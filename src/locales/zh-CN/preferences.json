@@ -706,6 +706,16 @@
         }
       },
       "shortcuts": {
+        "mouseTrigger": {
+          "description": "单击选定的鼠标按键打开或隐藏剪贴板窗口。选定后该按键原有的单击功能（如中键开新标签页、侧键后退）会被停用，按住中键拖动和 快贴 窗口内的中键操作不受影响。",
+          "options": {
+            "back": "侧键（后退）",
+            "disabled": "禁用",
+            "forward": "侧键（前进）",
+            "middle": "中键"
+          },
+          "title": "鼠标按键唤起"
+        },
         "openClipboard": {
           "description": "打开或隐藏剪贴板窗口。",
           "placeholder": "Alt+C",

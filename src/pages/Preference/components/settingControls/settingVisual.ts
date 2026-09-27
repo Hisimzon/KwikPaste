@@ -70,6 +70,7 @@ const SETTING_ICON_MAP: Record<string, string> = {
   "search.sort": "i-lucide:arrow-down-up",
   "sensitive.collectSecrets": "i-lucide:key-round",
   "sensitive.redactSecrets": "i-lucide:scan-eye",
+  "shortcuts.mouseTrigger": "i-ph:mouse-bold",
   "shortcuts.openClipboard": "i-lucide:clipboard",
   "shortcuts.openPreference": "i-lucide:settings",
   "shortcuts.quickPaste": "i-lucide:clipboard-paste",

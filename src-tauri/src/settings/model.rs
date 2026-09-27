@@ -119,6 +119,8 @@ pub struct Shortcuts {
     pub open_preference: String,
     /// 仅 Windows：用 Win+V 唤起剪贴板窗口，替代系统剪贴板历史面板。默认关闭。
     pub win_v: bool,
+    /// 仅 Windows：单击这个鼠标按键打开或隐藏剪贴板窗口，按键原有的单击功能随之停用。默认关闭。
+    pub mouse_trigger: MouseTrigger,
     /// 全局：修饰键 + 数字直接粘贴历史记录，不唤起剪贴板窗口。默认关闭。
     pub quick_paste: QuickPaste,
 }
@@ -129,9 +131,21 @@ impl Default for Shortcuts {
             open_clipboard: "Alt+C".into(),
             open_preference: "Alt+X".into(),
             win_v: false,
+            mouse_trigger: MouseTrigger::Disabled,
             quick_paste: QuickPaste::default(),
         }
     }
+}
+
+/// 唤起剪贴板窗口的鼠标按键。侧键对应 Windows 的 XBUTTON1 / XBUTTON2，多数鼠标上是后退、前进。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MouseTrigger {
+    #[default]
+    Disabled,
+    Middle,
+    Back,
+    Forward,
 }
 
 /// 全局快速粘贴：修饰键 + 1–9 粘贴第 1–9 条，修饰键 + 0 粘贴第 10 条。

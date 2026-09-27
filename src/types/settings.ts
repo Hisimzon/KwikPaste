@@ -108,10 +108,14 @@ export interface QuickPaste {
   modifiers: QuickPasteModifiers;
 }
 
+/** Rust enum `MouseTrigger`：唤起剪贴板窗口的鼠标按键，侧键 back / forward 对应 XBUTTON1 / XBUTTON2。 */
+export type MouseTrigger = "disabled" | "middle" | "back" | "forward";
+
 export interface Shortcuts {
   openClipboard: string;
   openPreference: string;
   winV: boolean;
+  mouseTrigger: MouseTrigger;
   quickPaste: QuickPaste;
 }
 

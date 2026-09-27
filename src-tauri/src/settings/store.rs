@@ -496,6 +496,38 @@ mod tests {
     }
 
     #[test]
+    fn released_shortcut_settings_keep_mouse_trigger_disabled() {
+        let released = r#"{
+            "shortcuts": {
+                "openClipboard": "Alt+C",
+                "openPreference": "Alt+X",
+                "winV": true,
+                "quickPaste": {"enabled": true, "modifiers": "alt"}
+            }
+        }"#;
+        let parsed: Settings = serde_json::from_str(released).unwrap();
+
+        assert!(parsed.shortcuts.win_v);
+        assert_eq!(
+            parsed.shortcuts.mouse_trigger,
+            crate::settings::MouseTrigger::Disabled
+        );
+    }
+
+    #[test]
+    fn mouse_trigger_round_trips_side_buttons() {
+        let parsed: Settings =
+            serde_json::from_str(r#"{"shortcuts": {"mouseTrigger": "forward"}}"#).unwrap();
+        assert_eq!(
+            parsed.shortcuts.mouse_trigger,
+            crate::settings::MouseTrigger::Forward
+        );
+
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(json["shortcuts"]["mouseTrigger"], "forward");
+    }
+
+    #[test]
     fn storage_limit_bytes_never_drops_below_minimum() {
         let mut history = crate::settings::History::default();
         assert_eq!(history.storage_limit_bytes(), 1024 * 1024 * 1024);

@@ -1,8 +1,8 @@
 //! 全局快捷键：注册由 Rust 主导，前端在偏好设置里改完通过 `update_settings` 触发重注册。
 //!
 //! 配置来自 `settings::Shortcuts`：打开窗口的两个快捷键，以及开启后的快速粘贴
-//! 「修饰键 + 数字」。本模块只负责 OS 级注册——`paste_plain` 是窗口内交互
-//! （前端 `useKeyPress`），不在这里处理。
+//! 「修饰键 + 数字」。Windows 上的 Win+V 接管与鼠标按键唤起靠低级钩子实现，也在这里按设置启停。
+//! 本模块只负责 OS 级注册——`paste_plain` 是窗口内交互（前端 `useKeyPress`），不在这里处理。
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -150,7 +150,12 @@ pub fn apply(app: &AppHandle, shortcuts: &Shortcuts) -> Result<()> {
     ];
 
     #[cfg(target_os = "windows")]
-    win_v::set_enabled(app, shortcuts.win_v);
+    {
+        win_v::set_enabled(app, shortcuts.win_v);
+        crate::mouse::set_mouse_trigger(app, shortcuts.mouse_trigger);
+    }
+    // TODO(macOS): 鼠标按键唤起需要用 CGEventTap 拦截 OtherMouseDown（依赖辅助功能权限），
+    // 尚未实现；偏好设置只在 Windows 显示这一项。
 
     let mut active = Vec::new();
     for (action, binding) in desired {

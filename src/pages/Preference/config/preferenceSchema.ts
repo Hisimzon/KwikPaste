@@ -25,6 +25,12 @@ const MIDDLE_CLICK_ACTION_OPTIONS = [
   { value: "singleClickCopy" },
   { value: "singleClickCopyPlain" },
 ];
+const MOUSE_TRIGGER_OPTIONS = [
+  { value: "disabled" },
+  { value: "middle" },
+  { value: "back" },
+  { value: "forward" },
+];
 const CLIPBOARD_SORT_OPTIONS = [
   { value: "createdAtDesc" },
   { value: "updatedAtDesc" },
@@ -787,6 +793,27 @@ export const preferenceTabs: PreferenceTab[] = [
                   path: ["shortcuts", "winV"] as const,
                   value: (settings: Settings) => {
                     return settings.shortcuts.winV;
+                  },
+                },
+                {
+                  control: {
+                    options: MOUSE_TRIGGER_OPTIONS,
+                    type: "select",
+                  } as const,
+                  id: "shortcuts.mouseTrigger",
+                  keywords: [
+                    "mouse",
+                    "middle click",
+                    "middle button",
+                    "side button",
+                    "back",
+                    "forward",
+                    "xbutton",
+                    "wheel",
+                  ],
+                  path: ["shortcuts", "mouseTrigger"] as const,
+                  value: (settings: Settings) => {
+                    return settings.shortcuts.mouseTrigger;
                   },
                 },
               ]

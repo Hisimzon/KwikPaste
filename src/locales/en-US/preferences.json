@@ -706,6 +706,16 @@
         }
       },
       "shortcuts": {
+        "mouseTrigger": {
+          "description": "Click the chosen mouse button to open or hide the clipboard window. Its usual click action, like opening a new tab or going back, is turned off; middle-button drags and middle clicks inside KwikPaste still work.",
+          "options": {
+            "back": "Side Button (Back)",
+            "disabled": "Disabled",
+            "forward": "Side Button (Forward)",
+            "middle": "Middle Button"
+          },
+          "title": "Open with Mouse Button"
+        },
         "openClipboard": {
           "description": "Open or hide the clipboard window.",
           "placeholder": "Alt+C",
