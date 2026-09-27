@@ -3,6 +3,7 @@ import type { ChangeEvent, FC } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { updateClipboardItemNote } from "@/commands";
+import AutoFocus from "@/components/AutoFocus";
 import type { ClipboardItem } from "@/types/clipboard";
 
 interface NoteModalProps {
@@ -65,20 +66,8 @@ const NoteModal: FC<NoteModalProps> = (props) => {
     }
   };
 
-  /**
-   * 弹窗完全打开后聚焦输入框；Windows 下 `autoFocus` 容易早于 Modal 内容稳定挂载。
-   */
-  const handleAfterOpenChange = (open: boolean) => {
-    if (!open) return;
-
-    requestAnimationFrame(() => {
-      textAreaRef.current?.focus({ cursor: "end" });
-    });
-  };
-
   return (
     <Modal
-      afterOpenChange={handleAfterOpenChange}
       confirmLoading={saving}
       destroyOnHidden
       okText={t("common:actions.save")}
@@ -87,6 +76,8 @@ const NoteModal: FC<NoteModalProps> = (props) => {
       open={!!item}
       title={t("clipboard:note.title")}
     >
+      <AutoFocus target={textAreaRef} />
+
       <Input.TextArea
         autoSize={{ maxRows: 6, minRows: 3 }}
         maxLength={256}

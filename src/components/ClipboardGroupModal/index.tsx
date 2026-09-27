@@ -7,6 +7,7 @@ import {
   importClipboardGroupSvg,
   setClipboardWindowAutoHideSuspended,
 } from "@/commands";
+import AutoFocus from "@/components/AutoFocus";
 import CustomIconButton from "@/components/CustomIconButton";
 import type {
   ClipboardGroupIcon as ClipboardGroupIconValue,
@@ -87,17 +88,6 @@ const ClipboardGroupModal: FC<ClipboardGroupModalProps> = (props) => {
   }, [form, group, open]);
 
   /**
-   * 弹框打开后聚焦名称输入框。
-   */
-  const handleAfterOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen) return;
-
-    requestAnimationFrame(() => {
-      nameInputRef.current?.focus({ cursor: "end" });
-    });
-  };
-
-  /**
    * 提交表单，交由调用方决定是新增还是更新。
    */
   const handleSubmit = async () => {
@@ -159,7 +149,6 @@ const ClipboardGroupModal: FC<ClipboardGroupModalProps> = (props) => {
 
   return (
     <Modal
-      afterOpenChange={handleAfterOpenChange}
       confirmLoading={submitting}
       destroyOnHidden
       mask={{ closable: false }}
@@ -169,6 +158,8 @@ const ClipboardGroupModal: FC<ClipboardGroupModalProps> = (props) => {
       open={open}
       title={title}
     >
+      <AutoFocus target={nameInputRef} />
+
       <Form<ClipboardGroupFormValues>
         form={form}
         initialValues={buildInitialValues(group)}
