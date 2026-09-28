@@ -9,6 +9,7 @@ import {
 } from "@/commands";
 import AutoFocus from "@/components/AutoFocus";
 import CustomIconButton from "@/components/CustomIconButton";
+import ModalKeyboardLayer from "@/components/ModalKeyboardLayer";
 import type {
   ClipboardGroupIcon as ClipboardGroupIconValue,
   ClipboardGroupInput,
@@ -159,6 +160,7 @@ const ClipboardGroupModal: FC<ClipboardGroupModalProps> = (props) => {
       title={title}
     >
       <AutoFocus target={nameInputRef} />
+      <ModalKeyboardLayer />
 
       <Form<ClipboardGroupFormValues>
         form={form}

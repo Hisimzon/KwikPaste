@@ -3,6 +3,7 @@ import { setClipboardWindowEditing } from "@/commands";
 import { isWinClipboardWindow } from "@/utils/is";
 
 const EDITABLE_BLUR_RESTORE_DELAY_MS = 80;
+const MODAL_DIALOG_SELECTOR = '[aria-modal="true"]';
 
 export const prepareClipboardWindowEditableFocus = async () => {
   if (!isWinClipboardWindow()) return;
@@ -65,7 +66,7 @@ export const useClipboardWindowEditableFocus = () => {
 
       restoreTimer = window.setTimeout(() => {
         restoreTimer = 0;
-        if (findEditableElement(document.activeElement)) return;
+        if (holdsEditingFocus(document.activeElement)) return;
 
         void setEditing(false);
       }, EDITABLE_BLUR_RESTORE_DELAY_MS);
@@ -95,6 +96,17 @@ export const useClipboardWindowEditableFocus = () => {
     };
   }, []);
 };
+
+/**
+ * 焦点仍在输入控件上，或 Tab 到了打开中的弹窗按钮上：窗口继续留住系统焦点，Enter / 空格 / Esc
+ * 照常作用于弹窗；退出编辑态后这些键会被低级钩子截走，弹窗就只能用鼠标操作了。
+ */
+function holdsEditingFocus(target: Element | null) {
+  if (!target) return false;
+  if (findEditableElement(target)) return true;
+
+  return target.closest(MODAL_DIALOG_SELECTOR) !== null;
+}
 
 function findEditableElement(target: EventTarget | null): HTMLElement | null {
   if (!(target instanceof Element)) return null;

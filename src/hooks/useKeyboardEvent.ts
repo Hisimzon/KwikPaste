@@ -32,13 +32,24 @@ interface KeyboardLayerEntry {
 }
 
 /**
- * 独占键盘的浮层栈（每个 webview 一份）。栈顶浮层打开期间，keydown 只交给登记在该浮层上的处理器，
- * 被遮住的列表、分组栏和快捷键提示一律跳过；keyup 不拦，底层靠它复位修饰键状态。
+ * 独占键盘的浮层栈（每个 webview 一份）。栈顶浮层打开期间，按键只交给登记在该浮层上的处理器，
+ * 被遮住的列表、分组栏和快捷键提示一律跳过；修饰键的 keyup 不拦，底层靠它复位修饰键状态。
  */
 const keyboardLayers: KeyboardLayerEntry[] = [];
 
 /**
- * 判断某个处理器所在的层当前能否收到 keydown：没有浮层时只有底层（`layer` 为空）生效。
+ * 浮层打开期间仍放行给底层的 keyup。其它键的 keyup 照样拦：底层的空格 keyup 会 `preventDefault`，
+ * 放过去会吞掉弹窗按钮靠空格 keyup 触发的点击。
+ */
+const LAYER_PASSTHROUGH_KEYUP_KEYS = new Set([
+  "Alt",
+  "Control",
+  "Meta",
+  "Shift",
+]);
+
+/**
+ * 判断某个处理器所在的层当前能否收到按键：没有浮层时只有底层（`layer` 为空）生效。
  */
 const isKeyboardLayerActive = (layer?: string) => {
   return keyboardLayers[keyboardLayers.length - 1]?.layer === layer;
@@ -80,12 +91,14 @@ export const useKeyboardEvent = (
   const isWindowsClipboardWindow = isWinClipboardWindow();
   const handlerRef = useLatest(handler);
 
-  const shouldHandle = () => {
-    return type === "keyup" || isKeyboardLayerActive(layer);
+  const shouldHandle = (key: string) => {
+    if (type === "keyup" && LAYER_PASSTHROUGH_KEYUP_KEYS.has(key)) return true;
+
+    return isKeyboardLayerActive(layer);
   };
 
   const handleBrowserEvent = (event: KeyboardEvent) => {
-    if (!shouldHandle()) return;
+    if (!shouldHandle(event.key)) return;
 
     if (isWindowsClipboardWindow) {
       const editableTarget = findEditableElement(event.target);
@@ -108,7 +121,7 @@ export const useKeyboardEvent = (
     const { type: payloadType, ...rest } = event.payload;
 
     if (payloadType !== type || !rest.key) return;
-    if (!shouldHandle()) return;
+    if (!shouldHandle(rest.key)) return;
 
     handlerRef.current(
       new KeyboardEvent(payloadType, { cancelable: true, ...rest }),

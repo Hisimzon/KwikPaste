@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { updateClipboardItemNote } from "@/commands";
 import AutoFocus from "@/components/AutoFocus";
+import ModalKeyboardLayer from "@/components/ModalKeyboardLayer";
 import type { ClipboardItem } from "@/types/clipboard";
 
 interface NoteModalProps {
@@ -77,6 +78,7 @@ const NoteModal: FC<NoteModalProps> = (props) => {
       title={t("clipboard:note.title")}
     >
       <AutoFocus target={textAreaRef} />
+      <ModalKeyboardLayer />
 
       <Input.TextArea
         autoSize={{ maxRows: 6, minRows: 3 }}
