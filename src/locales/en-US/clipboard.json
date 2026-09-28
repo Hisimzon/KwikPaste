@@ -25,6 +25,11 @@
   },
   "footer": {
     "shortcuts": "Shortcuts",
+    "storageAlert": {
+      "blocked": "Local data uses {{used}}, over the {{limit}} limit. Regular records can't free enough space: most of it is favorites, pinned, grouped, or noted records. Click to open settings.",
+      "label": "Storage over limit",
+      "remind": "Local data uses {{used}}, over the {{limit}} limit. Click to clean up or raise the limit in settings."
+    },
     "total": "{{count}} items"
   },
   "groups": {

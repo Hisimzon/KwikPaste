@@ -57,7 +57,10 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
   const disabled = setting.disabled === true || parentDisabled;
   const childSetting = setting.parentId !== void 0;
   const collapsed = isPreferenceSettingCollapsed(setting, settings);
-  const isTilesControl = setting.control.type === "tiles";
+  // 外观磁贴和清理规则列表需要整行宽度，换到标题下方单独一行。
+  const isFullWidthControl =
+    setting.control.type === "tiles" ||
+    setting.control.type === "retentionRules";
   const visual = resolveSettingVisual(setting.id);
   const highlightOpacity = shouldReduceMotion
     ? 0.08
@@ -80,7 +83,7 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
       className={cn(
         "group relative flex items-center gap-5 overflow-hidden border-ant-split border-b px-4 transition-colors last:border-b-0 hover:bg-ant-fill-quaternary motion-reduce:transition-none",
         {
-          "flex-wrap items-start gap-y-3": isTilesControl,
+          "flex-wrap items-start gap-y-3": isFullWidthControl,
           "pl-12": childSetting,
           "pointer-events-none": collapsed,
         },
@@ -154,9 +157,9 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
         className={cn(
           "relative flex shrink-0 justify-end opacity-90 transition-opacity group-hover:opacity-100 motion-reduce:transition-none",
           {
-            "basis-full pl-12": isTilesControl,
-            "justify-start": isTilesControl,
-            "w-full": isTilesControl,
+            "basis-full pl-12": isFullWidthControl,
+            "justify-start": isFullWidthControl,
+            "w-full": isFullWidthControl,
           },
         )}
       >

@@ -1,117 +1,278 @@
-//! 历史清理后台任务：按 `clipboard.history.retention` + `maxCount` 定期裁剪，
-//! 存储上限设为自动清理时再按占用裁剪。
+//! 历史自动清理：按保留规则、条数上限与存储上限删除普通记录。
 //!
-//! 启动即跑一次；之后按用户设置的清理周期触发，每次都从 `SettingsStore` 取最新配置——
-//! 用户在偏好里调时长 / 上限后不必重启即可生效。置顶与收藏项一律保留（由 [`cleanup_history`] 保证）。
+//! 触发时机：启动时、设置变更后（[`request`]）、有新记录入库后（[`notify_inserted`]）防抖执行，
+//! 另有每分钟一次的后台检查兜底按时间过期的记录。每轮都从 `SettingsStore` 取最新配置。
+//! 存储占用要遍历数据目录，只在有新记录、设置变更或长时间没统计过时才统计。
+//! 收藏、置顶、分组内和有备注的记录一律保留（由 [`crate::db::retention`] 保证）。
 
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use serde::Serialize;
 use serde_json::json;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::Notify;
 
 use super::storage::ImageStore;
 use super::watcher::CLIPBOARD_UPDATED_EVENT;
 use crate::core::disk::{dir_size, file_size};
-use crate::db::items::{
-    cleanup_history, cleanup_oldest_until, reusable_page_bytes, CleanupOutcome,
+use crate::core::Result;
+use crate::db::items::{reusable_page_bytes, CleanupOutcome};
+use crate::db::retention::{
+    count_protected, delete_expired, delete_least_recent_until, delete_over_count,
+    release_free_pages, rule_match_stats, AgePlan, RuleMatchStats, RulePlan,
 };
-use crate::settings::{Retention, RetentionUnit, SettingsStore, StorageLimitAction};
+use crate::settings::{History, Retention, RetentionUnit, SettingsStore, StorageLimitAction};
 
-/// 调度器检查设置与到期状态的频率；真正清理只在用户设置周期到期后执行。
-const SCHEDULER_TICK_INTERVAL: Duration = Duration::from_secs(60);
+/// 与前端 `src/constants/events.ts` 的 `TAURI_EVENT.CLEANUP_STATUS` 一一对应。
+pub const CLEANUP_STATUS_EVENT: &str = "cleanup://status";
 
-/// 启动历史清理后台任务：启动立即清理一次，之后按设置周期到点清理。
+/// 后台检查间隔：按时间过期的记录最迟这么久后被清理。
+const SCHEDULER_TICK: Duration = Duration::from_secs(60);
+/// 设置变更、新记录入库后等这么久再清理，合并连续触发。
+const REQUEST_DEBOUNCE: Duration = Duration::from_millis(1500);
+/// 有新记录时两次存储统计之间的最短间隔。
+const STORAGE_CHECK_MIN_INTERVAL: Duration = Duration::from_secs(2 * 60);
+/// 没有新记录也定期重新统计一次存储占用，覆盖缩略图生成等目录外部变化。
+const STORAGE_CHECK_MAX_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+/// 自动清理调度状态，注册在 Tauri `State` 里。
+#[derive(Default)]
+pub struct CleanupScheduler {
+    wake: Notify,
+    pending: Mutex<Pending>,
+    status: Mutex<CleanupStatus>,
+    /// 串行化后台清理、手动清理与预演，避免两轮同时删同一批记录。
+    running: tokio::sync::Mutex<()>,
+}
+
+#[derive(Default)]
+struct Pending {
+    full: bool,
+    count_dirty: bool,
+    storage_dirty: bool,
+    last_storage_check: Option<Instant>,
+}
+
+/// 本轮要执行的清理范围；按时间过期每轮都会检查。
+#[derive(Debug, Clone, Copy)]
+struct PassScope {
+    count: bool,
+    storage: bool,
+}
+
+impl PassScope {
+    const FULL: Self = Self {
+        count: true,
+        storage: true,
+    };
+}
+
+/// 偏好页与剪贴板窗口展示的清理状态。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupStatus {
+    /// 本次启动后最近一次删除了记录的清理。
+    pub last_run: Option<CleanupReport>,
+    /// 最近一次存储占用统计。
+    pub storage: Option<StorageCheck>,
+}
+
+/// 一轮清理的结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupReport {
+    pub finished_at: DateTime<Utc>,
+    pub removed: u64,
+    /// 释放的空间：文本按内容大小、图片按原图与缩略图文件估算。
+    pub freed_bytes: u64,
+    /// 其中超过保留时长的条数。
+    pub expired: u64,
+    /// 其中超过最大保留条数的条数。
+    pub over_count: u64,
+    /// 其中为回到存储上限以内删除的条数。
+    pub over_storage: u64,
+}
+
+/// 一次存储占用统计。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageCheck {
+    pub used_bytes: u64,
+    pub limit_bytes: u64,
+    pub over_limit: bool,
+    /// 设为自动清理但删光普通记录也回不到上限以内：占用主要来自受保护的记录或缓存。
+    pub cleanup_blocked: bool,
+}
+
+/// 按一份候选设置预演清理的结果，偏好页保存前据此确认，并展示每条规则的匹配情况。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupPreview {
+    /// 按这份设置立即清理会删除的条数。
+    pub removed: u64,
+    pub freed_bytes: u64,
+    pub expired: u64,
+    pub over_count: u64,
+    pub over_storage: u64,
+    pub storage_blocked: bool,
+    /// 受保护、不会被自动清理的记录条数。
+    pub protected: u64,
+    /// 已启用的规则逐条统计；停用的规则不参与匹配，不在列表里。
+    pub rules: Vec<RulePreview>,
+    /// 没有命中任何规则、按默认保留时长处理的记录。
+    pub fallback: RulePreview,
+}
+
+/// 一条规则当前匹配的普通记录数，以及其中已超过保留时长的条数。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RulePreview {
+    pub id: String,
+    pub matched: u64,
+    pub expired: u64,
+}
+
+impl RulePreview {
+    fn new(id: &str, stats: RuleMatchStats) -> Self {
+        Self {
+            id: id.to_owned(),
+            matched: stats.matched,
+            expired: stats.expired,
+        }
+    }
+}
+
+/// 注册调度状态并启动后台清理任务：启动后立即完整清理一次。
 pub fn spawn(app: AppHandle) {
+    app.manage(CleanupScheduler::default());
+
     tauri::async_runtime::spawn(async move {
-        run_once(&app).await;
-        enforce_storage_limit(&app).await;
-        let mut last_cleanup_at = Instant::now();
-        let mut ticker = tokio::time::interval(SCHEDULER_TICK_INTERVAL);
-        ticker.tick().await;
+        let scheduler = app.state::<CleanupScheduler>();
+        scheduler.pending().full = true;
 
         loop {
-            ticker.tick().await;
-            // 存储上限不跟随清理周期（默认只在启动时清理），否则新图片写入后要到下次启动才回到上限以内。
-            enforce_storage_limit(&app).await;
+            run_due(&app, scheduler.inner()).await;
 
-            let Some(interval) = cleanup_interval(&app) else {
-                continue;
-            };
-
-            if last_cleanup_at.elapsed() < interval {
-                continue;
+            let woke = tokio::time::timeout(SCHEDULER_TICK, scheduler.wake.notified())
+                .await
+                .is_ok();
+            if woke {
+                tokio::time::sleep(REQUEST_DEBOUNCE).await;
             }
-
-            run_once(&app).await;
-            last_cleanup_at = Instant::now();
         }
     });
 }
 
-async fn run_once(app: &AppHandle) {
-    let history = match app.try_state::<SettingsStore>() {
-        Some(store) => store.snapshot().clipboard.history,
-        None => return,
-    };
-
-    let cutoff = retention_cutoff(&history.retention, Utc::now());
-    let max = (history.max_count > 0).then_some(history.max_count);
-
-    if cutoff.is_none() && max.is_none() {
+/// 清理设置变化后请求尽快完整清理一次。
+pub fn request(app: &AppHandle) {
+    let Some(scheduler) = app.try_state::<CleanupScheduler>() else {
         return;
-    }
-
-    let pool = app.state::<crate::db::DatabaseState>().pool().await;
-    match cleanup_history(&pool, cutoff, max).await {
-        Ok(outcome) => apply_outcome(app, &outcome, "history"),
-        Err(err) => log::warn!("history cleanup failed: {err}"),
-    }
+    };
+    scheduler.pending().full = true;
+    scheduler.wake.notify_one();
 }
 
-/// 存储上限设为自动清理且占用超出时，从最旧的普通记录删起，直到回到上限以内。
-async fn enforce_storage_limit(app: &AppHandle) {
-    let history = match app.try_state::<SettingsStore>() {
-        Some(store) => store.snapshot().clipboard.history,
-        None => return,
-    };
-    if history.storage_limit_action != StorageLimitAction::Cleanup {
+/// 有新记录入库：尽快检查条数上限，存储占用按节流间隔统计。
+pub fn notify_inserted(app: &AppHandle) {
+    let Some(scheduler) = app.try_state::<CleanupScheduler>() else {
         return;
+    };
+    {
+        let mut pending = scheduler.pending();
+        pending.count_dirty = true;
+        pending.storage_dirty = true;
+    }
+    scheduler.wake.notify_one();
+}
+
+/// 当前清理状态快照。
+pub fn status(app: &AppHandle) -> CleanupStatus {
+    app.try_state::<CleanupScheduler>()
+        .map(|scheduler| scheduler.status().clone())
+        .unwrap_or_default()
+}
+
+/// 立即按当前设置完整清理一次，返回本轮结果（没有删除记录时 `removed = 0`）。
+pub async fn run_now(app: &AppHandle) -> Result<CleanupReport> {
+    let scheduler = app.state::<CleanupScheduler>();
+    {
+        let mut pending = scheduler.pending();
+        pending.storage_dirty = false;
+        pending.last_storage_check = Some(Instant::now());
     }
 
+    let _running = scheduler.running.lock().await;
+    let (report, storage) = execute(app, PassScope::FULL).await?;
+    scheduler.record(app, &report, storage);
+    Ok(report)
+}
+
+/// 按候选设置在事务里预演一轮完整清理后回滚，不删除任何记录或文件。
+pub async fn preview(app: &AppHandle, history: &History) -> Result<CleanupPreview> {
+    let scheduler = app.state::<CleanupScheduler>();
+    let _running = scheduler.running.lock().await;
     let pool = app.state::<crate::db::DatabaseState>().pool().await;
-    let used = match storage_bytes_in_use(app, &pool).await {
-        Ok(used) => used,
-        Err(err) => {
-            log::warn!("measure storage for limit cleanup failed: {err}");
-            return;
-        }
-    };
-    let limit = history.storage_limit_bytes();
-    if used <= limit {
-        return;
-    }
+    let rules = enabled_rules(history).collect::<Vec<_>>();
+    let plan = age_plan(history, Utc::now());
+    let image_bytes = |file_name: &str| stored_image_bytes(app, file_name);
 
-    let image_bytes = |file_name: &str| {
-        app.try_state::<ImageStore>()
-            .map_or(0, |store| store.stored_bytes(file_name))
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin history cleanup")?;
+    let (per_rule, fallback) = rule_match_stats(&mut tx, &plan).await?;
+    let protected = count_protected(&mut tx).await?;
+    let expired = delete_expired(&mut tx, &plan).await?;
+    let over_count = delete_over_count(&mut tx, history.max_count).await?;
+
+    let mut preview = CleanupPreview {
+        expired: expired.removed,
+        over_count: over_count.removed,
+        protected,
+        rules: rules
+            .iter()
+            .zip(per_rule)
+            .map(|(rule, stats)| RulePreview::new(&rule.id, stats))
+            .collect(),
+        fallback: RulePreview::new("", fallback),
+        ..CleanupPreview::default()
     };
-    match cleanup_oldest_until(&pool, used - limit, image_bytes).await {
-        Ok(outcome) if outcome.removed == 0 => {
-            // 每分钟都会走到这里，只记 debug，避免超限期间刷满日志文件。
-            log::debug!("storage stays over the limit: history cleanup cannot free enough space");
+    let mut outcome = expired;
+    outcome.merge(over_count);
+    let mut freed = estimated_bytes(&outcome, image_bytes);
+
+    if history.storage_limit_action == StorageLimitAction::Cleanup {
+        // 事务外的连接看不到预演删除，统计的是当前占用，扣掉前两步预计释放的部分再比较。
+        let used = storage_bytes_in_use(app, &pool)
+            .await?
+            .saturating_sub(freed);
+        let limit = history.storage_limit_bytes();
+        if used > limit {
+            let over = delete_least_recent_until(&mut tx, used - limit, image_bytes).await?;
+            preview.storage_blocked = over.removed == 0;
+            preview.over_storage = over.removed;
+            freed += estimated_bytes(&over, image_bytes);
+            outcome.merge(over);
         }
-        Ok(outcome) => apply_outcome(app, &outcome, "storage limit"),
-        Err(err) => log::warn!("storage limit cleanup failed: {err}"),
     }
+    tx.rollback()
+        .await
+        .context("failed to roll back cleanup preview")?;
+
+    preview.removed = outcome.removed;
+    preview.freed_bytes = freed;
+    Ok(preview)
 }
 
 /// 数据实际占用：数据目录总大小减去 SQLite 可复用的空闲页和 WAL 旁路文件。
-/// 偏好页展示与存储上限清理共用这一口径——删行后数据库文件不会立即缩小，
+/// 偏好页展示与存储上限清理共用这一口径——删行后数据库文件不一定立即缩小，
 /// 按目录原始大小判断会让下一轮把已释放的空间再算一遍而继续误删，侧栏也会一直显示超限。
-pub async fn storage_bytes_in_use(app: &AppHandle, pool: &SqlitePool) -> crate::core::Result<u64> {
+pub async fn storage_bytes_in_use(app: &AppHandle, pool: &SqlitePool) -> Result<u64> {
     let total = dir_size(&crate::core::paths::app_data_dir(app)?)?;
     let db_path = crate::db::db_path(app)?;
 
@@ -123,140 +284,401 @@ pub async fn storage_bytes_in_use(app: &AppHandle, pool: &SqlitePool) -> crate::
     Ok(total.saturating_sub(reusable))
 }
 
-/// 清理完成后删除对应图片文件并通知前端刷新列表；没删到记录时什么都不做。
+/// 手动批量删除后删掉对应图片文件并通知前端刷新列表；没删到记录时什么都不做。
 pub fn apply_outcome(app: &AppHandle, outcome: &CleanupOutcome, reason: &str) {
     if outcome.removed == 0 {
         return;
     }
 
-    remove_images(app, &outcome.image_files);
+    remove_files(app, outcome);
     log::info!("{reason} cleanup removed {} item(s)", outcome.removed);
-    if let Err(err) = app.emit(
-        CLIPBOARD_UPDATED_EVENT,
-        json!({ "cleanup": outcome.removed }),
-    ) {
-        log::warn!("emit cleanup event failed: {err}");
-    }
+    emit_cleanup(app, outcome.removed);
 }
 
-/// 读取当前清理周期。`0` 表示关闭周期性清理。
-fn cleanup_interval(app: &AppHandle) -> Option<Duration> {
-    let store = app.try_state::<SettingsStore>()?;
-    let hours = store.snapshot().clipboard.history.cleanup_interval_hours;
-
-    if hours == 0 {
-        return None;
+impl CleanupScheduler {
+    fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    Some(Duration::from_secs(u64::from(hours) * 60 * 60))
-}
-
-/// 删除被清理图片记录的落盘文件（原图 + 缩略图）。`ImageStore` 未注册或单个文件删除失败
-/// 都只记日志、不阻断——清理本身已成功，残留文件最坏只是占用磁盘，不影响功能。
-fn remove_images(app: &AppHandle, file_names: &[String]) {
-    if file_names.is_empty() {
-        return;
+    fn status(&self) -> std::sync::MutexGuard<'_, CleanupStatus> {
+        self.status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
-    let Some(store) = app.try_state::<ImageStore>() else {
-        log::warn!(
-            "image store unavailable; skip removing {} image file(s)",
-            file_names.len()
-        );
-        return;
-    };
-    for file_name in file_names {
-        if let Err(err) = store.remove(file_name) {
-            log::warn!("remove cleaned image {file_name} failed: {err}");
+
+    /// 取出本轮到期的清理范围，并把存储统计时间记到现在。
+    fn take_due(&self) -> PassScope {
+        let mut pending = self.pending();
+        let full = std::mem::take(&mut pending.full);
+        let count = full || std::mem::take(&mut pending.count_dirty);
+        let storage = full
+            || pending.last_storage_check.is_none_or(|checked_at| {
+                let elapsed = checked_at.elapsed();
+                elapsed >= STORAGE_CHECK_MAX_INTERVAL
+                    || (pending.storage_dirty && elapsed >= STORAGE_CHECK_MIN_INTERVAL)
+            });
+
+        if storage {
+            pending.storage_dirty = false;
+            pending.last_storage_check = Some(Instant::now());
+        }
+
+        PassScope { count, storage }
+    }
+
+    /// 记下本轮结果，状态有变化时广播给前端。
+    fn record(&self, app: &AppHandle, report: &CleanupReport, storage: Option<StorageCheck>) {
+        let next = {
+            let mut status = self.status();
+            let before = status.clone();
+            if report.removed > 0 {
+                status.last_run = Some(report.clone());
+            }
+            if let Some(check) = storage {
+                status.storage = Some(check);
+            }
+            if *status == before {
+                return;
+            }
+            status.clone()
+        };
+
+        if let Err(err) = app.emit(CLEANUP_STATUS_EVENT, next) {
+            log::warn!("emit cleanup status failed: {err}");
         }
     }
 }
 
-/// `Retention` → 绝对截止时间。`Forever` 或 `value == 0` 表示禁用。
+/// 后台跑一轮到期的清理；失败只记日志，下一轮再试。
+async fn run_due(app: &AppHandle, scheduler: &CleanupScheduler) {
+    let scope = scheduler.take_due();
+    let _running = scheduler.running.lock().await;
+
+    match execute(app, scope).await {
+        Ok((report, storage)) => scheduler.record(app, &report, storage),
+        Err(err) => log::warn!("history cleanup failed: {err}"),
+    }
+}
+
+/// 执行一轮清理：先按时间与条数，再按存储上限。每一步单独提交，删掉的图片文件随后移除。
+async fn execute(
+    app: &AppHandle,
+    scope: PassScope,
+) -> Result<(CleanupReport, Option<StorageCheck>)> {
+    let history = app.state::<SettingsStore>().snapshot().clipboard.history;
+    let pool = app.state::<crate::db::DatabaseState>().pool().await;
+    let plan = age_plan(&history, Utc::now());
+
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin history cleanup")?;
+    let expired = delete_expired(&mut tx, &plan).await?;
+    let over_count = if scope.count {
+        delete_over_count(&mut tx, history.max_count).await?
+    } else {
+        CleanupOutcome::default()
+    };
+    tx.commit()
+        .await
+        .context("failed to commit history cleanup")?;
+
+    let mut report = CleanupReport {
+        finished_at: Utc::now(),
+        removed: 0,
+        freed_bytes: 0,
+        expired: expired.removed,
+        over_count: over_count.removed,
+        over_storage: 0,
+    };
+    let mut outcome = expired;
+    outcome.merge(over_count);
+    report.freed_bytes += remove_files(app, &outcome);
+    shrink_database(&pool, &outcome).await;
+
+    let storage = if scope.storage {
+        let (check, over, freed) = enforce_storage_limit(app, &pool, &history).await?;
+        report.over_storage = over.removed;
+        report.freed_bytes += freed;
+        outcome.merge(over);
+        Some(check)
+    } else {
+        None
+    };
+
+    report.removed = outcome.removed;
+    report.finished_at = Utc::now();
+    if report.removed > 0 {
+        log::info!(
+            "history cleanup removed {} item(s): {} expired, {} over count, {} over storage",
+            report.removed,
+            report.expired,
+            report.over_count,
+            report.over_storage
+        );
+        emit_cleanup(app, report.removed);
+    }
+
+    Ok((report, storage))
+}
+
+/// 统计存储占用；设为自动清理且超出上限时，从最久没用的普通记录删起，直到回到上限以内。
+/// 返回统计结果、删除结果与释放空间估算。
+async fn enforce_storage_limit(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    history: &History,
+) -> Result<(StorageCheck, CleanupOutcome, u64)> {
+    let limit = history.storage_limit_bytes();
+    let mut used = storage_bytes_in_use(app, pool).await?;
+    let mut over = CleanupOutcome::default();
+    let mut freed = 0;
+    let mut cleanup_blocked = false;
+
+    if used > limit && history.storage_limit_action == StorageLimitAction::Cleanup {
+        let image_bytes = |file_name: &str| stored_image_bytes(app, file_name);
+        let mut tx = pool
+            .begin()
+            .await
+            .context("failed to begin history cleanup")?;
+        over = delete_least_recent_until(&mut tx, used - limit, image_bytes).await?;
+        tx.commit()
+            .await
+            .context("failed to commit history cleanup")?;
+
+        if over.removed == 0 {
+            // 每次统计都会走到这里，只记 debug，避免超限期间刷满日志文件。
+            log::debug!("storage stays over the limit: history cleanup cannot free enough space");
+            cleanup_blocked = true;
+        } else {
+            // 图片文件要在重新统计前删掉，统计结果才准。
+            freed = remove_files(app, &over);
+            shrink_database(pool, &over).await;
+            used = storage_bytes_in_use(app, pool).await?;
+        }
+    }
+
+    let check = StorageCheck {
+        used_bytes: used,
+        limit_bytes: limit,
+        over_limit: used > limit,
+        cleanup_blocked,
+    };
+    Ok((check, over, freed))
+}
+
+/// 删行后把 SQLite 空闲页还给文件系统；失败不影响清理结果。
+async fn shrink_database(pool: &SqlitePool, outcome: &CleanupOutcome) {
+    if outcome.removed == 0 {
+        return;
+    }
+    if let Err(err) = release_free_pages(pool).await {
+        log::warn!("release sqlite free pages after cleanup failed: {err}");
+    }
+}
+
+/// 设置 → 按时间清理计划：只取启用的规则，截止时间按当前时刻换算。
+fn age_plan(history: &History, now: DateTime<Utc>) -> AgePlan {
+    AgePlan {
+        rules: enabled_rules(history)
+            .map(|rule| RulePlan {
+                categories: rule.categories.clone(),
+                min_size_bytes: (rule.min_size_kb > 0).then(|| u64::from(rule.min_size_kb) * 1024),
+                source_app_ids: rule.source_app_ids.clone(),
+                sensitive_only: rule.sensitive_only,
+                unused_only: rule.unused_only,
+                cutoff: retention_cutoff(&rule.keep, now),
+            })
+            .collect(),
+        fallback_cutoff: retention_cutoff(&history.retention, now),
+    }
+}
+
+fn enabled_rules(history: &History) -> impl Iterator<Item = &crate::settings::RetentionRule> {
+    history.rules.iter().filter(|rule| rule.enabled)
+}
+
+/// 被删记录预计释放的空间：非图片按内容大小，图片按落盘文件。
+fn estimated_bytes(outcome: &CleanupOutcome, image_bytes: impl Fn(&str) -> u64) -> u64 {
+    outcome.content_bytes
+        + outcome
+            .image_files
+            .iter()
+            .map(|file_name| image_bytes(file_name))
+            .sum::<u64>()
+}
+
+fn stored_image_bytes(app: &AppHandle, file_name: &str) -> u64 {
+    app.try_state::<ImageStore>()
+        .map_or(0, |store| store.stored_bytes(file_name))
+}
+
+/// 删除被清理图片记录的落盘文件（原图 + 缩略图），返回本批记录释放的空间估算。
+/// `ImageStore` 未注册或单个文件删除失败都只记日志、不阻断——清理本身已成功，残留文件最坏只是占用磁盘。
+fn remove_files(app: &AppHandle, outcome: &CleanupOutcome) -> u64 {
+    let mut freed = outcome.content_bytes;
+    if outcome.image_files.is_empty() {
+        return freed;
+    }
+
+    let Some(store) = app.try_state::<ImageStore>() else {
+        log::warn!(
+            "image store unavailable; skip removing {} image file(s)",
+            outcome.image_files.len()
+        );
+        return freed;
+    };
+    for file_name in &outcome.image_files {
+        freed += store.stored_bytes(file_name);
+        if let Err(err) = store.remove(file_name) {
+            log::warn!("remove cleaned image {file_name} failed: {err}");
+        }
+    }
+    freed
+}
+
+/// 通知前端列表按清理结果刷新。
+fn emit_cleanup(app: &AppHandle, removed: u64) {
+    if let Err(err) = app.emit(CLIPBOARD_UPDATED_EVENT, json!({ "cleanup": removed })) {
+        log::warn!("emit cleanup event failed: {err}");
+    }
+}
+
+/// `Retention` → 绝对截止时间。`Forever` 或 `value == 0` 表示不按时间清理。
 /// 月份近似按 30 天处理（与前端展示口径一致，不引日历库）。
-fn retention_cutoff(r: &Retention, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    if r.value == 0 {
+fn retention_cutoff(retention: &Retention, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    if retention.value == 0 {
         return None;
     }
-    let dur = match r.unit {
+    let value = i64::from(retention.value);
+    let duration = match retention.unit {
         RetentionUnit::Forever => return None,
-        RetentionUnit::Hours => ChronoDuration::hours(r.value as i64),
-        RetentionUnit::Days => ChronoDuration::days(r.value as i64),
-        RetentionUnit::Weeks => ChronoDuration::weeks(r.value as i64),
-        RetentionUnit::Months => ChronoDuration::days((r.value as i64) * 30),
+        RetentionUnit::Minutes => ChronoDuration::minutes(value),
+        RetentionUnit::Hours => ChronoDuration::hours(value),
+        RetentionUnit::Days => ChronoDuration::days(value),
+        RetentionUnit::Weeks => ChronoDuration::weeks(value),
+        RetentionUnit::Months => ChronoDuration::days(value * 30),
     };
-    Some(now - dur)
+    Some(now - duration)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::overview::ContentCategory;
+    use crate::settings::RetentionRule;
 
     fn now() -> DateTime<Utc> {
         DateTime::from_timestamp(1_700_000_000, 0).unwrap()
     }
 
+    fn retention(value: u32, unit: RetentionUnit) -> Retention {
+        Retention { value, unit }
+    }
+
     #[test]
     fn retention_cutoff_returns_none_when_disabled() {
-        assert!(retention_cutoff(
-            &Retention {
-                value: 0,
-                unit: RetentionUnit::Days
-            },
-            now()
-        )
-        .is_none());
-        assert!(retention_cutoff(
-            &Retention {
-                value: 7,
-                unit: RetentionUnit::Forever
-            },
-            now()
-        )
-        .is_none());
+        assert!(retention_cutoff(&retention(0, RetentionUnit::Days), now()).is_none());
+        assert!(retention_cutoff(&retention(7, RetentionUnit::Forever), now()).is_none());
     }
 
     #[test]
     fn retention_cutoff_subtracts_by_unit() {
         let n = now();
-        assert_eq!(
-            retention_cutoff(
-                &Retention {
-                    value: 2,
-                    unit: RetentionUnit::Hours
-                },
-                n
+        let cases = [
+            (
+                retention(30, RetentionUnit::Minutes),
+                ChronoDuration::minutes(30),
             ),
-            Some(n - ChronoDuration::hours(2))
-        );
-        assert_eq!(
-            retention_cutoff(
-                &Retention {
-                    value: 3,
-                    unit: RetentionUnit::Days
-                },
-                n
+            (retention(2, RetentionUnit::Hours), ChronoDuration::hours(2)),
+            (retention(3, RetentionUnit::Days), ChronoDuration::days(3)),
+            (retention(1, RetentionUnit::Weeks), ChronoDuration::weeks(1)),
+            (
+                retention(1, RetentionUnit::Months),
+                ChronoDuration::days(30),
             ),
-            Some(n - ChronoDuration::days(3))
-        );
-        assert_eq!(
-            retention_cutoff(
-                &Retention {
-                    value: 1,
-                    unit: RetentionUnit::Weeks
+        ];
+        for (retention, duration) in cases {
+            assert_eq!(retention_cutoff(&retention, n), Some(n - duration));
+        }
+    }
+
+    #[test]
+    fn age_plan_keeps_enabled_rules_in_order() {
+        let history = History {
+            retention: retention(30, RetentionUnit::Days),
+            rules: vec![
+                RetentionRule {
+                    id: "images".to_owned(),
+                    categories: vec![ContentCategory::Image],
+                    min_size_kb: 2048,
+                    keep: retention(3, RetentionUnit::Days),
+                    ..RetentionRule::default()
                 },
-                n
-            ),
-            Some(n - ChronoDuration::weeks(1))
-        );
-        assert_eq!(
-            retention_cutoff(
-                &Retention {
-                    value: 1,
-                    unit: RetentionUnit::Months
+                RetentionRule {
+                    id: "off".to_owned(),
+                    enabled: false,
+                    keep: retention(1, RetentionUnit::Hours),
+                    ..RetentionRule::default()
                 },
-                n
-            ),
-            Some(n - ChronoDuration::days(30))
+                RetentionRule {
+                    id: "wechat".to_owned(),
+                    source_app_ids: vec!["wechat".to_owned()],
+                    sensitive_only: true,
+                    unused_only: true,
+                    keep: retention(0, RetentionUnit::Forever),
+                    ..RetentionRule::default()
+                },
+            ],
+            ..History::default()
+        };
+
+        let plan = age_plan(&history, now());
+
+        assert_eq!(
+            plan,
+            AgePlan {
+                rules: vec![
+                    RulePlan {
+                        categories: vec![ContentCategory::Image],
+                        min_size_bytes: Some(2048 * 1024),
+                        cutoff: Some(now() - ChronoDuration::days(3)),
+                        ..RulePlan::default()
+                    },
+                    RulePlan {
+                        source_app_ids: vec!["wechat".to_owned()],
+                        sensitive_only: true,
+                        unused_only: true,
+                        cutoff: None,
+                        ..RulePlan::default()
+                    },
+                ],
+                fallback_cutoff: Some(now() - ChronoDuration::days(30)),
+            }
         );
+    }
+
+    #[test]
+    fn inserts_throttle_storage_checks_but_settings_changes_force_them() {
+        let scheduler = CleanupScheduler::default();
+        let first = scheduler.take_due();
+        assert!(first.storage, "never measured yet");
+
+        scheduler.pending().count_dirty = true;
+        scheduler.pending().storage_dirty = true;
+        let after_insert = scheduler.take_due();
+        assert!(after_insert.count);
+        assert!(!after_insert.storage, "measured just now");
+        assert!(scheduler.pending().storage_dirty, "kept for the next check");
+
+        scheduler.pending().full = true;
+        let forced = scheduler.take_due();
+        assert!(forced.count && forced.storage);
+        assert!(!scheduler.pending().storage_dirty);
+
+        let idle = scheduler.take_due();
+        assert!(!idle.count && !idle.storage);
     }
 }

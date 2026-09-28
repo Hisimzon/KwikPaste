@@ -13,6 +13,18 @@ export type ClipboardSubKind =
   | "color"
   | "path";
 
+/** Rust `db::overview::ContentCategory`：文本按识别出的子类型拆开，图片、文件各成一类。 */
+export type ContentCategory =
+  | "text"
+  | "html"
+  | "rtf"
+  | "url"
+  | "email"
+  | "color"
+  | "path"
+  | "image"
+  | "files";
+
 export type ClipboardPlatform = "macos" | "windows";
 
 /**

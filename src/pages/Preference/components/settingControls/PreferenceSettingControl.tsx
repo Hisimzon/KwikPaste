@@ -15,10 +15,12 @@ import type {
 import ActionControl from "./ActionControl";
 import AppearanceTilesControl from "./AppearanceTilesControl";
 import CaptureOrderControl from "./CaptureOrderControl";
+import CleanupStatusControl from "./CleanupStatusControl";
 import ClipboardGroupSelectControl from "./ClipboardGroupSelectControl";
 import NumberControl from "./NumberControl";
 import PermissionControl from "./PermissionControl";
 import RetentionControl, { resolveRetentionValue } from "./RetentionControl";
+import RetentionRulesControl from "./RetentionRulesControl";
 import { SegmentedSelectControl, SelectControl } from "./SelectControls";
 import ShortcutRecorderControl from "./ShortcutRecorderControl";
 import ShortcutTagsControl from "./ShortcutTagsControl";
@@ -157,6 +159,23 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
           value={resolveRetentionValue(value)}
         />
       );
+    case "retentionRules":
+      return (
+        <RetentionRulesControl
+          disabled={disabled}
+          onChange={onChange}
+          setting={setting}
+          settings={settings}
+        />
+      );
+    case "cleanupStatus":
+      return (
+        <CleanupStatusControl
+          disabled={disabled}
+          language={settings.appearance.language}
+          setting={setting}
+        />
+      );
     case "text":
       return (
         <TextControl
@@ -183,7 +202,7 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
           disabled={disabled}
           onChange={onChange}
           setting={setting}
-          value={Array.isArray(value) ? value : []}
+          value={resolveStringList(value)}
         />
       );
     case "action":
@@ -204,5 +223,16 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
       return null;
   }
 };
+
+/**
+ * 取出字符串列表型设置值，其它形状一律视为空列表。
+ */
+function resolveStringList(value?: SettingValue) {
+  if (!Array.isArray(value)) return [];
+
+  return value.filter((item): item is string => {
+    return typeof item === "string";
+  });
+}
 
 export default PreferenceSettingControl;

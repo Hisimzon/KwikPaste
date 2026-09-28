@@ -21,7 +21,11 @@ pub use app_store::AppIconStore;
 pub use apps_registry::{
     add_app_from_path, delete_unreferenced_apps, refresh_running_apps, AppsRegistry,
 };
-pub use cleanup::{apply_outcome as apply_cleanup_outcome, storage_bytes_in_use};
+pub use cleanup::{
+    apply_outcome as apply_cleanup_outcome, preview as preview_cleanup, request as request_cleanup,
+    run_now as run_cleanup_now, status as cleanup_status, storage_bytes_in_use, CleanupPreview,
+    CleanupReport, CleanupStatus,
+};
 pub use detect::sanitize_css_color;
 pub use file_icon_store::FileIconStore;
 pub use fragment::{

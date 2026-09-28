@@ -22,10 +22,12 @@ import type {
   ClipboardItemQuery,
   ClipboardKind,
   ClipboardSubKind,
+  ContentCategory,
   UpdateNoteResult,
   WordSplit,
 } from "@/types/clipboard";
 import type {
+  History,
   Settings,
   SettingsPatch,
   WindowMaterialSupport,
@@ -138,7 +140,56 @@ export interface StorageUsage {
 export interface CleanCacheResult {
   removedFiles: number;
   removedBytes: number;
+  /** 压缩数据库文件缩小的字节数。 */
+  compactedBytes: number;
   storageUsage: StorageUsage;
+}
+
+/** 一轮自动或手动清理的结果。 */
+export interface CleanupReport {
+  finishedAt: string;
+  removed: number;
+  freedBytes: number;
+  expired: number;
+  overCount: number;
+  overStorage: number;
+}
+
+/** 一次存储占用统计。 */
+export interface StorageCheck {
+  usedBytes: number;
+  limitBytes: number;
+  overLimit: boolean;
+  /** 设为自动清理但删光普通记录也回不到上限以内。 */
+  cleanupBlocked: boolean;
+}
+
+/** 与 Rust `clipboard::cleanup::CleanupStatus` 对应，变化时经 `cleanup://status` 推送。 */
+export interface CleanupStatus {
+  /** 本次启动后最近一次删除了记录的清理。 */
+  lastRun: CleanupReport | null;
+  storage: StorageCheck | null;
+}
+
+/** 一条规则当前匹配的普通记录数与其中已超过保留时长的条数；兜底规则的 `id` 为空串。 */
+export interface RulePreview {
+  id: string;
+  matched: number;
+  expired: number;
+}
+
+/** 按一份候选清理设置预演的结果。 */
+export interface CleanupPreview {
+  removed: number;
+  freedBytes: number;
+  expired: number;
+  overCount: number;
+  overStorage: number;
+  storageBlocked: boolean;
+  protected: number;
+  /** 只含已启用的规则。 */
+  rules: RulePreview[];
+  fallback: RulePreview;
 }
 
 /**
@@ -156,17 +207,7 @@ export interface ReclaimableCache {
   bytes: number;
 }
 
-/** 与 Rust `db::overview::ContentCategory` 对应的内容类别。 */
-export type ContentCategory =
-  | "text"
-  | "html"
-  | "rtf"
-  | "url"
-  | "email"
-  | "color"
-  | "path"
-  | "image"
-  | "files";
+export type { ContentCategory };
 
 export interface ItemTotals {
   total: number;
@@ -658,19 +699,64 @@ export const cleanResourceCache = async () => {
     "commands:labels.cleanCache",
   );
 
+  const freedBytes = result.removedBytes + result.compactedBytes;
   const messageKey =
-    result.removedFiles === 0 && result.removedBytes === 0
-      ? "commands:messages.cacheAlreadyClean"
-      : "commands:messages.cacheCleaned";
+    result.removedFiles > 0
+      ? "commands:messages.cacheCleaned"
+      : freedBytes > 0
+        ? "commands:messages.databaseCompacted"
+        : "commands:messages.cacheAlreadyClean";
 
   getMessageApi().success(
     i18n.t(messageKey, {
       count: result.removedFiles,
-      size: formatCommandBytes(result.removedBytes),
+      size: formatCommandBytes(freedBytes),
     }),
   );
 
   return result;
+};
+
+/**
+ * 读取最近一次清理结果与存储占用检查；后续变化走 `cleanup://status` 事件。
+ */
+export const getCleanupStatus = () => {
+  return call<CleanupStatus>(
+    TAURI_COMMAND.GET_CLEANUP_STATUS,
+    "commands:labels.loadCleanupStatus",
+  );
+};
+
+/**
+ * 按候选清理设置预演一轮清理，不删除任何记录。
+ */
+export const previewHistoryCleanup = (history: History) => {
+  return call<CleanupPreview>(
+    TAURI_COMMAND.PREVIEW_HISTORY_CLEANUP,
+    "commands:labels.previewHistoryCleanup",
+    { history },
+  );
+};
+
+/**
+ * 按当前设置立即清理一次，并提示清理结果。
+ */
+export const runHistoryCleanup = async () => {
+  const report = await call<CleanupReport>(
+    TAURI_COMMAND.RUN_HISTORY_CLEANUP,
+    "commands:labels.runHistoryCleanup",
+  );
+
+  getMessageApi().success(
+    report.removed === 0
+      ? i18n.t("commands:messages.historyAlreadyClean")
+      : i18n.t("commands:messages.historyCleaned", {
+          count: report.removed,
+          size: formatCommandBytes(report.freedBytes),
+        }),
+  );
+
+  return report;
 };
 
 /**

@@ -1,16 +1,14 @@
-import { InputNumber, Space } from "antd";
 import type { FC } from "react";
-import { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
-import type { RetentionUnit } from "@/types/settings";
+import { useState } from "react";
+import type { Retention } from "@/types/settings";
 import type {
   PreferenceSetting,
   RetentionSettingValue,
   SettingValue,
 } from "../../types/preferences";
+import { DEFAULT_RETENTION_UNITS } from "../../utils/retention";
+import RetentionDurationInput from "./RetentionDurationInput";
 import type { ControlProps } from "./types";
-
-const DEFAULT_RETENTION_UNIT: RetentionUnit = "days";
 
 interface RetentionControlProps extends ControlProps {
   setting: PreferenceSetting;
@@ -33,56 +31,34 @@ export function resolveRetentionValue(
     return value;
   }
 
-  return { unit: DEFAULT_RETENTION_UNIT, value: 0 };
+  return { unit: "forever", value: 0 };
 }
 
 /**
- * 历史保留周期控件：单位固定为天，0 表示不按时间清理。
+ * 默认保留时长控件：数值 + 单位，可选永久保留。
  */
 const RetentionControl: FC<RetentionControlProps> = (props) => {
-  const { t } = useTranslation("preferences");
   const { disabled, onChange, setting, value } = props;
-  const [draftValue, setDraftValue] = useState<number | null>(value.value);
+  // 用户取消确认时设置不变，换 key 重建输入框丢掉草稿值。
+  const [revision, setRevision] = useState(0);
 
-  useEffect(() => {
-    setDraftValue(value.value);
-  }, [value]);
+  const handleChange = async (next: Retention) => {
+    const saved = await onChange(setting, next);
+    if (saved !== false) return;
 
-  const commit = async (nextValue: number | null) => {
-    const normalizedValue = Math.max(0, nextValue ?? 0);
-    const next: RetentionSettingValue = {
-      unit: DEFAULT_RETENTION_UNIT,
-      value: normalizedValue,
-    };
-
-    setDraftValue(normalizedValue);
-    await onChange(setting, next);
-  };
-
-  const handleValueChange = (next: number | null) => {
-    setDraftValue(next);
-  };
-
-  const handleBlur = async () => {
-    await commit(draftValue);
-  };
-
-  const handlePressEnter = async () => {
-    await commit(draftValue);
+    setRevision((current) => {
+      return current + 1;
+    });
   };
 
   return (
-    <Space.Compact>
-      <InputNumber
-        disabled={disabled}
-        min={0}
-        onBlur={handleBlur}
-        onChange={handleValueChange}
-        onPressEnter={handlePressEnter}
-        value={draftValue}
-      />
-      <Space.Addon>{t("schema.retentionUnits.days")}</Space.Addon>
-    </Space.Compact>
+    <RetentionDurationInput
+      disabled={disabled}
+      key={revision}
+      onChange={handleChange}
+      units={DEFAULT_RETENTION_UNITS}
+      value={value}
+    />
   );
 };
 

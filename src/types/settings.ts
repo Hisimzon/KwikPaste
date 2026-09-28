@@ -2,6 +2,7 @@ import type {
   ClipboardCategory,
   ClipboardItemSort,
   ClipboardRange,
+  ContentCategory,
 } from "./clipboard";
 
 /**
@@ -60,7 +61,14 @@ export type ItemAction =
 
 export type CaptureKind = "files" | "image" | "html" | "rtf" | "text";
 
-export type RetentionUnit = "hours" | "days" | "weeks" | "months" | "forever";
+/** `minutes` 只用于自定义清理规则，默认保留时长不写这个单位。 */
+export type RetentionUnit =
+  | "minutes"
+  | "hours"
+  | "days"
+  | "weeks"
+  | "months"
+  | "forever";
 
 export type StorageLimitAction = "remind" | "cleanup";
 
@@ -168,10 +176,23 @@ export interface Retention {
   unit: RetentionUnit;
 }
 
+/** 自定义清理规则；所有条件同时满足才算命中，空数组 / 0 / false 表示不限。 */
+export interface RetentionRule {
+  id: string;
+  enabled: boolean;
+  categories: ContentCategory[];
+  minSizeKb: number;
+  sourceAppIds: string[];
+  sensitiveOnly: boolean;
+  unusedOnly: boolean;
+  keep: Retention;
+}
+
 export interface History {
   retention: Retention;
+  /** 自上而下匹配，记录按第一条命中的规则清理；都没命中时按 `retention`。 */
+  rules: RetentionRule[];
   maxCount: number;
-  cleanupIntervalHours: number;
   storageLimitMb: number;
   storageLimitAction: StorageLimitAction;
 }

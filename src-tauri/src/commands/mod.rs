@@ -3,6 +3,7 @@
 mod admin;
 mod autostart;
 mod backup;
+mod cleanup;
 mod clipboard;
 mod context_menu;
 mod drag;
@@ -18,6 +19,7 @@ mod window;
 pub use admin::*;
 pub use autostart::*;
 pub use backup::*;
+pub use cleanup::*;
 pub use clipboard::*;
 pub use context_menu::*;
 pub use drag::*;

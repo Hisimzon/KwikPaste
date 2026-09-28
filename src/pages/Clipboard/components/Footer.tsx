@@ -6,10 +6,11 @@ import KeyHint from "@/components/KeyHint";
 import Popover, { POPOVER_KEYBOARD_LAYER } from "@/components/Popover";
 import { clipboardStatsState } from "@/stores/clipboardStats";
 import ShortcutList from "./ShortcutList";
+import StorageLimitAlert from "./StorageLimitAlert";
 
 /**
  * 剪贴板窗口底部条：左侧统计当前过滤下的总条数（由 List 写入共享 store，
- * Rust 列表查询附带返回），右侧展示窗口快捷键提示。
+ * Rust 列表查询附带返回）和存储超限提示，右侧展示窗口快捷键提示。
  */
 const Footer = () => {
   const { t } = useTranslation("clipboard");
@@ -26,9 +27,12 @@ const Footer = () => {
 
   return (
     <div className="flex items-center justify-between px-3 py-1">
-      <span className="text-ant-tertiary text-xs">
-        {t("footer.total", { count: total ?? 0 })}
-      </span>
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="text-ant-tertiary text-xs">
+          {t("footer.total", { count: total ?? 0 })}
+        </span>
+        <StorageLimitAlert />
+      </div>
 
       <Popover
         content={<ShortcutList />}

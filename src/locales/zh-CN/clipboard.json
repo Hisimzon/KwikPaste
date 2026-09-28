@@ -25,6 +25,11 @@
   },
   "footer": {
     "shortcuts": "快捷键",
+    "storageAlert": {
+      "blocked": "本地数据已占用 {{used}}，超出上限 {{limit}}。普通记录已不足以释放空间，占用主要来自收藏、置顶、分组或有备注的记录。点击前往设置。",
+      "label": "存储超出上限",
+      "remind": "本地数据已占用 {{used}}，超出上限 {{limit}}。点击前往设置清理或调整上限。"
+    },
     "total": "共 {{count}} 项"
   },
   "groups": {

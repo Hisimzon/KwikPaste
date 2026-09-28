@@ -107,7 +107,9 @@ export default SortableCheckboxTreeControl;
  */
 function resolveTreeValue(value?: SettingValue) {
   if (Array.isArray(value)) {
-    return { order: value, selected: value };
+    const keys = resolveStringArray(value);
+
+    return { order: keys, selected: keys };
   }
 
   if (typeof value !== "object" || value === null) {

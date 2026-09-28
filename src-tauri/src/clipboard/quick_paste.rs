@@ -11,7 +11,9 @@ use super::storage::ImageStore;
 use super::watcher::CLIPBOARD_UPDATED_EVENT;
 use super::write::write_to_clipboard;
 use crate::core::Result;
-use crate::db::items::{find_item_by_id, find_item_id_at, increment_item_use_count};
+use crate::db::items::{
+    find_item_by_id, find_item_id_at, increment_item_use_count, touch_item_last_used,
+};
 use crate::db::models::ClipboardKind;
 use crate::db::DatabaseState;
 use crate::settings::{Content, SettingsStore};
@@ -73,6 +75,8 @@ pub async fn quick_paste(app: &AppHandle, offset: i64) -> Result<()> {
         ) {
             log::warn!("emit {CLIPBOARD_UPDATED_EVENT} after quick paste failed: {err}");
         }
+    } else if let Err(err) = touch_item_last_used(&pool, &id).await {
+        log::warn!("touch last used time of item {id} failed: {err}");
     }
 
     if !crate::keystroke::wait_for_modifiers_released(MODIFIER_RELEASE_TIMEOUT).await {

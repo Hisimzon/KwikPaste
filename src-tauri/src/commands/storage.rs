@@ -42,6 +42,8 @@ pub struct StorageUsage {
 pub struct CleanCacheResult {
     pub removed_files: u64,
     pub removed_bytes: u64,
+    /// 压缩数据库文件缩小的字节数。
+    pub compacted_bytes: u64,
     pub storage_usage: StorageUsage,
 }
 
@@ -202,7 +204,7 @@ fn ensure_storage_relocatable(app: &AppHandle) -> Result<()> {
     .into())
 }
 
-/// 删除资源目录中不再被历史记录或资源索引引用的文件。
+/// 删除资源目录中不再被历史记录或资源索引引用的文件，并压缩数据库文件。
 #[tauri::command]
 pub async fn clean_resource_cache(
     app: AppHandle,
@@ -211,9 +213,14 @@ pub async fn clean_resource_cache(
     let pool = db.pool().await;
     let removed = sweep_resource_cache(&app, &pool, CacheSweep::Delete).await?;
 
+    let before = database_bytes(&app)?;
+    crate::db::retention::compact(&pool).await?;
+    let compacted_bytes = before.saturating_sub(database_bytes(&app)?);
+
     Ok(CleanCacheResult {
         removed_files: removed.files,
         removed_bytes: removed.bytes,
+        compacted_bytes,
         storage_usage: get_storage_usage(app).await?,
     })
 }

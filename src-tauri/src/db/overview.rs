@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::core::Result;
-use crate::db::items::{absorb_deleted, CleanupOutcome};
+use crate::db::items::{absorb_deleted, CleanupOutcome, DeletedRow};
 use crate::db::models::{ClipboardKind, ClipboardSubKind};
 
 /// 来源应用排行只回传前几名，其余合并成一行，偏好页不需要全量列表。
@@ -61,7 +61,7 @@ impl ContentCategory {
     }
 
     /// 匹配该类别的 SQL 条件，与 [`Self::from_kind`] 的归类一一对应。
-    fn sql_condition(self) -> &'static str {
+    pub(crate) fn sql_condition(self) -> &'static str {
         match self {
             Self::Text => "kind = 'text' AND sub_kind IS NULL",
             Self::Html => "kind = 'text' AND sub_kind = 'html'",
@@ -216,10 +216,10 @@ pub async fn clear_scope(pool: &SqlitePool, scope: &ClearScope) -> Result<Cleanu
             qb.push("source_app_id IS NULL");
         }
     }
-    qb.push(" RETURNING kind, content");
+    qb.push(" RETURNING kind, content, size");
 
     let rows = qb
-        .build_query_as::<(ClipboardKind, String)>()
+        .build_query_as::<DeletedRow>()
         .fetch_all(pool)
         .await
         .context("failed to clear clipboard items in scope")?;

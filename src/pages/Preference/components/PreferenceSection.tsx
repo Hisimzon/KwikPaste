@@ -11,7 +11,7 @@ import type { Settings } from "@/types/settings";
 import type {
   PreferenceSection as PreferenceSectionModel,
   PreferenceSetting,
-  SettingValue,
+  PreferenceSettingChangeHandler,
 } from "../types/preferences";
 import { translatePreferenceSection } from "../utils/preferenceI18n";
 import PreferenceSettingRow from "./PreferenceSettingRow";
@@ -32,7 +32,7 @@ interface PreferenceSectionProps {
       | CleanCacheResult
       | ExportHistoryBackupResult,
   ) => void;
-  onChange: (setting: PreferenceSetting, value: SettingValue) => Promise<void>;
+  onChange: PreferenceSettingChangeHandler;
   onNavigateSetting: (settingId: string) => void;
   onStorageUsageChange: (usage: StorageUsage) => void;
 }

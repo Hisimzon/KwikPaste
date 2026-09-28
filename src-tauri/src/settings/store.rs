@@ -15,8 +15,8 @@ use tauri::AppHandle;
 use crate::core::{AppError, Result};
 
 use super::model::{
-    Language, Settings, WINDOW_OPEN_GROUP_PREFIX, WINDOW_OPEN_SELECTION_ALL,
-    WINDOW_OPEN_SELECTION_PRESERVE,
+    Language, RetentionRule, Settings, MAX_RETENTION_RULES, WINDOW_OPEN_GROUP_PREFIX,
+    WINDOW_OPEN_SELECTION_ALL, WINDOW_OPEN_SELECTION_PRESERVE,
 };
 
 const FILENAME: &str = "settings.json";
@@ -184,6 +184,7 @@ fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
 /// 校验设置之间的跨字段约束，避免非法配置写入磁盘。
 fn validate_settings(settings: &Settings) -> Result<()> {
     validate_window_open_group(&settings.clipboard.window.select_group_on_open)?;
+    validate_retention_rules(&settings.clipboard.history.rules)?;
 
     let open_clipboard = normalize_shortcut_value(&settings.shortcuts.open_clipboard);
     let open_preference = normalize_shortcut_value(&settings.shortcuts.open_preference);
@@ -217,6 +218,26 @@ fn validate_window_open_group(value: &str) -> Result<()> {
         return Err(AppError::Other(anyhow::anyhow!(
             "open group selection is invalid"
         )));
+    }
+
+    Ok(())
+}
+
+/// 校验自定义清理规则：条数有上限，id 非空且互不重复（前端按 id 对应逐条统计）。
+fn validate_retention_rules(rules: &[RetentionRule]) -> Result<()> {
+    if rules.len() > MAX_RETENTION_RULES {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "at most {MAX_RETENTION_RULES} cleanup rules are allowed"
+        )));
+    }
+
+    let mut ids = std::collections::HashSet::new();
+    for rule in rules {
+        if rule.id.trim().is_empty() || !ids.insert(rule.id.as_str()) {
+            return Err(AppError::Other(anyhow::anyhow!(
+                "cleanup rule ids must be unique and non-empty"
+            )));
+        }
     }
 
     Ok(())
@@ -340,7 +361,7 @@ mod tests {
         assert!(!parsed.clipboard.content.delete_pinned_items);
         assert!(parsed.clipboard.content.delete_pinned_confirm);
         assert!(!parsed.clipboard.content.update_on_reuse);
-        assert_eq!(parsed.clipboard.history.cleanup_interval_hours, 0);
+        assert!(parsed.clipboard.history.rules.is_empty());
         assert_eq!(
             parsed.clipboard.history.storage_limit_mb,
             crate::settings::DEFAULT_STORAGE_LIMIT_MB
@@ -407,7 +428,14 @@ mod tests {
         let history = parsed.clipboard.history;
 
         assert_eq!(history.max_count, 500);
-        assert_eq!(history.cleanup_interval_hours, 6);
+        assert_eq!(
+            history.retention,
+            crate::settings::Retention {
+                value: 7,
+                unit: crate::settings::RetentionUnit::Days
+            }
+        );
+        assert!(history.rules.is_empty());
         assert_eq!(
             history.storage_limit_mb,
             crate::settings::DEFAULT_STORAGE_LIMIT_MB
@@ -416,6 +444,70 @@ mod tests {
             history.storage_limit_action,
             crate::settings::StorageLimitAction::Remind
         );
+        // 已废弃的清理周期不再写回设置文件。
+        let json = serde_json::to_value(&history).unwrap();
+        assert!(json.get("cleanupIntervalHours").is_none());
+    }
+
+    #[test]
+    fn retention_rules_round_trip_with_defaults_for_missing_fields() {
+        let parsed: Settings = serde_json::from_str(
+            r#"{
+                "clipboard": {
+                    "history": {
+                        "rules": [
+                            {
+                                "id": "big-images",
+                                "categories": ["image"],
+                                "minSizeKb": 5120,
+                                "keep": {"value": 3, "unit": "days"}
+                            },
+                            {"id": "secrets", "sensitiveOnly": true, "keep": {"value": 30, "unit": "minutes"}}
+                        ]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        let rules = &parsed.clipboard.history.rules;
+
+        assert_eq!(rules.len(), 2);
+        assert!(rules[0].enabled);
+        assert_eq!(
+            rules[0].categories,
+            [crate::db::overview::ContentCategory::Image]
+        );
+        assert_eq!(rules[0].min_size_kb, 5120);
+        assert!(rules[1].sensitive_only);
+        assert_eq!(rules[1].keep.unit, crate::settings::RetentionUnit::Minutes);
+        assert!(validate_settings(&parsed).is_ok());
+    }
+
+    #[test]
+    fn validate_settings_rejects_duplicate_or_empty_rule_ids() {
+        let mut settings = Settings::default();
+        settings.clipboard.history.rules = vec![
+            RetentionRule {
+                id: "a".to_owned(),
+                ..RetentionRule::default()
+            },
+            RetentionRule {
+                id: "a".to_owned(),
+                ..RetentionRule::default()
+            },
+        ];
+        assert!(validate_settings(&settings).is_err());
+
+        settings.clipboard.history.rules = vec![RetentionRule::default()];
+        assert!(validate_settings(&settings).is_err());
+
+        settings.clipboard.history.rules = (0..=MAX_RETENTION_RULES)
+            .map(|index| RetentionRule {
+                id: index.to_string(),
+                ..RetentionRule::default()
+            })
+            .collect();
+        assert!(validate_settings(&settings).is_err());
     }
 
     #[test]

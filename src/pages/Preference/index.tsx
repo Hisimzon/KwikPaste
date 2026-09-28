@@ -34,6 +34,7 @@ import {
   isPreferenceSettingCollapsed,
   preferenceTabs,
 } from "./config/preferenceSchema";
+import { confirmHistoryCleanupChange } from "./services/historyCleanup";
 import {
   commitSettingChange,
   settingValuesEqual,
@@ -54,6 +55,7 @@ import {
   type PreferenceSearchResult,
   searchPreferenceSettings,
 } from "./utils/preferenceSearch";
+import { buildNextHistory } from "./utils/retention";
 
 type PreferenceHighlightTarget = {
   settingId: string;
@@ -235,20 +237,37 @@ const Preference: FC = () => {
     setStorageState("ready");
   };
 
+  /**
+   * 保存单个设置；清理设置保存后若会立即删除记录，先预演并让用户确认。
+   * 返回 `false` 表示没有保存，控件据此回退草稿值。
+   */
   const handleSettingChange = async (
     setting: PreferenceSetting,
     value: SettingValue,
   ) => {
-    if (!setting.path) return;
+    if (!setting.path) return false;
 
     const currentValue = setting.value?.(settings);
-    if (currentValue === void 0) return;
-    if (settingValuesEqual(currentValue, value)) return;
+    if (currentValue === void 0) return false;
+    if (settingValuesEqual(currentValue, value)) return true;
+
+    const nextHistory = buildNextHistory(
+      settings.clipboard.history,
+      setting.path,
+      value,
+    );
+    if (nextHistory) {
+      const confirmed = await confirmHistoryCleanupChange(nextHistory);
+      if (!confirmed) return false;
+    }
 
     try {
       await commitSettingChange(setting, value);
+
+      return true;
     } catch {
       // 错误 toast 已由 commands 层统一处理；设置镜像等待 Rust 事件回灌。
+      return false;
     }
   };
 

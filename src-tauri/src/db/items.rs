@@ -94,14 +94,14 @@ pub async fn find_item_by_content_hash(pool: &SqlitePool, hash: &str) -> Result<
     Ok(id)
 }
 
-/// 插入一条剪贴板记录（不做去重；去重请走 [`upsert_item`]）。
+/// 插入一条剪贴板记录（不做去重；去重请走 [`upsert_item`]）。最后使用时间取 `updated_at`。
 pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> {
     sqlx::query(
         "INSERT INTO clipboard_items \
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
           summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-          created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          created_at, updated_at, last_used_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(item.id.as_str())
     .bind(item.kind)
@@ -123,6 +123,7 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     .bind(item.platform)
     .bind(item.note.as_deref())
     .bind(item.created_at)
+    .bind(item.updated_at)
     .bind(item.updated_at)
     .execute(pool)
     .await
@@ -259,16 +260,31 @@ pub async fn update_item_group(pool: &SqlitePool, id: &str, group_id: Option<&st
     Ok(())
 }
 
-/// `use_count + 1` 并刷新 `updated_at`（命中去重时复用）。
+/// `use_count + 1` 并刷新 `updated_at` 与最后使用时间（命中去重时复用）。
 pub async fn increment_item_use_count(pool: &SqlitePool, id: &str) -> Result<()> {
+    let now = Utc::now();
     sqlx::query(
-        "UPDATE clipboard_items SET use_count = use_count + 1, updated_at = ? WHERE id = ?",
+        "UPDATE clipboard_items SET use_count = use_count + 1, updated_at = ?, last_used_at = ? \
+         WHERE id = ?",
     )
-    .bind(Utc::now())
+    .bind(now)
+    .bind(now)
     .bind(id)
     .execute(pool)
     .await
     .context("failed to increment clipboard item use_count")?;
+    Ok(())
+}
+
+/// 只刷新最后使用时间：「复用时更新」关闭时从历史复制 / 粘贴也算用过，
+/// 自动清理据此判断，列表排序与使用次数保持不变。
+pub async fn touch_item_last_used(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("UPDATE clipboard_items SET last_used_at = ? WHERE id = ?")
+        .bind(Utc::now())
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("failed to touch clipboard item last used time")?;
     Ok(())
 }
 
@@ -316,125 +332,22 @@ pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
-/// 历史清理的结果：删除行数 + 其中图片记录的落盘文件名（供调用方删图）。
+/// 一批删除的结果：删除行数、其中图片记录的落盘文件名（供调用方删图），
+/// 以及非图片记录的内容字节数（图片的实际占用由调用方按落盘文件统计）。
 #[derive(Debug, Default)]
 pub struct CleanupOutcome {
     pub removed: u64,
     pub image_files: Vec<String>,
+    pub content_bytes: u64,
 }
 
-/// 历史清理：按「时间下限」和「最大条数」删除条目；置顶 / 收藏项一律保留。
-/// 返回删除行数与被删图片的文件名。`older_than = None` 跳过时长清理；`max_count = None` 或 `Some(0)` 跳过条数清理。
-pub async fn cleanup_history(
-    pool: &SqlitePool,
-    older_than: Option<chrono::DateTime<chrono::Utc>>,
-    max_count: Option<u32>,
-) -> Result<CleanupOutcome> {
-    let mut outcome = CleanupOutcome::default();
-
-    if let Some(cutoff) = older_than {
-        let rows = sqlx::query_as::<_, (ClipboardKind, String)>(
-            "DELETE FROM clipboard_items \
-             WHERE is_pinned = 0 AND is_favorite = 0 AND created_at < ? \
-             RETURNING kind, content",
-        )
-        .bind(cutoff)
-        .fetch_all(pool)
-        .await
-        .context("failed to cleanup clipboard items by retention")?;
-        absorb_deleted(&mut outcome, rows);
+impl CleanupOutcome {
+    /// 合并另一批删除结果。
+    pub fn merge(&mut self, other: CleanupOutcome) {
+        self.removed += other.removed;
+        self.image_files.extend(other.image_files);
+        self.content_bytes += other.content_bytes;
     }
-
-    if let Some(max) = max_count.filter(|n| *n > 0) {
-        // 仅在非置顶 / 非收藏集合内按 created_at DESC 保留前 max 条，多余的删除。
-        // SQLite 中 `LIMIT -1 OFFSET n` 表示「跳过前 n 条，剩下全要」。
-        let rows = sqlx::query_as::<_, (ClipboardKind, String)>(
-            "DELETE FROM clipboard_items WHERE id IN ( \
-                 SELECT id FROM clipboard_items \
-                 WHERE is_pinned = 0 AND is_favorite = 0 \
-                 ORDER BY created_at DESC \
-                 LIMIT -1 OFFSET ? \
-             ) \
-             RETURNING kind, content",
-        )
-        .bind(max as i64)
-        .fetch_all(pool)
-        .await
-        .context("failed to cleanup clipboard items by max_count")?;
-        absorb_deleted(&mut outcome, rows);
-    }
-
-    Ok(outcome)
-}
-
-/// 按存储上限清理时每条 DELETE 绑定的 id 数，远低于 SQLite 的绑定参数上限。
-const STORAGE_CLEANUP_DELETE_BATCH: usize = 500;
-
-/// 按存储上限清理：从最旧的普通记录开始删，直到预估释放量达到 `bytes_to_free`；置顶 / 收藏项一律保留。
-///
-/// 文本按 `size` 估算，图片由 `image_bytes` 按落盘文件估算。估算只决定删到哪一条为止：
-/// 调用方下一轮会重新统计实际占用，估少了多删几条最旧记录，估多了下一轮再补删。
-/// 删光全部普通记录也达不到目标时（占用主要来自收藏、置顶或缓存）不删任何记录，避免白白清空历史。
-pub async fn cleanup_oldest_until(
-    pool: &SqlitePool,
-    bytes_to_free: u64,
-    image_bytes: impl Fn(&str) -> u64,
-) -> Result<CleanupOutcome> {
-    if bytes_to_free == 0 {
-        return Ok(CleanupOutcome::default());
-    }
-
-    // 只为图片取 content（落盘文件名），避免把大段文本整批读进内存。
-    let candidates = sqlx::query_as::<_, (String, ClipboardKind, Option<String>, Option<i64>)>(
-        "SELECT id, kind, CASE WHEN kind = 'image' THEN content END, size \
-             FROM clipboard_items \
-             WHERE is_pinned = 0 AND is_favorite = 0 \
-             ORDER BY created_at ASC",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list clipboard items for storage cleanup")?;
-
-    let mut freed = 0_u64;
-    let mut ids = Vec::new();
-    for (id, kind, image_file, size) in candidates {
-        if freed >= bytes_to_free {
-            break;
-        }
-
-        freed += match (kind, image_file) {
-            (ClipboardKind::Image, Some(file_name)) => image_bytes(&file_name),
-            _ => size.map_or(0, |size| size.max(0) as u64),
-        };
-        ids.push(id);
-    }
-
-    let mut outcome = CleanupOutcome::default();
-    if freed < bytes_to_free {
-        return Ok(outcome);
-    }
-
-    for batch in ids.chunks(STORAGE_CLEANUP_DELETE_BATCH) {
-        // 选取与删除之间用户可能刚收藏 / 置顶了某条，删除时再校验一次保护条件。
-        let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-            "DELETE FROM clipboard_items \
-             WHERE is_pinned = 0 AND is_favorite = 0 AND id IN (",
-        );
-        let mut separated = qb.separated(", ");
-        for id in batch {
-            separated.push_bind(id);
-        }
-        separated.push_unseparated(") RETURNING kind, content");
-
-        let rows = qb
-            .build_query_as::<(ClipboardKind, String)>()
-            .fetch_all(pool)
-            .await
-            .context("failed to cleanup clipboard items by storage limit")?;
-        absorb_deleted(&mut outcome, rows);
-    }
-
-    Ok(outcome)
 }
 
 /// SQLite 空闲页占用的字节数。删行只会把页挂回空闲列表、不缩小数据库文件，
@@ -451,13 +364,18 @@ pub async fn reusable_page_bytes(pool: &SqlitePool) -> Result<u64> {
     Ok(bytes.max(0) as u64)
 }
 
-/// 把一批被删行计入 outcome：累加行数，并收集其中的图片文件名。
-pub(crate) fn absorb_deleted(outcome: &mut CleanupOutcome, rows: Vec<(ClipboardKind, String)>) {
+/// 删除语句 `RETURNING kind, content, size` 返回的一行。
+pub(crate) type DeletedRow = (ClipboardKind, String, Option<i64>);
+
+/// 把一批被删行计入 outcome：累加行数与非图片内容字节，并收集其中的图片文件名。
+pub(crate) fn absorb_deleted(outcome: &mut CleanupOutcome, rows: Vec<DeletedRow>) {
     outcome.removed += rows.len() as u64;
-    outcome.image_files.extend(
-        rows.into_iter()
-            .filter_map(|(kind, content)| image_file_name(kind, content)),
-    );
+    for (kind, content, size) in rows {
+        match image_file_name(kind, content) {
+            Some(file_name) => outcome.image_files.push(file_name),
+            None => outcome.content_bytes += size.map_or(0, |size| size.max(0) as u64),
+        }
+    }
 }
 
 /// 清空记录，返回删除行数与被删图片文件名；未显式删除的收藏 / 置顶项会保留。
@@ -477,10 +395,10 @@ pub async fn clear_items(
         qb.push(if has_condition { " AND " } else { " WHERE " });
         qb.push("is_pinned = 0");
     }
-    qb.push(" RETURNING kind, content");
+    qb.push(" RETURNING kind, content, size");
 
     let rows = qb
-        .build_query_as::<(ClipboardKind, String)>()
+        .build_query_as::<DeletedRow>()
         .fetch_all(pool)
         .await
         .context("failed to clear clipboard items")?;
@@ -1238,6 +1156,33 @@ mod tests {
         assert!(after.updated_at > original_updated_at);
     }
 
+    async fn last_used_at(pool: &SqlitePool, id: &str) -> chrono::DateTime<Utc> {
+        sqlx::query_scalar("SELECT last_used_at FROM clipboard_items WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn last_used_time_starts_at_capture_and_follows_reuse() {
+        let pool = memory_pool().await;
+        let item = sample_item("a");
+        insert_item(&pool, &item).await.unwrap();
+        assert_eq!(last_used_at(&pool, "a").await, item.updated_at);
+
+        increment_item_use_count(&pool, "a").await.unwrap();
+        let reused = find_item_by_id(&pool, "a").await.unwrap().unwrap();
+        assert_eq!(last_used_at(&pool, "a").await, reused.updated_at);
+
+        // 只记使用时间：列表排序用的 updated_at 与使用次数不变。
+        touch_item_last_used(&pool, "a").await.unwrap();
+        let touched = find_item_by_id(&pool, "a").await.unwrap().unwrap();
+        assert!(last_used_at(&pool, "a").await > reused.updated_at);
+        assert_eq!(touched.updated_at, reused.updated_at);
+        assert_eq!(touched.use_count, reused.use_count);
+    }
+
     #[tokio::test]
     async fn delete_item_removes_row() {
         let pool = memory_pool().await;
@@ -1336,160 +1281,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_history_drops_old_items_keeping_pinned_and_favorite() {
-        let pool = memory_pool().await;
-        let mk = |id: &str, ts: i64, fav: bool, pin: bool| {
-            let mut it = sample_item(id);
-            it.created_at = DateTime::from_timestamp(ts, 0).unwrap();
-            it.is_favorite = fav;
-            it.is_pinned = pin;
-            it
-        };
-        let old_plain = mk("old", 1_000, false, false);
-        let old_fav = mk("old-fav", 1_000, true, false);
-        let old_pin = mk("old-pin", 1_000, false, true);
-        let recent = mk("recent", 9_000, false, false);
-        for item in [&old_plain, &old_fav, &old_pin, &recent] {
-            insert_item(&pool, item).await.unwrap();
-        }
-
-        let cutoff = DateTime::from_timestamp(5_000, 0).unwrap();
-        let outcome = cleanup_history(&pool, Some(cutoff), None).await.unwrap();
-        assert_eq!(outcome.removed, 1);
-        assert!(outcome.image_files.is_empty());
-
-        let all = query_items(&pool, &ClipboardItemQuery::default())
-            .await
-            .unwrap();
-        // 置顶项恒前置；保留集合：old-pin、old-fav、recent。
-        assert_eq!(ids(&all), ["old-pin", "recent", "old-fav"]);
-    }
-
-    #[tokio::test]
-    async fn cleanup_history_enforces_max_count_keeping_pinned_and_favorite() {
-        let pool = memory_pool().await;
-        // 五条普通项 + 一条收藏 + 一条置顶；max_count = 2 时仅保留两条最新的普通项。
-        for n in 0..5i64 {
-            let mut it = sample_item(&format!("p{n}"));
-            it.created_at = DateTime::from_timestamp(1_000 + n, 0).unwrap();
-            insert_item(&pool, &it).await.unwrap();
-        }
-        let mut fav = sample_item("fav");
-        fav.is_favorite = true;
-        fav.created_at = DateTime::from_timestamp(500, 0).unwrap();
-        insert_item(&pool, &fav).await.unwrap();
-        let mut pin = sample_item("pin");
-        pin.is_pinned = true;
-        pin.created_at = DateTime::from_timestamp(400, 0).unwrap();
-        insert_item(&pool, &pin).await.unwrap();
-
-        let outcome = cleanup_history(&pool, None, Some(2)).await.unwrap();
-        assert_eq!(outcome.removed, 3); // p0, p1, p2 被删
-        assert!(outcome.image_files.is_empty());
-
-        let all = query_items(&pool, &ClipboardItemQuery::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&all), ["pin", "p4", "p3", "fav"]);
-    }
-
-    #[tokio::test]
-    async fn cleanup_history_no_op_when_both_disabled() {
-        let pool = memory_pool().await;
-        insert_item(&pool, &sample_item("a")).await.unwrap();
-        assert_eq!(cleanup_history(&pool, None, None).await.unwrap().removed, 0);
-        assert_eq!(
-            cleanup_history(&pool, None, Some(0)).await.unwrap().removed,
-            0
-        );
-        let all = query_items(&pool, &ClipboardItemQuery::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&all), ["a"]);
-    }
-
-    #[tokio::test]
-    async fn cleanup_history_collects_deleted_image_file_names() {
-        let pool = memory_pool().await;
-        // 一条旧图片 + 一条旧文本，都早于 cutoff；只有图片应进入 image_files。
-        let mut img = sample_item("img");
-        img.kind = ClipboardKind::Image;
-        img.content = "cafe1234.png".to_owned();
-        img.content_hash = content_hash(ClipboardKind::Image, "cafe1234.png");
-        img.created_at = DateTime::from_timestamp(1_000, 0).unwrap();
-        let mut txt = sample_item("txt");
-        txt.created_at = DateTime::from_timestamp(1_000, 0).unwrap();
-        insert_item(&pool, &img).await.unwrap();
-        insert_item(&pool, &txt).await.unwrap();
-
-        let cutoff = DateTime::from_timestamp(5_000, 0).unwrap();
-        let outcome = cleanup_history(&pool, Some(cutoff), None).await.unwrap();
-        assert_eq!(outcome.removed, 2);
-        assert_eq!(outcome.image_files, vec!["cafe1234.png".to_owned()]);
-    }
-
-    #[tokio::test]
-    async fn cleanup_oldest_until_frees_oldest_plain_items_first() {
-        let pool = memory_pool().await;
-        // 四条普通文本各 100 字节（t0 最旧）+ 更旧的收藏与置顶；要求释放 150 字节时删 t0、t1。
-        for n in 0..4i64 {
-            let mut it = sample_item(&format!("t{n}"));
-            it.size = Some(100);
-            it.created_at = DateTime::from_timestamp(1_000 + n, 0).unwrap();
-            insert_item(&pool, &it).await.unwrap();
-        }
-        let mut fav = sample_item("fav");
-        fav.size = Some(10_000);
-        fav.is_favorite = true;
-        fav.created_at = DateTime::from_timestamp(10, 0).unwrap();
-        insert_item(&pool, &fav).await.unwrap();
-        let mut pin = sample_item("pin");
-        pin.size = Some(10_000);
-        pin.is_pinned = true;
-        pin.created_at = DateTime::from_timestamp(20, 0).unwrap();
-        insert_item(&pool, &pin).await.unwrap();
-
-        let outcome = cleanup_oldest_until(&pool, 150, |_| 0).await.unwrap();
-        assert_eq!(outcome.removed, 2);
-
-        let all = query_items(&pool, &ClipboardItemQuery::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&all), ["pin", "t3", "t2", "fav"]);
-    }
-
-    #[tokio::test]
-    async fn cleanup_oldest_until_sizes_images_by_stored_files() {
-        let pool = memory_pool().await;
-        let mut img = sample_item("img");
-        img.kind = ClipboardKind::Image;
-        img.content = "cafe1234.png".to_owned();
-        img.content_hash = content_hash(ClipboardKind::Image, "cafe1234.png");
-        img.size = Some(1);
-        img.created_at = DateTime::from_timestamp(1_000, 0).unwrap();
-        let mut txt = sample_item("txt");
-        txt.size = Some(1);
-        txt.created_at = DateTime::from_timestamp(2_000, 0).unwrap();
-        insert_item(&pool, &img).await.unwrap();
-        insert_item(&pool, &txt).await.unwrap();
-
-        // 图片按落盘文件计 5 000 字节，一条就够，较新的文本保留。
-        let outcome = cleanup_oldest_until(&pool, 4_000, |file_name| {
-            assert_eq!(file_name, "cafe1234.png");
-            5_000
-        })
-        .await
-        .unwrap();
-        assert_eq!(outcome.removed, 1);
-        assert_eq!(outcome.image_files, vec!["cafe1234.png".to_owned()]);
-
-        let all = query_items(&pool, &ClipboardItemQuery::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&all), ["txt"]);
-    }
-
-    #[tokio::test]
     async fn deleted_rows_count_as_reusable_page_bytes() {
         let pool = memory_pool().await;
         for n in 0..40 {
@@ -1508,35 +1299,6 @@ mod tests {
             after >= before + 40 * 16 * 1024,
             "before={before} after={after}"
         );
-    }
-
-    #[tokio::test]
-    async fn cleanup_oldest_until_keeps_history_when_target_is_unreachable() {
-        let pool = memory_pool().await;
-        for n in 0..3i64 {
-            let mut it = sample_item(&format!("t{n}"));
-            it.size = Some(100);
-            it.created_at = DateTime::from_timestamp(1_000 + n, 0).unwrap();
-            insert_item(&pool, &it).await.unwrap();
-        }
-
-        // 普通记录总共只有 300 字节，删光也释放不了 1 000 字节，应一条不删。
-        let outcome = cleanup_oldest_until(&pool, 1_000, |_| 0).await.unwrap();
-        assert_eq!(outcome.removed, 0);
-
-        let all = query_items(&pool, &ClipboardItemQuery::default())
-            .await
-            .unwrap();
-        assert_eq!(all.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn cleanup_oldest_until_is_no_op_without_bytes_to_free() {
-        let pool = memory_pool().await;
-        insert_item(&pool, &sample_item("a")).await.unwrap();
-
-        let outcome = cleanup_oldest_until(&pool, 0, |_| 0).await.unwrap();
-        assert_eq!(outcome.removed, 0);
     }
 
     #[test]
@@ -1793,14 +1555,21 @@ mod tests {
         expected.insert("glacier", vec![]);
         assert_fts_state(&pool, "delete_item", &expected).await;
 
-        // a、b 已收藏，c 已置顶；非收藏 / 非置顶的 e、f 只保留最新的 f。
-        let cleanup = cleanup_history(&pool, None, Some(1)).await.unwrap();
+        // a、b 已收藏，c 已置顶，e 有备注；自动清理只删普通记录 f。
+        let everything = crate::db::retention::AgePlan {
+            rules: Vec::new(),
+            fallback_cutoff: Some(DateTime::from_timestamp(1_900_000_000, 0).unwrap()),
+        };
+        let cleanup =
+            crate::db::retention::delete_expired(&mut pool.acquire().await.unwrap(), &everything)
+                .await
+                .unwrap();
         assert_eq!(cleanup.removed, 1);
-        expected.insert("meadow", vec![]);
-        expected.insert("lantern", vec!["f"]);
-        assert_fts_state(&pool, "cleanup_history max_count", &expected).await;
+        expected.insert("lantern", vec!["e"]);
+        assert_fts_state(&pool, "retention cleanup", &expected).await;
 
         assert_eq!(clear_items(&pool, false, false).await.unwrap().removed, 1);
+        expected.insert("meadow", vec![]);
         expected.insert("lantern", vec![]);
         assert_fts_state(&pool, "clear_items keep favorite/pinned", &expected).await;
 
@@ -1832,17 +1601,34 @@ mod tests {
             .unwrap();
 
         // 旧库：在 AFTER UPDATE 触发器下写入、改写备注并更新非索引列。
-        let mut a = sample_item("a");
-        a.search_text = Some("quartz".to_owned());
-        a.note = Some("amber".to_owned());
-        let mut b = sample_item("b");
-        b.search_text = Some("velvet".to_owned());
-        for item in [&a, &b] {
-            insert_item(&pool, item).await.unwrap();
+        // 旧表结构还没有 last_used_at，写入与计数只能按当时的列来。
+        for (id, search_text, note) in [("a", "quartz", Some("amber")), ("b", "velvet", None)] {
+            sqlx::query(
+                "INSERT INTO clipboard_items \
+                 (id, kind, content, content_hash, search_text, use_count, platform, note, \
+                  created_at, updated_at) \
+                 VALUES (?, 'text', ?, ?, ?, 1, 'macos', ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(format!("content-{id}"))
+            .bind(id)
+            .bind(search_text)
+            .bind(note)
+            .bind("2026-01-01T00:00:00+00:00")
+            .bind(format!(
+                "2026-01-0{}T00:00:00+00:00",
+                if id == "a" { 2 } else { 3 }
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
         }
         update_item_note(&pool, "a", Some("tundra")).await.unwrap();
         update_item_note(&pool, "b", Some("amber")).await.unwrap();
-        increment_item_use_count(&pool, "a").await.unwrap();
+        sqlx::query("UPDATE clipboard_items SET use_count = use_count + 1 WHERE id = 'a'")
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(toggle_item_favorite(&pool, "b").await.unwrap());
         let mut expected = std::collections::BTreeMap::from([
             ("quartz", vec!["a"]),
@@ -1867,6 +1653,19 @@ mod tests {
         );
         // 旧触发器维护的索引本来一致，升级无需 rebuild，检索结果不变。
         assert_fts_state(&pool, "after upgrade", &expected).await;
+        // 升级前的记录以 updated_at 作为最后使用时间。
+        let last_used: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, last_used_at FROM clipboard_items ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            last_used,
+            [
+                ("a".to_owned(), "2026-01-02T00:00:00+00:00".to_owned()),
+                ("b".to_owned(), "2026-01-03T00:00:00+00:00".to_owned()),
+            ]
+        );
 
         // 升级后继续变更：非索引列只改 1 行，备注、search_text 与删除仍保持一致。
         let before = total_changes(&pool).await;

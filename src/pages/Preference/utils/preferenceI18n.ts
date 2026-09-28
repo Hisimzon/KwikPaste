@@ -105,6 +105,7 @@ export function translatePreferenceControlLabel(
   if (
     setting.control.type !== "action" &&
     setting.control.type !== "status" &&
+    setting.control.type !== "cleanupStatus" &&
     setting.control.type !== "sortableTree" &&
     setting.control.type !== "sortableCheckboxTree"
   ) {

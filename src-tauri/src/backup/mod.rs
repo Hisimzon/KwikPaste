@@ -1194,12 +1194,13 @@ async fn merge_items(
             continue;
         }
 
+        // 备份可能来自还没有 last_used_at 的旧版本，统一以 updated_at 作为最后使用时间。
         sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
               summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-              created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              created_at, updated_at, last_used_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id)
         .bind(row.kind)
@@ -1221,6 +1222,7 @@ async fn merge_items(
         .bind(row.platform)
         .bind(row.note)
         .bind(row.created_at)
+        .bind(row.updated_at)
         .bind(row.updated_at)
         .execute(&mut **tx)
         .await

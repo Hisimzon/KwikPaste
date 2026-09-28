@@ -1,4 +1,4 @@
-import type { RetentionUnit, Settings } from "@/types/settings";
+import type { RetentionRule, RetentionUnit, Settings } from "@/types/settings";
 
 export type PreferenceTabId =
   | "general"
@@ -27,7 +27,8 @@ export type SettingValue =
   | string
   | string[]
   | SortableCheckboxTreeSettingValue
-  | RetentionSettingValue;
+  | RetentionSettingValue
+  | RetentionRule[];
 
 export type PreferenceStorageState = "loading" | "ready" | "error";
 
@@ -69,6 +70,8 @@ export type PreferenceControl =
       suffixKey?: string;
     }
   | { type: "retention" }
+  | { type: "retentionRules" }
+  | { type: "cleanupStatus" }
   | { type: "text" }
   | { type: "shortcutRecorder" }
   | { type: "textarea" }
@@ -90,10 +93,14 @@ export interface PreferenceSetting {
   value?: (settings: Settings) => SettingValue;
 }
 
+/**
+ * 提交设置变更；偏好页返回 `false` 表示没有保存（用户取消确认或保存失败），控件据此回退草稿值。
+ * 引导页等只管保存的调用方可以不返回值。
+ */
 export type PreferenceSettingChangeHandler = (
   setting: PreferenceSetting,
   value: SettingValue,
-) => Promise<void>;
+) => Promise<boolean> | Promise<void>;
 
 export interface PreferenceSection {
   id: string;

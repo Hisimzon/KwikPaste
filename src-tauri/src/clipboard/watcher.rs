@@ -141,6 +141,9 @@ pub async fn persist_and_notify(
         }
     }
     let result = upsert_item(pool, &item_to_write).await?;
+    if !result.deduplicated {
+        super::cleanup::notify_inserted(app);
+    }
     sound::maybe_play_copy(app);
     if let Err(err) = app.emit(
         CLIPBOARD_UPDATED_EVENT,

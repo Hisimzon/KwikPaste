@@ -20,6 +20,7 @@ use crate::clipboard::{
 use crate::core::{AppError, Result};
 use crate::db::items::{
     clear_items, find_item_by_id, find_item_for_list_by_id, increment_item_use_count,
+    touch_item_last_used,
 };
 use crate::db::models::{
     ClipboardAction, ClipboardApp, ClipboardGroup, ClipboardItem, ClipboardItemPage,
@@ -732,6 +733,10 @@ async fn mark_item_reused_if_enabled(
 ) -> Result<()> {
     let settings = app.state::<SettingsStore>().snapshot();
     if !settings.clipboard.content.update_on_reuse {
+        // 不计复用也要记下用过，自动清理按最后使用时间判断。
+        if let Err(err) = touch_item_last_used(pool, id).await {
+            log::warn!("touch last used time of item {id} failed: {err}");
+        }
         return Ok(());
     }
 

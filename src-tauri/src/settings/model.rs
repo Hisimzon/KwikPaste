@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::db::models::ClipboardItemSort;
+use crate::db::overview::ContentCategory;
 
 pub const WINDOW_OPEN_SELECTION_PRESERVE: &str = "preserve";
 pub const WINDOW_OPEN_SELECTION_ALL: &str = "all";
@@ -566,15 +567,22 @@ pub enum PreviewHoverDelayMs {
 
 pub const DEFAULT_STORAGE_LIMIT_MB: u32 = 1024;
 pub const MIN_STORAGE_LIMIT_MB: u32 = 100;
+/// 自定义清理规则条数上限，控制每轮清理 SQL 的规模。
+pub const MAX_RETENTION_RULES: usize = 32;
 
+/// 历史记录自动清理。收藏、置顶、放进自定义分组和写了备注的记录始终保留。
+///
+/// 已发布版本还有 `cleanupIntervalHours`（清理周期）：现在改为随设置变更、新记录与后台检查即时清理，
+/// 旧文件里的这个字段读取时直接忽略。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct History {
+    /// 默认保留时长：没有命中任何自定义规则的记录，超过这段时间没用过就清理。
     pub retention: Retention,
-    /// 最多保留条数。`0` = 不限。
+    /// 自定义规则，自上而下匹配，记录按第一条命中的规则清理。
+    pub rules: Vec<RetentionRule>,
+    /// 普通记录最多保留条数，超出后清理最久没用的。`0` = 不限。
     pub max_count: u32,
-    /// 自动清理周期（小时）。`0` = 关闭周期清理，但启动时仍清理一次。
-    pub cleanup_interval_hours: u32,
     /// 本地存储上限（MB），偏好页的存储占用以它为满格。
     pub storage_limit_mb: u32,
     /// 占用超过 `storage_limit_mb` 后的处理方式。
@@ -585,8 +593,8 @@ impl Default for History {
     fn default() -> Self {
         Self {
             retention: Retention::default(),
+            rules: Vec::new(),
             max_count: 0,
-            cleanup_interval_hours: 0,
             storage_limit_mb: DEFAULT_STORAGE_LIMIT_MB,
             storage_limit_action: StorageLimitAction::Remind,
         }
@@ -603,14 +611,50 @@ impl History {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StorageLimitAction {
-    /// 只在偏好页提醒，不删除任何数据。
+    /// 只提醒，不删除任何数据。
     #[default]
     Remind,
-    /// 从最旧的普通记录开始自动清理，直到回到上限以内；收藏与置顶保留。
+    /// 从最久没用的普通记录开始自动清理，直到回到上限以内。
     Cleanup,
 }
 
-/// 历史保留时长。`unit = Forever` 时忽略 `value`。
+/// 一条自定义清理规则。所有条件同时满足才算命中；条件留空表示不限。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RetentionRule {
+    /// 前端生成的稳定 id，列表渲染和逐条统计按它对应。
+    pub id: String,
+    pub enabled: bool,
+    /// 内容类别，空 = 全部。
+    pub categories: Vec<ContentCategory>,
+    /// 只命中大于这个大小（KB）的记录，`0` = 不限；文件记录没有大小，设了就不会命中。
+    pub min_size_kb: u32,
+    /// 来源应用 id，空 = 全部。
+    pub source_app_ids: Vec<String>,
+    /// 只命中识别为密钥 / Token 的敏感记录。
+    pub sensitive_only: bool,
+    /// 只命中采集后再没用过的记录。
+    pub unused_only: bool,
+    /// 命中后超过这段时间没用过就清理；`Forever` 表示命中的记录不按时间清理。
+    pub keep: Retention,
+}
+
+impl Default for RetentionRule {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            enabled: true,
+            categories: Vec::new(),
+            min_size_kb: 0,
+            source_app_ids: Vec::new(),
+            sensitive_only: false,
+            unused_only: false,
+            keep: Retention::default(),
+        }
+    }
+}
+
+/// 保留时长。`unit = Forever` 或 `value = 0` 表示不按时间清理。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Retention {
@@ -627,9 +671,11 @@ impl Default for Retention {
     }
 }
 
+/// 保留时长单位。`Minutes` 只用于自定义规则：默认保留时长仍只写已发布版本认识的单位。
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum RetentionUnit {
+    Minutes,
     Hours,
     Days,
     Weeks,

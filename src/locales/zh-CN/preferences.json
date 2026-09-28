@@ -47,6 +47,22 @@
       "plain": "已识别明文备份。"
     }
   },
+  "cleanupConfirm": {
+    "breakdown": "超过保留时长 {{expired}} 条 · 超过条数上限 {{overCount}} 条 · 超过存储上限 {{overStorage}} 条",
+    "content": "收藏、置顶、放入分组和写了备注的记录不受影响，清理后无法恢复。",
+    "freed": "预计释放约 {{size}}。",
+    "ok": "保存并清理",
+    "title": "保存后将立即清理 {{count}} 条记录",
+    "unknownContent": "暂时无法预估影响范围。收藏、置顶、放入分组和写了备注的记录不受影响。",
+    "unknownTitle": "保存后可能会立即清理部分记录"
+  },
+  "cleanupStatus": {
+    "lastRun": "{{time}} 清理了 {{count}} 条",
+    "lastRunDetail": "释放约 {{size}}；超过保留时长 {{expired}} 条，超过条数上限 {{overCount}} 条，超过存储上限 {{overStorage}} 条",
+    "never": "本次启动后还没有清理过记录",
+    "storageBlocked": "存储仍超出上限：普通记录已不足以释放空间，占用主要来自受保护的记录",
+    "today": "今天 {{time}}"
+  },
   "controls": {
     "saving": "保存中…"
   },
@@ -115,7 +131,7 @@
       },
       "limit": "/ 上限 {{limit}}",
       "limitAction": {
-        "cleanup": "超出上限后自动从最旧的普通记录删起，收藏和置顶始终保留",
+        "cleanup": "超出上限后自动从最久没用的普通记录删起，收藏、置顶、分组和有备注的记录始终保留",
         "remind": "超出上限后只提醒，不会自动删除记录"
       },
       "limitMarker": "存储上限",
@@ -162,6 +178,63 @@
       "tooltip": "{{date}} · {{value}} 条"
     }
   },
+  "retentionRules": {
+    "add": "添加规则",
+    "addCustom": "自定义规则…",
+    "delete": "删除",
+    "disabled": "已停用",
+    "durations": {
+      "days": "{{count}} 天",
+      "hours": "{{count}} 小时",
+      "minutes": "{{count}} 分钟",
+      "months": "{{count}} 个月",
+      "weeks": "{{count}} 周"
+    },
+    "edit": "编辑",
+    "empty": "还没有自定义规则，所有普通记录都按默认保留时长处理。",
+    "expired": "{{count}} 条待清理",
+    "fallback": "其余记录",
+    "form": {
+      "apps": "来源应用",
+      "appsPlaceholder": "全部应用",
+      "categories": "内容类型",
+      "categoriesPlaceholder": "全部类型",
+      "conditions": "其他条件",
+      "filesNoSize": "文件记录没有大小，设置大小后不会命中文件。",
+      "keep": "保留时长",
+      "keepHint": "命中这条规则的记录，超过这段时间没有使用就会被清理。最大保留条数和存储上限对所有普通记录都生效。",
+      "minSize": "大小超过",
+      "minSizePlaceholder": "不限",
+      "preview": "当前匹配 {{matched}} 条普通记录，其中 {{expired}} 条已超过保留时长。",
+      "previewNone": "当前没有匹配的普通记录。",
+      "sensitiveOnly": "只包含识别为密钥或 Token 的敏感内容",
+      "titleCreate": "添加清理规则",
+      "titleEdit": "编辑清理规则",
+      "unusedOnly": "只包含复制后再没用过的记录"
+    },
+    "matched": "匹配 {{count}} 条",
+    "moveDown": "下移",
+    "moveUp": "上移",
+    "order": "从上到下匹配，命中第一条就按它清理；新规则放在最上方。",
+    "presets": {
+      "images": "图片保留 30 天",
+      "largeImages": "大于 5 MB 的图片保留 3 天",
+      "secrets": "敏感内容保留 1 小时",
+      "title": "常用规则",
+      "unusedText": "只复制过一次的文本保留 7 天"
+    },
+    "summary": {
+      "all": "全部记录",
+      "allText": "全部文本",
+      "apps": "来自 {{apps}}",
+      "keep": "保留 {{duration}}",
+      "keepForever": "永久保留",
+      "larger": "大于 {{size}}",
+      "moreApps": "{{first}} 等 {{count}} 个应用",
+      "sensitive": "敏感内容",
+      "unused": "只复制过一次"
+    }
+  },
   "schema": {
     "captureKinds": {
       "files": "文件和文件夹",
@@ -182,7 +255,9 @@
     },
     "retentionUnits": {
       "days": "天",
+      "forever": "永久保留",
       "hours": "小时",
+      "minutes": "分钟",
       "months": "月",
       "weeks": "周"
     },
@@ -537,25 +612,30 @@
         }
       },
       "history": {
-        "cleanupIntervalHours": {
-          "description": "每隔指定小时检查并清理一次历史记录，0 表示关闭周期性清理；应用启动时仍会清理一次。",
-          "title": "自动清理周期"
+        "cleanupStatus": {
+          "controlLabel": "立即清理",
+          "description": "收藏、置顶、放入分组和写了备注的记录始终保留，不会被自动清理。",
+          "title": "清理状态"
         },
         "maxCount": {
-          "description": "超过上限后，自动清理较旧的普通记录；收藏和置顶始终保留，0 表示不限数量。",
+          "description": "普通记录超过这个数量时，清理最久没有使用的记录；0 表示不限数量。",
           "title": "最大保留条数"
         },
         "retention": {
-          "description": "超过该天数的普通记录会自动清理；收藏和置顶始终保留，0 表示不按时间清理。",
-          "title": "保留周期"
+          "description": "没有命中自定义规则的普通记录，超过这段时间没有使用就会被清理。",
+          "title": "默认保留时长"
+        },
+        "rules": {
+          "description": "按内容类型、大小、来源等条件单独设置保留时长。从上到下匹配，记录按第一条命中的规则处理。",
+          "title": "自定义规则"
         }
       },
       "localData": {
         "cleanCache": {
-          "confirmContent": "将删除不再被历史记录引用的图片、缩略图和图标缓存。仍在使用的资源会保留。",
+          "confirmContent": "将删除不再被历史记录引用的图片、缩略图和图标缓存，并压缩数据库文件。仍在使用的资源会保留，记录较多时可能需要几秒。",
           "confirmTitle": "清理资源缓存",
           "controlLabel": "清理缓存",
-          "description": "移除不再被历史记录引用的图片、缩略图和图标缓存。",
+          "description": "移除不再被历史记录引用的图片、缩略图和图标缓存，并压缩数据库文件。",
           "title": "清理缓存"
         },
         "clearHistory": {
@@ -578,7 +658,7 @@
           "title": "存储上限"
         },
         "storageLimitAction": {
-          "description": "自动清理会从最旧的普通记录删起，直到回到上限以内；收藏和置顶始终保留。",
+          "description": "自动清理会从最久没有使用的普通记录删起，直到回到上限以内。",
           "options": {
             "cleanup": "自动清理",
             "remind": "仅提醒"

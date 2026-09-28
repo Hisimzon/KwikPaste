@@ -21,6 +21,7 @@ const NumberControl: FC<NumberControlProps> = (props) => {
   const { disabled, onChange, setting, value } = props;
   const [draft, setDraft] = useState<number | null>(value);
   const dirtyRef = useRef(false);
+  const committingRef = useRef(false);
   const windowLabelRef = useRef(getCurrentWebviewWindow().label);
   const control = setting.control.type === "number" ? setting.control : null;
   const dirtyOwner = `number:${setting.id}`;
@@ -55,12 +56,23 @@ const NumberControl: FC<NumberControlProps> = (props) => {
   };
 
   const commit = async () => {
+    // 回车提交后弹出确认框会让输入框失焦，再触发一次提交；等上一次结束前忽略。
+    if (committingRef.current) return;
+
     const min = control.min ?? 0;
     const max = control.max ?? Number.POSITIVE_INFINITY;
     const current = typeof draft === "number" ? draft : min;
     const next = Math.min(max, Math.max(min, current));
     setDraft(next);
-    await onChange(setting, next);
+
+    committingRef.current = true;
+    try {
+      const saved = await onChange(setting, next);
+      // 用户取消确认时设置不变，草稿退回当前值。
+      if (saved === false) setDraft(value);
+    } finally {
+      committingRef.current = false;
+    }
   };
 
   const handleBlur = async () => {

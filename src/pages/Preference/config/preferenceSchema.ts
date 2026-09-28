@@ -896,10 +896,28 @@ export const preferenceTabs: PreferenceTab[] = [
           {
             control: { type: "retention" },
             id: "history.retention",
-            keywords: ["retention", "cleanup", "history"],
+            keywords: ["retention", "cleanup", "history", "expire"],
             path: ["clipboard", "history", "retention"],
             value: (settings) => {
               return settings.clipboard.history.retention;
+            },
+          },
+          {
+            control: { type: "retentionRules" },
+            id: "history.rules",
+            keywords: [
+              "retention",
+              "rules",
+              "cleanup",
+              "expire",
+              "image",
+              "text",
+              "size",
+              "sensitive",
+            ],
+            path: ["clipboard", "history", "rules"],
+            value: (settings) => {
+              return settings.clipboard.history.rules;
             },
           },
           {
@@ -938,13 +956,9 @@ export const preferenceTabs: PreferenceTab[] = [
             },
           },
           {
-            control: { min: 0, suffixKey: "hours", type: "number" },
-            id: "history.cleanupIntervalHours",
-            keywords: ["cleanup", "interval", "schedule"],
-            path: ["clipboard", "history", "cleanupIntervalHours"],
-            value: (settings) => {
-              return settings.clipboard.history.cleanupIntervalHours;
-            },
+            control: { type: "cleanupStatus" },
+            id: "history.cleanupStatus",
+            keywords: ["cleanup", "status", "protected", "now"],
           },
         ],
       },
