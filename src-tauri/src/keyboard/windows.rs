@@ -26,6 +26,9 @@ fn consumed_keys() -> &'static Mutex<HashSet<u32>> {
 }
 
 /// 仅放行当前前端需要的 Ctrl 快捷键：A、C、D、F、K、M、N、O、P、Q、S、T、Enter、Backspace、Delete、逗号与数字 0-9。
+/// 搜索框聚焦时钩子停用，前端 `useKeyboardEvent` 的 `WIN_CTRL_SHORTCUT_KEYS` 按同一张表
+/// （去掉输入框自己的 A、C、Backspace、Delete；C 在没选中文字时另行交出）把 Ctrl 组合交给列表，
+/// 增删快捷键时两边一起改。
 fn ctrl_shortcut_key(vk: u32) -> Option<String> {
     match vk as i32 {
         0x41 => Some("a".to_string()),

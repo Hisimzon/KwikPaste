@@ -10,13 +10,11 @@ const EDITABLE_GLOBAL_KEYBOARD_ATTRIBUTE = "data-allow-global-keyboard";
 const EDITABLE_GLOBAL_KEYBOARD_SELECTOR = `[${EDITABLE_GLOBAL_KEYBOARD_ATTRIBUTE}="true"]`;
 
 /**
- * 搜索框交给列表的按键：上下选条目、左右切分类（目标是输入框时分组栏仍让光标移动）、Enter 粘贴、
- * Esc 逐层退出、Tab 切自定义分组，以及平台修饰键本身（显示快捷键提示）。
+ * 搜索框交给列表的按键：上下选条目、Enter 粘贴、Esc 逐层退出、Tab 切自定义分组，以及平台修饰键本身
+ * （显示快捷键提示）。左右键留给输入框移动光标，Windows 上按 ↓ 离开搜索框后左右键再切分类。
  */
 const EDITABLE_GLOBAL_HANDOFF_KEYS = new Set([
   "ArrowDown",
-  "ArrowLeft",
-  "ArrowRight",
   "ArrowUp",
   "Enter",
   "Escape",
@@ -37,6 +35,24 @@ const MAC_NATIVE_EDITING_SHORTCUT_KEYS = new Set([
   "z",
 ]);
 
+const VK_RETURN = 0x0d;
+const VK_OEM_COMMA = 0xbc;
+const VK_C = 0x43;
+
+/**
+ * Windows 搜索框在按住 Ctrl 时交给列表的应用快捷键：虚拟键码 → Rust 键盘钩子发来的按键名。
+ * 与钩子 `ctrl_shortcut_key` 放行的组合一致，只去掉输入框自己的编辑组合（A、C、Backspace、Delete）；
+ * 表外的 Ctrl 组合（粘贴、剪切、撤销、按词移动 / 删除等）都留给输入框。按键码而不是 `key` 对照，
+ * 法语键盘的数字行、俄语键盘的字母键才和钩子一样命中。
+ */
+const WIN_CTRL_SHORTCUT_KEYS = new Map<number, string>([
+  [VK_RETURN, "Enter"],
+  [VK_OEM_COMMA, ","],
+  ...[..."0123456789DFKMNOPQST"].map((char): [number, string] => {
+    return [char.charCodeAt(0), char.toLowerCase()];
+  }),
+]);
+
 /**
  * 修饰键。它们的 keyup 在浮层打开期间仍放行给底层、在输入控件里也一律交出，底层靠它复位修饰键状态；
  * 其它键的 keyup 照样拦：底层的空格 keyup 会 `preventDefault`，放过去会吞掉弹窗按钮靠空格 keyup 触发的点击。
@@ -44,8 +60,8 @@ const MAC_NATIVE_EDITING_SHORTCUT_KEYS = new Set([
 const MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);
 
 /**
- * 输入法正在处理的 keydown 的 keyCode。WebKit 把确认组字的 Enter 放在 compositionend 之后派发，
- * 那时 `isComposing` 已是 false，只能靠它认出来。
+ * 输入法正在处理的 keydown 的 keyCode。开始组字的那个键 `isComposing` 还是 false；WebKit 把确认组字的
+ * Enter 放在 compositionend 之后派发，那时 `isComposing` 已是 false，这两种都只能靠它认出来。
  */
 const IME_PROCESS_KEY_CODE = 229;
 
@@ -100,7 +116,7 @@ export const useKeyboardLayer = (layer: string) => {
  *
  * macOS 与可聚焦窗口直接监听浏览器键盘事件；Windows 剪贴板窗口默认不可聚焦，
  * 导航键通常来自 Rust 低级钩子。输入控件里的按键默认留给输入本身，
- * 只有搜索框交出导航键和快捷键（见 {@link shouldHandoffEditableKeyboard}）。
+ * 只有搜索框交出导航键和快捷键（见 {@link getEditableHandoffEvent}）。
  * `layer` 表示处理器所属的独占浮层（见 {@link useKeyboardLayer}），不传即底层界面。
  */
 export const useKeyboardEvent = (
@@ -122,12 +138,24 @@ export const useKeyboardEvent = (
 
     const editableTarget = findEditableElement(event.target);
     if (editableTarget) {
-      if (!shouldHandoffEditableKeyboard(editableTarget, event)) return;
+      const handoffEvent = getEditableHandoffEvent(editableTarget, event);
+      if (!handoffEvent) return;
 
       // Windows 剪贴板窗口编辑态下可聚焦、钩子停用：交出按键时让输入框失焦，窗口退回不可聚焦，后续按键重新走钩子。
-      if (isWindowsClipboardWindow && event.type === "keydown") {
+      // 只按下 Ctrl 时不失焦，接着按的编辑组合才留得在输入框里。
+      if (
+        isWindowsClipboardWindow &&
+        event.type === "keydown" &&
+        event.key !== "Control"
+      ) {
         editableTarget.blur();
       }
+
+      // 换成钩子同款事件后，处理器的 preventDefault 落不到原事件上，这里替它拦下。
+      if (handoffEvent !== event) event.preventDefault();
+
+      handlerRef.current(handoffEvent);
+      return;
     }
 
     handlerRef.current(event);
@@ -173,26 +201,53 @@ function shouldUseNativeEditableKeyboard(target: EventTarget | null) {
 }
 
 /**
- * 输入控件里的按键是否交给全局处理器。修饰键松开一律交出，底层靠它复位修饰键状态；
- * 按下只有搜索框交出，而且输入法组字中的按键不交。
+ * 输入控件里的按键交给全局处理器时用的事件，留给输入框自己时返回 null。
  *
- * Windows 按下 Ctrl 时搜索框已失焦，随后的组合键不再以它为目标；macOS 交出时不失焦，
- * ⌘ 组合在这里逐个放行，输入框自己的编辑组合除外。
+ * 修饰键松开一律交出，底层靠它复位修饰键状态；按下只有搜索框交出，而且输入法组字中的按键不交。
+ * macOS 交出时不失焦，⌘ 组合逐个放行，输入框自己的编辑组合除外。Windows 按住 Ctrl 时只交出应用快捷键
+ * （见 {@link getWinCtrlShortcutKey}），并换成钩子发来的同款事件；AltGr 在 Windows 上等于 Ctrl+Alt，
+ * 它打出的字符（如波兰语的 ś、ń）照常输入。
  */
-function shouldHandoffEditableKeyboard(
-  target: HTMLElement,
-  event: KeyboardEvent,
-) {
-  if (event.type === "keyup") return MODIFIER_KEYS.has(event.key);
-  if (!target.closest(EDITABLE_GLOBAL_KEYBOARD_SELECTOR)) return false;
-  if (event.isComposing || event.keyCode === IME_PROCESS_KEY_CODE) {
-    return false;
+function getEditableHandoffEvent(target: HTMLElement, event: KeyboardEvent) {
+  if (event.type === "keyup") {
+    return MODIFIER_KEYS.has(event.key) ? event : null;
   }
-  if (EDITABLE_GLOBAL_HANDOFF_KEYS.has(event.key)) return true;
+  if (!target.closest(EDITABLE_GLOBAL_KEYBOARD_SELECTOR)) return null;
+  if (event.isComposing || event.keyCode === IME_PROCESS_KEY_CODE) return null;
 
-  return (
-    isMac &&
-    event.metaKey &&
-    !MAC_NATIVE_EDITING_SHORTCUT_KEYS.has(event.key.toLowerCase())
-  );
+  if (isMac) {
+    if (EDITABLE_GLOBAL_HANDOFF_KEYS.has(event.key)) return event;
+    if (!event.metaKey) return null;
+
+    return MAC_NATIVE_EDITING_SHORTCUT_KEYS.has(event.key.toLowerCase())
+      ? null
+      : event;
+  }
+
+  if (event.key === "Control") return event;
+  if (!event.ctrlKey) {
+    return EDITABLE_GLOBAL_HANDOFF_KEYS.has(event.key) ? event : null;
+  }
+  if (event.altKey) return null;
+
+  const key = getWinCtrlShortcutKey(target, event);
+  if (!key) return null;
+
+  return new KeyboardEvent("keydown", { cancelable: true, ctrlKey: true, key });
+}
+
+/**
+ * Windows 搜索框里按住 Ctrl 时交给列表的按键名，留给输入框时返回 null。查 {@link WIN_CTRL_SHORTCUT_KEYS}；
+ * Ctrl+C 例外：输入框里没选中文字时也交出，复制选中条目，选中了文字才留给输入框复制。
+ */
+function getWinCtrlShortcutKey(target: HTMLElement, event: KeyboardEvent) {
+  const key = WIN_CTRL_SHORTCUT_KEYS.get(event.keyCode);
+  if (key) return key;
+  if (event.keyCode !== VK_C) return null;
+
+  const hasSelectedText =
+    target instanceof HTMLInputElement &&
+    target.selectionStart !== target.selectionEnd;
+
+  return hasSelectedText ? null : "c";
 }
