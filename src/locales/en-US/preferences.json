@@ -194,7 +194,7 @@
         "title": "Quick Actions"
       },
       "appearance": {
-        "title": "Appearance & Language"
+        "title": "Theme & Language"
       },
       "backup": {
         "description": "Export or import KwikPaste backup packages.",
@@ -203,35 +203,41 @@
       "capture": {
         "title": "Content Types"
       },
-      "control": {
-        "title": "System Entry"
+      "captureRules": {
+        "title": "Capture Rules"
       },
-      "copy": {
-        "title": "Copy Feedback"
+      "cards": {
+        "title": "List Cards"
+      },
+      "cleanup": {
+        "title": "Auto Cleanup"
+      },
+      "click": {
+        "title": "Click Actions"
+      },
+      "deleteProtection": {
+        "title": "Delete Protection"
       },
       "diagnostics": {
-        "title": "Diagnostics"
+        "title": "Diagnostics & Recovery"
+      },
+      "format": {
+        "title": "Default Format"
       },
       "globalShortcuts": {
         "title": "Global Shortcuts"
       },
-      "groups": {
-        "title": "Group Management"
-      },
-      "history": {
-        "title": "Retention & Cleanup"
-      },
       "localData": {
-        "title": "Storage Locations"
+        "title": "Data Management"
       },
       "organizing": {
-        "title": "Favorites & Notes"
+        "title": "Favorites & Groups"
       },
       "overview": {
         "title": "Overview"
       },
-      "paste": {
-        "title": "Paste Behavior"
+      "performance": {
+        "title": "Performance"
       },
       "permissions": {
         "title": "System Permissions"
@@ -239,20 +245,23 @@
       "preview": {
         "title": "Content Preview"
       },
-      "search": {
-        "title": "Search & Sort"
-      },
       "sensitive": {
         "title": "Privacy"
       },
+      "sort": {
+        "title": "Sorting"
+      },
       "source": {
-        "title": "App Filters"
+        "title": "Ignored Apps"
+      },
+      "startup": {
+        "title": "Startup & Icons"
       },
       "updates": {
         "title": "Updates"
       },
       "window": {
-        "title": "Clipboard Window"
+        "title": "When Opening"
       }
     },
     "settings": {
@@ -835,23 +844,29 @@
       "about": {
         "title": "About"
       },
+      "appearance": {
+        "title": "Appearance"
+      },
+      "capture": {
+        "title": "Capture"
+      },
       "data": {
         "title": "Data"
       },
-      "organize": {
-        "title": "History"
+      "general": {
+        "title": "General"
       },
-      "record": {
-        "title": "Capture"
+      "items": {
+        "title": "Items"
       },
-      "reuse": {
-        "title": "Actions"
+      "paste": {
+        "title": "Paste & Copy"
       },
       "shortcuts": {
         "title": "Shortcuts"
       },
-      "workflow": {
-        "title": "Interface"
+      "window": {
+        "title": "Clipboard Window"
       }
     }
   },

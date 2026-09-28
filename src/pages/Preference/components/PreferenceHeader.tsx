@@ -2,7 +2,6 @@ import { Input } from "antd";
 import type { ChangeEvent, FC } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/utils/cn";
-import { PREFERENCE_TAB_META } from "../constants";
 import type { PreferenceSection, PreferenceTab } from "../types/preferences";
 import {
   translatePreferenceSection,
@@ -25,7 +24,7 @@ interface PreferenceHeaderProps {
 }
 
 /**
- * 偏好窗口主区域头部：标题、全局搜索和二级分组导航。
+ * 偏好窗口主区域头部：标题、全局搜索和页内分组目录。
  */
 const PreferenceHeader: FC<PreferenceHeaderProps> = (props) => {
   const { t } = useTranslation(["preferences", "common"]);
@@ -54,10 +53,7 @@ const PreferenceHeader: FC<PreferenceHeaderProps> = (props) => {
           <h1 className="m-0 flex items-center gap-2 font-semibold text-ant-text text-lg leading-snug">
             <i
               aria-hidden="true"
-              className={cn(
-                "text-ant-primary text-lg",
-                PREFERENCE_TAB_META[activeTab.id].icon,
-              )}
+              className={cn("text-ant-primary text-lg", activeTab.icon)}
             />
             <span className="truncate">
               {translatePreferenceTab(t, activeTab)}
@@ -112,15 +108,16 @@ interface SectionTabsProps {
 }
 
 /**
- * 偏好页二级分组导航，紧贴标题栏用于快速切换当前分类。
+ * 当前分类的页内目录：点击滚到对应分组，滚动时跟随高亮；只有一个分组时不显示。
  */
 const SectionTabs: FC<SectionTabsProps> = (props) => {
   const { t } = useTranslation(["preferences", "common"]);
   const { activeSectionId, sections, totalSettings, onSectionSelect } = props;
+  const visibleSections = sections.length > 1 ? sections : [];
 
   return (
-    <div className="mt-3 flex items-center gap-3" data-tauri-drag-region>
-      {sections.map((section) => {
+    <div className="mt-3 flex h-7.5 items-center gap-3" data-tauri-drag-region>
+      {visibleSections.map((section) => {
         const selected = section.id === activeSectionId;
         const handleClick = () => {
           onSectionSelect(section.id);

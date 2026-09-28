@@ -1,7 +1,7 @@
 import { getName, getVersion } from "@tauri-apps/api/app";
-import { useMount } from "ahooks";
+import { useMount, useUnmount } from "ahooks";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { ChangeEvent, FC } from "react";
+import type { ChangeEvent, FC, UIEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSnapshot } from "valtio";
@@ -25,13 +25,15 @@ import { useTauriListen } from "@/hooks/useTauriListen";
 import { settingsState } from "@/stores/settings";
 import { preloadSourceApps, reloadSourceApps } from "@/stores/sourceApps";
 import type { Settings } from "@/types/settings";
-import { cn } from "@/utils/cn";
 import { log } from "@/utils/log";
 import BackupImportModal from "./components/BackupImportModal";
 import PreferenceHeader from "./components/PreferenceHeader";
 import PreferenceSection from "./components/PreferenceSection";
 import PreferenceSidebar from "./components/PreferenceSidebar";
-import { preferenceTabs } from "./config/preferenceSchema";
+import {
+  isPreferenceSettingCollapsed,
+  preferenceTabs,
+} from "./config/preferenceSchema";
 import {
   commitSettingChange,
   settingValuesEqual,
@@ -44,7 +46,9 @@ import type {
 } from "./types/preferences";
 import {
   resetContentScroll,
+  resolveVisibleSectionId,
   scrollHighlightedSetting,
+  scrollToSection,
 } from "./utils/preferenceScroll";
 import {
   type PreferenceSearchResult,
@@ -62,6 +66,10 @@ interface ClipboardCleanupPayload {
 
 const STORAGE_OVERVIEW_TAB_ID: PreferenceTabId = "data";
 const STORAGE_OVERVIEW_SECTION_ID = "overview";
+/** 程序滚动开始前的等待上限：定位高亮要等分类切换动画后才滚。 */
+const SECTION_TRACKING_HOLD_MS = 400;
+/** 滚动事件停止这么久即视为程序滚动结束，恢复目录跟随。 */
+const SECTION_TRACKING_SETTLE_MS = 150;
 
 interface PreferenceHighlightSettingPayload {
   settingId: string;
@@ -81,8 +89,14 @@ const Preference: FC = () => {
   const shouldReduceMotion = useReducedMotion();
   const reduceMotion = shouldReduceMotion === true;
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const [activeTabId, setActiveTabId] = useState<PreferenceTabId>("record");
-  const [activeSectionId, setActiveSectionId] = useState("capture");
+  const sectionTrackingHeldRef = useRef(false);
+  const sectionTrackingTimerRef = useRef<number | undefined>(void 0);
+  const [activeTabId, setActiveTabId] = useState<PreferenceTabId>(
+    preferenceTabs[0].id,
+  );
+  const [activeSectionId, setActiveSectionId] = useState(
+    preferenceTabs[0].sections[0]?.id ?? "",
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [highlightTarget, setHighlightTarget] =
     useState<PreferenceHighlightTarget | null>(null);
@@ -106,13 +120,15 @@ const Preference: FC = () => {
     return searchPreferenceSettings(searchQuery, t);
   }, [searchQuery, t]);
   const totalSettings = activeTab.sections.reduce((total, section) => {
-    return total + section.settings.length;
+    const visibleSettings = section.settings.filter((setting) => {
+      return !isPreferenceSettingCollapsed(setting, settings);
+    });
+
+    return total + visibleSettings.length;
   }, 0);
-  const activeSection =
-    activeTab.sections.find((section) => {
-      return section.id === activeSectionId;
-    }) ?? activeTab.sections[0];
-  const isSourceSection = activeSection?.id === "source";
+  const hasSourceSection = activeTab.sections.some((section) => {
+    return section.id === "source";
+  });
 
   const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(event.target.value);
@@ -132,7 +148,40 @@ const Preference: FC = () => {
 
   const handleSectionSelect = (sectionId: string) => {
     setActiveSectionId(sectionId);
-    resetContentScroll(contentRef.current);
+    holdSectionTracking(SECTION_TRACKING_HOLD_MS);
+    scrollToSection(contentRef.current, sectionId, reduceMotion);
+  };
+
+  /**
+   * 程序触发的滚动期间暂停目录跟随，避免平滑滚动途经的分组抢走刚选中的高亮。
+   */
+  const holdSectionTracking = (releaseDelay: number) => {
+    sectionTrackingHeldRef.current = true;
+    window.clearTimeout(sectionTrackingTimerRef.current);
+    sectionTrackingTimerRef.current = window.setTimeout(() => {
+      sectionTrackingHeldRef.current = false;
+    }, releaseDelay);
+  };
+
+  /**
+   * 用户滚动内容区时让页内目录跟随当前阅读的分组；内部嵌套滚动区不参与。
+   */
+  const handleContentScroll = (event: UIEvent<HTMLDivElement>) => {
+    const container = contentRef.current;
+    if (!container || event.target !== container) return;
+
+    if (sectionTrackingHeldRef.current) {
+      holdSectionTracking(SECTION_TRACKING_SETTLE_MS);
+      return;
+    }
+
+    const sectionIds = activeTab.sections.map((section) => {
+      return section.id;
+    });
+    const sectionId = resolveVisibleSectionId(container, sectionIds);
+    if (!sectionId) return;
+
+    setActiveSectionId(sectionId);
   };
 
   const handlePickSearchResult = (result: PreferenceSearchResult) => {
@@ -144,17 +193,25 @@ const Preference: FC = () => {
 
   /**
    * 切换到指定设置项所属分类，并触发滚动高亮。
+   * 子项在父开关关闭时是收起的，此时改为高亮父开关，提示先打开它。
    */
   const highlightSetting = (settingId: string) => {
     const target = findPreferenceSetting(settingId);
     if (!target) return;
 
+    const { parentId } = target.setting;
+    const collapsed = isPreferenceSettingCollapsed(
+      target.setting,
+      settingsState as Settings,
+    );
+
     setActiveTabId(target.tab.id);
     setActiveSectionId(target.section.id);
     setSearchQuery("");
+    holdSectionTracking(SECTION_TRACKING_HOLD_MS);
     setHighlightTarget((currentTarget) => {
       return {
-        settingId,
+        settingId: collapsed && parentId ? parentId : settingId,
         token: (currentTarget?.token ?? 0) + 1,
       };
     });
@@ -198,6 +255,7 @@ const Preference: FC = () => {
   const highlightBackupImport = () => {
     setActiveTabId("data");
     setActiveSectionId("backup");
+    holdSectionTracking(SECTION_TRACKING_HOLD_MS);
     setHighlightTarget((currentTarget) => {
       return {
         settingId: "backup.importHistory",
@@ -307,6 +365,10 @@ const Preference: FC = () => {
     }
   });
 
+  useUnmount(() => {
+    window.clearTimeout(sectionTrackingTimerRef.current);
+  });
+
   useTauriListen<BackupReceivedPayload>(
     TAURI_EVENT.BACKUP_RECEIVED,
     (event) => {
@@ -334,16 +396,22 @@ const Preference: FC = () => {
   useEffect(() => {
     if (!highlightTarget) return;
 
+    const scrollToTarget = () => {
+      scrollHighlightedSetting(
+        contentRef.current,
+        highlightTarget.settingId,
+        reduceMotion,
+      );
+    };
     const scrollTimer = window.setTimeout(
-      () => {
-        scrollHighlightedSetting(
-          contentRef.current,
-          highlightTarget.settingId,
-          reduceMotion,
-        );
-      },
+      scrollToTarget,
       reduceMotion ? 0 : 140,
     );
+    // 同页上方的数据概览等分组异步加载后会变高，高亮期间内容尺寸一变就重新对准目标。
+    const resizeObserver = new ResizeObserver(scrollToTarget);
+    const content = contentRef.current?.firstElementChild;
+    if (content) resizeObserver.observe(content);
+
     const clearTimer = window.setTimeout(
       () => {
         setHighlightTarget((currentTarget) => {
@@ -361,14 +429,15 @@ const Preference: FC = () => {
     return () => {
       window.clearTimeout(scrollTimer);
       window.clearTimeout(clearTimer);
+      resizeObserver.disconnect();
     };
   }, [highlightTarget, reduceMotion]);
 
   useEffect(() => {
-    if (!isSourceSection) return;
+    if (!hasSourceSection) return;
 
     void reloadSourceApps();
-  }, [isSourceSection]);
+  }, [hasSourceSection]);
 
   if (!activeTab) return null;
 
@@ -412,38 +481,39 @@ const Preference: FC = () => {
             className="min-h-0 flex-1"
             contentClassName="p-6"
             data-tauri-drag-region
+            onScrollCapture={handleContentScroll}
             ref={contentRef}
           >
             <AnimatePresence mode="wait">
-              {activeSection ? (
-                <motion.div
-                  animate={{ opacity: 1 }}
-                  className={cn(
-                    "flex flex-col",
-                    isSourceSection ? "h-full max-w-none" : "max-w-228",
-                  )}
-                  exit={{ opacity: 0 }}
-                  initial={{ opacity: 0 }}
-                  key={`${activeTabId}-${activeSection.id}`}
-                  transition={{
-                    duration: reduceMotion ? 0 : 0.12,
-                    ease: "easeOut",
-                  }}
-                >
-                  <PreferenceSection
-                    highlightedSettingId={highlightTarget?.settingId ?? null}
-                    highlightToken={highlightTarget?.token ?? 0}
-                    onActionComplete={handleActionComplete}
-                    onChange={handleSettingChange}
-                    onNavigateSetting={highlightSetting}
-                    onStorageUsageChange={handleStorageUsageChange}
-                    section={activeSection}
-                    settings={settings}
-                    shouldReduceMotion={reduceMotion}
-                    storageLocation={storageLocation}
-                  />
-                </motion.div>
-              ) : null}
+              <motion.div
+                animate={{ opacity: 1 }}
+                className="flex max-w-228 flex-col gap-6"
+                exit={{ opacity: 0 }}
+                initial={{ opacity: 0 }}
+                key={activeTabId}
+                transition={{
+                  duration: reduceMotion ? 0 : 0.12,
+                  ease: "easeOut",
+                }}
+              >
+                {activeTab.sections.map((section) => {
+                  return (
+                    <PreferenceSection
+                      highlightedSettingId={highlightTarget?.settingId ?? null}
+                      highlightToken={highlightTarget?.token ?? 0}
+                      key={section.id}
+                      onActionComplete={handleActionComplete}
+                      onChange={handleSettingChange}
+                      onNavigateSetting={highlightSetting}
+                      onStorageUsageChange={handleStorageUsageChange}
+                      section={section}
+                      settings={settings}
+                      shouldReduceMotion={reduceMotion}
+                      storageLocation={storageLocation}
+                    />
+                  );
+                })}
+              </motion.div>
             </AnimatePresence>
           </ScrollArea>
         </main>

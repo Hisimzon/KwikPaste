@@ -10,6 +10,7 @@ import type {
 } from "@/commands";
 import type { Settings } from "@/types/settings";
 import { cn } from "@/utils/cn";
+import { isPreferenceSettingCollapsed } from "../config/preferenceSchema";
 import type {
   PreferenceSetting,
   PreferenceSettingChangeHandler,
@@ -55,7 +56,7 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
   const parentDisabled = setting.disabledWhen?.(settings) === true;
   const disabled = setting.disabled === true || parentDisabled;
   const childSetting = setting.parentId !== void 0;
-  const collapsed = childSetting && parentDisabled;
+  const collapsed = isPreferenceSettingCollapsed(setting, settings);
   const isTilesControl = setting.control.type === "tiles";
   const visual = resolveSettingVisual(setting.id);
   const highlightOpacity = shouldReduceMotion

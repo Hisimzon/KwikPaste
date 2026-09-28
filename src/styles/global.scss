@@ -88,8 +88,7 @@ html {
 // Preference chrome must let the window-level material show through; controls
 // and setting cards keep their own surfaces for contrast and readability.
 .kp-preference-chrome,
-.kp-preference-panel,
-.kp-preference-panel-header {
+.kp-preference-panel {
   background-color: var(--ant-color-bg-container);
 }
 
@@ -109,14 +108,6 @@ html {
   );
 }
 
-.kp-material-surface[data-material="mica"] .kp-preference-panel-header {
-  background-color: color-mix(
-    in srgb,
-    var(--ant-color-bg-container) 28%,
-    transparent
-  );
-}
-
 .kp-material-surface[data-material="acrylic"] .kp-preference-chrome {
   background-color: color-mix(
     in srgb,
@@ -129,14 +120,6 @@ html {
   background-color: color-mix(
     in srgb,
     var(--ant-color-bg-container) 32%,
-    transparent
-  );
-}
-
-.kp-material-surface[data-material="acrylic"] .kp-preference-panel-header {
-  background-color: color-mix(
-    in srgb,
-    var(--ant-color-bg-container) 18%,
     transparent
   );
 }

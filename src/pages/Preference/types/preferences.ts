@@ -1,11 +1,13 @@
 import type { RetentionUnit, Settings } from "@/types/settings";
 
 export type PreferenceTabId =
-  | "record"
-  | "organize"
-  | "reuse"
-  | "workflow"
+  | "general"
   | "shortcuts"
+  | "appearance"
+  | "capture"
+  | "window"
+  | "paste"
+  | "items"
   | "data"
   | "about";
 
@@ -98,7 +100,11 @@ export interface PreferenceSection {
   settings: PreferenceSetting[];
 }
 
+/** 侧栏按组排列一级分类，组与组之间画分隔线。 */
+export type PreferenceTabGroup = "app" | "clipboard" | "data";
+
 export interface PreferenceTab {
+  group: PreferenceTabGroup;
   icon: string;
   id: PreferenceTabId;
   sections: PreferenceSection[];

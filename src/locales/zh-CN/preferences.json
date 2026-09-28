@@ -194,7 +194,7 @@
         "title": "快捷动作"
       },
       "appearance": {
-        "title": "外观与语言"
+        "title": "主题与语言"
       },
       "backup": {
         "description": "导出或导入 快贴 备份包。",
@@ -203,35 +203,41 @@
       "capture": {
         "title": "内容类型"
       },
-      "control": {
-        "title": "系统入口"
+      "captureRules": {
+        "title": "收录规则"
       },
-      "copy": {
-        "title": "复制反馈"
+      "cards": {
+        "title": "列表卡片"
+      },
+      "cleanup": {
+        "title": "自动清理"
+      },
+      "click": {
+        "title": "点击行为"
+      },
+      "deleteProtection": {
+        "title": "删除保护"
       },
       "diagnostics": {
-        "title": "诊断恢复"
+        "title": "诊断与恢复"
+      },
+      "format": {
+        "title": "默认格式"
       },
       "globalShortcuts": {
         "title": "全局快捷键"
       },
-      "groups": {
-        "title": "分组管理"
-      },
-      "history": {
-        "title": "保留与清理"
-      },
       "localData": {
-        "title": "存储位置"
+        "title": "数据管理"
       },
       "organizing": {
-        "title": "收藏与备注"
+        "title": "收藏与分组"
       },
       "overview": {
         "title": "数据概览"
       },
-      "paste": {
-        "title": "粘贴行为"
+      "performance": {
+        "title": "性能"
       },
       "permissions": {
         "title": "系统权限"
@@ -239,20 +245,23 @@
       "preview": {
         "title": "内容预览"
       },
-      "search": {
-        "title": "搜索与排序"
-      },
       "sensitive": {
         "title": "隐私保护"
       },
+      "sort": {
+        "title": "列表排序"
+      },
       "source": {
-        "title": "应用过滤"
+        "title": "忽略应用"
+      },
+      "startup": {
+        "title": "启动与图标"
       },
       "updates": {
         "title": "更新"
       },
       "window": {
-        "title": "剪贴板窗口"
+        "title": "打开窗口时"
       }
     },
     "settings": {
@@ -835,23 +844,29 @@
       "about": {
         "title": "关于"
       },
+      "appearance": {
+        "title": "外观"
+      },
+      "capture": {
+        "title": "采集"
+      },
       "data": {
         "title": "数据"
       },
-      "organize": {
-        "title": "历史"
+      "general": {
+        "title": "通用"
       },
-      "record": {
-        "title": "采集"
+      "items": {
+        "title": "记录管理"
       },
-      "reuse": {
-        "title": "操作"
+      "paste": {
+        "title": "粘贴与复制"
       },
       "shortcuts": {
         "title": "快捷键"
       },
-      "workflow": {
-        "title": "界面"
+      "window": {
+        "title": "剪贴板窗口"
       }
     }
   },
