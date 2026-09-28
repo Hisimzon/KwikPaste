@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSnapshot } from "valtio";
 import CustomIconButton from "@/components/CustomIconButton";
 import KeyHint from "@/components/KeyHint";
-import Popover from "@/components/Popover";
+import Popover, { POPOVER_KEYBOARD_LAYER } from "@/components/Popover";
 import { clipboardStatsState } from "@/stores/clipboardStats";
 import ShortcutList from "./ShortcutList";
 
@@ -43,6 +43,7 @@ const Footer = () => {
             <KeyHint
               hintKey="K"
               iconName="i-lucide:keyboard"
+              layer={popoverOpen ? POPOVER_KEYBOARD_LAYER : void 0}
               onKeyPress={handleShortcutKeyPress}
             />
           }

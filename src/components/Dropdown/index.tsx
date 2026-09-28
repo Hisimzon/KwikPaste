@@ -1,6 +1,7 @@
 import { Dropdown as AntdDropdown, type DropdownProps } from "antd";
 import type { FC, ReactElement, ReactNode } from "react";
 import { cloneElement, isValidElement, useState } from "react";
+import PopupKeyboardLayer from "@/components/PopupKeyboardLayer";
 import Tooltip, {
   type OverlayTooltipConfig,
   resolveOverlayTooltipProps,
@@ -8,6 +9,7 @@ import Tooltip, {
 import { cn } from "@/utils/cn";
 
 const DEFAULT_MENU_ICON_CLASS = "text-sm! shrink-0";
+const DROPDOWN_KEYBOARD_LAYER = "dropdown";
 
 type AntdMenu = NonNullable<DropdownProps["menu"]>;
 type AntdMenuItems = NonNullable<AntdMenu["items"]>;
@@ -95,7 +97,7 @@ const renderDropdownTrigger = (
 };
 
 /**
- * antd Dropdown 的统一封装：保留原生能力，并收口菜单项图标默认尺寸。
+ * antd Dropdown 的统一封装：保留原生能力，并收口菜单项图标默认尺寸；菜单打开期间独占键盘。
  */
 const Dropdown: FC<AppDropdownProps> = (props) => {
   const { children, menu, onOpenChange, open, tooltip, ...rest } = props;
@@ -113,15 +115,25 @@ const Dropdown: FC<AppDropdownProps> = (props) => {
     onOpenChange?.(nextOpen, info);
   };
 
+  const close = () => {
+    handleOpenChange(false, { source: "trigger" });
+  };
+
   return (
-    <AntdDropdown
-      menu={normalizedMenu}
-      onOpenChange={handleOpenChange}
-      open={open}
-      {...rest}
-    >
-      {renderDropdownTrigger(children, tooltip, mergedOpen)}
-    </AntdDropdown>
+    <>
+      <AntdDropdown
+        menu={normalizedMenu}
+        onOpenChange={handleOpenChange}
+        open={mergedOpen}
+        {...rest}
+      >
+        {renderDropdownTrigger(children, tooltip, mergedOpen)}
+      </AntdDropdown>
+
+      {mergedOpen ? (
+        <PopupKeyboardLayer layer={DROPDOWN_KEYBOARD_LAYER} onClose={close} />
+      ) : null}
+    </>
   );
 };
 

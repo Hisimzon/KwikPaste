@@ -26,6 +26,10 @@ interface KeyHintProps {
    * 按下完整组合键（macOS: ⌘+key / Windows: Ctrl+key）时触发；事件默认会被 preventDefault。
    */
   onKeyPress?: (event: KeyboardEvent) => void;
+  /**
+   * 快捷键所在的键盘层（见 `useKeyboardLayer`），不传即底层界面；浮层打开期间仍要响应时传浮层的层名。
+   */
+  layer?: string;
 }
 
 /**
@@ -34,7 +38,7 @@ interface KeyHintProps {
  * 时调用 `onKeyPress`，调用方无需再额外注册一份 `useKeyPress`。
  */
 const KeyHint: FC<KeyHintProps> = (props) => {
-  const { hintKey, onKeyPress, iconName, children, className } = props;
+  const { hintKey, onKeyPress, iconName, children, className, layer } = props;
 
   const [active, setActive] = useState(false);
   const isWindowsClipboardWindow = isWinClipboardWindow();
@@ -99,9 +103,9 @@ const KeyHint: FC<KeyHintProps> = (props) => {
     });
   };
 
-  useKeyboardEvent("keydown", handleKeyDown);
+  useKeyboardEvent("keydown", handleKeyDown, layer);
 
-  useKeyboardEvent("keyup", handleKeyUp);
+  useKeyboardEvent("keyup", handleKeyUp, layer);
 
   useEventListener("blur", handleBlur, { target: window });
 
