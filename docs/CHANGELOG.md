@@ -2,6 +2,21 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 1.3.7 - 2026-09-28
+
+- Reworked Auto Cleanup in Preference › Data. Records now expire by when you last used them instead of when they were first copied, so something copied long ago that you still paste every day is kept. Copying or pasting from history counts as use even with Update Record on Reuse turned off.
+- Added custom cleanup rules. Give text, images, files, sensitive content, records from certain apps, records over a given size, or records copied only once their own retention, from minutes to forever. Rules match from top to bottom, and records that match no rule follow the Default Retention. Presets cover common cases such as images over 5 MB and sensitive content.
+- Saving a cleanup setting that would delete records right away now shows how many would go and why, and asks first. A new Cleanup Status row shows the last cleanup and has a Clean Up Now button.
+- Automatic cleanup now also keeps records in a custom group and records with a note, as it already did for favorites and pinned records.
+- Cleanup settings take effect right away instead of at the next launch, and the Cleanup Interval setting is gone. Maximum Items applies as soon as new records come in, and the storage limit no longer rescans the data folder every minute.
+- The clipboard window's footer now warns when storage is over the limit, either in Remind only mode or when auto cleanup can't free enough space. Click the warning to open the storage settings.
+- The database file now shrinks after records are cleaned up. For existing data, run Clean Cache once in Preference › Data to compact the database and turn this on.
+- Added Open with Mouse Button on Windows: click the middle button or a side button to open or hide the clipboard window. It is off by default; turn it on in Preference › Shortcuts.
+- Reorganized Preference into nine categories. Each category shows all its settings on one scrolling page, with links to its sections at the top.
+- Fixed keys pressed in the note, group and confirmation dialogs, drop-down menus or the search box also reaching the list, such as Enter pasting the selected item or Esc hiding the window.
+- Fixed Ctrl+V and other Ctrl edits in the Windows search box going to the app you were in before, and arrow keys leaving the search box.
+- Fixed the note and group name inputs not taking focus when their dialogs open on Windows.
+
 ## 1.3.6 - 2026-09-26
 
 - Added Data Overview in Preference › Data. It shows what takes up storage, the total record count, daily additions, content types and source apps, and can clear all records of one content type or from one app at once while keeping favorites and pinned items. Click the storage usage at the bottom left to open it.
