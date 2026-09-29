@@ -3,12 +3,17 @@
 //! - **文件**（`start_drag_files`）：直接复用 `drag` crate v2.1.1
 //!   （`IDataObject(CF_HDROP)` + `DoDragDrop`），稳定且自带 `IDragSourceHelper` 预览。
 //! - **文本 / 富文本**（`start_drag_text`）：自实现 `IDataObject`，支持
-//!   `CF_UNICODETEXT` + `CF_HTML`（注册名 "HTML Format"）+ `Rich Text Format`，
+//!   `CF_UNICODETEXT` + `CF_TEXT` + `CF_HTML`（注册名 "HTML Format"）+ `Rich Text Format`，
 //!   接收方按偏好选格式（Word 优先 RTF，浏览器优先 HTML，纯文本退回 plain）。
 //!
 //! `CF_HTML` / `Rich Text Format` 不是系统常量，需 `RegisterClipboardFormatW` 注册
 //! 拿 cfid；用 `OnceLock` 进程级缓存。CF_HTML 的 payload 必须带 Microsoft 定义的
 //! header（`Version:0.9\r\nStartHTML:...`），否则 Word / Outlook 不识别。
+//!
+//! 接收方的探测方式各不相同，三点都要满足，否则有的程序会直接拒绝 drop：
+//! - `EnumFormatEtc` 必须给出枚举器：Qt（WPS）、WinForms / WPF 靠它列出可用格式。
+//! - `tymed` 是位掩码：接收方常一次问多种介质（如 `HGLOBAL | ISTREAM`），含 HGLOBAL 就要认。
+//! - OLE 拖拽不像剪贴板会自动合成 `CF_TEXT`，只认 ANSI 文本的程序需要我们自己提供。
 //!
 //! 通用约束：所有入口**必须在拥有窗口的线程上调用**（= Tauri 主线程），否则
 //! `IDropSource::QueryContinueDrag` 会立刻返回 `DRAGDROP_S_CANCEL`，拖拽秒取消。
@@ -21,24 +26,26 @@ use std::path::PathBuf;
 use std::sync::{Once, OnceLock};
 
 use tauri::WebviewWindow;
-use windows::core::{implement, Error as WinError, HRESULT, HSTRING, PCWSTR};
+use windows::core::{implement, Error as WinError, HRESULT, HSTRING, PCSTR, PCWSTR};
 use windows::Win32::Foundation::{
     BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
     E_NOTIMPL, OLE_E_ADVISENOTSUPPORTED, S_OK,
 };
+use windows::Win32::Globalization::{WideCharToMultiByte, CP_ACP};
 use windows::Win32::System::Com::{
-    IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, DVASPECT_CONTENT,
-    FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+    IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, DATADIR_GET,
+    DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
 use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_FIXED,
 };
 use windows::Win32::System::Ole::{
-    DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize, ReleaseStgMedium, CF_UNICODETEXT,
-    DROPEFFECT, DROPEFFECT_COPY,
+    DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize, ReleaseStgMedium, CF_TEXT,
+    CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY,
 };
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
+use windows::Win32::UI::Shell::SHCreateStdEnumFmtEtc;
 
 use crate::core::{AppError, Result};
 
@@ -115,6 +122,34 @@ fn build_cf_html_payload(html: &str) -> Vec<u8> {
     buf.into_bytes()
 }
 
+/// 把带结尾 NUL 的 UTF-16 文本按系统 ANSI 代码页转成 `CF_TEXT` 字节（同样带 NUL）。
+/// 代码页里没有的字符变成系统默认字符（`?`），与剪贴板自动合成的 `CF_TEXT` 一致；
+/// 转换失败返回 None，此时不提供 `CF_TEXT`。
+fn to_ansi(text_utf16: &[u16]) -> Option<Vec<u8>> {
+    unsafe {
+        let len = WideCharToMultiByte(CP_ACP, 0, text_utf16, None, PCSTR::null(), None);
+        if len <= 0 {
+            return None;
+        }
+
+        let mut buf = vec![0u8; len as usize];
+        let written =
+            WideCharToMultiByte(CP_ACP, 0, text_utf16, Some(&mut buf), PCSTR::null(), None);
+        (written == len).then_some(buf)
+    }
+}
+
+/// 我们提供的格式统一用 `HGLOBAL` 介质、`DVASPECT_CONTENT`。
+fn hglobal_format(cf: u16) -> FORMATETC {
+    FORMATETC {
+        cfFormat: cf,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    }
+}
+
 /// 把字节缓冲拷到新的 HGLOBAL，包装成 STGMEDIUM 返回。
 fn bytes_to_stgmedium(bytes: &[u8]) -> windows::core::Result<STGMEDIUM> {
     unsafe {
@@ -187,6 +222,8 @@ impl Drop for StoredEntry {
 struct RichDataObject {
     /// UTF-16 with trailing NUL，CF_UNICODETEXT 用。
     text_utf16: Vec<u16>,
+    /// 系统 ANSI 代码页字节 with trailing NUL，CF_TEXT 用；None 表示转换失败、不提供。
+    text_ansi: Option<Vec<u8>>,
     /// 已带 Microsoft CF_HTML header 的 UTF-8 字节流，None 表示不提供 HTML。
     html_bytes: Option<Vec<u8>>,
     /// 原样的 RTF 字节流（ASCII），None 表示不提供 RTF。
@@ -202,6 +239,7 @@ impl RichDataObject {
             .chain(once(0))
             .collect();
         Self {
+            text_ansi: to_ansi(&text_utf16),
             text_utf16,
             html_bytes: html.map(build_cf_html_payload),
             rtf_bytes: rtf.map(|s| s.as_bytes().to_vec()),
@@ -209,22 +247,33 @@ impl RichDataObject {
         }
     }
 
+    /// 本对象提供的内容格式，按保真度从高到低排列；`EnumFormatEtc` 按此顺序给出，
+    /// 取第一个认识格式的接收方因此拿到最完整的内容。
+    fn formats(&self) -> Vec<u16> {
+        let mut formats = Vec::with_capacity(4);
+        if self.rtf_bytes.is_some() {
+            formats.push(cf_rtf());
+        }
+        if self.html_bytes.is_some() {
+            formats.push(cf_html());
+        }
+        formats.push(CF_UNICODETEXT.0);
+        if self.text_ansi.is_some() {
+            formats.push(CF_TEXT.0);
+        }
+        formats
+    }
+
     /// 判定 FORMATETC 是否落在我们支持的某个格式上。
     fn supported_format(&self, format: *const FORMATETC) -> Option<u16> {
         let fmt = unsafe { format.as_ref()? };
-        if fmt.tymed as i32 != TYMED_HGLOBAL.0 || fmt.dwAspect != DVASPECT_CONTENT.0 {
+        if fmt.tymed & TYMED_HGLOBAL.0 as u32 == 0 || fmt.dwAspect != DVASPECT_CONTENT.0 {
             return None;
         }
-        if fmt.cfFormat == CF_UNICODETEXT.0 {
-            return Some(CF_UNICODETEXT.0);
-        }
-        if self.html_bytes.is_some() && fmt.cfFormat == cf_html() {
-            return Some(fmt.cfFormat);
-        }
-        if self.rtf_bytes.is_some() && fmt.cfFormat == cf_rtf() {
-            return Some(fmt.cfFormat);
-        }
-        None
+
+        self.formats()
+            .contains(&fmt.cfFormat)
+            .then_some(fmt.cfFormat)
     }
 
     fn alloc_for(&self, cf: u16) -> windows::core::Result<STGMEDIUM> {
@@ -236,6 +285,11 @@ impl RichDataObject {
                 )
             };
             return bytes_to_stgmedium(bytes);
+        }
+        if cf == CF_TEXT.0 {
+            if let Some(b) = &self.text_ansi {
+                return bytes_to_stgmedium(b);
+            }
         }
         if cf == cf_html() {
             if let Some(b) = &self.html_bytes {
@@ -354,9 +408,14 @@ impl IDataObject_Impl for RichDataObject {
         Ok(())
     }
 
-    fn EnumFormatEtc(&self, _dwdirection: u32) -> windows::core::Result<IEnumFORMATETC> {
-        // 不实现枚举：多数接收方先 QueryGetData 探测，不依赖 enumerator。
-        Err(WinError::new(E_NOTIMPL, HSTRING::new()))
+    fn EnumFormatEtc(&self, dwdirection: u32) -> windows::core::Result<IEnumFORMATETC> {
+        // 只枚举内容格式；Shell helper 塞进来的私有格式它自己按 QueryGetData 取，不需要列出。
+        if dwdirection != DATADIR_GET.0 as u32 {
+            return Err(WinError::new(E_NOTIMPL, HSTRING::new()));
+        }
+
+        let formats: Vec<FORMATETC> = self.formats().into_iter().map(hglobal_format).collect();
+        unsafe { SHCreateStdEnumFmtEtc(&formats) }
     }
 
     fn DAdvise(
@@ -456,4 +515,76 @@ pub fn start_drag_files(
     .map_err(|err| AppError::Clipboard(format!("drag-out failed: {err}")))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Com::TYMED_ISTREAM;
+
+    /// 按接收方的方式把 IDataObject 里某个格式的字节读出来。
+    fn read_bytes(data: &IDataObject, format: &FORMATETC) -> Vec<u8> {
+        unsafe {
+            let mut medium = data.GetData(format).expect("GetData");
+            let size = GlobalSize(medium.u.hGlobal);
+            let ptr = GlobalLock(medium.u.hGlobal) as *const u8;
+            let bytes = std::slice::from_raw_parts(ptr, size).to_vec();
+            let _ = GlobalUnlock(medium.u.hGlobal);
+            ReleaseStgMedium(&mut medium);
+            bytes
+        }
+    }
+
+    /// Qt（WPS）这类接收方先枚举格式，拿不到枚举器就当作没有可用数据。
+    #[test]
+    fn enumerates_formats_richest_first() {
+        let data: IDataObject = RichDataObject::new("hi", Some("<b>hi</b>"), None).into();
+
+        let mut fetched = [FORMATETC::default(); 8];
+        let mut count = 0u32;
+        unsafe {
+            let enumerator = data
+                .EnumFormatEtc(DATADIR_GET.0 as u32)
+                .expect("EnumFormatEtc");
+            let _ = enumerator.Next(&mut fetched, Some(&mut count as *mut u32));
+        }
+        let formats: Vec<u16> = fetched[..count as usize]
+            .iter()
+            .map(|f| f.cfFormat)
+            .collect();
+
+        assert_eq!(formats, vec![cf_html(), CF_UNICODETEXT.0, CF_TEXT.0]);
+        assert!(fetched[..count as usize]
+            .iter()
+            .all(|f| f.tymed == TYMED_HGLOBAL.0 as u32));
+    }
+
+    /// tymed 是位掩码：同时问 HGLOBAL 和 ISTREAM 也要认，只问 ISTREAM 则拒绝。
+    #[test]
+    fn matches_tymed_as_bitmask() {
+        let data: IDataObject = RichDataObject::new("hi", None, None).into();
+        let mut format = hglobal_format(CF_UNICODETEXT.0);
+
+        format.tymed = (TYMED_HGLOBAL.0 | TYMED_ISTREAM.0) as u32;
+        assert_eq!(unsafe { data.QueryGetData(&format) }, S_OK);
+
+        format.tymed = TYMED_ISTREAM.0 as u32;
+        assert_eq!(unsafe { data.QueryGetData(&format) }, DV_E_FORMATETC);
+    }
+
+    #[test]
+    fn provides_ansi_and_unicode_text() {
+        let data: IDataObject = RichDataObject::new("hello", None, None).into();
+
+        assert_eq!(read_bytes(&data, &hglobal_format(CF_TEXT.0)), b"hello\0");
+
+        let unicode: Vec<u8> = "hello\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(
+            read_bytes(&data, &hglobal_format(CF_UNICODETEXT.0)),
+            unicode
+        );
+    }
 }
