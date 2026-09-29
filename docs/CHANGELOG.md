@@ -2,6 +2,16 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 1.3.8 - 2026-09-29
+
+- Added multi-select. Click Select multiple at the bottom of the clipboard window, or choose Select Multiple from a record's context menu, to pick several records and delete them at once. Click to select, hold Shift to select a range, and press Ctrl+A (⌘A on macOS) to select all. Favorite and pinned records still follow the delete protection settings.
+- Added list display settings in Preference › Appearance. List Style switches between Cards and Seamless, where records sit edge to edge with dividers. List Density offers Comfortable, Standard, Compact and Custom; Custom lets you set Record Spacing, Vertical Padding and whether to Show Header Row.
+- Added Tray Icon Click Opens on Windows: choose whether clicking the tray icon opens the clipboard window or Preferences. It sits under System Tray Icon in Preference › General and still opens the clipboard window by default.
+- Simplified Preference: setting rows no longer carry icons, descriptions appear only where they help, and Overview has its own page in the sidebar.
+- On macOS you can now install KwikPaste with Homebrew: `brew install --cask mansandadada/tap/kwikpaste`.
+- Fixed text dragged out on Windows not dropping into WPS and other apps.
+- Fixed the Preference window not shrinking back to 960×600 after raising the Windows text size.
+
 ## 1.3.7 - 2026-09-28
 
 - Reworked Auto Cleanup in Preference › Data. Records now expire by when you last used them instead of when they were first copied, so something copied long ago that you still paste every day is kept. Copying or pasting from history counts as use even with Update Record on Reuse turned off.
