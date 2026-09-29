@@ -1,3 +1,4 @@
+import { Checkbox } from "antd";
 import type { DragEvent, FC, MouseEvent, PointerEvent } from "react";
 import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -56,9 +57,17 @@ interface ClipboardCardProps {
   onAuxClick?: (event: MouseEvent<HTMLDivElement>) => void;
   onDoubleClick?: (item: ClipboardItem) => void;
   /**
-   * 受收藏 / 置顶保护规则约束时为 false，右键菜单和快捷动作都去掉删除。
+   * 受收藏 / 置顶保护规则约束时为 false，右键菜单和快捷动作都去掉删除，多选时复选框不可选。
    */
   canDelete: boolean;
+  /**
+   * 列表处于多选状态：收起快捷动作、时间旁显示复选框，卡片内部不再响应点击，也不能拖出或弹右键菜单。
+   */
+  selecting?: boolean;
+  /**
+   * 多选时该条已选中。
+   */
+  checked?: boolean;
   quickActions?: readonly ItemAction[];
   quickActionLabels?: ItemActionLabels;
   onQuickAction?: (
@@ -97,6 +106,8 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
     onAuxClick,
     onDoubleClick,
     canDelete,
+    selecting = false,
+    checked = false,
     quickActions = [],
     quickActionLabels,
     onQuickAction,
@@ -129,6 +140,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   const showSensitiveIndicator = item.isSensitive && item.kind === "text";
   const showStatusIndicators = item.isPinned || showSensitiveIndicator;
   const indicatorCount = Number(item.isPinned) + Number(showSensitiveIndicator);
+  const checkedInSelection = selecting && checked;
   const appIcon = sourceAppId ? (
     <AssetImage
       alt={sourceAppName}
@@ -151,6 +163,8 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
 
   const handleContextMenu = async (event: MouseEvent) => {
     event.preventDefault();
+
+    if (selecting) return;
 
     const allActions = item.availableActions ?? [];
     const actions = canDelete
@@ -222,9 +236,12 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       labels={quickActionLabels}
       onQuickAction={onQuickAction ? handleQuickAction : void 0}
       quickActions={visibleQuickActions}
-      visible={hovered}
+      visible={hovered && !selecting}
     />
   );
+  const checkbox = selecting ? (
+    <Checkbox checked={checked} disabled={!canDelete} tabIndex={-1} />
+  ) : null;
   const content = item.note ? (
     <NoteContentSwitcher
       note={item.note}
@@ -253,12 +270,16 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
         {
           // 外环和边框互不干扰，置顶项被选中时两种标记可以同时读出来。
           [layout.pinnedClassName]: item.isPinned,
+          // 写在置顶之后：无间风格的置顶底色和勾选底色冲突时，cn 让后写的勾选底色胜出。
+          "bg-ant-primary/10": checkedInSelection,
+          // 多选时点击卡片任何位置都只切换勾选，链接、快捷信息等内部控件一律不接收指针。
+          "cursor-pointer select-none [&_*]:pointer-events-none": selecting,
           // 选中只加一圈柔和外环，底色和边框都不动：整圈亮蓝框在深色下太跳，
           // 而且会和置顶项的 primary 边框撞在一起分不出来。
           [layout.selectedClassName]: isSelected,
         },
       )}
-      draggable
+      draggable={!selecting}
       onAuxClick={onAuxClick}
       onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
@@ -285,7 +306,10 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
               <span className="truncate">{typeLabel}</span>
             </div>
 
-            {quickActionsNode}
+            <div className="flex shrink-0 items-center gap-1.5">
+              {quickActionsNode}
+              {checkbox}
+            </div>
           </div>
 
           {content}
@@ -315,6 +339,9 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
                 true,
               )
             : null}
+          {checkbox ? (
+            <div className="flex h-5 shrink-0 items-center">{checkbox}</div>
+          ) : null}
           {quickActionsNode}
         </>
       )}

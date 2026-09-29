@@ -215,6 +215,29 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
     });
   }, [commitItems, fetchRange, resetLoadingRanges]);
 
+  /**
+   * 一次删掉多条后刷新：不先清空镜像，免得整屏闪一下占位。未加载的条目也可能被删，已加载条目的
+   * 新下标无从推算，所以先用首页替换整份镜像（置顶条目固定渲染在列表上方，视口离顶部再远也要补回），
+   * 再强制重拉视口范围。
+   */
+  const refreshAfterRemoval = useCallback(async () => {
+    const token = requestTokenRef.current + 1;
+    requestTokenRef.current = token;
+    resetLoadingRanges();
+
+    await fetchRange(0, PAGE_SIZE - 1, {
+      force: true,
+      replace: true,
+      token,
+    });
+
+    const { end, start } = viewRangeRef.current;
+    await fetchRange(start - PRELOAD_ROWS, end + PRELOAD_ROWS, {
+      force: true,
+      token,
+    });
+  }, [fetchRange, resetLoadingRanges]);
+
   const loadRange = useCallback(
     (startIndex: number, endIndex: number) => {
       viewRangeRef.current = {
@@ -332,6 +355,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
     loadingMore: loadingRangeCount > 0 && loadedInitial,
     loadRange,
     patchItemById,
+    refreshAfterRemoval,
     reload,
     reloadCurrentRange,
     removeItemById,

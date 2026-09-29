@@ -24,6 +24,7 @@
     "searchHistory": "No records found for \"{{keyword}}\""
   },
   "footer": {
+    "select": "Select multiple",
     "shortcuts": "Shortcuts",
     "storageAlert": {
       "blocked": "Local data uses {{used}}, over the {{limit}} limit. Regular records can't free enough space: most of it is favorites, pinned, grouped, or noted records. Click to open settings.",
@@ -84,6 +85,15 @@
     "star": "Favorite",
     "starActive": "Unfavorite"
   },
+  "selection": {
+    "clear": "Deselect all",
+    "delete": "Delete",
+    "exit": "Cancel",
+    "hint": "Click to select, Shift-click for a range",
+    "protected": "Favorite and pinned records are protected from deletion. You can allow it in settings.",
+    "selectAll": "Select all",
+    "selected": "{{count}} selected"
+  },
   "shortcuts": {
     "closePreviewFilterWindow": "Close preview / filters / window",
     "copySelected": "Copy selected item",
@@ -101,6 +111,7 @@
     "pinSelected": "Pin / unpin selected item",
     "pinWindow": "Pin / unpin window",
     "previewSelected": "Hold to preview selected item",
+    "selectAll": "Select all / deselect all",
     "showShortcuts": "Show shortcuts",
     "splitSelected": "Split selected item into words",
     "switchCategory": "Switch category",

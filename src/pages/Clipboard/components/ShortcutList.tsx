@@ -37,6 +37,7 @@ const SHORTCUTS: Shortcut[] = [
     keys: ["CmdOrCtrl", "Backspace"],
     labelKey: "shortcuts.deleteSelected",
   },
+  { keys: "CmdOrCtrl+A", labelKey: "shortcuts.selectAll" },
   { keys: ["ArrowUp", "/", "ArrowDown"], labelKey: "shortcuts.navigate" },
   { keys: "CmdOrCtrl+F", labelKey: "shortcuts.focusSearch" },
   { keys: "CmdOrCtrl+Q", labelKey: "shortcuts.toggleRange" },

@@ -137,6 +137,8 @@ pub fn run() {
             commands::toggle_clipboard_item_favorite,
             commands::toggle_clipboard_item_pinned,
             commands::delete_clipboard_item,
+            commands::delete_clipboard_items,
+            commands::list_clipboard_item_refs,
             commands::clear_clipboard_items,
             commands::update_clipboard_item_note,
             commands::update_clipboard_item_group,

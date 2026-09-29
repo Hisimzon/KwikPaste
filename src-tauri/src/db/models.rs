@@ -149,8 +149,19 @@ pub enum ClipboardAction {
     TogglePinned,
     /// 编辑备注（恒在）。
     EditNote,
+    /// 进入列表多选并选中该条（恒在）。
+    Select,
     /// 删除条目（恒在）。
     Delete,
+}
+
+/// 列表多选用的轻量记录：只带 id 与决定能否删除的收藏 / 置顶标记。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardItemRef {
+    pub id: String,
+    pub is_favorite: bool,
+    pub is_pinned: bool,
 }
 
 /// Files 类型条目里的单条文件/目录元信息，由命令层组装后返回前端。

@@ -46,6 +46,7 @@ export type ClipboardAction =
   | "togglePinned"
   | "moveToGroup"
   | "editNote"
+  | "select"
   | "delete";
 
 export interface ClipboardItem {
@@ -179,6 +180,15 @@ export interface ClipboardItemQuery {
   sort?: ClipboardItemSort;
   limit?: number;
   offset?: number;
+}
+
+/**
+ * 列表多选用的轻量记录，与 Rust `ClipboardItemRef` 对应：按列表顺序排列，只带判断能否删除的标记。
+ */
+export interface ClipboardItemRef {
+  id: string;
+  isFavorite: boolean;
+  isPinned: boolean;
 }
 
 /**

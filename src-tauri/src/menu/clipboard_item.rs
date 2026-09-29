@@ -40,6 +40,7 @@ pub enum ClipboardMenuAction {
     TogglePinned,
     MoveToGroup,
     EditNote,
+    Select,
     Delete,
 }
 
@@ -87,6 +88,7 @@ impl ClipboardMenuAction {
                     Key::AddNote
                 }
             }
+            Self::Select => Key::Select,
             Self::Delete => Key::Delete,
         };
 
@@ -108,6 +110,7 @@ impl ClipboardMenuAction {
             Self::TogglePinned => Some("CmdOrCtrl+T"),
             Self::MoveToGroup => None,
             Self::EditNote => Some("CmdOrCtrl+M"),
+            Self::Select => None,
             Self::Delete => Some("CmdOrCtrl+Backspace"),
         }
     }
@@ -135,7 +138,7 @@ pub(super) const ACTION_GROUPS: &[&[ClipboardMenuAction]] = &[
         ClipboardMenuAction::MoveToGroup,
         ClipboardMenuAction::EditNote,
     ],
-    &[ClipboardMenuAction::Delete],
+    &[ClipboardMenuAction::Select, ClipboardMenuAction::Delete],
 ];
 
 /// 右键菜单里的可选自定义分组；由命令入口从数据库实时读取。
@@ -226,6 +229,7 @@ mod native {
                 Self::TogglePinned => "cim::togglePinned",
                 Self::MoveToGroup => "cim::moveToGroup",
                 Self::EditNote => "cim::editNote",
+                Self::Select => "cim::select",
                 Self::Delete => "cim::delete",
             }
         }
@@ -246,6 +250,7 @@ mod native {
                 ClipboardMenuAction::TogglePinned,
                 ClipboardMenuAction::MoveToGroup,
                 ClipboardMenuAction::EditNote,
+                ClipboardMenuAction::Select,
                 ClipboardMenuAction::Delete,
             ];
             if id.starts_with(MOVE_GROUP_PREFIX) {

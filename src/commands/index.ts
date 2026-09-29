@@ -20,6 +20,7 @@ import type {
   ClipboardGroupRecord,
   ClipboardItemPage,
   ClipboardItemQuery,
+  ClipboardItemRef,
   ClipboardKind,
   ClipboardSubKind,
   ContentCategory,
@@ -981,6 +982,17 @@ export const listClipboardItems = (query: ClipboardItemQuery) => {
 };
 
 /**
+ * 按列表同款过滤与排序取出全部匹配记录的 id 与收藏 / 置顶标记，供多选的全选与区间选择；忽略分页参数。
+ */
+export const listClipboardItemRefs = (query: ClipboardItemQuery) => {
+  return call<ClipboardItemRef[]>(
+    TAURI_COMMAND.LIST_CLIPBOARD_ITEM_REFS,
+    "commands:labels.selectClipboardItems",
+    { query },
+  );
+};
+
+/**
  * 列出自定义剪贴板分组；隐藏态由调用方按场景决定是否过滤。
  */
 export const listClipboardGroups = () => {
@@ -1307,6 +1319,43 @@ export const deleteClipboardItem = async (
   getMessageApi().success(i18n.t("commands:messages.deleted"));
 
   return true;
+};
+
+/**
+ * 删除列表多选的记录：和其它批量清理一样总是二次确认，返回实际删除条数，取消时返回 null。
+ * 命令**不**广播 `clipboard://updated`，调用方按返回值刷新列表；收藏 / 置顶保护由调用方在选择时过滤。
+ */
+export const deleteClipboardItems = async (
+  ids: string[],
+): Promise<number | null> => {
+  const ok = await new Promise<boolean>((resolve) => {
+    getModalApi().confirm({
+      cancelText: i18n.t("common:actions.cancel"),
+      centered: true,
+      content: i18n.t("commands:batchDeleteConfirm.content", {
+        count: ids.length,
+      }),
+      okButtonProps: { danger: true },
+      okText: i18n.t("common:actions.delete"),
+      onCancel: () => resolve(false),
+      onOk: () => resolve(true),
+      title: i18n.t("commands:batchDeleteConfirm.title"),
+    });
+  });
+
+  if (!ok) return null;
+
+  const removed = await call<number>(
+    TAURI_COMMAND.DELETE_CLIPBOARD_ITEMS,
+    "commands:labels.delete",
+    { ids },
+  );
+
+  getMessageApi().success(
+    i18n.t("commands:messages.itemsDeleted", { count: removed }),
+  );
+
+  return removed;
 };
 
 /**

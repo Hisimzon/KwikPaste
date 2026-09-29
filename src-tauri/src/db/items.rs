@@ -5,7 +5,8 @@ use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::core::Result;
 use crate::db::models::{
-    ClipboardGroupFilter, ClipboardItem, ClipboardItemQuery, ClipboardItemSort, ClipboardKind,
+    ClipboardGroupFilter, ClipboardItem, ClipboardItemQuery, ClipboardItemRef, ClipboardItemSort,
+    ClipboardKind,
 };
 
 const SELECT_ITEM: &str = "SELECT id, kind, sub_kind, group_id, source_app_id, content, \
@@ -309,27 +310,64 @@ fn image_file_name(kind: ClipboardKind, content: String) -> Option<String> {
     (kind == ClipboardKind::Image).then_some(content)
 }
 
-/// 批量删除，返回实际删除行数；`ids` 为空时不发查询。
-#[allow(dead_code)]
-pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<u64> {
+/// 批量删除单条 `DELETE` 最多绑定的 id 数，远低于 SQLite 的绑定变量上限。
+const DELETE_BATCH_SIZE: usize = 500;
+
+/// 按 id 批量删除，返回删除行数与被删图片文件名（供调用方删图）；不存在的 id 忽略。
+/// 所有分批在同一事务里完成，中途失败时一条都不删。
+pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<CleanupOutcome> {
+    let mut outcome = CleanupOutcome::default();
     if ids.is_empty() {
-        return Ok(0);
+        return Ok(outcome);
     }
 
-    let mut qb: QueryBuilder<Sqlite> =
-        QueryBuilder::new("DELETE FROM clipboard_items WHERE id IN (");
-    let mut separated = qb.separated(", ");
-    for id in ids {
-        separated.push_bind(id);
-    }
-    qb.push(")");
-
-    let result = qb
-        .build()
-        .execute(pool)
+    let mut tx = pool
+        .begin()
         .await
-        .context("failed to delete clipboard items")?;
-    Ok(result.rows_affected())
+        .context("failed to begin delete clipboard items transaction")?;
+    for chunk in ids.chunks(DELETE_BATCH_SIZE) {
+        let mut qb: QueryBuilder<Sqlite> =
+            QueryBuilder::new("DELETE FROM clipboard_items WHERE id IN (");
+        let mut separated = qb.separated(", ");
+        for id in chunk {
+            separated.push_bind(id.as_str());
+        }
+        qb.push(") RETURNING kind, content, size");
+
+        let rows = qb
+            .build_query_as::<DeletedRow>()
+            .fetch_all(&mut *tx)
+            .await
+            .context("failed to delete clipboard items")?;
+        absorb_deleted(&mut outcome, rows);
+    }
+    tx.commit()
+        .await
+        .context("failed to commit delete clipboard items transaction")?;
+
+    Ok(outcome)
+}
+
+/// 按列表同款过滤与排序（置顶在前）取出全部匹配记录的 id 与收藏 / 置顶标记，忽略分页参数。
+/// 供列表多选的全选与区间选择使用：只取三列，几万条也只是一次轻量查询。
+pub async fn list_item_refs(
+    pool: &SqlitePool,
+    q: &ClipboardItemQuery,
+) -> Result<Vec<ClipboardItemRef>> {
+    let keyword = KeywordFilter::from_keyword(q.keyword.as_deref());
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "SELECT clipboard_items.id, clipboard_items.is_favorite, clipboard_items.is_pinned \
+         FROM clipboard_items WHERE 1 = 1",
+    );
+    push_filter_clauses(&mut qb, q, &keyword);
+    push_order_clause(&mut qb, q.sort);
+
+    let refs = qb
+        .build_query_as::<ClipboardItemRef>()
+        .fetch_all(pool)
+        .await
+        .context("failed to list clipboard item refs")?;
+    Ok(refs)
 }
 
 /// 一批删除的结果：删除行数、其中图片记录的落盘文件名（供调用方删图），
@@ -493,9 +531,16 @@ fn push_list_query(qb: &mut QueryBuilder<Sqlite>, q: &ClipboardItemQuery, keywor
     qb.push(LIST_SELECT_ITEM);
     qb.push(" WHERE 1 = 1");
     push_filter_clauses(qb, q, keyword);
+    push_order_clause(qb, q.sort);
 
+    qb.push(" LIMIT ").push_bind(q.limit);
+    qb.push(" OFFSET ").push_bind(q.offset);
+}
+
+/// 列表排序：置顶恒前置，其余按 `sort`。列表分页与 [`list_item_refs`] 共用，保证两边顺序一致。
+fn push_order_clause(qb: &mut QueryBuilder<Sqlite>, sort: ClipboardItemSort) {
     qb.push(" ORDER BY clipboard_items.is_pinned DESC, ");
-    match q.sort {
+    match sort {
         ClipboardItemSort::CreatedAt => {
             qb.push("clipboard_items.created_at DESC");
         }
@@ -506,9 +551,6 @@ fn push_list_query(qb: &mut QueryBuilder<Sqlite>, q: &ClipboardItemQuery, keywor
             qb.push("clipboard_items.use_count DESC, clipboard_items.created_at DESC");
         }
     }
-
-    qb.push(" LIMIT ").push_bind(q.limit);
-    qb.push(" OFFSET ").push_bind(q.offset);
 }
 
 /// 统计满足同样过滤条件的总条数（不参与排序 / 分页），与 [`fetch_items`] 共用 [`push_filter_clauses`]。
@@ -1219,22 +1261,102 @@ mod tests {
         for id in ["a", "b", "c"] {
             insert_item(&pool, &sample_item(id)).await.unwrap();
         }
+        let mut img = sample_item("img");
+        img.kind = ClipboardKind::Image;
+        img.content = "deadbeef.png".to_owned();
+        img.content_hash = content_hash(ClipboardKind::Image, "deadbeef.png");
+        insert_item(&pool, &img).await.unwrap();
 
-        assert_eq!(delete_items(&pool, &[]).await.unwrap(), 0);
+        assert_eq!(delete_items(&pool, &[]).await.unwrap().removed, 0);
 
-        let removed = delete_items(
+        let outcome = delete_items(
             &pool,
-            &["a".to_owned(), "b".to_owned(), "missing".to_owned()],
+            &[
+                "a".to_owned(),
+                "img".to_owned(),
+                "b".to_owned(),
+                "missing".to_owned(),
+            ],
         )
         .await
         .unwrap();
-        assert_eq!(removed, 2);
+        assert_eq!(outcome.removed, 3);
+        assert_eq!(outcome.image_files, ["deadbeef.png"]);
         assert_eq!(
             ids(&query_items(&pool, &ClipboardItemQuery::default())
                 .await
                 .unwrap()),
             ["c"]
         );
+    }
+
+    #[tokio::test]
+    async fn delete_items_spans_several_batches() {
+        let pool = memory_pool().await;
+        let all: Vec<String> = (0..DELETE_BATCH_SIZE + 3)
+            .map(|index| format!("item-{index}"))
+            .collect();
+        for id in &all {
+            insert_item(&pool, &sample_item(id)).await.unwrap();
+        }
+
+        let outcome = delete_items(&pool, &all[1..]).await.unwrap();
+        assert_eq!(outcome.removed, (all.len() - 1) as u64);
+        assert_eq!(
+            ids(&query_items(&pool, &ClipboardItemQuery::default())
+                .await
+                .unwrap()),
+            ["item-0"]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_item_refs_follows_list_filters_and_order() {
+        let pool = memory_pool().await;
+        let mut a = sample_item("a");
+        a.created_at = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        a.is_favorite = true;
+        let mut b = sample_item("b");
+        b.created_at = DateTime::from_timestamp(1_700_000_010, 0).unwrap();
+        b.is_pinned = true;
+        let mut c = sample_item("c");
+        c.created_at = DateTime::from_timestamp(1_700_000_020, 0).unwrap();
+        let mut img = sample_item("img");
+        img.kind = ClipboardKind::Image;
+        img.created_at = DateTime::from_timestamp(1_700_000_030, 0).unwrap();
+        for item in [&a, &b, &c, &img] {
+            insert_item(&pool, item).await.unwrap();
+        }
+
+        // 分页参数不影响结果：置顶 b 在前，其余按创建时间倒序。
+        let refs = list_item_refs(
+            &pool,
+            &ClipboardItemQuery {
+                sort: ClipboardItemSort::CreatedAt,
+                limit: 1,
+                offset: 1,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let ref_ids: Vec<&str> = refs.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(ref_ids, ["b", "img", "c", "a"]);
+        assert!(refs[0].is_pinned && !refs[0].is_favorite);
+        assert!(refs[3].is_favorite && !refs[3].is_pinned);
+
+        let text_refs = list_item_refs(
+            &pool,
+            &ClipboardItemQuery {
+                kind: Some(ClipboardKind::Text),
+                sort: ClipboardItemSort::CreatedAt,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let text_ids: Vec<&str> = text_refs.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(text_ids, ["b", "c", "a"]);
     }
 
     #[tokio::test]

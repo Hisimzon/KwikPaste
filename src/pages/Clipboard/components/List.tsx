@@ -13,8 +13,10 @@ import { useSnapshot } from "valtio";
 import {
   copyClipboardFragment,
   deleteClipboardItem,
+  deleteClipboardItems,
   hideWindow,
   listClipboardGroups,
+  listClipboardItemRefs,
   openClipboardItemLink,
   pasteClipboardFragment,
   pasteClipboardItem,
@@ -39,6 +41,11 @@ import { WINDOW_LABEL } from "@/constants/windows";
 import { useClipboardItems } from "@/hooks/useClipboardItems";
 import { useKeyboardEvent } from "@/hooks/useKeyboardEvent";
 import { useTauriListen } from "@/hooks/useTauriListen";
+import {
+  clipboardSelectionState,
+  enterClipboardSelection,
+  exitClipboardSelection,
+} from "@/stores/clipboardSelection";
 import { clipboardStatsState } from "@/stores/clipboardStats";
 import { clipboardViewState } from "@/stores/clipboardView";
 import { settingsState } from "@/stores/settings";
@@ -48,11 +55,14 @@ import type {
   ClipboardFragment,
   ClipboardGroupRecord,
   ClipboardItem,
+  ClipboardItemQuery,
+  ClipboardItemRef,
   ClipboardKind,
   ClipboardRange,
 } from "@/types/clipboard";
 import type { ItemAction } from "@/types/settings";
 import { cn } from "@/utils/cn";
+import { getMessageApi } from "@/utils/feedback";
 import { isMac } from "@/utils/is";
 import type { WindowVisibilityPayload } from "../hooks/previewController";
 import {
@@ -62,9 +72,13 @@ import {
 import { useListLayout } from "../hooks/useListLayout";
 import ClipboardCard from "./cards/ClipboardCard";
 import NoteModal from "./NoteModal";
+import SelectionBar from "./SelectionBar";
 
 /** 前 10 项的快捷键：index 0-8 对应 1-9，index 9 对应 0 */
 const KEY_HINTS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+
+/** 多选时点到受保护记录的提示只保留一条，连点不堆叠。 */
+const PROTECTED_HINT_KEY = "clipboard-selection-protected";
 
 interface ClipboardUpdatedPayload {
   cleanup?: number;
@@ -96,6 +110,15 @@ const List: FC = () => {
   const [isModifierPressed, setIsModifierPressed] = useState(false);
   const [customGroups, setCustomGroups] = useState<ClipboardGroupRecord[]>([]);
   const [noteTarget, setNoteTarget] = useState<ClipboardItem | null>(null);
+  const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [allChecked, setAllChecked] = useState(false);
+  const [selectionBusy, setSelectionBusy] = useState(false);
+  // Shift 连选的起点：最近一次单独勾选 / 取消的条目。
+  const selectionAnchorIdRef = useRef<string | null>(null);
+  // 勾选集合每次清空都换代，异步拉回的全选 / 连选结果属于旧视图时丢弃。
+  const selectionTokenRef = useRef(0);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const isAtTopRef = useRef(true);
   const itemElementMapRef = useRef(new Map<string, HTMLDivElement>());
@@ -110,6 +133,7 @@ const List: FC = () => {
 
   const snapshot = useSnapshot(clipboardViewState);
   const settings = useSnapshot(settingsState);
+  const { active: selecting } = useSnapshot(clipboardSelectionState);
   const { category, keyword, groupId, range } = snapshot;
   const autoPaste = settings.clipboard.content.autoPaste;
   const middleClick = settings.clipboard.content.middleClick;
@@ -128,6 +152,13 @@ const List: FC = () => {
     return buildItemActionLabels(t);
   }, [t]);
   const currentGroupName = getCurrentGroupName(customGroups, groupId);
+  const itemQuery: ClipboardItemQuery = {
+    favorite: range === "favorite" ? true : void 0,
+    groupId: groupId ?? void 0,
+    keyword,
+    kind: category ?? void 0,
+    sort,
+  };
 
   const {
     findItemById,
@@ -137,17 +168,12 @@ const List: FC = () => {
     loadedInitial,
     loading,
     patchItemById,
+    refreshAfterRemoval,
     reload,
     reloadCurrentRange,
     removeItemById,
     total,
-  } = useClipboardItems({
-    favorite: range === "favorite" ? true : void 0,
-    groupId: groupId ?? void 0,
-    keyword,
-    kind: category ?? void 0,
-    sort,
-  });
+  } = useClipboardItems(itemQuery);
   const pinnedCount = countLeadingPinnedItems(getItem);
   // 虚拟列表只承载置顶之后的条目，其余逻辑一律用全局下标。
   const firstVisibleIndex = listStartIndex + pinnedCount;
@@ -180,7 +206,14 @@ const List: FC = () => {
     if (keywordRef.current !== keyword) keywordRef.current = keyword;
     deferredReloadRef.current = false;
     closePreview("filterChange");
+    // 换了视图就不再勾着看不见的记录，多选状态本身保留。
+    resetChecked();
   }, [snapshot]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 只在退出多选时触发，resetChecked 只写 state 与 ref
+  useEffect(() => {
+    if (!selecting) resetChecked();
+  }, [selecting]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 仅按影响列表 payload 的展示设置触发重拉，函数引用用 ref 读取最新值
   useEffect(() => {
@@ -233,6 +266,7 @@ const List: FC = () => {
     if (payload.cleanup !== void 0) {
       closePreview("cleanup");
       setSelectedId(null);
+      resetChecked();
       deferredReloadRef.current = false;
       if (clipboardStatsState.total !== null) {
         clipboardStatsState.total = Math.max(
@@ -247,6 +281,7 @@ const List: FC = () => {
     if (payload.imported) {
       closePreview("backupImport");
       setSelectedId(null);
+      resetChecked();
       requestReloadAtTop();
       return;
     }
@@ -299,7 +334,10 @@ const List: FC = () => {
     if (label !== WINDOW_LABEL.CLIPBOARD) return;
 
     clipboardWindowVisibleRef.current = visible;
-    if (!visible) return;
+    if (!visible) {
+      exitClipboardSelection();
+      return;
+    }
 
     const {
       scrollToTopOnOpen,
@@ -470,6 +508,195 @@ const List: FC = () => {
   };
 
   /**
+   * 清空勾选并换代，还在路上的全选 / 连选结果回来后作废。
+   */
+  function resetChecked() {
+    selectionTokenRef.current += 1;
+    selectionAnchorIdRef.current = null;
+    setCheckedIds(new Set());
+    setAllChecked(false);
+  }
+
+  /**
+   * 多选时点到受保护的收藏 / 置顶记录：勾不上，提示可以去设置里放开。
+   */
+  function showProtectedHint() {
+    getMessageApi().info({
+      content: t("selection.protected"),
+      key: PROTECTED_HINT_KEY,
+    });
+  }
+
+  /**
+   * 切换单条勾选，并把它记为 Shift 连选的起点。
+   */
+  function toggleChecked(item: ClipboardItem) {
+    if (!canDeleteItem(item)) {
+      showProtectedHint();
+      return;
+    }
+
+    selectionAnchorIdRef.current = item.id;
+    setAllChecked(false);
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(item.id)) next.add(item.id);
+
+      return next;
+    });
+  }
+
+  /**
+   * Shift 点击：勾上起点到目标之间（含两端）所有能删的记录，起点不变。
+   * 中间的行都已加载时就地取，否则向 Rust 要当前视图的完整顺序再截取。
+   */
+  async function checkRange(target: ClipboardItem) {
+    const anchorId = selectionAnchorIdRef.current;
+    if (anchorId === null || anchorId === target.id) {
+      toggleChecked(target);
+      return;
+    }
+
+    const token = selectionTokenRef.current;
+    const refs =
+      getLoadedRangeRefs(anchorId, target.id) ??
+      (await fetchRangeRefs(anchorId, target.id));
+    if (token !== selectionTokenRef.current) return;
+
+    if (!refs) {
+      toggleChecked(target);
+      return;
+    }
+
+    const ids = getDeletableIds(refs);
+    if (ids.length === 0) {
+      showProtectedHint();
+      return;
+    }
+
+    setAllChecked(false);
+    setCheckedIds((current) => {
+      return new Set([...current, ...ids]);
+    });
+  }
+
+  /**
+   * 两条记录之间（含两端）的已加载条目；有一端或中间某行没加载时返回 null。
+   */
+  function getLoadedRangeRefs(fromId: string, toId: string) {
+    const fromIndex = getItemIndexById(fromId);
+    const toIndex = getItemIndexById(toId);
+    if (fromIndex === null || toIndex === null) return null;
+
+    const refs: ClipboardItemRef[] = [];
+    const end = Math.max(fromIndex, toIndex);
+    for (let index = Math.min(fromIndex, toIndex); index <= end; index += 1) {
+      const item = getItem(index);
+      if (!item) return null;
+
+      refs.push(item);
+    }
+
+    return refs;
+  }
+
+  /**
+   * 从当前视图的完整顺序里截出两条记录之间（含两端）的部分；有一端已不在视图里时返回 null。
+   */
+  async function fetchRangeRefs(fromId: string, toId: string) {
+    const refs = await loadViewRefs();
+    if (!refs) return null;
+
+    const fromIndex = refs.findIndex((ref) => {
+      return ref.id === fromId;
+    });
+    const toIndex = refs.findIndex((ref) => {
+      return ref.id === toId;
+    });
+    if (fromIndex === -1 || toIndex === -1) return null;
+
+    return refs.slice(
+      Math.min(fromIndex, toIndex),
+      Math.max(fromIndex, toIndex) + 1,
+    );
+  }
+
+  /**
+   * 拉取当前视图全部记录的 id 与保护标记；失败原因命令层已提示，这里返回 null。
+   */
+  async function loadViewRefs() {
+    setSelectionBusy(true);
+
+    try {
+      return await listClipboardItemRefs(itemQuery);
+    } catch {
+      return null;
+    } finally {
+      setSelectionBusy(false);
+    }
+  }
+
+  function getDeletableIds(refs: ClipboardItemRef[]) {
+    return refs.filter(canDeleteItem).map((ref) => {
+      return ref.id;
+    });
+  }
+
+  /**
+   * 全选当前视图里能删的记录，已全选时全部取消；还没进入多选时顺带进入。
+   */
+  async function toggleAllChecked() {
+    enterClipboardSelection();
+
+    if (allChecked) {
+      resetChecked();
+      return;
+    }
+
+    const token = selectionTokenRef.current;
+    const refs = await loadViewRefs();
+    if (!refs || token !== selectionTokenRef.current) return;
+
+    const ids = getDeletableIds(refs);
+    if (ids.length === 0) {
+      if (refs.length > 0) showProtectedHint();
+      return;
+    }
+
+    selectionAnchorIdRef.current = null;
+    setCheckedIds(new Set(ids));
+    setAllChecked(true);
+  }
+
+  /**
+   * 删除已勾选的记录：确认并删除成功后退出多选，再按新数据刷新列表；取消或失败时保留勾选。
+   */
+  async function deleteChecked() {
+    if (checkedIds.size === 0 || selectionBusy) return;
+
+    if (previewSession && checkedIds.has(previewSession.itemId)) {
+      closePreview("batchDelete");
+    }
+
+    setSelectionBusy(true);
+
+    let removed: number | null = null;
+    try {
+      removed = await deleteClipboardItems([...checkedIds]);
+    } catch {
+      // 失败原因命令层已提示，勾选原样保留方便重试。
+    }
+
+    setSelectionBusy(false);
+
+    if (removed === null) return;
+
+    exitClipboardSelection();
+    setSelectedId(null);
+    void refreshAfterRemoval();
+  }
+
+  /**
    * 快捷键触发的收藏切换：读当前项的 isFavorite 计算下一态，
    * Rust 返回真实状态后走统一的 `handleFavoriteToggled`（favorite 分组内取消会移除）。
    */
@@ -614,6 +841,13 @@ const List: FC = () => {
       case "editNote":
         handleOpenNote(target, "editNote");
         return;
+      case "select":
+        enterClipboardSelection();
+        setSelectedId(target.id);
+        if (canDeleteItem(target) && !checkedIds.has(target.id)) {
+          toggleChecked(target);
+        }
+        return;
       case "delete":
         if (!canDeleteItem(target)) return;
 
@@ -667,6 +901,17 @@ const List: FC = () => {
     }
 
     if (total === 0) return;
+
+    if (eventModifierPressed && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      void toggleAllChecked();
+
+      return;
+    }
+
+    if (selecting && handleSelectionKeyDown(event, eventModifierPressed)) {
+      return;
+    }
 
     if (event.key === "Enter") {
       event.preventDefault();
@@ -817,6 +1062,33 @@ const List: FC = () => {
   useKeyboardEvent("keydown", handleKeyDown);
 
   /**
+   * 多选时的按键：Enter 勾选 / 取消当前项，Cmd/Ctrl+Backspace / Delete 删除已勾选的记录，
+   * 其余作用于单条记录的修饰键组合一律不响应。返回 false 的键（上下移动、空格预览）继续按列表规则处理。
+   */
+  function handleSelectionKeyDown(
+    event: KeyboardEvent,
+    modifierPressed: boolean,
+  ) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+
+      const activeItem = getActiveItem();
+      if (activeItem) toggleChecked(activeItem);
+
+      return true;
+    }
+
+    if (!modifierPressed) return false;
+
+    if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault();
+      void deleteChecked();
+    }
+
+    return true;
+  }
+
+  /**
    * 预览面板转交的按键：点过面板后键盘焦点可能停在预览窗口，Enter / Esc / Cmd+C / 上下键
    * 仍按列表这一套规则处理，预览里选了词时 Enter / Cmd+C 作用于选中的词。
    */
@@ -934,6 +1206,11 @@ const List: FC = () => {
 
   const handleCardMouseDown = useMemoizedFn(
     (item: ClipboardItem, event: ReactMouseEvent<HTMLDivElement>) => {
+      if (selecting) {
+        selectCardByMouse(item, event);
+        return;
+      }
+
       if (event.button !== 0) {
         if (event.button !== 1) return;
 
@@ -984,7 +1261,30 @@ const List: FC = () => {
     },
   );
 
+  /**
+   * 多选时按下卡片：左键切换勾选，按住 Shift 连选（卡片此时不可选中文字，Shift 点击不会拉出选区）。
+   * 中键不执行动作，但照样拦掉它的自动滚动。
+   */
+  function selectCardByMouse(
+    item: ClipboardItem,
+    event: ReactMouseEvent<HTMLDivElement>,
+  ) {
+    if (event.button === 1) event.preventDefault();
+    if (event.button !== 0) return;
+
+    setSelectedId(item.id);
+
+    if (event.shiftKey) {
+      void checkRange(item);
+      return;
+    }
+
+    toggleChecked(item);
+  }
+
   const handleCardDoubleClick = useMemoizedFn((item: ClipboardItem) => {
+    if (selecting) return;
+
     if (autoPaste === "doubleClickPaste") {
       closePreview("doubleClickPaste");
       pasteClipboardItem(item.id, false);
@@ -1040,11 +1340,27 @@ const List: FC = () => {
     requestReloadAtTop();
   }
 
+  // 多选栏接替底部栏（Footer 多选时不渲染），列表加载中或为空时也要留着，才能退出多选。
+  const selectionBar = selecting ? (
+    <SelectionBar
+      allChecked={allChecked}
+      busy={selectionBusy}
+      count={checkedIds.size}
+      onDelete={deleteChecked}
+      onExit={exitClipboardSelection}
+      onToggleAll={toggleAllChecked}
+    />
+  ) : null;
+
   if (loading && !loadedInitial) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <Spin />
-      </div>
+      <>
+        <div className="flex flex-1 items-center justify-center">
+          <Spin />
+        </div>
+
+        {selectionBar}
+      </>
     );
   }
 
@@ -1059,33 +1375,45 @@ const List: FC = () => {
     );
 
     return (
-      <div
-        className="flex flex-1 flex-col items-center justify-center"
-        data-tauri-drag-region
-      >
-        <Empty description={description} image={Empty.PRESENTED_IMAGE_SIMPLE} />
-      </div>
+      <>
+        <div
+          className="flex flex-1 flex-col items-center justify-center"
+          data-tauri-drag-region
+        >
+          <Empty
+            description={description}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        </div>
+
+        {selectionBar}
+      </>
     );
   }
 
   return (
-    <div
-      className="relative flex flex-1 flex-col overflow-hidden"
-      onPointerLeave={handlePreviewAreaPointerLeave}
-      role="listbox"
-    >
-      {renderPinnedItems()}
+    <>
+      <div
+        aria-multiselectable={selecting}
+        className="relative flex flex-1 flex-col overflow-hidden"
+        onPointerLeave={handlePreviewAreaPointerLeave}
+        role="listbox"
+      >
+        {renderPinnedItems()}
 
-      <VirtuosoScroller className="min-h-0 flex-1">
-        {renderVirtuoso}
-      </VirtuosoScroller>
+        <VirtuosoScroller className="min-h-0 flex-1">
+          {renderVirtuoso}
+        </VirtuosoScroller>
 
-      <NoteModal
-        item={noteTarget}
-        onClose={handleCloseNote}
-        onSaved={handleNoteSaved}
-      />
-    </div>
+        <NoteModal
+          item={noteTarget}
+          onClose={handleCloseNote}
+          onSaved={handleNoteSaved}
+        />
+      </div>
+
+      {selectionBar}
+    </>
   );
 
   function renderVirtuoso(props: VirtuosoScrollerChildrenProps) {
@@ -1153,8 +1481,9 @@ const List: FC = () => {
     if (!item) return renderPlaceholderItem();
 
     const relativeIndex = index - firstVisibleIndex;
+    // 多选时 Cmd/Ctrl+数字不粘贴，也就不显示数字提示。
     const hintKey =
-      relativeIndex >= 0 && relativeIndex < 10
+      !selecting && relativeIndex >= 0 && relativeIndex < 10
         ? KEY_HINTS[relativeIndex]
         : void 0;
 
@@ -1163,8 +1492,9 @@ const List: FC = () => {
       <div className={listLayout.itemClassName}>
         <ClipboardCard
           canDelete={canDeleteItem(item)}
+          checked={checkedIds.has(item.id)}
           hintKey={hintKey}
-          isLinkActive={isModifierPressed}
+          isLinkActive={isModifierPressed && !selecting}
           isSelected={
             selectedId === null
               ? index === firstVisibleIndex
@@ -1184,6 +1514,7 @@ const List: FC = () => {
           onRootElement={registerItemElement}
           quickActionLabels={quickActionLabels}
           quickActions={quickActions}
+          selecting={selecting}
           showOriginalOnHover={showOriginalPreview}
         />
       </div>
@@ -1251,7 +1582,7 @@ const List: FC = () => {
   /**
    * 判断当前条目是否允许删除：收藏 / 置顶条目分别受各自保护开关约束。
    */
-  function canDeleteItem(item: ClipboardItem) {
+  function canDeleteItem(item: Pick<ClipboardItem, "isFavorite" | "isPinned">) {
     if (item.isPinned && !deletePinnedItems) return false;
 
     if (!item.isFavorite) return true;
@@ -1264,11 +1595,16 @@ const List: FC = () => {
   }
 
   /**
-   * ESC 按预览、分组、分类、窗口的顺序逐层退出。
+   * ESC 按预览、多选、分组、分类、窗口的顺序逐层退出。
    */
   function closeTopEscapeLayer() {
     if (previewSession !== null) {
       closePreview("escape");
+      return;
+    }
+
+    if (clipboardSelectionState.active) {
+      exitClipboardSelection();
       return;
     }
 

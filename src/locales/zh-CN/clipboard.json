@@ -24,6 +24,7 @@
     "searchHistory": "未找到「{{keyword}}」相关记录"
   },
   "footer": {
+    "select": "多选",
     "shortcuts": "快捷键",
     "storageAlert": {
       "blocked": "本地数据已占用 {{used}}，超出上限 {{limit}}。普通记录已不足以释放空间，占用主要来自收藏、置顶、分组或有备注的记录。点击前往设置。",
@@ -84,6 +85,15 @@
     "star": "收藏",
     "starActive": "取消收藏"
   },
+  "selection": {
+    "clear": "取消全选",
+    "delete": "删除",
+    "exit": "取消",
+    "hint": "点击选择，按住 Shift 连选",
+    "protected": "收藏或置顶记录受删除保护，可在设置里允许删除",
+    "selectAll": "全选",
+    "selected": "已选 {{count}} 项"
+  },
   "shortcuts": {
     "closePreviewFilterWindow": "关闭预览 / 筛选 / 窗口",
     "copySelected": "复制选中项",
@@ -101,6 +111,7 @@
     "pinSelected": "置顶 / 取消置顶",
     "pinWindow": "固定 / 取消固定窗口",
     "previewSelected": "按住预览选中项",
+    "selectAll": "全选 / 取消全选",
     "showShortcuts": "显示快捷键",
     "splitSelected": "拆词选中项",
     "switchCategory": "切换分类",

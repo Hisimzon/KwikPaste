@@ -24,7 +24,7 @@ use crate::db::items::{
 };
 use crate::db::models::{
     ClipboardAction, ClipboardApp, ClipboardGroup, ClipboardItem, ClipboardItemPage,
-    ClipboardItemQuery, ClipboardKind, ClipboardSubKind, FileEntry, Platform,
+    ClipboardItemQuery, ClipboardItemRef, ClipboardKind, ClipboardSubKind, FileEntry, Platform,
 };
 use crate::db::DatabaseState;
 use crate::settings::{PreviewTextView, SettingsStore};
@@ -1003,7 +1003,7 @@ fn attach_display_created_at(item: &mut ClipboardItem, now: &chrono::DateTime<Lo
 /// 不再自行判定「能否打开链接 / 是否文件可揭示」等业务规则。
 /// 脱敏展示的敏感文本不提供拆词，与 [`split_clipboard_item`] 的拒绝条件一致。
 fn compute_available_actions(item: &ClipboardItem, redact_sensitive: bool) -> Vec<ClipboardAction> {
-    let mut actions = Vec::with_capacity(11);
+    let mut actions = Vec::with_capacity(12);
 
     actions.push(ClipboardAction::Paste);
 
@@ -1039,6 +1039,7 @@ fn compute_available_actions(item: &ClipboardItem, redact_sensitive: bool) -> Ve
     actions.push(ClipboardAction::ToggleFavorite);
     actions.push(ClipboardAction::TogglePinned);
     actions.push(ClipboardAction::EditNote);
+    actions.push(ClipboardAction::Select);
     actions.push(ClipboardAction::Delete);
 
     actions
@@ -1625,6 +1626,37 @@ pub async fn delete_clipboard_item(
         }
     }
     Ok(())
+}
+
+/// 批量删除列表多选的记录（薄封装），连带删除图片落盘文件，返回实际删除条数。
+/// 与单条删除一样不广播 `clipboard://updated`，列表由调用方按返回值刷新；
+/// 收藏 / 置顶保护由前端在选择时过滤。
+#[tauri::command]
+pub async fn delete_clipboard_items(
+    db: State<'_, DatabaseState>,
+    store: State<'_, ImageStore>,
+    ids: Vec<String>,
+) -> Result<u64> {
+    let pool = db.pool().await;
+    let outcome = crate::db::items::delete_items(&pool, &ids).await?;
+
+    for file_name in &outcome.image_files {
+        if let Err(err) = store.remove(file_name) {
+            log::warn!("remove deleted image {file_name} failed: {err}");
+        }
+    }
+
+    Ok(outcome.removed)
+}
+
+/// 列表多选的全选 / 区间选择（薄封装）：按列表同款过滤与排序返回全部匹配记录的 id 与收藏 / 置顶标记。
+#[tauri::command]
+pub async fn list_clipboard_item_refs(
+    db: State<'_, DatabaseState>,
+    query: ClipboardItemQuery,
+) -> Result<Vec<ClipboardItemRef>> {
+    let pool = db.pool().await;
+    crate::db::items::list_item_refs(&pool, &query).await
 }
 
 /// 清空全部历史记录，并删除对应图片资源。完成后广播列表刷新事件。
