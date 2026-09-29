@@ -111,6 +111,11 @@ const PreferenceSearchResults: FC<PreferenceSearchResultsProps> = (props) => {
     return (
       <ScrollArea className="max-h-88 w-max min-w-64 max-w-128 overflow-x-hidden overscroll-contain">
         {results.map((result) => {
+          const description = translatePreferenceSetting(
+            t,
+            result.setting,
+            "description",
+          );
           const handleClick = () => {
             onPick(result);
           };
@@ -126,9 +131,11 @@ const PreferenceSearchResults: FC<PreferenceSearchResultsProps> = (props) => {
                 <span className="block truncate font-medium text-sm">
                   {translatePreferenceSetting(t, result.setting, "title")}
                 </span>
-                <small className="mt-0.5 block truncate text-ant-secondary text-xs leading-snug">
-                  {translatePreferenceSetting(t, result.setting, "description")}
-                </small>
+                {description ? (
+                  <small className="mt-0.5 block truncate text-ant-secondary text-xs leading-snug">
+                    {description}
+                  </small>
+                ) : null}
               </div>
               <div className="max-w-56 truncate text-ant-tertiary text-xs">
                 {translatePreferenceTab(t, result.tab)} /{" "}

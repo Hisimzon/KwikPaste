@@ -8,6 +8,7 @@ export type PreferenceTabId =
   | "window"
   | "paste"
   | "items"
+  | "overview"
   | "data"
   | "about";
 
@@ -52,6 +53,7 @@ export type PreferenceControl =
     }
   | { type: "segmented"; options: PreferenceOption[] }
   | { type: "tiles"; kind: "material" | "theme" }
+  | { type: "captureKinds" }
   | { type: "select"; options: PreferenceOption[]; mode?: "multiple" }
   | { type: "clipboardGroupSelect" }
   | {

@@ -91,6 +91,7 @@ const ClipboardGroupSelectControl: FC<ClipboardGroupSelectControlProps> = (
 
   return (
     <Select
+      className="min-w-40"
       disabled={disabled}
       loading={loading}
       onChange={handleChange}

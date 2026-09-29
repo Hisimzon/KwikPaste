@@ -18,7 +18,6 @@
     "press": "Press shortcut"
   },
   "units": {
-    "items": "{{count}} items",
-    "settings": "{{count}} settings"
+    "items": "{{count}} items"
   }
 }

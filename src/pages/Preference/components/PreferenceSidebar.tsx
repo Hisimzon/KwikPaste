@@ -93,7 +93,7 @@ const PreferenceSidebar: FC<PreferenceSidebarProps> = (props) => {
                 )}
                 <button
                   className={cn(
-                    "group relative flex h-10 w-full cursor-pointer items-center gap-2 rounded-1.75 border-0 bg-transparent px-2 text-left transition-colors focus-visible:ring-1 focus-visible:ring-ant-primary motion-reduce:transition-none",
+                    "group relative flex h-9 w-full cursor-pointer items-center gap-2 rounded-1.75 border-0 bg-transparent px-2 text-left transition-colors focus-visible:ring-1 focus-visible:ring-ant-primary motion-reduce:transition-none",
                     selected
                       ? "bg-ant-fill-secondary text-ant-text"
                       : "text-ant-secondary hover:bg-ant-fill-tertiary hover:text-ant-text",
@@ -114,12 +114,6 @@ const PreferenceSidebar: FC<PreferenceSidebarProps> = (props) => {
                   <span className="min-w-0 flex-1 truncate font-medium text-sm leading-tight">
                     {translatePreferenceTab(t, tab)}
                   </span>
-                  <span
-                    className={cn(
-                      "h-5 w-0.75 rounded-full transition-colors motion-reduce:transition-none",
-                      selected ? "bg-ant-primary" : "bg-transparent",
-                    )}
-                  />
                 </button>
               </Fragment>
             );

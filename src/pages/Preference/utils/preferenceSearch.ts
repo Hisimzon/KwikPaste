@@ -1,5 +1,11 @@
-import { allPreferenceSettings } from "../config/preferenceSchema";
 import {
+  CAPTURE_KIND_DISPLAY_ORDER,
+  translateCaptureKindLabel,
+} from "@/constants/captureKinds";
+import { allPreferenceSettings } from "../config/preferenceSchema";
+import type { PreferenceSetting } from "../types/preferences";
+import {
+  translatePreferenceOption,
   translatePreferenceSection,
   translatePreferenceSetting,
   translatePreferenceTab,
@@ -27,6 +33,7 @@ export function searchPreferenceSettings(
         translatePreferenceSection(t, section, "title"),
         translatePreferenceSetting(t, setting, "title"),
         translatePreferenceSetting(t, setting, "description"),
+        ...translateSearchableOptions(t, setting),
         ...(setting.keywords ?? []),
       ]
         .join(" ")
@@ -35,4 +42,26 @@ export function searchPreferenceSettings(
       return haystack.includes(normalized);
     })
     .slice(0, 8);
+}
+
+/**
+ * 选项文案也参与搜索：很多设置只有标题没有说明，用户常按看到的选项名（如「跟随光标」「图片」）来找。
+ */
+function translateSearchableOptions(
+  t: PreferenceSearchTranslator,
+  setting: PreferenceSetting,
+) {
+  const { control } = setting;
+
+  if (control.type === "captureKinds") {
+    return CAPTURE_KIND_DISPLAY_ORDER.map((kind) => {
+      return translateCaptureKindLabel(t, kind);
+    });
+  }
+
+  if (control.type !== "select" && control.type !== "segmented") return [];
+
+  return control.options.map((option) => {
+    return translatePreferenceOption(t, setting, option).label;
+  });
 }

@@ -13,7 +13,9 @@ import type {
   SettingValue,
 } from "../../types/preferences";
 import ActionControl from "./ActionControl";
+import AppExclusionControl from "./AppExclusionControl";
 import AppearanceTilesControl from "./AppearanceTilesControl";
+import CaptureKindsControl from "./CaptureKindsControl";
 import CaptureOrderControl from "./CaptureOrderControl";
 import CleanupStatusControl from "./CleanupStatusControl";
 import ClipboardGroupSelectControl from "./ClipboardGroupSelectControl";
@@ -80,6 +82,7 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
       if (setting.id === "appearance.language") {
         return (
           <LanguageSwitcher
+            className="min-w-40"
             disabled={disabled}
             onChange={handleLanguageChange}
             value={settings.appearance.language}
@@ -103,6 +106,15 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
           onChange={onChange}
           setting={setting}
           value={typeof value === "string" ? value : ""}
+        />
+      );
+    case "captureKinds":
+      return (
+        <CaptureKindsControl
+          disabled={disabled}
+          onChange={onChange}
+          setting={setting}
+          value={value}
         />
       );
     case "select":
@@ -195,8 +207,16 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
           value={typeof value === "string" ? value : ""}
         />
       );
-    case "textarea":
     case "appExclusion":
+      return (
+        <AppExclusionControl
+          disabled={disabled}
+          onChange={onChange}
+          setting={setting}
+          settings={settings}
+        />
+      );
+    case "textarea":
       return (
         <TextareaControl
           disabled={disabled}

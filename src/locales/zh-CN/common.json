@@ -18,7 +18,6 @@
     "press": "按下录入快捷键"
   },
   "units": {
-    "items": "{{count}} 项",
-    "settings": "{{count}} 项设置"
+    "items": "{{count}} 项"
   }
 }

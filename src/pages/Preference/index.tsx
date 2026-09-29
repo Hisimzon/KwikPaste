@@ -1,7 +1,7 @@
 import { getName, getVersion } from "@tauri-apps/api/app";
-import { useMount, useUnmount } from "ahooks";
+import { useMount } from "ahooks";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { ChangeEvent, FC, UIEvent } from "react";
+import type { ChangeEvent, FC } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSnapshot } from "valtio";
@@ -47,9 +47,7 @@ import type {
 } from "./types/preferences";
 import {
   resetContentScroll,
-  resolveVisibleSectionId,
   scrollHighlightedSetting,
-  scrollToSection,
 } from "./utils/preferenceScroll";
 import {
   type PreferenceSearchResult,
@@ -66,12 +64,7 @@ interface ClipboardCleanupPayload {
   cleanup?: number;
 }
 
-const STORAGE_OVERVIEW_TAB_ID: PreferenceTabId = "data";
-const STORAGE_OVERVIEW_SECTION_ID = "overview";
-/** 程序滚动开始前的等待上限：定位高亮要等分类切换动画后才滚。 */
-const SECTION_TRACKING_HOLD_MS = 400;
-/** 滚动事件停止这么久即视为程序滚动结束，恢复目录跟随。 */
-const SECTION_TRACKING_SETTLE_MS = 150;
+const STORAGE_OVERVIEW_TAB_ID: PreferenceTabId = "overview";
 
 interface PreferenceHighlightSettingPayload {
   settingId: string;
@@ -91,13 +84,8 @@ const Preference: FC = () => {
   const shouldReduceMotion = useReducedMotion();
   const reduceMotion = shouldReduceMotion === true;
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const sectionTrackingHeldRef = useRef(false);
-  const sectionTrackingTimerRef = useRef<number | undefined>(void 0);
   const [activeTabId, setActiveTabId] = useState<PreferenceTabId>(
     preferenceTabs[0].id,
-  );
-  const [activeSectionId, setActiveSectionId] = useState(
-    preferenceTabs[0].sections[0]?.id ?? "",
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [highlightTarget, setHighlightTarget] =
@@ -121,15 +109,10 @@ const Preference: FC = () => {
   const searchResults = useMemo(() => {
     return searchPreferenceSettings(searchQuery, t);
   }, [searchQuery, t]);
-  const totalSettings = activeTab.sections.reduce((total, section) => {
-    const visibleSettings = section.settings.filter((setting) => {
-      return !isPreferenceSettingCollapsed(setting, settings);
+  const hasSourceApps = activeTab.sections.some((section) => {
+    return section.settings.some((setting) => {
+      return setting.control.type === "appExclusion";
     });
-
-    return total + visibleSettings.length;
-  }, 0);
-  const hasSourceSection = activeTab.sections.some((section) => {
-    return section.id === "source";
   });
 
   const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -137,58 +120,12 @@ const Preference: FC = () => {
   };
 
   const handleTabSelect = (nextTabId: PreferenceTabId) => {
-    const nextTab =
-      preferenceTabs.find((tab) => {
-        return tab.id === nextTabId;
-      }) ?? preferenceTabs[0];
-    const nextSectionId = nextTab.sections[0]?.id ?? "";
-
     setActiveTabId(nextTabId);
-    setActiveSectionId(nextSectionId);
     resetContentScroll(contentRef.current);
-  };
-
-  const handleSectionSelect = (sectionId: string) => {
-    setActiveSectionId(sectionId);
-    holdSectionTracking(SECTION_TRACKING_HOLD_MS);
-    scrollToSection(contentRef.current, sectionId, reduceMotion);
-  };
-
-  /**
-   * 程序触发的滚动期间暂停目录跟随，避免平滑滚动途经的分组抢走刚选中的高亮。
-   */
-  const holdSectionTracking = (releaseDelay: number) => {
-    sectionTrackingHeldRef.current = true;
-    window.clearTimeout(sectionTrackingTimerRef.current);
-    sectionTrackingTimerRef.current = window.setTimeout(() => {
-      sectionTrackingHeldRef.current = false;
-    }, releaseDelay);
-  };
-
-  /**
-   * 用户滚动内容区时让页内目录跟随当前阅读的分组；内部嵌套滚动区不参与。
-   */
-  const handleContentScroll = (event: UIEvent<HTMLDivElement>) => {
-    const container = contentRef.current;
-    if (!container || event.target !== container) return;
-
-    if (sectionTrackingHeldRef.current) {
-      holdSectionTracking(SECTION_TRACKING_SETTLE_MS);
-      return;
-    }
-
-    const sectionIds = activeTab.sections.map((section) => {
-      return section.id;
-    });
-    const sectionId = resolveVisibleSectionId(container, sectionIds);
-    if (!sectionId) return;
-
-    setActiveSectionId(sectionId);
   };
 
   const handlePickSearchResult = (result: PreferenceSearchResult) => {
     setActiveTabId(result.tab.id);
-    setActiveSectionId(result.section.id);
     setSearchQuery("");
     highlightSetting(result.setting.id);
   };
@@ -208,9 +145,7 @@ const Preference: FC = () => {
     );
 
     setActiveTabId(target.tab.id);
-    setActiveSectionId(target.section.id);
     setSearchQuery("");
-    holdSectionTracking(SECTION_TRACKING_HOLD_MS);
     setHighlightTarget((currentTarget) => {
       return {
         settingId: collapsed && parentId ? parentId : settingId,
@@ -224,7 +159,6 @@ const Preference: FC = () => {
    */
   const openStorageOverview = () => {
     setActiveTabId(STORAGE_OVERVIEW_TAB_ID);
-    setActiveSectionId(STORAGE_OVERVIEW_SECTION_ID);
     setSearchQuery("");
     resetContentScroll(contentRef.current);
   };
@@ -273,8 +207,6 @@ const Preference: FC = () => {
 
   const highlightBackupImport = () => {
     setActiveTabId("data");
-    setActiveSectionId("backup");
-    holdSectionTracking(SECTION_TRACKING_HOLD_MS);
     setHighlightTarget((currentTarget) => {
       return {
         settingId: "backup.importHistory",
@@ -384,10 +316,6 @@ const Preference: FC = () => {
     }
   });
 
-  useUnmount(() => {
-    window.clearTimeout(sectionTrackingTimerRef.current);
-  });
-
   useTauriListen<BackupReceivedPayload>(
     TAURI_EVENT.BACKUP_RECEIVED,
     (event) => {
@@ -453,10 +381,10 @@ const Preference: FC = () => {
   }, [highlightTarget, reduceMotion]);
 
   useEffect(() => {
-    if (!hasSourceSection) return;
+    if (!hasSourceApps) return;
 
     void reloadSourceApps();
-  }, [hasSourceSection]);
+  }, [hasSourceApps]);
 
   if (!activeTab) return null;
 
@@ -485,28 +413,24 @@ const Preference: FC = () => {
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <PreferenceHeader
-            activeSectionId={activeSectionId}
             activeTab={activeTab}
             onPickSearchResult={handlePickSearchResult}
             onSearchChange={handleSearchChange}
-            onSectionSelect={handleSectionSelect}
             searchQuery={searchQuery}
             searchResults={searchResults}
             shouldReduceMotion={reduceMotion}
-            totalSettings={totalSettings}
           />
 
           <ScrollArea
             className="min-h-0 flex-1"
             contentClassName="p-6"
             data-tauri-drag-region
-            onScrollCapture={handleContentScroll}
             ref={contentRef}
           >
             <AnimatePresence mode="wait">
               <motion.div
                 animate={{ opacity: 1 }}
-                className="flex max-w-228 flex-col gap-6"
+                className="flex max-w-180 flex-col gap-8"
                 exit={{ opacity: 0 }}
                 initial={{ opacity: 0 }}
                 key={activeTabId}
@@ -528,6 +452,7 @@ const Preference: FC = () => {
                       section={section}
                       settings={settings}
                       shouldReduceMotion={reduceMotion}
+                      showTitle={activeTab.sections.length > 1}
                       storageLocation={storageLocation}
                     />
                   );

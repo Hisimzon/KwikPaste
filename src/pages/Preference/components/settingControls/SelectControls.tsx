@@ -31,6 +31,7 @@ export const SegmentedSelectControl: FC<SegmentedSelectControlProps> = (
 
   return (
     <Select
+      className="min-w-40"
       disabled={disabled}
       onChange={handleChange}
       options={options}
@@ -63,6 +64,7 @@ export const SelectControl: FC<SelectControlProps> = (props) => {
 
   return (
     <Select
+      className="min-w-40"
       disabled={disabled}
       mode={setting.control.mode}
       onChange={handleChange}

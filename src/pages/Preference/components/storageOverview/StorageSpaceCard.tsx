@@ -171,12 +171,7 @@ const StorageSpaceCard: FC<StorageSpaceCardProps> = (props) => {
                 size: formatBytes(reclaimable.bytes),
               })}
             </span>
-            <Button
-              autoInsertSpace={false}
-              loading={cleaningCache}
-              onClick={onCleanCache}
-              size="small"
-            >
+            <Button loading={cleaningCache} onClick={onCleanCache} size="small">
               {t("overview.space.cleanCache")}
             </Button>
           </div>

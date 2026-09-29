@@ -1,5 +1,8 @@
 /* @unocss-include */
-import { CAPTURE_KIND_OPTIONS } from "@/constants/captureKinds";
+import {
+  CAPTURE_KIND_DISPLAY_ORDER,
+  CAPTURE_KIND_OPTIONS,
+} from "@/constants/captureKinds";
 import { ITEM_ACTION_OPTIONS } from "@/constants/itemActions";
 import { LANGUAGE_OPTIONS } from "@/constants/languages";
 import {
@@ -453,48 +456,25 @@ export const preferenceTabs: PreferenceTab[] = [
         id: "capture",
         settings: [
           {
-            control: { type: "switch" },
-            id: "capture.text",
-            keywords: ["text", "plain", "record"],
-            path: ["clipboard", "capture", "text"],
+            control: { type: "captureKinds" },
+            id: "capture.kinds",
+            keywords: [
+              "text",
+              "plain",
+              "html",
+              "rtf",
+              "rich text",
+              "image",
+              "picture",
+              "file",
+              "folder",
+              "record",
+            ],
+            path: ["clipboard", "capture"],
             value: (settings) => {
-              return settings.clipboard.capture.text;
-            },
-          },
-          {
-            control: { type: "switch" },
-            id: "capture.html",
-            keywords: ["html", "rich text", "format"],
-            path: ["clipboard", "capture", "html"],
-            value: (settings) => {
-              return settings.clipboard.capture.html;
-            },
-          },
-          {
-            control: { type: "switch" },
-            id: "capture.rtf",
-            keywords: ["rtf", "rich text", "format"],
-            path: ["clipboard", "capture", "rtf"],
-            value: (settings) => {
-              return settings.clipboard.capture.rtf;
-            },
-          },
-          {
-            control: { type: "switch" },
-            id: "capture.image",
-            keywords: ["image", "picture", "thumbnail"],
-            path: ["clipboard", "capture", "image"],
-            value: (settings) => {
-              return settings.clipboard.capture.image;
-            },
-          },
-          {
-            control: { type: "switch" },
-            id: "capture.files",
-            keywords: ["file", "folder", "path"],
-            path: ["clipboard", "capture", "files"],
-            value: (settings) => {
-              return settings.clipboard.capture.files;
+              return CAPTURE_KIND_DISPLAY_ORDER.filter((kind) => {
+                return settings.clipboard.capture[kind];
+              });
             },
           },
           {
@@ -564,11 +544,6 @@ export const preferenceTabs: PreferenceTab[] = [
               return settings.clipboard.sensitive.redactSecrets;
             },
           },
-        ],
-      },
-      {
-        id: "source",
-        settings: [
           {
             control: { type: "appExclusion" },
             id: "source.excludedApps",
@@ -944,8 +919,8 @@ export const preferenceTabs: PreferenceTab[] = [
   },
   {
     group: "data",
-    icon: "i-lucide:database",
-    id: "data",
+    icon: "i-lucide:chart-pie",
+    id: "overview",
     sections: [
       {
         id: "overview",
@@ -966,6 +941,13 @@ export const preferenceTabs: PreferenceTab[] = [
           },
         ],
       },
+    ],
+  },
+  {
+    group: "data",
+    icon: "i-lucide:database",
+    id: "data",
+    sections: [
       {
         id: "cleanup",
         settings: [

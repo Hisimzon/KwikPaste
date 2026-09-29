@@ -23,6 +23,10 @@ import { log } from "./utils/log";
 const ANTD_MODAL_CONFIG = {
   centered: true,
 } satisfies ConfigProviderProps["modal"];
+// antd 默认在两个汉字的按钮里插空格（「打 开」），中英文混排时显得松散，统一关掉。
+const ANTD_BUTTON_CONFIG = {
+  autoInsertSpace: false,
+} satisfies ConfigProviderProps["button"];
 
 /**
  * 把设置语言映射到 Ant Design 内置 locale。
@@ -96,6 +100,7 @@ const App: FC = () => {
 
   return (
     <ConfigProvider
+      button={ANTD_BUTTON_CONFIG}
       locale={locale}
       modal={ANTD_MODAL_CONFIG}
       popupMatchSelectWidth={false}

@@ -86,6 +86,7 @@ const NumberControl: FC<NumberControlProps> = (props) => {
   if (!suffix) {
     return (
       <InputNumber
+        className="w-40"
         disabled={disabled}
         max={control.max}
         min={control.min}
@@ -98,8 +99,9 @@ const NumberControl: FC<NumberControlProps> = (props) => {
   }
 
   return (
-    <Space.Compact>
+    <Space.Compact className="w-40">
       <InputNumber
+        className="min-w-0 flex-1"
         disabled={disabled}
         max={control.max}
         min={control.min}

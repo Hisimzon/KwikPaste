@@ -331,9 +331,6 @@
       "sort": {
         "title": "Sorting"
       },
-      "source": {
-        "title": "Ignored Apps"
-      },
       "startup": {
         "title": "Startup & Icons"
       },
@@ -348,7 +345,6 @@
       "about": {
         "checkUpdates": {
           "controlLabel": "Check",
-          "description": "Check whether a new KwikPaste version is available.",
           "title": "Check for Updates"
         },
         "github": {
@@ -362,50 +358,44 @@
       },
       "actions": {
         "deleteConfirm": {
-          "description": "Ask before deleting regular history records. Favorited and pinned records use their own switches.",
+          "description": "Favorited and pinned records follow their own switches below.",
           "title": "Confirm Regular Deletes"
         },
         "deleteFavoriteConfirm": {
-          "description": "Ask before deleting favorited records to prevent losing important items.",
           "title": "Confirm Favorite Deletes"
         },
         "deleteFavoriteItems": {
-          "description": "When off, favorited records hide delete actions and ignore delete shortcuts.",
+          "description": "When off, favorited records can't be deleted.",
           "title": "Allow Favorite Deletes"
         },
         "deleteFavoriteItemsOnlyInFavoriteGroup": {
-          "description": "When on, favorited records hide delete actions outside Favorites; regular records are unaffected.",
+          "description": "Hide the delete action for favorites outside the Favorites group.",
           "title": "Delete Favorites Only in Favorites"
         },
         "deletePinnedConfirm": {
-          "description": "Ask before deleting pinned records to prevent losing important items.",
           "title": "Confirm Pinned Deletes"
         },
         "deletePinnedItems": {
-          "description": "When off, pinned records hide delete actions and ignore delete shortcuts.",
+          "description": "When off, pinned records can't be deleted.",
           "title": "Allow Pinned Deletes"
         },
         "visible": {
           "controlLabel": "Manage",
-          "description": "Choose which action buttons appear when hovering over a record.",
           "title": "Visible Quick Actions"
         }
       },
       "appearance": {
         "fileMaxCount": {
-          "description": "Limit how many files are shown in each file record card.",
           "title": "Maximum Files Shown"
         },
         "headerRow": {
-          "description": "Show the source app, type, and time on their own line above the content. When off, the source icon sits left of the content and each record is shorter.",
+          "description": "Show source, type, and time above the content. Turn off for shorter records.",
           "title": "Show Header Row"
         },
         "imageMaxHeight": {
-          "description": "Limit thumbnail height for image records in the list.",
           "title": "Maximum Image Height"
         },
         "itemGap": {
-          "description": "Distance between cards.",
           "options": {
             "0": "0 px",
             "2": "2 px",
@@ -417,7 +407,6 @@
           "title": "Record Spacing"
         },
         "itemPadding": {
-          "description": "Space above and below the content of each record.",
           "options": {
             "2": "2 px",
             "4": "4 px",
@@ -427,7 +416,6 @@
           "title": "Vertical Padding"
         },
         "language": {
-          "description": "Switch the KwikPaste interface language.",
           "options": {
             "en-US": "English",
             "zh-CN": "简体中文"
@@ -435,7 +423,7 @@
           "title": "Language"
         },
         "listDensity": {
-          "description": "Adjust the spacing between records and the height of each record. Choose Custom to fine-tune the options below.",
+          "description": "Choose Custom to fine-tune spacing and padding.",
           "options": {
             "comfortable": "Comfortable",
             "compact": "Compact",
@@ -453,20 +441,11 @@
           "title": "List Style"
         },
         "material": {
-          "description": "Choose the window backdrop material. Solid color is used when unsupported or reduced transparency is enabled.",
+          "description": "Falls back to a solid color when unsupported or when reduced transparency is on.",
           "options": {
-            "acrylic": {
-              "description": "A softly blurred, translucent backdrop.",
-              "label": "Acrylic"
-            },
-            "default": {
-              "description": "An opaque solid background with no material effect.",
-              "label": "Default"
-            },
-            "mica": {
-              "description": "A subtle wallpaper tint without showing through content.",
-              "label": "Mica"
-            }
+            "acrylic": "Acrylic",
+            "default": "Default",
+            "mica": "Mica"
           },
           "title": "Window Material",
           "unsupported": "Not supported on this system; a solid background is used."
@@ -476,24 +455,13 @@
           "title": "Show Original on Hover"
         },
         "textMaxLines": {
-          "description": "Limit how many lines are shown in each text record card.",
           "title": "Maximum Text Lines"
         },
         "theme": {
-          "description": "Use light mode, dark mode, or follow the system appearance.",
           "options": {
-            "auto": {
-              "description": "Follow the system's light or dark appearance.",
-              "label": "Follow system"
-            },
-            "dark": {
-              "description": "Use a dark interface.",
-              "label": "Dark"
-            },
-            "light": {
-              "description": "Use a light interface.",
-              "label": "Light"
-            }
+            "auto": "Follow system",
+            "dark": "Dark",
+            "light": "Light"
           },
           "title": "Theme"
         }
@@ -511,62 +479,40 @@
         }
       },
       "capture": {
-        "files": {
-          "description": "When off, copied files and folders are not saved to history.",
-          "title": "Files and Folders"
-        },
-        "html": {
-          "description": "When off, rich text with HTML format is not saved to history.",
-          "title": "HTML Content"
-        },
-        "image": {
-          "description": "When off, clipboard images are not saved to history.",
-          "title": "Image"
+        "kinds": {
+          "description": "Unchecked types are not saved to history.",
+          "title": "Content Types to Save"
         },
         "maxImageMb": {
-          "description": "Images larger than this are not saved to history. Set to 0 for no limit.",
+          "description": "0 means no limit.",
           "title": "Maximum Image Capture Size"
         },
         "maxTextMb": {
-          "description": "Text, HTML, or RTF larger than this is not saved to history. Set to 0 for no limit.",
+          "description": "Includes HTML and RTF. 0 means no limit.",
           "title": "Maximum Text Capture Size"
         },
         "order": {
           "controlLabel": "Manage",
-          "description": "When the clipboard contains multiple formats, save the first matching type in this order.",
+          "description": "When the clipboard holds several formats, save the first one in this order.",
           "title": "Capture Order"
-        },
-        "rtf": {
-          "description": "When off, rich text with RTF format is not saved to history.",
-          "title": "RTF Content"
-        },
-        "text": {
-          "description": "When off, copied plain text is not saved to history.",
-          "title": "Plain Text"
         }
       },
       "control": {
         "autoStart": {
-          "description": "Start KwikPaste automatically after logging in.",
           "macos": {
-            "description": "Start KwikPaste automatically after login.",
             "title": "Launch at Login"
           },
           "title": "Launch at Login",
           "windows": {
-            "description": "Start KwikPaste automatically after login.",
             "title": "Launch at Startup"
           }
         },
         "dockIcon": {
-          "description": "Show the KwikPaste icon in the system desktop bar.",
           "macos": {
-            "description": "Show the KwikPaste icon in the Dock.",
             "title": "Dock Icon"
           },
           "title": "Desktop Bar Icon",
           "windows": {
-            "description": "Show the KwikPaste icon in the taskbar.",
             "title": "Taskbar Icon"
           }
         },
@@ -576,34 +522,29 @@
           "title": "Reopen Onboarding"
         },
         "trayIcon": {
-          "description": "Show the KwikPaste icon in the system status area.",
           "macos": {
-            "description": "Show the KwikPaste icon in the menu bar.",
             "title": "Menu Bar Icon"
           },
           "title": "Status Area Icon",
           "windows": {
-            "description": "Show the KwikPaste icon in the system tray.",
             "title": "System Tray Icon"
           }
         }
       },
       "copy": {
         "hideWindow": {
-          "description": "After copying a history record, automatically hide the clipboard window.",
           "title": "Hide Window After Copy"
         },
         "plainDefault": {
-          "description": "When copying text records, strip HTML/RTF formatting and copy plain text by default.",
+          "description": "Strip HTML and RTF formatting.",
           "title": "Copy as Plain Text by Default"
         },
         "sound": {
-          "description": "Play a sound when new clipboard content is saved to history.",
           "preview": "Preview sound",
           "title": "Copy Sound"
         },
         "updateOnReuse": {
-          "description": "Refresh use time and usage count when copying or pasting a history record.",
+          "description": "Refresh a record's last-used time and use count when you copy or paste it again.",
           "title": "Update Record on Reuse"
         }
       },
@@ -699,7 +640,6 @@
         },
         "logDirectory": {
           "controlLabel": "Open",
-          "description": "Open the runtime log directory used for troubleshooting.",
           "title": "Log Directory"
         },
         "storageLimit": {
@@ -717,12 +657,10 @@
       },
       "organizing": {
         "autoFavorite": {
-          "description": "When saving a non-empty note, automatically add that record to favorites.",
           "title": "Auto-Favorite When Noted"
         },
         "customGroups": {
           "controlLabel": "Manage",
-          "description": "Adjust custom group order, visibility, names, and icons.",
           "title": "Custom Groups"
         }
       },
@@ -734,7 +672,6 @@
       },
       "paste": {
         "autoPaste": {
-          "description": "Choose what happens when clicking a history record with the left mouse button.",
           "options": {
             "disabled": "Disabled",
             "doubleClickCopy": "Double-click to copy",
@@ -745,11 +682,10 @@
           "title": "Left Mouse Button"
         },
         "fileMode": {
-          "description": "When pasting file records, paste file paths by default instead of the files themselves.",
+          "description": "Paste the path instead of the file itself.",
           "title": "Paste File Paths by Default"
         },
         "middleClick": {
-          "description": "Choose what happens when clicking a history record with the middle mouse button.",
           "options": {
             "disabled": "Disabled",
             "singleClickCopy": "Copy",
@@ -760,11 +696,11 @@
           "title": "Middle Mouse Button"
         },
         "plainDefault": {
-          "description": "When pasting text records, strip HTML/RTF formatting and paste plain text by default.",
+          "description": "Strip HTML and RTF formatting.",
           "title": "Paste as Plain Text by Default"
         },
         "quickSnippets": {
-          "description": "List codes, model numbers, numbers and links found in text records below each item. Click one to paste just that part, or copy it when the left click is set to copy.",
+          "description": "List codes, numbers, and links found in text records below each item. Click one to paste or copy just that part.",
           "title": "Extract Quick Info"
         }
       },
@@ -789,7 +725,6 @@
       },
       "preview": {
         "delay": {
-          "description": "Set how long to hover before the preview appears.",
           "options": {
             "ms300": "300ms",
             "ms500": "500ms",
@@ -798,7 +733,6 @@
           "title": "Hover Delay"
         },
         "hover": {
-          "description": "Show a full-content preview when hovering over a record.",
           "title": "Hover Preview"
         },
         "space": {
@@ -816,15 +750,12 @@
       },
       "search": {
         "clearOnHide": {
-          "description": "Clear the search keyword and show the full list next time the clipboard window opens.",
-          "title": "Clear Search on Next Open"
+          "title": "Clear Last Search"
         },
         "defaultFocus": {
-          "description": "Select the search box when the clipboard window opens so you can type keywords right away.",
-          "title": "Focus Search on Window Open"
+          "title": "Focus Search Box"
         },
         "sort": {
-          "description": "Choose the default order for history records when no search is active.",
           "options": {
             "createdAtDesc": "Created Time",
             "updatedAtDesc": "Updated Time",
@@ -845,7 +776,7 @@
       },
       "shortcuts": {
         "mouseTrigger": {
-          "description": "Click the chosen mouse button to open or hide the clipboard window. Its usual click action, like opening a new tab or going back, is turned off; middle-button drags and middle clicks inside KwikPaste still work.",
+          "description": "Click the chosen button to open or hide the clipboard window. Its usual click action, like opening a new tab or going back, is turned off.",
           "options": {
             "back": "Side Button (Back)",
             "disabled": "Disabled",
@@ -865,7 +796,7 @@
           "title": "Open Preferences Window"
         },
         "quickPaste": {
-          "description": "Paste without opening the clipboard window: hold the modifier keys and press a number. 1–9 paste items 1–9 and 0 pastes item 10, in the same order as the All list.",
+          "description": "Hold the modifier keys and press 1–9 or 0 to paste the first 10 items of the All list without opening the window.",
           "title": "Quick Paste"
         },
         "quickPasteModifiers": {
@@ -889,21 +820,21 @@
           "searchPlaceholder": "Search apps"
         },
         "excludedApps": {
+          "controlLabel": "Manage",
+          "count_one": "{{count}} app",
+          "count_other": "{{count}} apps",
           "description": "Content copied from these apps will not be saved to history.",
           "title": "Ignored Apps"
         }
       },
       "updates": {
         "autoCheck": {
-          "description": "Periodically check whether a new KwikPaste version is available.",
           "title": "Automatically Check for Updates"
         },
         "beta": {
-          "description": "Receive beta test versions when checking for updates.",
           "title": "Receive Beta Updates"
         },
         "frequency": {
-          "description": "Set how often KwikPaste checks for updates.",
           "options": {
             "daily": "Daily",
             "monthly": "Monthly",
@@ -912,13 +843,12 @@
           "title": "Update Check Frequency"
         },
         "nightly": {
-          "description": "Receive nightly versions when checking for updates.",
           "title": "Receive Nightly Updates"
         }
       },
       "window": {
         "idleDestroySeconds": {
-          "description": "Release secondary WebViews such as preferences, preview, and context menus after they have been hidden for this long; they rebuild automatically next time.",
+          "description": "Release hidden windows such as Preferences and Preview after this long. They rebuild on next use.",
           "title": "Secondary Window Idle Release"
         },
         "lightweightMode": {
@@ -926,20 +856,17 @@
           "title": "Lightweight Mode"
         },
         "position": {
-          "description": "Choose where the clipboard window opens each time.",
           "options": {
             "center": "Center of Screen",
             "followCursor": "Follow Cursor",
             "remember": "Remember Position"
           },
-          "title": "Open Position"
+          "title": "Window Position"
         },
         "scrollToTopOnOpen": {
-          "description": "Return to the newest items at the top whenever the clipboard window opens.",
-          "title": "Return to Top on Open"
+          "title": "Scroll to Top"
         },
         "selectCategoryOnOpen": {
-          "description": "Choose which content category to switch to whenever the clipboard window opens.",
           "options": {
             "all": "All",
             "files": "Files",
@@ -947,25 +874,23 @@
             "preserve": "Keep Last Selection",
             "text": "Text"
           },
-          "title": "Select Category on Open"
+          "title": "Category"
         },
         "selectGroupOnOpen": {
-          "description": "Choose which custom group to switch to whenever the clipboard window opens.",
           "options": {
             "all": "All",
             "missingGroup": "Deleted Group",
             "preserve": "Keep Last Selection"
           },
-          "title": "Select Group on Open"
+          "title": "Group"
         },
         "selectRangeOnOpen": {
-          "description": "Choose which history range to switch to whenever the clipboard window opens.",
           "options": {
             "all": "All",
             "favorite": "Favorites",
             "preserve": "Keep Last Selection"
           },
-          "title": "Select Range on Open"
+          "title": "Range"
         }
       }
     },
@@ -987,6 +912,9 @@
       },
       "items": {
         "title": "Items"
+      },
+      "overview": {
+        "title": "Overview"
       },
       "paste": {
         "title": "Paste & Copy"

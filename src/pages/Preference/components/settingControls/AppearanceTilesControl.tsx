@@ -61,10 +61,8 @@ const AppearanceTilesControl: FC<AppearanceTilesControlProps> = (props) => {
         {values.map((option) => {
           const checked = option === selectedValue;
           const unsupported = isUnsupported(option);
-          const optionLabel = t(`${labelKey}.${option}.label`);
-          const optionDescription = unsupported
-            ? t(`schema.settings.${setting.id}.unsupported`)
-            : t(`${labelKey}.${option}.description`);
+          const optionLabel = t(`${labelKey}.${option}`);
+          const unsupportedId = `${setting.id}-${option}-unsupported`;
 
           return (
             <label
@@ -81,7 +79,7 @@ const AppearanceTilesControl: FC<AppearanceTilesControlProps> = (props) => {
               key={option}
             >
               <input
-                aria-describedby={`${setting.id}-${option}-description`}
+                aria-describedby={unsupported ? unsupportedId : void 0}
                 aria-label={optionLabel}
                 checked={checked}
                 className="sr-only"
@@ -94,7 +92,7 @@ const AppearanceTilesControl: FC<AppearanceTilesControlProps> = (props) => {
                 value={option}
               />
               <AppearanceTilePreview kind={kind} option={option} />
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5 p-2.5">
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 py-2">
                 <span className="flex items-center gap-1.5 font-medium text-ant-text text-sm">
                   <span className="truncate">{optionLabel}</span>
                   {checked ? (
@@ -104,12 +102,14 @@ const AppearanceTilesControl: FC<AppearanceTilesControlProps> = (props) => {
                     />
                   ) : null}
                 </span>
-                <span
-                  className="text-ant-secondary text-xs leading-relaxed"
-                  id={`${setting.id}-${option}-description`}
-                >
-                  {optionDescription}
-                </span>
+                {unsupported ? (
+                  <span
+                    className="text-ant-secondary text-xs leading-relaxed"
+                    id={unsupportedId}
+                  >
+                    {t(`schema.settings.${setting.id}.unsupported`)}
+                  </span>
+                ) : null}
               </span>
             </label>
           );
@@ -150,7 +150,7 @@ const AppearanceTilePreview: FC<AppearanceTilePreviewProps> = (props) => {
     <span
       aria-hidden="true"
       className={cn(
-        "relative block h-16 overflow-hidden border-ant-border-secondary border-b",
+        "relative block h-11 overflow-hidden border-ant-border-secondary border-b",
         kind === "theme" && isDark
           ? "bg-ant-bg-layout"
           : kind === "theme"

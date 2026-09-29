@@ -1,4 +1,5 @@
 import { setAutostart, showTaskbarIcon } from "@/commands";
+import { CAPTURE_KIND_DISPLAY_ORDER } from "@/constants/captureKinds";
 import {
   DEFAULT_CUSTOM_LIST_LAYOUT,
   LIST_DENSITY_PRESETS,
@@ -81,6 +82,10 @@ function buildSettingPatch(
     );
   }
 
+  if (setting.control.type === "captureKinds" && Array.isArray(value)) {
+    return buildCaptureKindsPatch(setting.path, value);
+  }
+
   if (setting.id === "appearance.listDensity" && value === "custom") {
     return mergeSettingsPatch(
       buildPatch(setting.path, value),
@@ -89,6 +94,21 @@ function buildSettingPatch(
   }
 
   return buildPatch(setting.path, value);
+}
+
+/**
+ * 采集类型在设置里是五个独立开关，勾选组提交的是已勾选列表，这里展开成逐项布尔补丁。
+ */
+function buildCaptureKindsPatch(
+  path: readonly string[],
+  selected: readonly unknown[],
+): SettingsPatch {
+  return CAPTURE_KIND_DISPLAY_ORDER.reduce<SettingsPatch>((patch, kind) => {
+    return mergeSettingsPatch(
+      patch,
+      buildPatch([...path, kind], selected.includes(kind)),
+    );
+  }, {});
 }
 
 /**

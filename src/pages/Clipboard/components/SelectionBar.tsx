@@ -42,7 +42,6 @@ const SelectionBar: FC<SelectionBarProps> = (props) => {
 
         <Tooltip title={formatShortcutDisplay("CmdOrCtrl+Backspace")}>
           <Button
-            autoInsertSpace={false}
             danger
             disabled={busy || count === 0}
             onClick={onDelete}

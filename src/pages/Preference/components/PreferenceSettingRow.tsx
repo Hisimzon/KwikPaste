@@ -18,7 +18,6 @@ import type {
 import { translatePreferenceSetting } from "../utils/preferenceI18n";
 import PreferenceStatusBadge from "./PreferenceStatusBadge";
 import PreferenceSettingControl from "./settingControls/PreferenceSettingControl";
-import { resolveSettingVisual } from "./settingControls/settingVisual";
 
 interface PreferenceSettingRowProps {
   highlighted: boolean;
@@ -38,7 +37,7 @@ interface PreferenceSettingRowProps {
 }
 
 /**
- * 单个设置项行：左侧说明结果，右侧渲染对应控件。
+ * 单个设置项行：左侧标题（必要时附一句说明），右侧渲染对应控件。
  */
 const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
   const { t } = useTranslation("preferences");
@@ -57,11 +56,12 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
   const disabled = setting.disabled === true || parentDisabled;
   const childSetting = setting.parentId !== void 0;
   const collapsed = isPreferenceSettingCollapsed(setting, settings);
-  // 外观磁贴和清理规则列表需要整行宽度，换到标题下方单独一行。
+  // 外观磁贴、采集类型和清理规则列表需要整行宽度，换到标题下方单独一行。
   const isFullWidthControl =
     setting.control.type === "tiles" ||
+    setting.control.type === "captureKinds" ||
     setting.control.type === "retentionRules";
-  const visual = resolveSettingVisual(setting.id);
+  const description = resolveSettingDescription(t, setting, storageLocation);
   const highlightOpacity = shouldReduceMotion
     ? 0.08
     : [0, 0.1, 0.055, 0.085, 0.045, 0.07, 0.025, 0];
@@ -75,16 +75,16 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
       animate={{
         borderBottomWidth: collapsed ? 0 : 1,
         height: collapsed ? 0 : "auto",
-        minHeight: collapsed ? 0 : "3.875rem",
+        minHeight: collapsed ? 0 : "3.25rem",
         opacity: collapsed ? 0 : 1,
-        paddingBottom: collapsed ? 0 : "0.6875rem",
-        paddingTop: collapsed ? 0 : "0.6875rem",
+        paddingBottom: collapsed ? 0 : "0.625rem",
+        paddingTop: collapsed ? 0 : "0.625rem",
       }}
       className={cn(
-        "group relative flex items-center gap-5 overflow-hidden border-ant-split border-b px-4 transition-colors last:border-b-0 hover:bg-ant-fill-quaternary motion-reduce:transition-none",
+        "relative flex items-center gap-5 overflow-hidden border-ant-split border-b px-4 last:border-b-0",
         {
           "flex-wrap items-start gap-y-3": isFullWidthControl,
-          "pl-12": childSetting,
+          "pl-8": childSetting,
           "pointer-events-none": collapsed,
         },
       )}
@@ -93,38 +93,23 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
       transition={rowTransition}
     >
       {highlighted ? (
-        <motion.span
-          animate={{ opacity: highlightOpacity }}
-          className="pointer-events-none absolute inset-0 bg-ant-primary"
-          initial={{ opacity: 0 }}
-          key={highlightToken}
-          transition={{
-            duration: shouldReduceMotion ? 0 : 2.35,
-            ease: "easeInOut",
-            times: shouldReduceMotion
-              ? void 0
-              : [0, 0.11, 0.28, 0.43, 0.58, 0.73, 0.88, 1],
-          }}
-        />
+        <>
+          <motion.span
+            animate={{ opacity: highlightOpacity }}
+            className="pointer-events-none absolute inset-0 bg-ant-primary"
+            initial={{ opacity: 0 }}
+            key={highlightToken}
+            transition={{
+              duration: shouldReduceMotion ? 0 : 2.35,
+              ease: "easeInOut",
+              times: shouldReduceMotion
+                ? void 0
+                : [0, 0.11, 0.28, 0.43, 0.58, 0.73, 0.88, 1],
+            }}
+          />
+          <span className="absolute top-3 bottom-3 left-0 w-0.5 rounded-full bg-ant-primary" />
+        </>
       ) : null}
-
-      <span
-        className={cn(
-          "absolute top-3 bottom-3 left-0 w-0.5 rounded-full transition-colors motion-reduce:transition-none",
-          highlighted
-            ? "bg-ant-primary"
-            : "bg-transparent group-hover:bg-ant-primary",
-        )}
-      />
-
-      <span
-        className={cn(
-          "relative flex size-7.5 shrink-0 items-center justify-center text-xl transition-colors motion-reduce:transition-none",
-          disabled ? "text-ant-disabled" : visual.tone,
-        )}
-      >
-        <i aria-hidden="true" className={visual.icon} />
-      </span>
 
       <div className="relative min-w-0 flex-1">
         <div
@@ -134,7 +119,7 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
         >
           <span
             className={cn(
-              "truncate font-medium text-sm leading-snug",
+              "truncate text-sm leading-snug",
               disabled ? "text-ant-secondary" : "text-ant-text",
             )}
           >
@@ -142,26 +127,23 @@ const PreferenceSettingRow: FC<PreferenceSettingRowProps> = (props) => {
           </span>
           <PreferenceStatusBadge compact status={setting.status} />
         </div>
-        <div
-          className={cn(
-            "mt-0.5 text-xs leading-snug",
-            disabled ? "text-ant-disabled" : "text-ant-tertiary",
-            { "break-all": setting.id === "localData.dataDirectory" },
-          )}
-        >
-          {resolveSettingDescription(t, setting, storageLocation)}
-        </div>
+        {description ? (
+          <div
+            className={cn(
+              "mt-0.5 text-xs leading-snug",
+              disabled ? "text-ant-disabled" : "text-ant-secondary",
+              { "break-all": setting.id === "localData.dataDirectory" },
+            )}
+          >
+            {description}
+          </div>
+        ) : null}
       </div>
 
       <div
-        className={cn(
-          "relative flex shrink-0 justify-end opacity-90 transition-opacity group-hover:opacity-100 motion-reduce:transition-none",
-          {
-            "basis-full pl-12": isFullWidthControl,
-            "justify-start": isFullWidthControl,
-            "w-full": isFullWidthControl,
-          },
-        )}
+        className={cn("relative flex shrink-0 justify-end", {
+          "basis-full justify-start": isFullWidthControl,
+        })}
       >
         <PreferenceSettingControl
           disabled={disabled}

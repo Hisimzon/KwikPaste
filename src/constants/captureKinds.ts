@@ -40,6 +40,15 @@ const CAPTURE_KIND_META: Record<CaptureKind, CaptureKindMeta> = {
   },
 };
 
+/** 勾选采集类型时按用户熟悉的顺序排列，与采集优先级无关。 */
+export const CAPTURE_KIND_DISPLAY_ORDER: CaptureKind[] = [
+  "text",
+  "html",
+  "rtf",
+  "image",
+  "files",
+];
+
 export const CAPTURE_KIND_OPTIONS = CAPTURE_KIND_ORDER.map((kind) => {
   return { value: kind };
 });

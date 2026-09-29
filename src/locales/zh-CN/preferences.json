@@ -326,9 +326,6 @@
       "sort": {
         "title": "列表排序"
       },
-      "source": {
-        "title": "忽略应用"
-      },
       "startup": {
         "title": "启动与图标"
       },
@@ -343,7 +340,6 @@
       "about": {
         "checkUpdates": {
           "controlLabel": "检查更新",
-          "description": "检查 快贴 是否有可用的新版本。",
           "title": "检查更新"
         },
         "github": {
@@ -357,50 +353,44 @@
       },
       "actions": {
         "deleteConfirm": {
-          "description": "删除普通历史记录前先弹出确认，收藏和置顶记录不受此开关影响。",
+          "description": "收藏和置顶记录由下面的开关单独控制。",
           "title": "普通条目删除前确认"
         },
         "deleteFavoriteConfirm": {
-          "description": "删除已收藏记录前先弹出确认，避免误删重要内容。",
           "title": "收藏条目删除前确认"
         },
         "deleteFavoriteItems": {
-          "description": "关闭后，已收藏记录不会显示删除入口，也不会响应删除快捷操作。",
+          "description": "关闭后，收藏记录不能删除。",
           "title": "允许删除收藏条目"
         },
         "deleteFavoriteItemsOnlyInFavoriteGroup": {
-          "description": "开启后，已收藏记录在其他分组隐藏删除入口；普通记录不受影响。",
+          "description": "在其他分组里隐藏收藏记录的删除入口。",
           "title": "收藏项仅在收藏分组删除"
         },
         "deletePinnedConfirm": {
-          "description": "删除已置顶记录前先弹出确认，避免误删重要内容。",
           "title": "置顶条目删除前确认"
         },
         "deletePinnedItems": {
-          "description": "关闭后，已置顶记录不会显示删除入口，也不会响应删除快捷操作。",
+          "description": "关闭后，置顶记录不能删除。",
           "title": "允许删除置顶条目"
         },
         "visible": {
           "controlLabel": "管理",
-          "description": "选择鼠标悬停在记录上时显示的操作按钮。",
           "title": "显示的快捷动作"
         }
       },
       "appearance": {
         "fileMaxCount": {
-          "description": "限制文件记录在列表卡片中最多显示的文件数量。",
           "title": "文件最多显示数量"
         },
         "headerRow": {
-          "description": "在内容上方单独一行显示来源应用、类型和时间。关闭后来源图标并入内容左侧，每条记录更矮。",
+          "description": "在内容上方显示来源、类型和时间；关闭后每条记录更矮。",
           "title": "显示头部行"
         },
         "imageMaxHeight": {
-          "description": "限制图片记录在列表卡片中的缩略图高度。",
           "title": "图片最大显示高度"
         },
         "itemGap": {
-          "description": "卡片之间的距离。",
           "options": {
             "0": "0 px",
             "2": "2 px",
@@ -412,7 +402,6 @@
           "title": "记录间距"
         },
         "itemPadding": {
-          "description": "每条记录内容上下留出的空白。",
           "options": {
             "2": "2 px",
             "4": "4 px",
@@ -422,7 +411,6 @@
           "title": "上下内边距"
         },
         "language": {
-          "description": "切换 快贴 的界面语言。",
           "options": {
             "en-US": "English",
             "zh-CN": "简体中文"
@@ -430,7 +418,7 @@
           "title": "语言"
         },
         "listDensity": {
-          "description": "调整记录之间的间距和每条记录的高度。选择「自定义」可以单独调整下面几项。",
+          "description": "选择「自定义」可以单独调整间距和内边距。",
           "options": {
             "comfortable": "舒适",
             "compact": "紧凑",
@@ -448,20 +436,11 @@
           "title": "列表风格"
         },
         "material": {
-          "description": "选择窗口背景材质。系统不支持或开启减少透明度时自动使用纯色。",
+          "description": "系统不支持或开启了减少透明度时使用纯色。",
           "options": {
-            "acrylic": {
-              "description": "背景呈现柔和的模糊透视效果。",
-              "label": "亚克力"
-            },
-            "default": {
-              "description": "纯色不透明背景，不应用材质效果。",
-              "label": "默认"
-            },
-            "mica": {
-              "description": "轻微染入壁纸色调，但不会透视内容。",
-              "label": "云母"
-            }
+            "acrylic": "亚克力",
+            "default": "默认",
+            "mica": "云母"
           },
           "title": "窗口材质",
           "unsupported": "当前系统不支持，将使用纯色背景。"
@@ -471,24 +450,13 @@
           "title": "悬停显示原始内容"
         },
         "textMaxLines": {
-          "description": "限制文本记录在列表卡片中最多显示的行数。",
           "title": "文本内容最大显示行数"
         },
         "theme": {
-          "description": "选择界面使用浅色、深色，或跟随系统外观。",
           "options": {
-            "auto": {
-              "description": "跟随系统的浅色或深色外观。",
-              "label": "跟随系统"
-            },
-            "dark": {
-              "description": "使用深色界面。",
-              "label": "深色"
-            },
-            "light": {
-              "description": "使用浅色界面。",
-              "label": "浅色"
-            }
+            "auto": "跟随系统",
+            "dark": "深色",
+            "light": "浅色"
           },
           "title": "主题"
         }
@@ -506,62 +474,40 @@
         }
       },
       "capture": {
-        "files": {
-          "description": "关闭后，复制的文件和文件夹不会进入历史。",
-          "title": "文件和文件夹"
-        },
-        "html": {
-          "description": "关闭后，带 HTML 格式的网页富文本不会进入历史。",
-          "title": "HTML 内容"
-        },
-        "image": {
-          "description": "关闭后，剪贴板中的图片不会进入历史。",
-          "title": "图片"
+        "kinds": {
+          "description": "未勾选的类型复制后不会进入历史。",
+          "title": "记录的内容类型"
         },
         "maxImageMb": {
-          "description": "图片超过此大小时不会进入历史。设为 0 表示不限制。",
+          "description": "0 表示不限制。",
           "title": "图片最大收录大小"
         },
         "maxTextMb": {
-          "description": "文本、HTML 或 RTF 超过此大小时不会进入历史。设为 0 表示不限制。",
+          "description": "包含 HTML 和 RTF；0 表示不限制。",
           "title": "文本最大收录大小"
         },
         "order": {
           "controlLabel": "管理",
-          "description": "剪贴板同时包含多种格式时，按这个顺序选择要保存的内容。",
+          "description": "同时有多种格式时，按这个顺序决定保存哪一种。",
           "title": "采集顺序"
-        },
-        "rtf": {
-          "description": "关闭后，带 RTF 格式的文档富文本不会进入历史。",
-          "title": "RTF 内容"
-        },
-        "text": {
-          "description": "关闭后，复制的纯文本不会进入历史。",
-          "title": "纯文本"
         }
       },
       "control": {
         "autoStart": {
-          "description": "登录系统后自动启动 快贴。",
           "macos": {
-            "description": "登录后自动启动 快贴。",
             "title": "登录时启动"
           },
           "title": "开机启动",
           "windows": {
-            "description": "登录后自动启动 快贴。",
             "title": "开机启动"
           }
         },
         "dockIcon": {
-          "description": "在系统桌面栏显示 快贴 图标。",
           "macos": {
-            "description": "在程序坞显示 快贴 图标。",
             "title": "程序坞图标"
           },
           "title": "桌面栏图标",
           "windows": {
-            "description": "在任务栏显示 快贴 图标。",
             "title": "任务栏图标"
           }
         },
@@ -571,34 +517,29 @@
           "title": "重新打开引导"
         },
         "trayIcon": {
-          "description": "在系统状态栏显示 快贴 图标。",
           "macos": {
-            "description": "在菜单栏显示 快贴 图标。",
             "title": "菜单栏图标"
           },
           "title": "状态栏图标",
           "windows": {
-            "description": "在系统托盘显示 快贴 图标。",
             "title": "系统托盘图标"
           }
         }
       },
       "copy": {
         "hideWindow": {
-          "description": "从历史复制记录后，自动隐藏剪贴板窗口。",
           "title": "复制后隐藏窗口"
         },
         "plainDefault": {
-          "description": "复制文本记录时默认去除 HTML/RTF 等格式，只复制纯文本。",
+          "description": "去掉 HTML、RTF 等格式。",
           "title": "默认复制为纯文本"
         },
         "sound": {
-          "description": "剪贴板新内容成功进入历史时播放提示音。",
           "preview": "试听提示音",
           "title": "复制成功提示音"
         },
         "updateOnReuse": {
-          "description": "从历史复制或粘贴记录时，刷新使用时间和使用次数。",
+          "description": "复制或粘贴旧记录时，刷新它的使用时间和次数。",
           "title": "复用时更新记录"
         }
       },
@@ -694,7 +635,6 @@
         },
         "logDirectory": {
           "controlLabel": "打开",
-          "description": "打开用于排查问题的运行日志目录。",
           "title": "日志目录"
         },
         "storageLimit": {
@@ -712,12 +652,10 @@
       },
       "organizing": {
         "autoFavorite": {
-          "description": "保存非空备注时，自动把该记录加入收藏。",
           "title": "有备注时自动收藏"
         },
         "customGroups": {
           "controlLabel": "管理",
-          "description": "调整自定义分组的顺序、显示状态、名称和图标。",
           "title": "自定义分组"
         }
       },
@@ -729,7 +667,6 @@
       },
       "paste": {
         "autoPaste": {
-          "description": "选择鼠标左键点击历史记录时执行的动作。",
           "options": {
             "disabled": "禁用",
             "doubleClickCopy": "双击复制",
@@ -740,11 +677,10 @@
           "title": "鼠标左键"
         },
         "fileMode": {
-          "description": "粘贴文件记录时默认不粘贴文件本身，只粘贴文件路径。",
+          "description": "只粘贴路径，不粘贴文件本身。",
           "title": "默认文件路径粘贴"
         },
         "middleClick": {
-          "description": "选择鼠标中键点击历史记录时执行的动作。",
           "options": {
             "disabled": "禁用",
             "singleClickCopy": "复制",
@@ -755,11 +691,11 @@
           "title": "鼠标中键"
         },
         "plainDefault": {
-          "description": "粘贴文本记录时默认去除 HTML/RTF 等格式，只粘贴纯文本。",
+          "description": "去掉 HTML、RTF 等格式。",
           "title": "默认纯文本粘贴"
         },
         "quickSnippets": {
-          "description": "在文本记录下方列出识别到的编号、型号、数字、链接等，点击即可单独粘贴；左键设为复制时改为复制。",
+          "description": "在文本记录下方列出编号、数字、链接等，点击即可单独粘贴或复制。",
           "title": "提取快捷信息"
         }
       },
@@ -784,7 +720,6 @@
       },
       "preview": {
         "delay": {
-          "description": "设置鼠标悬停多久后显示预览。",
           "options": {
             "ms300": "300ms",
             "ms500": "500ms",
@@ -793,7 +728,6 @@
           "title": "悬停延迟"
         },
         "hover": {
-          "description": "鼠标悬停在记录上时显示完整内容预览。",
           "title": "悬停预览"
         },
         "space": {
@@ -811,15 +745,12 @@
       },
       "search": {
         "clearOnHide": {
-          "description": "下次打开剪贴板窗口时清空搜索关键词，并显示完整列表。",
-          "title": "下次打开时清空搜索"
+          "title": "清空上次搜索"
         },
         "defaultFocus": {
-          "description": "打开剪贴板窗口时自动选中搜索框，方便直接输入关键词。",
-          "title": "打开窗口时聚焦搜索"
+          "title": "聚焦搜索框"
         },
         "sort": {
-          "description": "设置未搜索时历史列表的默认排序方式。",
           "options": {
             "createdAtDesc": "创建时间",
             "updatedAtDesc": "更新时间",
@@ -840,7 +771,7 @@
       },
       "shortcuts": {
         "mouseTrigger": {
-          "description": "单击选定的鼠标按键打开或隐藏剪贴板窗口。选定后该按键原有的单击功能（如中键开新标签页、侧键后退）会被停用，按住中键拖动和 快贴 窗口内的中键操作不受影响。",
+          "description": "单击该按键打开或隐藏剪贴板窗口；它原来的单击功能（如中键开新标签页、侧键后退）会停用。",
           "options": {
             "back": "侧键（后退）",
             "disabled": "禁用",
@@ -860,7 +791,7 @@
           "title": "打开偏好设置窗口"
         },
         "quickPaste": {
-          "description": "不打开剪贴板窗口，按住修饰键再按数字键直接粘贴：1–9 对应第 1–9 条，0 对应第 10 条，顺序与窗口里的「全部」列表一致。",
+          "description": "不打开窗口，按住修饰键再按 1–9、0 直接粘贴「全部」列表的前 10 条。",
           "title": "快速粘贴"
         },
         "quickPasteModifiers": {
@@ -884,21 +815,20 @@
           "searchPlaceholder": "搜索应用"
         },
         "excludedApps": {
+          "controlLabel": "管理",
+          "count": "{{count}} 个应用",
           "description": "从这些应用复制的内容不会进入历史。",
           "title": "忽略应用"
         }
       },
       "updates": {
         "autoCheck": {
-          "description": "定期检查 快贴 是否有可用的新版本。",
           "title": "自动检查更新"
         },
         "beta": {
-          "description": "检查更新时同时接收测试版。",
           "title": "接收测试版更新"
         },
         "frequency": {
-          "description": "设置自动检查更新的时间间隔。",
           "options": {
             "daily": "每天",
             "monthly": "每月",
@@ -907,13 +837,12 @@
           "title": "自动检查频率"
         },
         "nightly": {
-          "description": "检查更新时同时接收每日构建版本。",
           "title": "接收每日构建更新"
         }
       },
       "window": {
         "idleDestroySeconds": {
-          "description": "偏好设置、预览和右键菜单等非剪贴板窗口隐藏超过此时间后释放 WebView，下次使用时自动重建。",
+          "description": "偏好设置、预览等窗口隐藏超过这段时间后释放，下次使用时自动重建。",
           "title": "非剪贴板窗口空闲释放"
         },
         "lightweightMode": {
@@ -921,20 +850,17 @@
           "title": "轻量模式"
         },
         "position": {
-          "description": "选择每次打开剪贴板窗口时的位置。",
           "options": {
             "center": "屏幕中间",
             "followCursor": "跟随光标",
             "remember": "记住位置"
           },
-          "title": "打开位置"
+          "title": "窗口位置"
         },
         "scrollToTopOnOpen": {
-          "description": "每次打开剪贴板窗口时，自动回到最新记录所在的顶部。",
-          "title": "打开时回到顶部"
+          "title": "回到列表顶部"
         },
         "selectCategoryOnOpen": {
-          "description": "每次打开剪贴板窗口时，选择要切换到的内容分类。",
           "options": {
             "all": "全部",
             "files": "文件",
@@ -942,25 +868,23 @@
             "preserve": "保持上次选择",
             "text": "文本"
           },
-          "title": "打开时选中分类"
+          "title": "选中分类"
         },
         "selectGroupOnOpen": {
-          "description": "每次打开剪贴板窗口时，选择要切换到的自定义分组。",
           "options": {
             "all": "全部",
             "missingGroup": "已删除的分组",
             "preserve": "保持上次选择"
           },
-          "title": "打开时选中分组"
+          "title": "选中分组"
         },
         "selectRangeOnOpen": {
-          "description": "每次打开剪贴板窗口时，选择要切换到的历史范围。",
           "options": {
             "all": "全部",
             "favorite": "收藏",
             "preserve": "保持上次选择"
           },
-          "title": "打开时选中范围"
+          "title": "选中范围"
         }
       }
     },
@@ -982,6 +906,9 @@
       },
       "items": {
         "title": "记录管理"
+      },
+      "overview": {
+        "title": "数据概览"
       },
       "paste": {
         "title": "粘贴与复制"

@@ -34,6 +34,7 @@ export function translatePreferenceSection(
 
 /**
  * 翻译偏好设置项字段；key 由稳定 setting id 推导。
+ * 说明是可选的：标题已经说清楚的设置不写说明，缺省时返回空串。
  */
 export function translatePreferenceSetting(
   t: PreferenceTranslator,
@@ -48,12 +49,11 @@ export function translatePreferenceSetting(
     return REPOSITORY_URL;
   }
 
-  const platformField = resolvePlatformPreferenceField(setting, field);
-  if (platformField) {
-    return t(platformField);
-  }
+  const key =
+    resolvePlatformPreferenceField(setting, field) ??
+    `schema.settings.${setting.id}.${field}`;
 
-  return t(`schema.settings.${setting.id}.${field}`);
+  return field === "description" ? t(key, { defaultValue: "" }) : t(key);
 }
 
 /**
