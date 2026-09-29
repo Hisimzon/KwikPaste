@@ -165,25 +165,73 @@ pub fn fit_text_scale(window: &WebviewWindow, design: (f64, f64)) -> Result<()> 
         return Ok(());
     }
 
-    let Some(monitor) = window.current_monitor().map_err(|e| anyhow::anyhow!(e))? else {
+    let Some((min_size, monitor)) = text_scaled_size(window, design, text_scale)? else {
         return Ok(());
     };
-    let area = monitor.work_area();
-    let dpi_scale = monitor.scale_factor();
-    let min_size = fit_size(
-        design,
-        dpi_scale * text_scale,
-        area.size,
-        WORK_AREA_MARGIN * dpi_scale,
-    );
     // 设最小尺寸时系统会立刻从左上角把窗口撑大，所以先记下原来的位置和尺寸。
     let current = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
     let position = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
     let size = text_scaled_inner_size(current, min_size, resizable);
 
     window
-        .set_min_size(Some(min_size.to_logical::<f64>(dpi_scale)))
+        .set_min_size(Some(min_size.to_logical::<f64>(monitor.scale_factor())))
         .map_err(|e| anyhow::anyhow!(e))?;
+    resize_keeping_center(window, position, current, size, monitor.work_area())
+}
+
+/// 系统「文本大小」放大时，把还没有存档尺寸的可调整大小窗口的默认尺寸同比放大。
+///
+/// 与 [`fit_text_scale`] 不同，最小尺寸保持建窗值：文本缩放大、屏幕又小时，放大后的设计尺寸
+/// 几乎占满工作区，拿它当最小尺寸用户就再也拉不小窗口；页面放不下的部分由页面自己滚动。
+pub fn grow_to_text_scale(window: &WebviewWindow, design: (f64, f64)) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    let text_scale = super::text_scale_factor();
+    if text_scale <= 1.0 {
+        return Ok(());
+    }
+
+    let Some((scaled, monitor)) = text_scaled_size(window, design, text_scale)? else {
+        return Ok(());
+    };
+    let current = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
+    let position = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
+    let size = text_scaled_inner_size(current, scaled, true);
+
+    resize_keeping_center(window, position, current, size, monitor.work_area())
+}
+
+/// 设计尺寸按窗口所在显示器的 DPI × 文本缩放换算成物理尺寸并收进工作区，
+/// 连同该显示器一起返回；取不到显示器时返回 `None`。
+fn text_scaled_size(
+    window: &WebviewWindow,
+    design: (f64, f64),
+    text_scale: f64,
+) -> Result<Option<(PhysicalSize<u32>, Monitor)>> {
+    let Some(monitor) = window.current_monitor().map_err(|e| anyhow::anyhow!(e))? else {
+        return Ok(None);
+    };
+    let dpi_scale = monitor.scale_factor();
+    let size = fit_size(
+        design,
+        dpi_scale * text_scale,
+        monitor.work_area().size,
+        WORK_AREA_MARGIN * dpi_scale,
+    );
+
+    Ok(Some((size, monitor)))
+}
+
+/// 内容区从 `current` 改到 `size`，并按 [`recentered_position`] 保持窗口中心不动；尺寸没变时不动窗口。
+fn resize_keeping_center(
+    window: &WebviewWindow,
+    position: PhysicalPosition<i32>,
+    current: PhysicalSize<u32>,
+    size: PhysicalSize<u32>,
+    area: &PhysicalRect<i32, u32>,
+) -> Result<()> {
     if size == current {
         return Ok(());
     }
@@ -195,7 +243,7 @@ pub fn fit_text_scale(window: &WebviewWindow, design: (f64, f64)) -> Result<()> 
     Ok(())
 }
 
-/// 可调整大小的窗口只在不够大时撑到最小尺寸，保留用户拉大的部分；不可调整的窗口定到最小尺寸，
+/// 可调整大小的窗口只在不够大时撑到目标尺寸，保留用户拉大的部分；不可调整的窗口定到目标尺寸，
 /// 文本缩放调小后也跟着缩回。
 fn text_scaled_inner_size(
     current: PhysicalSize<u32>,
@@ -295,7 +343,7 @@ mod tests {
         }
     }
 
-    // 偏好窗口 960×600 在 175% DPI、150% 文本缩放下至少要 2520×1575。
+    // 偏好窗口 960×600 在 175% DPI、150% 文本缩放下的默认尺寸放大到 2520×1575。
     #[test]
     fn resizable_window_grows_only_the_sides_that_are_too_small() {
         let min_size = fit_size((960.0, 600.0), 1.75 * 1.5, work_area().size, 28.0);

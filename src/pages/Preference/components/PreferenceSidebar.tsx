@@ -2,6 +2,7 @@ import type { FC } from "react";
 import { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import type { StorageUsage } from "@/commands";
+import ScrollArea from "@/components/ScrollArea";
 import { cn } from "@/utils/cn";
 import { isMac, isPortable } from "@/utils/is";
 import { preferenceTabs } from "../config/preferenceSchema";
@@ -72,60 +73,59 @@ const PreferenceSidebar: FC<PreferenceSidebarProps> = (props) => {
         </div>
       </div>
 
-      <nav
-        className="flex flex-1 flex-col gap-0.5 px-3 pb-3"
-        data-tauri-drag-region
-      >
-        {preferenceTabs.map((tab, index) => {
-          const selected = tab.id === activeTabId;
-          const startsGroup =
-            index > 0 && preferenceTabs[index - 1].group !== tab.group;
-          const handleClick = () => {
-            onTabSelect(tab.id);
-          };
+      <ScrollArea className="min-h-0 flex-1" data-tauri-drag-region>
+        <nav className="flex flex-col gap-0.5 px-3 pb-3" data-tauri-drag-region>
+          {preferenceTabs.map((tab, index) => {
+            const selected = tab.id === activeTabId;
+            const startsGroup =
+              index > 0 && preferenceTabs[index - 1].group !== tab.group;
+            const handleClick = () => {
+              onTabSelect(tab.id);
+            };
 
-          return (
-            <Fragment key={tab.id}>
-              {startsGroup && (
-                <div
-                  aria-hidden="true"
-                  className="mx-2 my-1.5 h-px shrink-0 bg-ant-split"
-                />
-              )}
-              <button
-                className={cn(
-                  "group relative flex h-10 w-full cursor-pointer items-center gap-2 rounded-1.75 border-0 bg-transparent px-2 text-left transition-colors focus-visible:ring-1 focus-visible:ring-ant-primary motion-reduce:transition-none",
-                  selected
-                    ? "bg-ant-fill-secondary text-ant-text"
-                    : "text-ant-secondary hover:bg-ant-fill-tertiary hover:text-ant-text",
+            return (
+              <Fragment key={tab.id}>
+                {startsGroup && (
+                  <div
+                    aria-hidden="true"
+                    className="mx-2 my-1.5 h-px shrink-0 bg-ant-split"
+                  />
                 )}
-                onClick={handleClick}
-                type="button"
-              >
-                <span
+                <button
                   className={cn(
-                    "flex size-7.5 shrink-0 items-center justify-center text-lg transition-colors motion-reduce:transition-none",
+                    "group relative flex h-10 w-full cursor-pointer items-center gap-2 rounded-1.75 border-0 bg-transparent px-2 text-left transition-colors focus-visible:ring-1 focus-visible:ring-ant-primary motion-reduce:transition-none",
                     selected
-                      ? "text-ant-primary"
-                      : "text-ant-tertiary group-hover:text-ant-secondary",
+                      ? "bg-ant-fill-secondary text-ant-text"
+                      : "text-ant-secondary hover:bg-ant-fill-tertiary hover:text-ant-text",
                   )}
+                  onClick={handleClick}
+                  type="button"
                 >
-                  <i aria-hidden="true" className={tab.icon} />
-                </span>
-                <span className="min-w-0 flex-1 truncate font-medium text-sm leading-tight">
-                  {translatePreferenceTab(t, tab)}
-                </span>
-                <span
-                  className={cn(
-                    "h-5 w-0.75 rounded-full transition-colors motion-reduce:transition-none",
-                    selected ? "bg-ant-primary" : "bg-transparent",
-                  )}
-                />
-              </button>
-            </Fragment>
-          );
-        })}
-      </nav>
+                  <span
+                    className={cn(
+                      "flex size-7.5 shrink-0 items-center justify-center text-lg transition-colors motion-reduce:transition-none",
+                      selected
+                        ? "text-ant-primary"
+                        : "text-ant-tertiary group-hover:text-ant-secondary",
+                    )}
+                  >
+                    <i aria-hidden="true" className={tab.icon} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-medium text-sm leading-tight">
+                    {translatePreferenceTab(t, tab)}
+                  </span>
+                  <span
+                    className={cn(
+                      "h-5 w-0.75 rounded-full transition-colors motion-reduce:transition-none",
+                      selected ? "bg-ant-primary" : "bg-transparent",
+                    )}
+                  />
+                </button>
+              </Fragment>
+            );
+          })}
+        </nav>
+      </ScrollArea>
 
       <PreferenceStorageUsagePanel
         onClick={onStorageSelect}

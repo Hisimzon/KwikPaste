@@ -1,6 +1,8 @@
 import { Input } from "antd";
 import type { ChangeEvent, FC } from "react";
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import ScrollArea from "@/components/ScrollArea";
 import { cn } from "@/utils/cn";
 import type { PreferenceSection, PreferenceTab } from "../types/preferences";
 import {
@@ -109,44 +111,72 @@ interface SectionTabsProps {
 
 /**
  * 当前分类的页内目录：点击滚到对应分组，滚动时跟随高亮；只有一个分组时不显示。
+ * 系统文本放大后窗口可能窄于设计宽度，目录放不下时横向滚动，并把高亮的分组滚进视野。
  */
 const SectionTabs: FC<SectionTabsProps> = (props) => {
   const { t } = useTranslation(["preferences", "common"]);
   const { activeSectionId, sections, totalSettings, onSectionSelect } = props;
+  const tabsRef = useRef<HTMLDivElement | null>(null);
   const visibleSections = sections.length > 1 ? sections : [];
+
+  useEffect(() => {
+    const viewport = tabsRef.current;
+    const tab = viewport?.querySelector<HTMLElement>(
+      `[data-section-id="${activeSectionId}"]`,
+    );
+    if (!viewport || !tab) return;
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+
+    if (tabRect.left < viewportRect.left) {
+      viewport.scrollLeft -= viewportRect.left - tabRect.left;
+    } else if (tabRect.right > viewportRect.right) {
+      viewport.scrollLeft += tabRect.right - viewportRect.right;
+    }
+  }, [activeSectionId]);
 
   return (
     <div className="mt-3 flex h-7.5 items-center gap-3" data-tauri-drag-region>
-      {visibleSections.map((section) => {
-        const selected = section.id === activeSectionId;
-        const handleClick = () => {
-          onSectionSelect(section.id);
-        };
+      <ScrollArea
+        className="min-w-0 flex-1"
+        data-tauri-drag-region
+        ref={tabsRef}
+      >
+        <div className="flex h-7.5 items-center gap-3" data-tauri-drag-region>
+          {visibleSections.map((section) => {
+            const selected = section.id === activeSectionId;
+            const handleClick = () => {
+              onSectionSelect(section.id);
+            };
 
-        return (
-          <button
-            className={cn(
-              "relative h-7.5 cursor-pointer whitespace-nowrap border-0 bg-transparent px-0.5 font-medium text-sm transition-colors focus-visible:ring-1 focus-visible:ring-ant-primary motion-reduce:transition-none",
-              selected
-                ? "text-ant-text"
-                : "text-ant-secondary hover:text-ant-text",
-            )}
-            key={section.id}
-            onClick={handleClick}
-            type="button"
-          >
-            {translatePreferenceSection(t, section, "title")}
-            <span
-              className={cn(
-                "absolute right-0 bottom-0 left-0 h-0.5 rounded-full transition-colors motion-reduce:transition-none",
-                selected ? "bg-ant-primary" : "bg-transparent",
-              )}
-            />
-          </button>
-        );
-      })}
+            return (
+              <button
+                className={cn(
+                  "relative h-7.5 shrink-0 cursor-pointer whitespace-nowrap border-0 bg-transparent px-0.5 font-medium text-sm transition-colors focus-visible:ring-1 focus-visible:ring-ant-primary motion-reduce:transition-none",
+                  selected
+                    ? "text-ant-text"
+                    : "text-ant-secondary hover:text-ant-text",
+                )}
+                data-section-id={section.id}
+                key={section.id}
+                onClick={handleClick}
+                type="button"
+              >
+                {translatePreferenceSection(t, section, "title")}
+                <span
+                  className={cn(
+                    "absolute right-0 bottom-0 left-0 h-0.5 rounded-full transition-colors motion-reduce:transition-none",
+                    selected ? "bg-ant-primary" : "bg-transparent",
+                  )}
+                />
+              </button>
+            );
+          })}
+        </div>
+      </ScrollArea>
 
-      <PreferenceCountTag className="ml-auto">
+      <PreferenceCountTag>
         {t("common:units.settings", { count: totalSettings })}
       </PreferenceCountTag>
     </div>

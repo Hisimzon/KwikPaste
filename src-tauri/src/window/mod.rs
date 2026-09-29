@@ -33,8 +33,9 @@ pub const UPDATE_WINDOW_LABEL: &str = "update";
 
 /// 引导页按 900×600 CSS px 设计；实际窗口尺寸在每次显示时按缩放和工作区换算。
 const ONBOARDING_DESIGN_SIZE: (f64, f64) = (900.0, 600.0);
-/// 以下页面同样按 CSS px 设计，建窗时用作逻辑尺寸；系统「文本大小」放大时由
-/// [`position::fit_text_scale`] 在显示前同比放大。剪贴板窗口的值与 `tauri.conf.json` 的最小尺寸一致。
+/// 以下页面同样按 CSS px 设计，建窗时用作逻辑尺寸；系统「文本大小」放大时在显示前同比放大，
+/// 规则见 [`fit_page_text_scale`] 与 [`apply_clipboard_window_layout`]。
+/// 剪贴板窗口的值与 `tauri.conf.json` 的最小尺寸一致。
 const CLIPBOARD_DESIGN_MIN_SIZE: (f64, f64) = (360.0, 600.0);
 const PREFERENCE_DESIGN_SIZE: (f64, f64) = (960.0, 600.0);
 const UPDATE_DESIGN_SIZE: (f64, f64) = (520.0, 230.0);
@@ -237,13 +238,12 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         if !window.is_visible().unwrap_or(false) {
             // 次级窗口（如 preference）：只在从隐藏态打开时恢复位置 + 尺寸。
             // 已可见窗口可能刚被用户移动但尚未落盘，重复恢复会把窗口拉回旧位置。
-            if let Err(err) = state::restore_window_state(app_handle, label) {
+            let restored = state::restore_window_state(app_handle, label).unwrap_or_else(|err| {
                 log::warn!("restore window state failed for {label}: {err}");
-            }
-            if let Some(design) = page_design_size(label) {
-                if let Err(err) = position::fit_text_scale(&window, design) {
-                    log::warn!("fit text scale failed for {label}: {err}");
-                }
+                false
+            });
+            if let Err(err) = fit_page_text_scale(&window, label, restored) {
+                log::warn!("fit text scale failed for {label}: {err}");
             }
         }
     }
@@ -336,12 +336,17 @@ pub(crate) fn text_scale_factor() -> f64 {
     return windows::text_scale_factor();
 }
 
-/// 走通用显示流程、页面尺寸固定的次级窗口的设计尺寸（CSS px）。
-fn page_design_size(label: &str) -> Option<(f64, f64)> {
+/// 走通用显示流程的次级窗口按系统「文本大小」调整尺寸。
+///
+/// 偏好窗口可调整大小，只在没有存档尺寸时放大默认尺寸，最小尺寸不跟着放大，
+/// 用户随时能拉回小窗口；更新窗口尺寸固定，每次都定到放大后的尺寸。
+fn fit_page_text_scale(window: &WebviewWindow, label: &str, restored: bool) -> Result<()> {
     match label {
-        PREFERENCE_WINDOW_LABEL => Some(PREFERENCE_DESIGN_SIZE),
-        UPDATE_WINDOW_LABEL => Some(UPDATE_DESIGN_SIZE),
-        _ => None,
+        PREFERENCE_WINDOW_LABEL if !restored => {
+            position::grow_to_text_scale(window, PREFERENCE_DESIGN_SIZE)
+        }
+        UPDATE_WINDOW_LABEL => position::fit_text_scale(window, UPDATE_DESIGN_SIZE),
+        _ => Ok(()),
     }
 }
 
