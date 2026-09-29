@@ -35,6 +35,7 @@ const MIDDLE_CLICK_ACTION_OPTIONS = [
   { value: "singleClickCopy" },
   { value: "singleClickCopyPlain" },
 ];
+const TRAY_CLICK_OPTIONS = [{ value: "clipboard" }, { value: "preference" }];
 const MOUSE_TRIGGER_OPTIONS = [
   { value: "disabled" },
   { value: "middle" },
@@ -96,6 +97,27 @@ export const preferenceTabs: PreferenceTab[] = [
               return settings.general.trayIcon;
             },
           },
+          // macOS 单击菜单栏图标弹出菜单，没有可选的单击行为。
+          ...(isWin
+            ? [
+                {
+                  control: {
+                    options: TRAY_CLICK_OPTIONS,
+                    type: "select",
+                  } as const,
+                  disabledWhen: (settings: Settings) => {
+                    return !settings.general.trayIcon;
+                  },
+                  id: "control.trayClick",
+                  keywords: ["tray", "click", "preferences", "clipboard"],
+                  parentId: "control.trayIcon",
+                  path: ["general", "trayClick"] as const,
+                  value: (settings: Settings) => {
+                    return settings.general.trayClick;
+                  },
+                },
+              ]
+            : []),
           {
             control: { type: "switch" },
             id: "control.dockIcon",

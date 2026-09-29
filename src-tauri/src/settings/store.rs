@@ -627,6 +627,33 @@ mod tests {
     }
 
     #[test]
+    fn released_general_settings_keep_tray_click_on_clipboard() {
+        let released = r#"{
+            "general": {"autoStart": true, "runAsAdmin": false, "trayIcon": true, "dockIcon": false}
+        }"#;
+        let parsed: Settings = serde_json::from_str(released).unwrap();
+
+        assert!(parsed.general.auto_start);
+        assert_eq!(
+            parsed.general.tray_click,
+            crate::settings::TrayClick::Clipboard
+        );
+    }
+
+    #[test]
+    fn tray_click_round_trips_preference() {
+        let parsed: Settings =
+            serde_json::from_str(r#"{"general": {"trayClick": "preference"}}"#).unwrap();
+        assert_eq!(
+            parsed.general.tray_click,
+            crate::settings::TrayClick::Preference
+        );
+
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(json["general"]["trayClick"], "preference");
+    }
+
+    #[test]
     fn mouse_trigger_round_trips_side_buttons() {
         let parsed: Settings =
             serde_json::from_str(r#"{"shortcuts": {"mouseTrigger": "forward"}}"#).unwrap();

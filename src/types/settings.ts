@@ -90,10 +90,14 @@ export type PreviewTextView = "plain" | "words";
 
 export type UpdateFrequency = "daily" | "weekly" | "monthly";
 
+/** Rust enum `TrayClick`：Windows 左键单击托盘图标打开的窗口。 */
+export type TrayClick = "clipboard" | "preference";
+
 export interface General {
   autoStart: boolean;
   runAsAdmin: boolean;
   trayIcon: boolean;
+  trayClick: TrayClick;
   dockIcon: boolean;
 }
 

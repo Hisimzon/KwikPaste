@@ -3,6 +3,7 @@
 //! - icon 沿用 `assets/tray.ico`（Windows）/ `assets/tray-mac.ico`（macOS），编进二进制：便携版只分发一个 exe。
 //! - 菜单只有「偏好设置」「退出应用」两项，文案跟随 `Appearance.language` 即时切换（见 [`crate::i18n::tray`]）。
 //! - 显隐跟随 `General.tray_icon`；语言或显隐变更后由 `commands/settings.rs` 调用 [`apply`] 同步。
+//! - Windows 左键单击按 `General.tray_click` 打开剪贴板或偏好设置窗口，点击时现读设置，改了无需同步。
 
 use anyhow::Context;
 use tauri::image::Image;
@@ -11,11 +12,15 @@ use tauri::tray::TrayIconBuilder;
 #[cfg(target_os = "windows")]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::AppHandle;
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 
 use crate::core::Result;
 use crate::i18n::tray as tray_i18n;
 use crate::i18n::tray::Key;
 use crate::settings::{Language, Settings};
+#[cfg(target_os = "windows")]
+use crate::settings::{SettingsStore, TrayClick};
 #[cfg(target_os = "windows")]
 use crate::window::CLIPBOARD_WINDOW_LABEL;
 use crate::window::{self, PREFERENCE_WINDOW_LABEL};
@@ -42,8 +47,7 @@ pub fn init(app: &AppHandle, settings: &Settings) -> Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()))
         .on_tray_icon_event(|tray, event| {
-            // macOS 左键已经走 show_menu_on_left_click，不在这里处理；
-            // Windows 左键单击显剪贴板窗口。
+            // macOS 左键已经走 show_menu_on_left_click，不在这里处理。
             #[cfg(target_os = "windows")]
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -51,9 +55,13 @@ pub fn init(app: &AppHandle, settings: &Settings) -> Result<()> {
                 ..
             } = event
             {
-                let app = tray.app_handle().clone();
-                if let Err(err) = window::show_window(&app, CLIPBOARD_WINDOW_LABEL) {
-                    log::error!("tray left-click show main failed: {err:?}");
+                let app = tray.app_handle();
+                let label = match app.state::<SettingsStore>().snapshot().general.tray_click {
+                    TrayClick::Clipboard => CLIPBOARD_WINDOW_LABEL,
+                    TrayClick::Preference => PREFERENCE_WINDOW_LABEL,
+                };
+                if let Err(err) = window::show_window(app, label) {
+                    log::error!("tray left-click show {label} failed: {err:?}");
                 }
             }
             #[cfg(not(target_os = "windows"))]

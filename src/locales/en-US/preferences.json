@@ -521,6 +521,13 @@
           "description": "View the first-time onboarding again without resetting your current settings or history.",
           "title": "Reopen Onboarding"
         },
+        "trayClick": {
+          "options": {
+            "clipboard": "Clipboard Window",
+            "preference": "Preferences"
+          },
+          "title": "Tray Icon Click Opens"
+        },
         "trayIcon": {
           "macos": {
             "title": "Menu Bar Icon"

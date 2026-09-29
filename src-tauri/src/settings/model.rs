@@ -30,6 +30,8 @@ pub struct General {
     pub run_as_admin: bool,
     /// macOS 菜单栏 / Windows 系统托盘图标。
     pub tray_icon: bool,
+    /// Windows：左键单击托盘图标打开的窗口。macOS 单击托盘弹出菜单，不读这一项。
+    pub tray_click: TrayClick,
     /// macOS Dock / Windows 任务栏图标。
     pub dock_icon: bool,
 }
@@ -40,9 +42,18 @@ impl Default for General {
             auto_start: false,
             run_as_admin: false,
             tray_icon: true,
+            tray_click: TrayClick::Clipboard,
             dock_icon: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TrayClick {
+    #[default]
+    Clipboard,
+    Preference,
 }
 
 /// 首次启动引导状态。业务数据仍由各自设置项持久化，本结构只记录引导进度。

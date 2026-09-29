@@ -516,6 +516,13 @@
           "description": "再次查看首次使用引导，不会重置当前设置或历史记录。",
           "title": "重新打开引导"
         },
+        "trayClick": {
+          "options": {
+            "clipboard": "剪贴板窗口",
+            "preference": "偏好设置"
+          },
+          "title": "单击托盘图标打开"
+        },
         "trayIcon": {
           "macos": {
             "title": "菜单栏图标"
