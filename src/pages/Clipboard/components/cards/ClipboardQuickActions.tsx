@@ -19,6 +19,10 @@ interface ClipboardQuickActionsProps {
   onQuickAction?: (action: ItemAction) => Promise<void> | void;
   quickActions: readonly ItemAction[];
   visible: boolean;
+  /**
+   * 卡片没有头部行时不显示时间，动作按钮浮在卡片右上角，不占行高。
+   */
+  floating?: boolean;
 }
 
 interface QuickActionButtonProps {
@@ -35,7 +39,14 @@ interface QuickActionButtonProps {
  * 在卡片 meta 右侧展示时间，并在 hover 时替换为当前条目可执行的快捷动作。
  */
 const ClipboardQuickActions: FC<ClipboardQuickActionsProps> = (props) => {
-  const { item, labels, onQuickAction, quickActions, visible } = props;
+  const {
+    item,
+    labels,
+    onQuickAction,
+    quickActions,
+    visible,
+    floating = false,
+  } = props;
   const shouldReduceMotion = useReducedMotion();
   const availableActions = filterAvailableItemActions(quickActions, item);
   // 不给 layoutDependency 时 motion 每次渲染都测一遍布局；按钮只在动作集合变化时才需要位移动画。
@@ -48,9 +59,58 @@ const ClipboardQuickActions: FC<ClipboardQuickActionsProps> = (props) => {
     duration: shouldReduceMotion ? 0 : 0.16,
     ease: "easeOut",
   } as const;
+  const actions =
+    enabled && onQuickAction && labels ? (
+      <div
+        aria-hidden={!actionsVisible}
+        className={cn(
+          "pointer-events-none flex translate-x-1 items-center gap-0.5 opacity-0 transition-all duration-150 ease-out motion-reduce:transition-none",
+          {
+            "absolute top-1 right-1 rounded-1.5 border border-ant-border-secondary bg-ant-elevated shadow-sm":
+              floating,
+            "col-start-1 row-start-1": !floating,
+            "pointer-events-auto translate-x-0 opacity-100": actionsVisible,
+          },
+        )}
+      >
+        <AnimatePresence initial={false} mode="popLayout">
+          {availableActions.map((action) => {
+            return (
+              <motion.span
+                animate={{ opacity: 1, scale: 1, width: "1.25rem", x: 0 }}
+                className="flex overflow-hidden"
+                exit={{
+                  opacity: 0,
+                  scale: shouldReduceMotion ? 1 : 0.9,
+                  width: 0,
+                  x: shouldReduceMotion ? 0 : 4,
+                }}
+                initial={{ opacity: 0, scale: 0.9, width: 0, x: 4 }}
+                key={action}
+                layout
+                layoutDependency={layoutDependency}
+                transition={actionTransition}
+              >
+                <QuickActionButton
+                  action={action}
+                  hasNote={Boolean(item.note)}
+                  isFavorite={item.isFavorite}
+                  isPinned={item.isPinned}
+                  labels={labels}
+                  onQuickAction={onQuickAction}
+                  tabIndex={tabIndex}
+                />
+              </motion.span>
+            );
+          })}
+        </AnimatePresence>
+      </div>
+    ) : null;
+
+  if (floating) return actions;
 
   return (
-    <div className="grid h-6 shrink-0 items-center justify-items-end overflow-hidden">
+    <div className="grid shrink-0 items-center justify-items-end overflow-hidden">
       <span
         className={cn(
           "col-start-1 row-start-1 transition-all duration-150 ease-out motion-reduce:transition-none",
@@ -62,49 +122,7 @@ const ClipboardQuickActions: FC<ClipboardQuickActionsProps> = (props) => {
         {item.displayCreatedAt ?? item.createdAt}
       </span>
 
-      {enabled && onQuickAction && labels ? (
-        <div
-          aria-hidden={!actionsVisible}
-          className={cn(
-            "pointer-events-none col-start-1 row-start-1 flex translate-x-1 items-center gap-0.5 opacity-0 transition-all duration-150 ease-out motion-reduce:transition-none",
-            {
-              "pointer-events-auto translate-x-0 opacity-100": actionsVisible,
-            },
-          )}
-        >
-          <AnimatePresence initial={false} mode="popLayout">
-            {availableActions.map((action) => {
-              return (
-                <motion.span
-                  animate={{ opacity: 1, scale: 1, width: "1.25rem", x: 0 }}
-                  className="flex overflow-hidden"
-                  exit={{
-                    opacity: 0,
-                    scale: shouldReduceMotion ? 1 : 0.9,
-                    width: 0,
-                    x: shouldReduceMotion ? 0 : 4,
-                  }}
-                  initial={{ opacity: 0, scale: 0.9, width: 0, x: 4 }}
-                  key={action}
-                  layout
-                  layoutDependency={layoutDependency}
-                  transition={actionTransition}
-                >
-                  <QuickActionButton
-                    action={action}
-                    hasNote={Boolean(item.note)}
-                    isFavorite={item.isFavorite}
-                    isPinned={item.isPinned}
-                    labels={labels}
-                    onQuickAction={onQuickAction}
-                    tabIndex={tabIndex}
-                  />
-                </motion.span>
-              );
-            })}
-          </AnimatePresence>
-        </div>
-      ) : null}
+      {actions}
     </div>
   );
 };

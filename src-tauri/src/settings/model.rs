@@ -465,6 +465,12 @@ pub struct Display {
     /// 文本记录下方列出识别到的编号、数字、链接等快捷信息，点击单独粘贴。
     /// 旧配置没有这个字段，按默认开启读取。
     pub quick_snippets: bool,
+    /// 列表条目画成独立卡片，还是贴边排列、用分隔线隔开。
+    pub list_style: ListStyle,
+    /// 列表疏密。旧配置没有这个字段，存量用户升级后同样按「标准」读取，比旧版的「舒适」紧一档。
+    pub density: ListDensity,
+    /// 密度选「自定义」时使用的各项尺寸，其它密度下保留不动，切回自定义时原样恢复。
+    pub custom_layout: CustomListLayout,
 }
 
 impl Default for Display {
@@ -474,6 +480,52 @@ impl Default for Display {
             image_max_height: 64,
             file_max_count: 3,
             quick_snippets: true,
+            list_style: ListStyle::Card,
+            density: ListDensity::Standard,
+            custom_layout: CustomListLayout::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ListStyle {
+    #[default]
+    Card,
+    Seamless,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ListDensity {
+    /// 旧版的排布：间距 12px、头部行 24px。
+    Comfortable,
+    #[default]
+    Standard,
+    /// 来源图标并入正文，不再单独占一行。
+    Compact,
+    Custom,
+}
+
+/// 自定义密度的尺寸，单位 px。前端只提供固定档位，不在档位里的值按最接近的档位渲染。
+/// 默认值与「标准」密度一致。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CustomListLayout {
+    /// 来源图标、类型和时间单独占一行；关闭时来源图标并入正文左侧，类型和时间不再显示。
+    pub header_row: bool,
+    /// 卡片之间的间距，无间风格下不生效。
+    pub item_gap: u8,
+    /// 条目的上下内边距。
+    pub padding_y: u8,
+}
+
+impl Default for CustomListLayout {
+    fn default() -> Self {
+        Self {
+            header_row: true,
+            item_gap: 8,
+            padding_y: 6,
         }
     }
 }

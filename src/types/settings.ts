@@ -148,11 +148,27 @@ export interface Content {
   itemActionOrder: ItemAction[];
 }
 
+/** Rust enum `ListStyle`：条目画成独立卡片，或贴边排列用分隔线隔开。 */
+export type ListStyle = "card" | "seamless";
+
+/** Rust enum `ListDensity`：`custom` 时按 `customLayout` 的各项尺寸排布。 */
+export type ListDensity = "comfortable" | "standard" | "compact" | "custom";
+
+/** Rust `CustomListLayout`：自定义密度的尺寸，单位 px。 */
+export interface CustomListLayout {
+  headerRow: boolean;
+  itemGap: number;
+  paddingY: number;
+}
+
 export interface Display {
   textMaxLines: number;
   imageMaxHeight: number;
   fileMaxCount: number;
   quickSnippets: boolean;
+  listStyle: ListStyle;
+  density: ListDensity;
+  customLayout: CustomListLayout;
 }
 
 export interface Capture {

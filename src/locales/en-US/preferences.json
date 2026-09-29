@@ -287,7 +287,7 @@
         "title": "Capture Rules"
       },
       "cards": {
-        "title": "List Cards"
+        "title": "List Display"
       },
       "cleanup": {
         "title": "Auto Cleanup"
@@ -396,9 +396,35 @@
           "description": "Limit how many files are shown in each file record card.",
           "title": "Maximum Files Shown"
         },
+        "headerRow": {
+          "description": "Show the source app, type, and time on their own line above the content. When off, the source icon sits left of the content and each record is shorter.",
+          "title": "Show Header Row"
+        },
         "imageMaxHeight": {
           "description": "Limit thumbnail height for image records in the list.",
           "title": "Maximum Image Height"
+        },
+        "itemGap": {
+          "description": "Distance between cards.",
+          "options": {
+            "0": "0 px",
+            "2": "2 px",
+            "4": "4 px",
+            "6": "6 px",
+            "8": "8 px",
+            "12": "12 px"
+          },
+          "title": "Record Spacing"
+        },
+        "itemPadding": {
+          "description": "Space above and below the content of each record.",
+          "options": {
+            "2": "2 px",
+            "4": "4 px",
+            "6": "6 px",
+            "8": "8 px"
+          },
+          "title": "Vertical Padding"
         },
         "language": {
           "description": "Switch the KwikPaste interface language.",
@@ -407,6 +433,24 @@
             "zh-CN": "简体中文"
           },
           "title": "Language"
+        },
+        "listDensity": {
+          "description": "Adjust the spacing between records and the height of each record. Choose Custom to fine-tune the options below.",
+          "options": {
+            "comfortable": "Comfortable",
+            "compact": "Compact",
+            "custom": "Custom",
+            "standard": "Standard"
+          },
+          "title": "List Density"
+        },
+        "listStyle": {
+          "description": "Cards draws each record as its own rounded card. Seamless lines records up edge to edge with dividers.",
+          "options": {
+            "card": "Cards",
+            "seamless": "Seamless"
+          },
+          "title": "List Style"
         },
         "material": {
           "description": "Choose the window backdrop material. Solid color is used when unsupported or reduced transparency is enabled.",

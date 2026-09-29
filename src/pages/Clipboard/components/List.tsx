@@ -52,12 +52,14 @@ import type {
   ClipboardRange,
 } from "@/types/clipboard";
 import type { ItemAction } from "@/types/settings";
+import { cn } from "@/utils/cn";
 import { isMac } from "@/utils/is";
 import type { WindowVisibilityPayload } from "../hooks/previewController";
 import {
   isSpaceKey,
   useClipboardPreviewController,
 } from "../hooks/useClipboardPreviewController";
+import { useListLayout } from "../hooks/useListLayout";
 import ClipboardCard from "./cards/ClipboardCard";
 import NoteModal from "./NoteModal";
 
@@ -120,6 +122,7 @@ const List: FC = () => {
   const deleteFavoriteItemsOnlyInFavoriteGroup =
     settings.clipboard.content.deleteFavoriteItemsOnlyInFavoriteGroup;
   const { fileMaxCount, quickSnippets } = display;
+  const listLayout = useListLayout();
   const showOriginalPreview = settings.clipboard.content.showOriginalPreview;
   const quickActionLabels = useMemo(() => {
     return buildItemActionLabels(t);
@@ -1157,7 +1160,7 @@ const List: FC = () => {
 
     // 首项同样留出上边距：选中态外环画在边框外侧，贴着视口顶边会被裁掉一截。
     return (
-      <div className="px-3 pt-3">
+      <div className={listLayout.itemClassName}>
         <ClipboardCard
           canDelete={canDeleteItem(item)}
           hintKey={hintKey}
@@ -1187,17 +1190,38 @@ const List: FC = () => {
     );
   }
 
+  /**
+   * 未加载条目的骨架：按当前密度画成两行文本卡片的样子，数据到达后高度变化尽量小。
+   */
   function renderPlaceholderItem() {
+    const { cardClassName, headerClassName, itemClassName } = listLayout;
+
     return (
-      <div aria-hidden="true" className="px-3 pt-3">
-        <div className="min-h-24 rounded-2 border border-ant-border-secondary bg-ant-fill-quaternary p-2">
-          <div className="flex items-center gap-1 text-ant-secondary text-xs">
-            <span className="size-4 rounded-1 bg-ant-fill-secondary" />
-            <span className="h-3 w-16 rounded-1 bg-ant-fill-secondary" />
-          </div>
-          <div className="mt-3 flex flex-col gap-2">
-            <span className="h-3 w-9/12 rounded-1 bg-ant-fill-secondary" />
-            <span className="h-3 w-6/12 rounded-1 bg-ant-fill-secondary" />
+      <div aria-hidden="true" className={itemClassName}>
+        <div
+          className={cn(
+            "flex border-ant-border-secondary bg-ant-fill-quaternary",
+            cardClassName,
+          )}
+        >
+          {headerClassName ? (
+            <div className={cn("flex items-center gap-1", headerClassName)}>
+              <span className="size-4 rounded-1 bg-ant-fill-secondary" />
+              <span className="h-3 w-16 rounded-1 bg-ant-fill-secondary" />
+            </div>
+          ) : (
+            <span className="flex h-5 shrink-0 items-center">
+              <span className="size-4 rounded-1 bg-ant-fill-secondary" />
+            </span>
+          )}
+
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="flex h-5 items-center">
+              <span className="h-3 w-9/12 rounded-1 bg-ant-fill-secondary" />
+            </span>
+            <span className="flex h-5 items-center">
+              <span className="h-3 w-6/12 rounded-1 bg-ant-fill-secondary" />
+            </span>
           </div>
         </div>
       </div>

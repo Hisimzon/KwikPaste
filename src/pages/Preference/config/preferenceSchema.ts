@@ -2,6 +2,12 @@
 import { CAPTURE_KIND_OPTIONS } from "@/constants/captureKinds";
 import { ITEM_ACTION_OPTIONS } from "@/constants/itemActions";
 import { LANGUAGE_OPTIONS } from "@/constants/languages";
+import {
+  LIST_DENSITY_OPTIONS,
+  LIST_ITEM_GAP_VALUES,
+  LIST_PADDING_Y_VALUES,
+  LIST_STYLE_OPTIONS,
+} from "@/constants/listLayout";
 import { QUICK_PASTE_MODIFIER_OPTIONS } from "@/constants/quickPaste";
 import {
   WINDOW_OPEN_CATEGORY_OPTIONS,
@@ -41,8 +47,21 @@ const STORAGE_LIMIT_ACTION_OPTIONS = [
   { value: "remind" },
   { value: "cleanup" },
 ];
+const LIST_ITEM_GAP_OPTIONS = LIST_ITEM_GAP_VALUES.map((value) => {
+  return { value };
+});
+const LIST_PADDING_Y_OPTIONS = LIST_PADDING_Y_VALUES.map((value) => {
+  return { value };
+});
 // 便携版不自动提权：计划任务记着 exe 路径，换电脑、挪文件夹后就失效。
 const SHOW_RUN_AS_ADMINISTRATOR = isWin && !isPortable;
+
+/**
+ * 自定义尺寸只在密度选「自定义」时展开，其它档位下收起，相当于默认收起的高级项。
+ */
+function isNotCustomDensity(settings: Settings) {
+  return settings.clipboard.display.density !== "custom";
+}
 
 /**
  * 偏好分类按用户找设置的心智组织；setting id 是 i18n key 与跨窗口定位目标，挪动分类时保持不变。
@@ -319,6 +338,63 @@ export const preferenceTabs: PreferenceTab[] = [
       {
         id: "cards",
         settings: [
+          {
+            control: { options: LIST_STYLE_OPTIONS, type: "segmented" },
+            id: "appearance.listStyle",
+            keywords: ["list", "card", "seamless", "divider", "style"],
+            path: ["clipboard", "display", "listStyle"],
+            value: (settings) => {
+              return settings.clipboard.display.listStyle;
+            },
+          },
+          {
+            control: { options: LIST_DENSITY_OPTIONS, type: "segmented" },
+            id: "appearance.listDensity",
+            keywords: ["density", "compact", "spacing", "height", "custom"],
+            path: ["clipboard", "display", "density"],
+            value: (settings) => {
+              return settings.clipboard.display.density;
+            },
+          },
+          {
+            control: { type: "switch" },
+            disabledWhen: isNotCustomDensity,
+            id: "appearance.headerRow",
+            keywords: ["density", "header", "time", "type", "icon"],
+            parentId: "appearance.listDensity",
+            path: ["clipboard", "display", "customLayout", "headerRow"],
+            value: (settings) => {
+              return settings.clipboard.display.customLayout.headerRow;
+            },
+          },
+          {
+            control: { options: LIST_ITEM_GAP_OPTIONS, type: "select" },
+            // 无间风格条目贴边排列，间距不生效，一并收起。
+            disabledWhen: (settings) => {
+              return (
+                isNotCustomDensity(settings) ||
+                settings.clipboard.display.listStyle === "seamless"
+              );
+            },
+            id: "appearance.itemGap",
+            keywords: ["density", "gap", "spacing", "margin"],
+            parentId: "appearance.listDensity",
+            path: ["clipboard", "display", "customLayout", "itemGap"],
+            value: (settings) => {
+              return settings.clipboard.display.customLayout.itemGap;
+            },
+          },
+          {
+            control: { options: LIST_PADDING_Y_OPTIONS, type: "select" },
+            disabledWhen: isNotCustomDensity,
+            id: "appearance.itemPadding",
+            keywords: ["density", "padding", "height"],
+            parentId: "appearance.listDensity",
+            path: ["clipboard", "display", "customLayout", "paddingY"],
+            value: (settings) => {
+              return settings.clipboard.display.customLayout.paddingY;
+            },
+          },
           {
             control: { max: 5, min: 1, suffixKey: "lines", type: "number" },
             id: "appearance.textMaxLines",

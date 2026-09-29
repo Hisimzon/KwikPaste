@@ -282,7 +282,7 @@
         "title": "收录规则"
       },
       "cards": {
-        "title": "列表卡片"
+        "title": "列表显示"
       },
       "cleanup": {
         "title": "自动清理"
@@ -391,9 +391,35 @@
           "description": "限制文件记录在列表卡片中最多显示的文件数量。",
           "title": "文件最多显示数量"
         },
+        "headerRow": {
+          "description": "在内容上方单独一行显示来源应用、类型和时间。关闭后来源图标并入内容左侧，每条记录更矮。",
+          "title": "显示头部行"
+        },
         "imageMaxHeight": {
           "description": "限制图片记录在列表卡片中的缩略图高度。",
           "title": "图片最大显示高度"
+        },
+        "itemGap": {
+          "description": "卡片之间的距离。",
+          "options": {
+            "0": "0 px",
+            "2": "2 px",
+            "4": "4 px",
+            "6": "6 px",
+            "8": "8 px",
+            "12": "12 px"
+          },
+          "title": "记录间距"
+        },
+        "itemPadding": {
+          "description": "每条记录内容上下留出的空白。",
+          "options": {
+            "2": "2 px",
+            "4": "4 px",
+            "6": "6 px",
+            "8": "8 px"
+          },
+          "title": "上下内边距"
         },
         "language": {
           "description": "切换 快贴 的界面语言。",
@@ -402,6 +428,24 @@
             "zh-CN": "简体中文"
           },
           "title": "语言"
+        },
+        "listDensity": {
+          "description": "调整记录之间的间距和每条记录的高度。选择「自定义」可以单独调整下面几项。",
+          "options": {
+            "comfortable": "舒适",
+            "compact": "紧凑",
+            "custom": "自定义",
+            "standard": "标准"
+          },
+          "title": "列表密度"
+        },
+        "listStyle": {
+          "description": "卡片：每条记录是一张独立的圆角卡片。无间：记录贴边排列，用分隔线隔开。",
+          "options": {
+            "card": "卡片",
+            "seamless": "无间"
+          },
+          "title": "列表风格"
         },
         "material": {
           "description": "选择窗口背景材质。系统不支持或开启减少透明度时自动使用纯色。",

@@ -9,6 +9,7 @@ import type { ClipboardAction, ClipboardItem } from "@/types/clipboard";
 import type { ItemAction } from "@/types/settings";
 import { cn } from "@/utils/cn";
 import { isMac } from "@/utils/is";
+import { useListLayout } from "../../hooks/useListLayout";
 import ClipboardQuickActions from "./ClipboardQuickActions";
 import FilesCard from "./FilesCard";
 import ImageCard from "./ImageCard";
@@ -112,6 +113,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
     sourceAppName,
   } = item;
   const { t } = useTranslation("clipboard");
+  const layout = useListLayout();
   const [hovered, setHovered] = useState(false);
   const typeKey = subKind ?? kind;
   const typeLabel = t(`types.${typeKey}`);
@@ -127,7 +129,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   const showSensitiveIndicator = item.isSensitive && item.kind === "text";
   const showStatusIndicators = item.isPinned || showSensitiveIndicator;
   const indicatorCount = Number(item.isPinned) + Number(showSensitiveIndicator);
-  const sourceAppIcon = sourceAppId ? (
+  const appIcon = sourceAppId ? (
     <AssetImage
       alt={sourceAppName}
       className="size-4"
@@ -206,17 +208,54 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
     onRootElement?.(item.id, node);
   };
 
+  const sourceAppIcon = hintKey ? (
+    <KeyHint hintKey={hintKey} onKeyPress={handleQuickPaste}>
+      {appIcon}
+    </KeyHint>
+  ) : (
+    appIcon
+  );
+  const quickActionsNode = (
+    <ClipboardQuickActions
+      floating={!layout.headerClassName}
+      item={item}
+      labels={quickActionLabels}
+      onQuickAction={onQuickAction ? handleQuickAction : void 0}
+      quickActions={visibleQuickActions}
+      visible={hovered}
+    />
+  );
+  const content = item.note ? (
+    <NoteContentSwitcher
+      note={item.note}
+      showOriginal={showOriginalOnHover && hovered}
+    >
+      {body}
+    </NoteContentSwitcher>
+  ) : (
+    body
+  );
+  const snippets =
+    quickSnippets.length > 0 && onPickSnippet ? (
+      <QuickSnippets
+        indicatorCount={layout.headerClassName ? indicatorCount : 0}
+        onPick={handlePickSnippet}
+        snippets={quickSnippets}
+      />
+    ) : null;
+
   return (
     <div
       aria-selected={isSelected}
       className={cn(
-        "relative flex flex-col gap-1 overflow-hidden rounded-2 border border-ant-border-secondary p-2 transition-colors duration-150 ease-out motion-reduce:transition-none",
+        "relative flex overflow-hidden border-ant-border-secondary transition-colors duration-150 ease-out motion-reduce:transition-none",
+        layout.cardClassName,
         {
           // 外环和边框互不干扰，置顶项被选中时两种标记可以同时读出来。
-          "border-ant-primary": item.isPinned,
+          [layout.pinnedClassName]: item.isPinned,
           // 选中只加一圈柔和外环，底色和边框都不动：整圈亮蓝框在深色下太跳，
           // 而且会和置顶项的 primary 边框撞在一起分不出来。
-          "ring-2 ring-ant-primary/35": isSelected,
+          [layout.selectedClassName]: isSelected,
         },
       )}
       draggable
@@ -232,48 +271,53 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       role="option"
       tabIndex={-1}
     >
-      <div className="flex items-center justify-between text-ant-secondary text-xs">
-        <div className="flex min-w-0 items-center gap-1 overflow-hidden">
-          {hintKey ? (
-            <KeyHint hintKey={hintKey} onKeyPress={handleQuickPaste}>
+      {layout.headerClassName ? (
+        <>
+          <div
+            className={cn(
+              "flex items-center justify-between text-ant-secondary text-xs",
+              layout.headerClassName,
+            )}
+          >
+            <div className="flex min-w-0 items-center gap-1 overflow-hidden">
               {sourceAppIcon}
-            </KeyHint>
-          ) : (
-            sourceAppIcon
-          )}
 
-          <span className="truncate">{typeLabel}</span>
-        </div>
+              <span className="truncate">{typeLabel}</span>
+            </div>
 
-        <ClipboardQuickActions
-          item={item}
-          labels={quickActionLabels}
-          onQuickAction={onQuickAction ? handleQuickAction : void 0}
-          quickActions={visibleQuickActions}
-          visible={hovered}
-        />
-      </div>
+            {quickActionsNode}
+          </div>
 
-      {item.note ? (
-        <NoteContentSwitcher
-          note={item.note}
-          showOriginal={showOriginalOnHover && hovered}
-        >
-          {body}
-        </NoteContentSwitcher>
+          {content}
+          {snippets}
+          {showStatusIndicators
+            ? renderStatusIndicators(
+                item.isPinned,
+                showSensitiveIndicator,
+                false,
+              )
+            : null}
+        </>
       ) : (
-        body
+        <>
+          {/* 行高与正文首行一致，图标对齐第一行文字。 */}
+          <div className="flex h-5 shrink-0 items-center">{sourceAppIcon}</div>
+
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            {content}
+            {snippets}
+          </div>
+
+          {showStatusIndicators
+            ? renderStatusIndicators(
+                item.isPinned,
+                showSensitiveIndicator,
+                true,
+              )
+            : null}
+          {quickActionsNode}
+        </>
       )}
-      {quickSnippets.length > 0 && onPickSnippet ? (
-        <QuickSnippets
-          indicatorCount={indicatorCount}
-          onPick={handlePickSnippet}
-          snippets={quickSnippets}
-        />
-      ) : null}
-      {showStatusIndicators
-        ? renderStatusIndicators(item.isPinned, showSensitiveIndicator)
-        : null}
     </div>
   );
 };
@@ -283,16 +327,34 @@ const isNotDeleteAction = (action: ClipboardAction | ItemAction) => {
 };
 
 /**
- * 渲染卡片右下角的状态水印；仅表达状态，不参与交互。
+ * 渲染置顶 / 敏感状态标记；仅表达状态，不参与交互。
+ * 有头部行时是卡片右下角的水印；没有头部行时卡片可能只有一行高，改成正文右侧的小图标，免得压住文字。
  */
-function renderStatusIndicators(isPinned: boolean, isSensitive: boolean) {
+function renderStatusIndicators(
+  isPinned: boolean,
+  isSensitive: boolean,
+  inline: boolean,
+) {
+  const iconClassName = inline ? "size-4" : "size-5";
+
   return (
-    <div className="pointer-events-none absolute right-2 bottom-2 flex items-end gap-1 text-ant-quaternary">
+    <div
+      className={cn("pointer-events-none flex gap-1 text-ant-quaternary", {
+        "absolute right-2 bottom-2 items-end": !inline,
+        "h-5 shrink-0 items-center": inline,
+      })}
+    >
       {isPinned ? (
-        <i aria-hidden="true" className="i-ph:push-pin-bold size-5" />
+        <i
+          aria-hidden="true"
+          className={cn("i-ph:push-pin-bold", iconClassName)}
+        />
       ) : null}
       {isSensitive ? (
-        <i aria-hidden="true" className="i-lucide:key-round size-5" />
+        <i
+          aria-hidden="true"
+          className={cn("i-lucide:key-round", iconClassName)}
+        />
       ) : null}
     </div>
   );

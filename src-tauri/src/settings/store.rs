@@ -536,6 +536,26 @@ mod tests {
         );
     }
 
+    // 存量文件没有列表风格与密度字段：升级后卡片风格不变，密度按「标准」读取。
+    #[test]
+    fn released_display_settings_use_standard_card_list() {
+        let released = r#"{
+            "clipboard": {
+                "display": {"textMaxLines": 2, "imageMaxHeight": 80, "fileMaxCount": 4, "quickSnippets": false}
+            }
+        }"#;
+        let parsed: Settings = serde_json::from_str(released).unwrap();
+        let display = parsed.clipboard.display;
+
+        assert_eq!(display.list_style, crate::settings::ListStyle::Card);
+        assert_eq!(display.density, crate::settings::ListDensity::Standard);
+        assert_eq!(
+            display.custom_layout,
+            crate::settings::CustomListLayout::default()
+        );
+        assert!(!display.quick_snippets);
+    }
+
     #[test]
     fn released_preview_settings_show_plain_text() {
         let released = r#"{

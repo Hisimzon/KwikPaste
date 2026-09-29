@@ -1,5 +1,9 @@
 import { setAutostart, showTaskbarIcon } from "@/commands";
-import { updateSettings } from "@/stores/settings";
+import {
+  DEFAULT_CUSTOM_LIST_LAYOUT,
+  LIST_DENSITY_PRESETS,
+} from "@/constants/listLayout";
+import { settingsState, updateSettings } from "@/stores/settings";
 import type { SettingsPatch } from "@/types/settings";
 import type {
   PreferenceSetting,
@@ -77,7 +81,33 @@ function buildSettingPatch(
     );
   }
 
+  if (setting.id === "appearance.listDensity" && value === "custom") {
+    return mergeSettingsPatch(
+      buildPatch(setting.path, value),
+      buildCustomLayoutSeedPatch(),
+    );
+  }
+
   return buildPatch(setting.path, value);
+}
+
+/**
+ * 从预设档位切到「自定义」时，没调过的自定义尺寸从刚才的档位起步，界面不会先跳回默认值；
+ * 调过的自定义尺寸原样恢复。
+ */
+function buildCustomLayoutSeedPatch(): SettingsPatch {
+  const { customLayout, density } = settingsState.clipboard.display;
+  if (density === "custom") return {};
+
+  const untouched =
+    customLayout.headerRow === DEFAULT_CUSTOM_LIST_LAYOUT.headerRow &&
+    customLayout.itemGap === DEFAULT_CUSTOM_LIST_LAYOUT.itemGap &&
+    customLayout.paddingY === DEFAULT_CUSTOM_LIST_LAYOUT.paddingY;
+  if (!untouched) return {};
+
+  return {
+    clipboard: { display: { customLayout: LIST_DENSITY_PRESETS[density] } },
+  };
 }
 
 /**
