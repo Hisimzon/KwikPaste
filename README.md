@@ -33,6 +33,14 @@
 - **Windows 便携版**：`_portable.zip`，同样分 x64 和 ARM64。解压后直接运行 `KwikPaste\KwikPaste.exe`，历史、设置和日志都保存在同目录的 `data` 文件夹里，整个文件夹可以拷到别的电脑或 U 盘。`portable.txt` 要和 exe 放在一起；便携版和安装版不能同时运行。
 - **macOS**：按芯片选择 `.dmg`，Apple 芯片选 `aarch64`，Intel 芯片选 `x64`。
 
+macOS 也可以用 [Homebrew](https://brew.sh) 安装，会按芯片自动选择版本：
+
+```bash
+brew install --cask mansandadada/tap/kwikpaste
+```
+
+升级和卸载见 [homebrew-tap](https://github.com/ManSanDADADA/homebrew-tap)。
+
 > [!NOTE]
 > 安装包暂未经过微软和苹果的代码签名，首次打开时可能出现安全提示。Windows 上点 **更多信息 → 仍要运行**；macOS 上打开 **系统设置 → 隐私与安全性**，点 **仍要打开**。
 

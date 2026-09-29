@@ -33,6 +33,14 @@ Get the latest installer from the [website](https://paste.fastthree.com/en/) or 
 - **Windows portable** — the `_portable.zip`, for x64 or ARM64. Unzip it and run `KwikPaste\KwikPaste.exe`. History, settings and logs stay in the `data` folder next to it, so the whole folder can move to another PC or a USB drive. Keep `portable.txt` beside the exe. The portable and installed versions can't run at the same time.
 - **macOS** — the `.dmg` for your chip: `aarch64` for Apple silicon, `x64` for Intel.
 
+On macOS you can also install it with [Homebrew](https://brew.sh), which picks the build for your chip:
+
+```bash
+brew install --cask mansandadada/tap/kwikpaste
+```
+
+See [homebrew-tap](https://github.com/ManSanDADADA/homebrew-tap) for upgrading and uninstalling.
+
 > [!NOTE]
 > The installers are not code-signed by Microsoft or Apple yet, so the first launch may show a security prompt. On Windows choose **More info → Run anyway**. On macOS open **System Settings → Privacy & Security** and click **Open Anyway**.
 
