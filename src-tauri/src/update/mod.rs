@@ -1,4 +1,5 @@
 mod portable;
+mod usage;
 
 use std::{sync::Mutex, time::Duration};
 
@@ -168,6 +169,7 @@ impl UpdateState {
 
 pub fn init(app: &AppHandle) {
     app.manage(UpdateState::new());
+    app.manage(usage::UsageState::default());
 
     if crate::core::portable::is_portable() {
         portable::cleanup_leftovers();
@@ -183,6 +185,8 @@ pub async fn check(app: &AppHandle, mode: CheckMode) -> Result<AppUpdateStatus> 
     if matches!(mode, CheckMode::Auto) && !should_auto_check(app) {
         return Ok(status(app).await);
     }
+
+    usage::schedule(app, usage::Trigger::Check);
 
     let settings = app.state::<SettingsStore>().snapshot();
     let channels = update_channels(
@@ -277,6 +281,8 @@ pub fn skip(app: &AppHandle, version: String) -> Result<AppUpdateStatus> {
 }
 
 pub fn schedule_auto_check(app: &AppHandle) {
+    usage::schedule(app, usage::Trigger::Launch);
+
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(AUTO_CHECK_INITIAL_DELAY_SECONDS)).await;
