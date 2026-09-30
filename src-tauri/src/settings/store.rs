@@ -571,19 +571,30 @@ mod tests {
         assert_eq!(preview.text_view, crate::settings::PreviewTextView::Plain);
     }
 
-    // 已发布版本首次启动就把完整设置落盘，存量用户文件里一定带 hoverEnabled：默认改为开启只影响新装与恢复默认。
+    // 已发布版本首次启动就把完整设置落盘，存量用户文件里一定带 hoverEnabled / spaceEnabled：
+    // 默认值调整只影响新装与恢复默认。
     #[test]
-    fn hover_preview_defaults_on_but_keeps_released_choice() {
-        assert!(crate::settings::Preview::default().hover_enabled);
+    fn preview_defaults_change_but_keep_released_choice() {
+        let defaults = crate::settings::Preview::default();
+        assert!(defaults.hover_enabled);
+        assert_eq!(
+            defaults.hover_delay_ms,
+            crate::settings::PreviewHoverDelayMs::Ms500
+        );
+        assert!(!defaults.space_enabled);
+        assert_eq!(defaults.text_view, crate::settings::PreviewTextView::Words);
 
         let released = r#"{
             "clipboard": {
-                "preview": {"hoverEnabled": false, "hoverDelayMs": "ms500", "spaceEnabled": true}
+                "preview": {"hoverEnabled": false, "hoverDelayMs": "ms500", "spaceEnabled": true, "textView": "plain"}
             }
         }"#;
         let parsed: Settings = serde_json::from_str(released).unwrap();
+        let preview = parsed.clipboard.preview;
 
-        assert!(!parsed.clipboard.preview.hover_enabled);
+        assert!(!preview.hover_enabled);
+        assert!(preview.space_enabled);
+        assert_eq!(preview.text_view, crate::settings::PreviewTextView::Plain);
     }
 
     #[test]

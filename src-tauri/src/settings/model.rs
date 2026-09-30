@@ -596,6 +596,8 @@ pub struct Preview {
     pub hover_enabled: bool,
     pub hover_delay_ms: PreviewHoverDelayMs,
     pub space_enabled: bool,
+    /// 新装默认选词；早于 v1.3.2 的设置文件没有这个字段，读取时按原文，保持升级前的样子。
+    #[serde(default)]
     pub text_view: PreviewTextView,
 }
 
@@ -604,8 +606,8 @@ impl Default for Preview {
         Self {
             hover_enabled: true,
             hover_delay_ms: PreviewHoverDelayMs::Ms500,
-            space_enabled: true,
-            text_view: PreviewTextView::Plain,
+            space_enabled: false,
+            text_view: PreviewTextView::Words,
         }
     }
 }
