@@ -16,11 +16,21 @@ path = "src/main.rs"
 default = ["runtime-shaders"]
 # 只影响 macOS：运行时编译 Metal 着色器，构建机不需要 Xcode 的 metal 工具链。
 runtime-shaders = ["gpui_platform/runtime_shaders"]
+# 用正式版的 identifier（com.fastthree.kwikpaste），会与已安装的 1.x 互认单实例。
+# 只有切换到原生版的发布流水线才打开；本机和 CI 的构建一律用开发 identifier。
+production-identity = []
 
 [dependencies]
 anyhow.workspace = true
+async-channel.workspace = true
+global-hotkey.workspace = true
 gpui.workspace = true
+image = { workspace = true, features = ["ico"] }
+kwikpaste-os.workspace = true
 kwikpaste-ui.workspace = true
+log.workspace = true
+raw-window-handle.workspace = true
+tray-icon.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_windows.workspace = true

@@ -50,9 +50,15 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 # 平台层（kwikpaste-os 与 kwikpaste-app/src/platform）。托盘、热键与 1.x 的 Tauri 插件同一系 crate；
 # windows 与 GPUI 用同一个大版本，特性合并后不多编一份。
+
+async-channel = "2"
+global-hotkey = "0.8"
+kwikpaste-os = { path = "crates/kwikpaste-os" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-foundation = { version = "0.3", default-features = false }
+raw-window-handle = "0.6"
+tray-icon = { version = "0.24", default-features = false }
 windows = "0.62"
 windows-registry = "0.6"
 
