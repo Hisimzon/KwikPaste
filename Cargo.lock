@@ -4227,6 +4227,7 @@ version = "2.0.0-alpha.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "chrono",
  "futures",
  "global-hotkey",
  "gpui-pre",
@@ -4239,6 +4240,7 @@ dependencies = [
  "log",
  "raw-window-handle",
  "semver",
+ "serde",
  "serde_json",
  "tray-icon",
 ]

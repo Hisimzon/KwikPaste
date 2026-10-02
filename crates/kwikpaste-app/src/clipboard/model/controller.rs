@@ -1,0 +1,586 @@
+//! 列表控制器：当前项、键盘移动、数字提示和刷新策略，移植自 1.x `List.tsx` 的逻辑部分。
+//!
+//! - 当前项（“选中”）只有一个：没有显式选中时，第一个可见的非置顶项就是当前项；
+//!   指针移进卡片就把它设为当前项，键盘和指针共用一个选中。
+//! - ↑/↓ 夹在首尾、不循环；目标行没加载时先发请求，这一次移动作废（与 1.x 相同）。
+//! - 剪贴板有新内容时：面板隐藏只记挂起；不在顶部也只记挂起，回到顶部的那一帧再刷新（附录 D L3）。
+
+use std::sync::Arc;
+
+use super::{
+    item::{ItemKind, ListItem},
+    list_model::ListModel,
+};
+
+/// 方向键。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nav {
+    Up,
+    Down,
+}
+
+/// 一次方向键的结果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavOutcome {
+    /// 当前项移到了模型下标 `index`，视图把它平滑滚进视口（置顶行不滚）。
+    Moved { index: usize },
+    /// 目标行还没加载：已登记为可见范围，等数据到了再按。
+    NeedsLoad { index: usize },
+    /// 列表为空。
+    Empty,
+}
+
+/// 列表当前的过滤条件，决定新记录要不要刷新（1.x `shouldRefreshCurrentGroup`）。U1 恒为“全部”。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ViewFilter {
+    pub favorites_only: bool,
+    pub category: Option<ItemKind>,
+    pub group_id: Option<Arc<str>>,
+}
+
+impl ViewFilter {
+    /// 一条新记录或被重新使用的记录可能出现在当前视图里吗。
+    pub fn may_include(&self, kind: Option<ItemKind>) -> bool {
+        if self.group_id.is_some() || self.favorites_only {
+            return false;
+        }
+
+        match (self.category, kind) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(category), Some(kind)) => category == kind,
+        }
+    }
+}
+
+/// core 发来的列表变化（`CoreEvent` 中与列表有关的几种）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListUpdate {
+    /// 新记录入库或已有记录被重新使用（`deduplicated`）。
+    Upserted { kind: ItemKind, deduplicated: bool },
+    /// 清理删掉了 `removed` 条。
+    Cleaned { removed: u64 },
+    /// 历史数据整体换了一份：导入备份、切换存储位置（core `ClipboardReloaded`，1.x `imported`）。
+    Reloaded,
+}
+
+/// 收到列表变化后要做的事。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateAction {
+    /// 与当前视图无关。
+    Ignore,
+    /// 已在顶部：立即重拉第一页。
+    ReloadNow {
+        /// 同时清掉当前选中（清理、导入时）。
+        reset_selection: bool,
+    },
+    /// 不在顶部或面板隐藏：记成挂起，回到顶部再刷新。
+    Defer { reset_selection: bool },
+}
+
+/// 数字提示 1–9、0（Mod+数字粘贴第 N 个可见非置顶项）。
+#[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
+const HINT_KEYS: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+
+#[derive(Debug, Default)]
+pub struct ListController {
+    selected: Option<Arc<str>>,
+    /// 第一个可见的非置顶项的模型下标（列表视口第一行 + 置顶行数）。
+    first_visible: usize,
+    pending_reload: bool,
+    filter: ViewFilter,
+}
+
+impl ListController {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
+    pub fn filter(&self) -> &ViewFilter {
+        &self.filter
+    }
+
+    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
+    pub fn first_visible(&self) -> usize {
+        self.first_visible
+    }
+
+    pub fn set_first_visible(&mut self, index: usize) {
+        self.first_visible = index;
+    }
+
+    #[cfg(test)]
+    pub fn selected(&self) -> Option<&Arc<str>> {
+        self.selected.as_ref()
+    }
+
+    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+    }
+
+    /// 指针移进卡片：它成为当前项（1.x 的 hover 与键盘共用选中）。返回选中是否变了。
+    pub fn hover(&mut self, id: &Arc<str>) -> bool {
+        if self.selected.as_ref() == Some(id) {
+            return false;
+        }
+
+        self.selected = Some(id.clone());
+        true
+    }
+
+    /// 第 `index` 行、id 为 `id` 的卡片是不是当前项。
+    pub fn is_active(&self, index: usize, id: &str) -> bool {
+        match &self.selected {
+            Some(selected) => &**selected == id,
+            None => index == self.first_visible,
+        }
+    }
+
+    /// 当前项的模型下标：显式选中且仍在缓存里时取它，否则取第一个可见的非置顶项。
+    pub fn active_index(&self, model: &ListModel) -> usize {
+        self.selected
+            .as_deref()
+            .and_then(|id| model.index_of(id))
+            .unwrap_or(self.first_visible)
+    }
+
+    /// Enter 作用的记录（1.x：显式选中项，否则第一个可见非置顶项，再否则第 0 行）。
+    pub fn active_item<'a>(&self, model: &'a ListModel) -> Option<&'a Arc<ListItem>> {
+        if let Some(item) = self.selected.as_deref().and_then(|id| model.find(id)) {
+            return Some(item);
+        }
+
+        model.get(self.first_visible).or_else(|| model.get(0))
+    }
+
+    /// 处理 ↑/↓（1.x `getNextKeyboardIndex` + `getNextKeyboardTarget`）。
+    pub fn navigate(
+        &mut self,
+        nav: Nav,
+        model: &mut ListModel,
+    ) -> (NavOutcome, Option<super::list_model::FetchRequest>) {
+        let total = model.total();
+        if total == 0 {
+            return (NavOutcome::Empty, None);
+        }
+
+        let current = self.active_index(model);
+        let next = match nav {
+            Nav::Up => current.saturating_sub(1),
+            Nav::Down => (current + 1).min(total - 1),
+        };
+
+        match model.get(next) {
+            Some(item) => {
+                self.selected = Some(item.id.clone());
+                (NavOutcome::Moved { index: next }, None)
+            }
+            None => {
+                let request = model.load_range(next..next + 1);
+                (NavOutcome::NeedsLoad { index: next }, request)
+            }
+        }
+    }
+
+    /// 删除记录后的选中（1.x `getSelectedIdAfterDelete`）：删的是当前项时选下一项，到底时选上一项；
+    /// 删的不是当前项时保持原样。在模型删除之前调用。
+    pub fn select_after_delete(&mut self, model: &ListModel, deleted_id: &str) {
+        let Some(deleted) = model.index_of(deleted_id) else {
+            return;
+        };
+        let active = self
+            .selected
+            .clone()
+            .or_else(|| model.get(self.first_visible).map(|item| item.id.clone()))
+            .or_else(|| model.get(0).map(|item| item.id.clone()));
+        if active.as_deref() != Some(deleted_id) {
+            return;
+        }
+
+        self.selected = model
+            .get(deleted + 1)
+            .or_else(|| {
+                deleted
+                    .checked_sub(1)
+                    .and_then(|previous| model.get(previous))
+            })
+            .map(|item| item.id.clone());
+    }
+
+    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
+    /// 第 `index` 行的数字提示：只标在前 10 个可见非置顶项上，多选时不显示。
+    pub fn hint_key(&self, index: usize, pinned: usize, selecting: bool) -> Option<char> {
+        if selecting || index < pinned {
+            return None;
+        }
+
+        let relative = index.checked_sub(self.first_visible)?;
+        HINT_KEYS.get(relative).copied()
+    }
+
+    /// 列表变化的处理决定（1.x `handleClipboardUpdated` + `requestReloadAtTop`）。
+    pub fn on_update(&mut self, update: ListUpdate, visible: bool, at_top: bool) -> UpdateAction {
+        if !visible {
+            self.pending_reload = true;
+            return UpdateAction::Defer {
+                reset_selection: false,
+            };
+        }
+
+        let reset_selection = match update {
+            ListUpdate::Cleaned { .. } | ListUpdate::Reloaded => true,
+            ListUpdate::Upserted { kind, .. } => {
+                if !self.filter.may_include(Some(kind)) {
+                    return UpdateAction::Ignore;
+                }
+                false
+            }
+        };
+        if reset_selection {
+            self.selected = None;
+        }
+
+        self.request_reload_at_top(at_top, reset_selection)
+    }
+
+    /// 是否有挂起的刷新。
+    #[cfg(test)]
+    pub fn has_pending_reload(&self) -> bool {
+        self.pending_reload
+    }
+
+    /// 每帧调用：到顶且有挂起的刷新时消费它（1.x `consumeDeferredReloadAtTop`，附录 D L3）。
+    pub fn take_reload_at_top(&mut self, at_top: bool) -> bool {
+        if !self.pending_reload || !at_top {
+            return false;
+        }
+
+        self.pending_reload = false;
+        true
+    }
+
+    /// 面板显示时（`scrollToTopOnOpen` 默认开启）：清掉选中，回到顶部后由下一帧消费挂起的刷新。
+    pub fn on_shown(&mut self) {
+        self.selected = None;
+    }
+
+    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
+    /// 过滤条件变化：清掉选中和挂起的刷新（视图会整体重载）。
+    pub fn set_filter(&mut self, filter: ViewFilter) {
+        self.filter = filter;
+        self.selected = None;
+        self.pending_reload = false;
+    }
+
+    fn request_reload_at_top(&mut self, at_top: bool, reset_selection: bool) -> UpdateAction {
+        if !at_top {
+            self.pending_reload = true;
+            return UpdateAction::Defer { reset_selection };
+        }
+
+        self.pending_reload = false;
+        UpdateAction::ReloadNow { reset_selection }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+
+    use super::super::{
+        item::Platform,
+        list_model::{FetchRequest, Page},
+    };
+    use super::*;
+
+    fn item(id: &str, pinned: bool) -> Arc<ListItem> {
+        Arc::new(ListItem {
+            id: id.into(),
+            kind: ItemKind::Text,
+            sub_kind: None,
+            group_id: None,
+            content: "".into(),
+            summary: None,
+            width: None,
+            height: None,
+            is_favorite: false,
+            is_pinned: pinned,
+            is_sensitive: false,
+            platform: Platform::Windows,
+            note: None,
+            created_at: Utc.timestamp_opt(0, 0).single().unwrap_or_default(),
+            source_app_id: None,
+            source_app_name: None,
+            source_app_icon_path: None,
+            origin_device_id: None,
+            origin_device_name: None,
+            image_thumbnail_path: None,
+            file_entries: None,
+            files_preview_kind: None,
+            available_actions: Vec::new(),
+            color_preview: None,
+            quick_snippets: Vec::new(),
+            image_display: None,
+        })
+    }
+
+    /// 加载了前 `loaded` 行（共 `total` 行，前 `pinned` 行置顶）的模型。
+    fn model(total: usize, loaded: usize, pinned: usize) -> ListModel {
+        let mut model = ListModel::new();
+        let request = model.reset_and_reload();
+        let page = Page {
+            items: (0..loaded.min(30))
+                .map(|index| item(&format!("r{index}"), index < pinned))
+                .collect(),
+            total,
+        };
+        model.apply(&request, page);
+        model
+    }
+
+    #[test]
+    fn default_active_item_is_the_first_visible_non_pinned_row() {
+        let model = model(100, 30, 2);
+        let mut controller = ListController::new();
+        controller.set_first_visible(2);
+
+        assert!(controller.is_active(2, "r2"));
+        assert!(!controller.is_active(0, "r0"));
+        assert_eq!(
+            controller.active_item(&model).map(|item| &*item.id),
+            Some("r2")
+        );
+    }
+
+    #[test]
+    fn hover_selects() {
+        let model = model(100, 30, 0);
+        let mut controller = ListController::new();
+        let id: Arc<str> = "r7".into();
+
+        assert!(controller.hover(&id));
+        assert!(
+            !controller.hover(&id),
+            "hovering the same card again is a no-op"
+        );
+        assert!(controller.is_active(7, "r7"));
+        assert!(!controller.is_active(0, "r0"));
+        assert_eq!(controller.active_index(&model), 7);
+    }
+
+    #[test]
+    fn arrows_move_and_clamp() {
+        let mut model = model(30, 30, 0);
+        let mut controller = ListController::new();
+        controller.set_first_visible(0);
+
+        assert_eq!(
+            controller.navigate(Nav::Up, &mut model).0,
+            NavOutcome::Moved { index: 0 }
+        );
+        assert_eq!(
+            controller.navigate(Nav::Down, &mut model).0,
+            NavOutcome::Moved { index: 1 }
+        );
+        for _ in 0..40 {
+            controller.navigate(Nav::Down, &mut model);
+        }
+        assert_eq!(controller.selected().map(|id| &**id), Some("r29"));
+        assert_eq!(
+            controller.navigate(Nav::Down, &mut model).0,
+            NavOutcome::Moved { index: 29 }
+        );
+    }
+
+    #[test]
+    fn arrow_into_an_unloaded_row_requests_it_and_does_not_move() {
+        let mut model = model(100, 30, 0);
+        let mut controller = ListController::new();
+        let last: Arc<str> = "r29".into();
+        controller.hover(&last);
+
+        let (outcome, request) = controller.navigate(Nav::Down, &mut model);
+        assert_eq!(outcome, NavOutcome::NeedsLoad { index: 30 });
+        assert_eq!(
+            request.map(|request: FetchRequest| request.range),
+            Some(0..90),
+            "30 ± preload, aligned"
+        );
+        assert_eq!(controller.selected().map(|id| &**id), Some("r29"));
+    }
+
+    #[test]
+    fn up_from_the_first_regular_row_reaches_pinned_rows() {
+        let mut model = model(50, 30, 2);
+        let mut controller = ListController::new();
+        controller.set_first_visible(2);
+
+        assert_eq!(
+            controller.navigate(Nav::Up, &mut model).0,
+            NavOutcome::Moved { index: 1 }
+        );
+    }
+
+    #[test]
+    fn delete_selects_next_then_previous() {
+        let model = model(30, 30, 0);
+        let mut controller = ListController::new();
+        controller.hover(&"r5".into());
+        controller.select_after_delete(&model, "r5");
+        assert_eq!(controller.selected().map(|id| &**id), Some("r6"));
+
+        controller.hover(&"r29".into());
+        controller.select_after_delete(&model, "r29");
+        assert_eq!(controller.selected().map(|id| &**id), Some("r28"));
+
+        // 删的不是当前项：保持。
+        controller.hover(&"r3".into());
+        controller.select_after_delete(&model, "r10");
+        assert_eq!(controller.selected().map(|id| &**id), Some("r3"));
+    }
+
+    #[test]
+    fn number_hints_cover_ten_visible_regular_rows() {
+        let mut controller = ListController::new();
+        controller.set_first_visible(5);
+
+        assert_eq!(controller.hint_key(5, 2, false), Some('1'));
+        assert_eq!(controller.hint_key(13, 2, false), Some('9'));
+        assert_eq!(controller.hint_key(14, 2, false), Some('0'));
+        assert_eq!(controller.hint_key(15, 2, false), None);
+        assert_eq!(controller.hint_key(4, 2, false), None);
+        assert_eq!(
+            controller.hint_key(1, 2, false),
+            None,
+            "pinned rows get no hint"
+        );
+        assert_eq!(
+            controller.hint_key(6, 2, true),
+            None,
+            "hidden while selecting"
+        );
+    }
+
+    #[test]
+    fn view_filter_matches_should_refresh_current_group() {
+        let all = ViewFilter::default();
+        assert!(all.may_include(Some(ItemKind::Image)));
+
+        let text = ViewFilter {
+            category: Some(ItemKind::Text),
+            ..ViewFilter::default()
+        };
+        assert!(text.may_include(Some(ItemKind::Text)));
+        assert!(!text.may_include(Some(ItemKind::Files)));
+        assert!(!text.may_include(None));
+
+        let favorites = ViewFilter {
+            favorites_only: true,
+            ..ViewFilter::default()
+        };
+        assert!(!favorites.may_include(Some(ItemKind::Text)));
+
+        let group = ViewFilter {
+            group_id: Some("g".into()),
+            ..ViewFilter::default()
+        };
+        assert!(!group.may_include(Some(ItemKind::Text)));
+    }
+
+    #[test]
+    fn updates_defer_until_the_top() {
+        let mut controller = ListController::new();
+        let upsert = ListUpdate::Upserted {
+            kind: ItemKind::Text,
+            deduplicated: false,
+        };
+
+        assert_eq!(
+            controller.on_update(upsert, true, true),
+            UpdateAction::ReloadNow {
+                reset_selection: false
+            }
+        );
+        assert!(!controller.has_pending_reload());
+
+        assert_eq!(
+            controller.on_update(upsert, true, false),
+            UpdateAction::Defer {
+                reset_selection: false
+            }
+        );
+        assert!(!controller.take_reload_at_top(false));
+        assert!(controller.take_reload_at_top(true));
+        assert!(!controller.take_reload_at_top(true), "consumed once");
+    }
+
+    #[test]
+    fn hidden_panel_only_records_a_pending_reload() {
+        let mut controller = ListController::new();
+        controller.hover(&"r1".into());
+        let action = controller.on_update(ListUpdate::Cleaned { removed: 3 }, false, true);
+
+        assert_eq!(
+            action,
+            UpdateAction::Defer {
+                reset_selection: false
+            }
+        );
+        assert!(controller.has_pending_reload());
+        assert!(controller.selected().is_some());
+    }
+
+    #[test]
+    fn cleanup_and_import_reset_the_selection() {
+        let mut controller = ListController::new();
+        controller.hover(&"r1".into());
+
+        assert_eq!(
+            controller.on_update(ListUpdate::Cleaned { removed: 3 }, true, false),
+            UpdateAction::Defer {
+                reset_selection: true
+            }
+        );
+        assert!(controller.selected().is_none());
+
+        controller.hover(&"r2".into());
+        assert_eq!(
+            controller.on_update(ListUpdate::Reloaded, true, true),
+            UpdateAction::ReloadNow {
+                reset_selection: true
+            }
+        );
+        assert!(controller.selected().is_none());
+    }
+
+    #[test]
+    fn irrelevant_updates_are_ignored() {
+        let mut controller = ListController::new();
+        controller.set_filter(ViewFilter {
+            favorites_only: true,
+            ..ViewFilter::default()
+        });
+
+        let action = controller.on_update(
+            ListUpdate::Upserted {
+                kind: ItemKind::Text,
+                deduplicated: true,
+            },
+            true,
+            true,
+        );
+        assert_eq!(action, UpdateAction::Ignore);
+        assert!(!controller.has_pending_reload());
+    }
+
+    #[test]
+    fn showing_clears_the_selection() {
+        let mut controller = ListController::new();
+        controller.hover(&"r4".into());
+        controller.on_shown();
+
+        assert!(controller.selected().is_none());
+    }
+}

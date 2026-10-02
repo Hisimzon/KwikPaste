@@ -1,0 +1,246 @@
+//! 列表条目的视图模型。
+//!
+//! 字段名和 JSON 形状与 core 的 `ClipboardItem`（S1 之后的 `ItemView`）一致：serde camelCase，
+//! 列表载荷里文本类的 `content` 已置空、敏感内容已脱敏、文件条目和可用动作已由 core 算好。
+//! 这里只收列表要用的字段，其余（`contentHash`、`searchText`、`useCount` 等）反序列化时忽略。
+//! 接 core 时把 `ItemView` 转成 [`ListItem`]（见 [`super::source`]），视图层不用改。
+
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+
+use super::layout::ImageBox;
+
+/// 记录的主类型（core `ClipboardKind`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemKind {
+    Text,
+    Image,
+    Files,
+}
+
+/// 文本记录的子类型（core `ClipboardSubKind`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubKind {
+    Rtf,
+    Html,
+    Url,
+    Email,
+    Color,
+    Path,
+}
+
+/// 记录产生的平台（core `Platform`）；局域网同步的记录用它选设备图标。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    Macos,
+    Windows,
+}
+
+/// 文件卡片的渲染方式（core `FilesPreviewKind`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilesPreview {
+    /// 单个仍存在的图片文件：按图片卡片显示。
+    ImagePreview,
+    /// 图标加文件名列表。
+    List,
+}
+
+/// 列表和右键菜单可用的动作（core `ClipboardAction`）。core 新增的动作在旧版 UI 里落到 `Unknown`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemAction {
+    Paste,
+    PasteAsPlainText,
+    PasteAsPath,
+    Copy,
+    SaveImage,
+    SplitWords,
+    OpenLink,
+    SendEmail,
+    RevealInFinder,
+    RevealInExplorer,
+    ToggleFavorite,
+    TogglePinned,
+    EditNote,
+    Select,
+    Delete,
+    #[serde(other)]
+    Unknown,
+}
+
+/// 文件卡片里的一行（core `FileEntry`）。
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRow {
+    pub path: Arc<str>,
+    pub name: Arc<str>,
+    #[serde(default)]
+    pub is_dir: bool,
+    #[serde(default)]
+    pub is_image: bool,
+    /// 路径是否仍在磁盘上；不在时文件名划删除线。
+    #[serde(default = "default_true")]
+    pub exists: bool,
+    /// 文件类型图标（PNG 绝对路径）。
+    #[serde(default)]
+    pub icon_path: Option<Arc<str>>,
+    /// 单图预览时图片的像素尺寸。今天的 `FileEntry` 没有这两个字段，需要 core S1 补上（见报告）；
+    /// 缺省时按方形预测占位尺寸。
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+/// 列表里的一条记录。
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListItem {
+    pub id: Arc<str>,
+    pub kind: ItemKind,
+    #[serde(default)]
+    pub sub_kind: Option<SubKind>,
+    #[serde(default)]
+    pub group_id: Option<Arc<str>>,
+    /// 图片记录是原图文件名（取缩略图时用）；文本类在列表载荷里是空串。
+    #[serde(default)]
+    pub content: Arc<str>,
+    /// 列表摘要（core 已截断、已脱敏）；图片和文件为空。
+    #[serde(default)]
+    pub summary: Option<Arc<str>>,
+    /// 图片原始像素尺寸，用来预测缩略图的显示尺寸（附录 D L6）。
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    pub is_favorite: bool,
+    pub is_pinned: bool,
+    pub is_sensitive: bool,
+    pub platform: Platform,
+    #[serde(default)]
+    pub note: Option<Arc<str>>,
+    /// UTC 创建时间；时间标签由 UI 按本地时区格式化（附录 D §8 第 4 条）。
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub source_app_id: Option<Arc<str>>,
+    #[serde(default)]
+    pub source_app_name: Option<Arc<str>>,
+    /// 来源应用图标（PNG 绝对路径）。
+    #[serde(default)]
+    pub source_app_icon_path: Option<Arc<str>>,
+    #[serde(default)]
+    pub origin_device_id: Option<Arc<str>>,
+    #[serde(default)]
+    pub origin_device_name: Option<Arc<str>>,
+    /// 已存在的缩略图绝对路径；还没生成时为空，由 UI 向数据源要。
+    #[serde(default)]
+    pub image_thumbnail_path: Option<Arc<str>>,
+    #[serde(default)]
+    pub file_entries: Option<Vec<FileRow>>,
+    #[serde(default)]
+    pub files_preview_kind: Option<FilesPreview>,
+    #[serde(default)]
+    pub available_actions: Vec<ItemAction>,
+    /// core 校验过的 CSS 颜色串（颜色子类型才有；脱敏时为空）。
+    #[serde(default)]
+    pub color_preview: Option<Arc<str>>,
+    #[serde(default)]
+    pub quick_snippets: Vec<Arc<str>>,
+    /// core 展示层算好的图片显示尺寸（`ClipboardItemView::image_display_size`，不在 JSON 里）。
+    /// 夹具没有它，视图按同一公式自己预测（[`super::layout::predict_image_box`]）。
+    #[serde(skip)]
+    pub image_display: Option<ImageBox>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl ListItem {
+    /// 头部类型标签用的类型：有子类型时取子类型（1.x `types.{subKind ?? kind}`）。
+    pub fn type_key(&self) -> TypeKey {
+        match (self.sub_kind, self.kind) {
+            (Some(SubKind::Rtf), _) => TypeKey::Rtf,
+            (Some(SubKind::Html), _) => TypeKey::Html,
+            (Some(SubKind::Url), _) => TypeKey::Url,
+            (Some(SubKind::Email), _) => TypeKey::Email,
+            (Some(SubKind::Color), _) => TypeKey::Color,
+            (Some(SubKind::Path), _) => TypeKey::Path,
+            (None, ItemKind::Text) => TypeKey::Text,
+            (None, ItemKind::Image) => TypeKey::Image,
+            (None, ItemKind::Files) => TypeKey::Files,
+        }
+    }
+
+    /// 是否显示敏感标记：只对文本类记录（1.x `isSensitive && kind === "text"`）。
+    pub fn shows_sensitive_mark(&self) -> bool {
+        self.is_sensitive && self.kind == ItemKind::Text
+    }
+
+    pub fn file_rows(&self) -> &[FileRow] {
+        self.file_entries.as_deref().unwrap_or_default()
+    }
+}
+
+/// 卡片头部的类型标签，对应 1.x `clipboard:types.*`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeKey {
+    Text,
+    Html,
+    Rtf,
+    Url,
+    Email,
+    Color,
+    Path,
+    Image,
+    Files,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserializes_the_core_list_payload_shape() {
+        let json = r#"{
+            "id": "a1", "kind": "text", "subKind": "url", "content": "", "contentHash": "h",
+            "summary": "https://example.com", "useCount": 3, "isFavorite": false, "isPinned": true,
+            "isSensitive": false, "platform": "windows", "createdAt": "2026-10-02T01:02:03.456Z",
+            "updatedAt": "2026-10-02T01:02:03.456Z", "availableActions": ["paste", "openLink", "futureThing"],
+            "quickSnippets": ["example.com"], "displayCreatedAt": "09:02"
+        }"#;
+        let item: ListItem = serde_json::from_str(json).expect("parses");
+
+        assert_eq!(&*item.id, "a1");
+        assert_eq!(item.type_key(), TypeKey::Url);
+        assert!(item.is_pinned);
+        assert_eq!(
+            item.available_actions,
+            vec![ItemAction::Paste, ItemAction::OpenLink, ItemAction::Unknown]
+        );
+        assert_eq!(item.summary.as_deref(), Some("https://example.com"));
+        assert!(item.file_rows().is_empty());
+    }
+
+    #[test]
+    fn sensitive_mark_is_text_only() {
+        let base: ListItem = serde_json::from_str(
+            r#"{"id":"x","kind":"image","isFavorite":false,"isPinned":false,"isSensitive":true,
+                "platform":"macos","createdAt":"2026-01-01T00:00:00Z"}"#,
+        )
+        .expect("parses");
+        assert!(!base.shows_sensitive_mark());
+
+        let text = ListItem {
+            kind: ItemKind::Text,
+            ..base
+        };
+        assert!(text.shows_sensitive_mark());
+    }
+}

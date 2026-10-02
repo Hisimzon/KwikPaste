@@ -1,0 +1,1000 @@
+//! 主窗口的剪贴板列表（附录 D §3.2 的 ListView）：`list(ListState)`、稀疏分页、置顶块、页脚。
+//!
+//! 落实 r2-02 的硬约束：
+//! - L1 面板已设 `inactive_frame_interval: None`（平台层），这里不放常驻动画；
+//! - L2 平均行高 hint 在首帧布局后、第一页测量后、结构变化后重新施加；宽度变化在布局的当帧由
+//!   `ListFrame` 补上，滚动条一帧也不塌；平均行高每行只采一次样；
+//! - L3 不用 scroll handler：每帧读 `logical_scroll_top()` 判断到顶，加载范围按上一帧的布局快照算；
+//! - L4 在顶部刷新时整体重建后补 `scroll_to(0)`；
+//! - L5 文本 `line_clamp(n).text_ellipsis()`（见 `card.rs`）；
+//! - L6 图片行按载荷宽高预测显式尺寸；
+//! - L7 剪贴板图片一律经 [`KpImageCache`]。
+
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+    time::Instant,
+};
+
+use chrono::{DateTime, Local};
+use gpui::{
+    AnyElement, AnyWindowHandle, App, AppContext as _, Context, DispatchPhase, Entity,
+    EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, ListAlignment, ListOffset,
+    ListState, MouseButton, ParentElement as _, Pixels, Render, ScrollDelta, ScrollWheelEvent,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, div, list,
+    prelude::FluentBuilder as _, px,
+};
+use kwikpaste_ui::{
+    Icon, IconName, KpStyled as _, ListScrollbar,
+    theme::{self, TextSize},
+};
+
+use super::{
+    Dismiss, PasteSelected, PasteSelectedPlain, SelectNext, SelectPrevious,
+    bench::Bench,
+    card::{self, CardEnv, CardState, Visual, dp},
+    frame::{FrameTimer, FrameTiming, ListFrame, PaintedCallback, Snapshot, WidthHint},
+    image_cache::{ImageKey, ImageState, KpImageCache, path_of},
+};
+use kwikpaste_core::CoreEvent;
+
+use crate::{
+    clipboard::{
+        model::{
+            controller::{ListController, ListUpdate, Nav, NavOutcome, UpdateAction},
+            item::ListItem,
+            layout::LayoutSpec,
+            list_model::{Applied, FetchRequest, ListModel},
+        },
+        source::{ClipboardSource, ListQuery, core_source::item_kind},
+    },
+    i18n::{t, t_count},
+    platform::{self, CoreEvents, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource},
+};
+
+/// 列表上下各多排版的距离（px）。
+const OVERDRAW: f32 = 200.;
+/// 平滑滚动与平滑 reveal 的指数缓动时间常数（r2-02 §3.5：τ = 30 ms）。
+const TAU_S: f32 = 0.030;
+/// 滚轮一行的距离（设计 px）：与 Chromium 在 Windows 上相同（100/3 px，默认每格 3 行 = 100 px）。
+const WHEEL_LINE: f32 = 100. / 3.;
+/// 平均行高的采样数到这个值，就用实测均值重新施加一次 hint（附录 D L2）。
+const MIN_HEIGHT_SAMPLES: u64 = 8;
+const MAX_HEIGHT_SAMPLES: u64 = 5000;
+/// 缩略图路径缓存的上限（1.x `useImageThumbnail` 的 512）。
+const THUMBNAIL_PATHS_MAX: usize = 512;
+
+/// 列表发给外面的意图。粘贴要由 core 和平台层完成（U2 接线），这里只发事件。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListIntent {
+    Paste { id: Arc<str>, plain: bool },
+}
+
+/// 没有缩略图的图片记录：向数据源要缩略图的进度。
+#[derive(Clone, Debug)]
+enum Thumbnail {
+    Pending,
+    Ready(Arc<str>),
+    Failed,
+}
+
+/// 平均行高估计（只用已加载行的实测高度）。
+///
+/// 每行只采一次：按帧采样的话，匀速滚动时高的行在视口里停留的帧数多，均值会偏高（实测 97.6 对真实 84.6）。
+#[derive(Debug, Default)]
+struct HeightSamples {
+    sum: f64,
+    count: u64,
+    /// 已经采过的列表行；行表整体重建后清空。
+    sampled: HashSet<usize>,
+}
+
+impl HeightSamples {
+    fn add(&mut self, ix: usize, height: f32) {
+        if self.count < MAX_HEIGHT_SAMPLES && height > 0. && self.sampled.insert(ix) {
+            self.sum += f64::from(height);
+            self.count += 1;
+        }
+    }
+
+    fn mean(&self) -> Option<f32> {
+        (self.count > 0).then(|| (self.sum / self.count as f64) as f32)
+    }
+}
+
+/// 施加 hint 时的状态。
+#[derive(Debug, Default)]
+struct Hints {
+    /// 最近一次施加 hint 时的列表宽度；与 [`ListFrame`] 共用：宽度在布局时变了，它当场重新施加。
+    width: Rc<Cell<Option<Pixels>>>,
+    measured: bool,
+    dirty: bool,
+    /// 最近一次施加的耗时（微秒），跑分记录。
+    last_apply_us: f64,
+}
+
+/// 平滑滚动、平滑 reveal 与跑分驱动的滚动。
+#[derive(Debug, Default)]
+pub(super) struct Motion {
+    last_frame: Option<Instant>,
+    /// 本帧用的时间步长（秒）；空闲后的第一帧按一个 60 Hz 帧算，免得一步跳太远（r2-02 §3.5）。
+    dt: f32,
+    /// 正在平滑露出的列表行。
+    reveal: Option<usize>,
+    /// 平滑滚轮剩下的距离（px，正数向下）。
+    wheel: f32,
+    /// 上一次快照之后本视图主动滚过的距离（px），跑分用来区分“自己滚的”和“跳动”。
+    pub(super) applied: f32,
+}
+
+/// 已经同步给 `ListState` 的行数。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Rows {
+    pinned: usize,
+    count: usize,
+}
+
+pub struct ClipboardList {
+    pub(super) source: Arc<dyn ClipboardSource>,
+    pub(super) model: ListModel,
+    pub(super) controller: ListController,
+    layout: LayoutSpec,
+    pub(super) state: ListState,
+    focus: FocusHandle,
+    window: AnyWindowHandle,
+    pub(super) images: Entity<KpImageCache>,
+    thumbnails: HashMap<Arc<str>, Thumbnail>,
+    rows: Rows,
+    visible: bool,
+    pub(super) snapshot: Rc<RefCell<Snapshot>>,
+    seen_seq: u64,
+    /// 上一帧画成骨架的列表行。
+    placeholders: Rc<RefCell<HashSet<usize>>>,
+    heights: HeightSamples,
+    hints: Hints,
+    pub(super) motion: Motion,
+    /// 跑分时额外留出的右边距（px），用来制造“宽度变化”（不能调 `Window::resize`）。
+    pub(super) extra_right: f32,
+    pub(super) bench: Option<Rc<RefCell<Bench>>>,
+    timing: Option<Rc<RefCell<FrameTiming>>>,
+    rem: Pixels,
+    /// 本帧的本地时间。
+    now: DateTime<Local>,
+    /// 自测时忽略系统的“减少动画”（`KP_FORCE_MOTION=1`）。
+    force_motion: bool,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl EventEmitter<ListIntent> for ClipboardList {}
+
+impl ClipboardList {
+    pub fn new(
+        source: Arc<dyn ClipboardSource>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let images = cx.new(|_| KpImageCache::new());
+        let mut subscriptions = vec![cx.observe(&images, |_, _, cx| cx.notify())];
+        // 面板的事件实体在面板窗口打开之前就有了，构造时直接订阅。
+        if let Some(panel) = cx.try_global::<Panel>() {
+            let events = panel.events().clone();
+            subscriptions.push(cx.subscribe_in(
+                &events,
+                window,
+                |list, _, event: &PanelEvent, window, cx| list.on_panel_event(*event, window, cx),
+            ));
+        }
+
+        let mut list = Self {
+            source,
+            model: ListModel::new(),
+            controller: ListController::new(),
+            layout: LayoutSpec::default(),
+            state: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
+            focus: cx.focus_handle(),
+            window: window.window_handle(),
+            images,
+            thumbnails: HashMap::new(),
+            rows: Rows::default(),
+            visible: false,
+            snapshot: Rc::default(),
+            seen_seq: 0,
+            placeholders: Rc::default(),
+            heights: HeightSamples::default(),
+            hints: Hints::default(),
+            motion: Motion::default(),
+            extra_right: 0.,
+            bench: None,
+            timing: None,
+            rem: window.rem_size(),
+            now: Local::now(),
+            force_motion: crate::selftest::active()
+                && std::env::var_os("KP_FORCE_MOTION").is_some_and(|value| value == "1"),
+            _subscriptions: subscriptions,
+        };
+        let request = list.model.reset_and_reload();
+        list.fetch(request, cx);
+
+        list
+    }
+
+    /// 跟随 core 的记录事件刷新（新记录、清理、导入备份或切换存储位置）。
+    pub fn follow_core_events(&mut self, events: &Entity<CoreEvents>, cx: &mut Context<Self>) {
+        let subscription = cx.subscribe(events, |list, _, event: &CoreEvent, cx| {
+            let update = match event {
+                CoreEvent::ClipboardUpserted {
+                    kind, deduplicated, ..
+                } => ListUpdate::Upserted {
+                    kind: item_kind(*kind),
+                    deduplicated: *deduplicated,
+                },
+                CoreEvent::ClipboardCleaned { removed } => {
+                    ListUpdate::Cleaned { removed: *removed }
+                }
+                CoreEvent::ClipboardReloaded => ListUpdate::Reloaded,
+                _ => return,
+            };
+            list.on_update(update, cx);
+        });
+        self._subscriptions.push(subscription);
+    }
+
+    /// 打开跑分计时（自测）。
+    pub(super) fn enable_bench(&mut self, bench: Rc<RefCell<Bench>>) {
+        self.timing = Some(Rc::default());
+        self.bench = Some(bench);
+    }
+
+    /// 列表所在的窗口（面板）。
+    pub fn window_handle(&self) -> AnyWindowHandle {
+        self.window
+    }
+
+    pub fn total(&self) -> usize {
+        self.model.total()
+    }
+
+    /// 处理 core 的列表变化（新记录、清理、整体重载）。
+    pub fn on_update(&mut self, update: ListUpdate, cx: &mut Context<Self>) {
+        let action = self
+            .controller
+            .on_update(update, self.visible, self.at_top());
+        log::debug!("list update {update:?} -> {action:?}");
+        if let UpdateAction::ReloadNow { .. } = action {
+            self.reload(cx);
+        }
+        cx.notify();
+    }
+
+    /// 面板事件。显示时和退出编辑态时把焦点放回列表：钩子转来的按键（Windows）和 key 窗口收到的
+    /// 按键（macOS）都按焦点所在的 key context 匹配，列表的绑定才会生效。
+    fn on_panel_event(&mut self, event: PanelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            PanelEvent::Shown => {
+                self.visible = true;
+                // `scrollToTopOnOpen` 默认开启：清掉选中、回到顶部；挂起的刷新在下一帧到顶时消费。
+                self.controller.on_shown();
+                self.motion.reveal = None;
+                self.motion.wheel = 0.;
+                self.motion.last_frame = None;
+                self.state.scroll_to(ListOffset {
+                    item_ix: 0,
+                    offset_in_item: px(0.),
+                });
+                window.focus(&self.focus, cx);
+                cx.notify();
+            }
+            PanelEvent::EditingEnded => window.focus(&self.focus, cx),
+            PanelEvent::EditingStarted | PanelEvent::EditingRefused => {}
+            PanelEvent::Hidden => {
+                self.visible = false;
+                self.motion.reveal = None;
+                self.motion.wheel = 0.;
+                // 隐藏即释放（附录 B §5.3）：缩略图位图全部还给图集，行缓存只留第一页。
+                self.images.update(cx, |images, cx| images.clear(None, cx));
+                self.model.release_rows();
+                // 缩略图路径只是字符串，留着；与 1.x 的 `useImageThumbnail` 一样封顶 512 条。
+                if self.thumbnails.len() > THUMBNAIL_PATHS_MAX {
+                    self.thumbnails.clear();
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 数据
+
+    pub(super) fn fetch(&mut self, request: FetchRequest, cx: &mut Context<Self>) {
+        let future = self.source.list(ListQuery {
+            offset: request.range.start,
+            limit: request.range.len(),
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = future.await;
+            this.update(cx, |list, cx| list.on_fetched(request, result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn on_fetched(
+        &mut self,
+        request: FetchRequest,
+        result: anyhow::Result<crate::clipboard::model::list_model::Page>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(page) => {
+                if let Some(applied) = self.model.apply(&request, page) {
+                    self.sync_rows(Some(&applied));
+                }
+            }
+            Err(err) => {
+                log::warn!("list page {:?} could not be loaded: {err:#}", request.range);
+                if self.model.fail(&request) {
+                    self.sync_rows(None);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// 把模型的行数变化同步给 `ListState`。
+    fn sync_rows(&mut self, applied: Option<&Applied>) {
+        let pinned = self.model.leading_pinned();
+        let target = Rows {
+            pinned,
+            count: self.model.total().saturating_sub(pinned),
+        };
+        let rebuild = applied.is_none_or(|applied| {
+            applied.replaced
+                && applied.range.start == 0
+                && (self.at_top() || self.rows == Rows::default())
+        });
+
+        if rebuild {
+            // 第一页整体替换且在顶部：重建行表、回到顶部（L4），下一帧按估计行高重新施加 hint。
+            self.state.reset(target.count);
+            self.state.scroll_to(ListOffset {
+                item_ix: 0,
+                offset_in_item: px(0.),
+            });
+            self.motion.reveal = None;
+            self.rows = target;
+            self.hints.dirty = true;
+            self.heights.sampled.clear();
+            return;
+        }
+
+        if target.pinned != self.rows.pinned {
+            // 置顶块变化发生在列表开头：按差值在开头增删行，锚点随 splice 平移。
+            if target.pinned > self.rows.pinned {
+                let removed = (target.pinned - self.rows.pinned).min(self.rows.count);
+                self.state.splice(0..removed, 0);
+                self.rows.count -= removed;
+            } else {
+                let added = self.rows.pinned - target.pinned;
+                self.state.splice(0..0, added);
+                self.rows.count += added;
+            }
+            self.rows.pinned = target.pinned;
+            self.hints.dirty = true;
+        }
+        if target.count != self.rows.count {
+            if target.count > self.rows.count {
+                self.state.splice(
+                    self.rows.count..self.rows.count,
+                    target.count - self.rows.count,
+                );
+            } else {
+                self.state.splice(target.count..self.rows.count, 0);
+            }
+            self.rows.count = target.count;
+            self.hints.dirty = true;
+        }
+
+        if let Some(applied) = applied {
+            let start = applied.range.start.saturating_sub(self.rows.pinned);
+            let end = applied
+                .range
+                .end
+                .saturating_sub(self.rows.pinned)
+                .min(self.rows.count);
+            if start < end {
+                self.state.remeasure_items(start..end);
+            }
+        }
+    }
+
+    /// 在顶部重拉第一页（有新内容时，1.x `reload`）。
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let request = self.model.reload();
+        self.fetch(request, cx);
+    }
+
+    /// 删除一条后同步（单条删除、在收藏里取消收藏、移出当前分组）。U1 只有自测在用，U2 的删除命令接这里。
+    pub(super) fn remove_item(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        self.controller.select_after_delete(&self.model, id);
+        let Some(removed) = self.model.remove_by_id(id) else {
+            return false;
+        };
+
+        if removed.index >= removed.pinned_before {
+            let ix = removed.index - removed.pinned_before;
+            if ix < self.rows.count {
+                self.state.splice(ix..ix + 1, 0);
+                self.rows.count -= 1;
+            }
+        } else {
+            self.rows.pinned = self.rows.pinned.saturating_sub(1);
+        }
+        if let Some(request) = removed.refetch {
+            self.fetch(request, cx);
+        }
+        cx.notify();
+        true
+    }
+
+    /// 本地合并一条记录的改动，并让它重新测量（收藏、便签等）。
+    pub(super) fn patch_item(
+        &mut self,
+        id: &str,
+        patch: impl FnOnce(&mut ListItem),
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let index = self.model.patch_by_id(id, patch)?;
+        if index >= self.rows.pinned {
+            let ix = index - self.rows.pinned;
+            self.state.remeasure_items(ix..ix + 1);
+        }
+        cx.notify();
+        Some(index)
+    }
+
+    // ---------------------------------------------------------------- 每帧
+
+    /// 系统“减少动画”。自测可以用 `KP_FORCE_MOTION=1` 忽略它，在关了动画的机器上也能量平滑滚动。
+    fn reduce_motion(&self, cx: &App) -> bool {
+        !self.force_motion && cx.reduce_motion()
+    }
+
+    /// 没有正在进行的平滑滚动或露出。
+    pub(super) fn motion_idle(&self) -> bool {
+        self.motion.reveal.is_none() && self.motion.wheel == 0.
+    }
+
+    pub(super) fn at_top(&self) -> bool {
+        let top = self.state.logical_scroll_top();
+        top.item_ix == 0 && top.offset_in_item <= px(0.5)
+    }
+
+    /// 读上一帧的快照：记录平均行高、第一个可见行，按可见范围补数据。
+    fn consume_snapshot(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.snapshot.borrow().clone();
+        let fresh = snapshot.seq != self.seen_seq;
+        self.seen_seq = snapshot.seq;
+
+        if fresh {
+            let placeholders = self.placeholders.borrow();
+            for row in &snapshot.rows {
+                if !placeholders.contains(&row.ix) {
+                    self.heights.add(row.ix, row.height);
+                }
+            }
+            // 跑分已经在本帧开头读过上一段主动滚动的距离。
+            self.motion.applied = 0.;
+        }
+
+        let top = self.state.logical_scroll_top().item_ix;
+        let (first, last) = match (snapshot.rows.first(), snapshot.rows.last()) {
+            (Some(first), Some(last)) => (first.ix.min(top), last.ix.max(top)),
+            _ => (top, top + 10),
+        };
+        self.controller.set_first_visible(first + self.rows.pinned);
+
+        if self.model.loaded_initial() && self.rows.count > 0 {
+            let visible = first + self.rows.pinned..last + 1 + self.rows.pinned;
+            if let Some(request) = self.model.load_range(visible) {
+                self.fetch(request, cx);
+            }
+        }
+    }
+
+    /// L2：首帧布局后、第一页测量后、宽度或行表变化后，按平均行高给未测量的行施加 hint。
+    fn apply_hints(&mut self) {
+        let width = self.state.viewport_bounds().size.width;
+        if width <= px(0.) || self.rows.count == 0 {
+            return;
+        }
+
+        let measured = self.heights.count >= MIN_HEIGHT_SAMPLES;
+        let due = self.hints.dirty
+            || self.hints.width.get() != Some(width)
+            || (measured && !self.hints.measured);
+        if !due {
+            return;
+        }
+
+        let estimate = self.height_estimate();
+        let started = Instant::now();
+        // ListState 是 Rc 句柄，对克隆调用 builder 改的是同一份状态。
+        let _ = self.state.clone().with_uniform_item_height(px(estimate));
+        self.hints.width.set(Some(width));
+        self.hints.measured = measured;
+        self.hints.dirty = false;
+        self.hints.last_apply_us = started.elapsed().as_secs_f64() * 1e6;
+        log::debug!(
+            "list hints applied: {estimate:.1}px for {} rows (width {width:?}) in {:.0} us",
+            self.rows.count,
+            self.hints.last_apply_us
+        );
+    }
+
+    /// 未测量行的估计高度：实测均值（样本够了之后），否则是骨架行高。
+    fn height_estimate(&self) -> f32 {
+        self.heights
+            .mean()
+            .filter(|_| self.heights.count >= MIN_HEIGHT_SAMPLES)
+            .unwrap_or_else(|| {
+                dp(self.layout.placeholder_height())
+                    .to_pixels(self.rem)
+                    .as_f32()
+            })
+    }
+
+    /// 平滑滚轮、平滑 reveal、跑分驱动：按剩余距离 ×(1−e^{−dt/τ}) 逐帧滚动。
+    fn run_motion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let dt = self
+            .motion
+            .last_frame
+            .map(|last| (now - last).as_secs_f32())
+            .unwrap_or(1. / 60.);
+        self.motion.last_frame = Some(now);
+        self.motion.dt = dt.clamp(0.001, 1. / 60.);
+        let fraction = 1. - (-self.motion.dt / TAU_S).exp();
+
+        if let Some(bench) = self.bench.clone()
+            && let Some(step) = bench.borrow_mut().drive_step(now)
+        {
+            self.state.scroll_by(px(step));
+            self.motion.applied += step;
+            window.request_animation_frame();
+        }
+
+        if self.motion.wheel.abs() > 0.5 {
+            let step = eased_step(self.motion.wheel, fraction);
+            self.state.scroll_by(px(step));
+            self.motion.applied += step;
+            self.motion.wheel -= step;
+            window.request_animation_frame();
+        } else {
+            self.motion.wheel = 0.;
+        }
+
+        if let Some(ix) = self.motion.reveal {
+            let remaining = self.reveal_distance(ix);
+            if remaining.abs() < 0.5 || self.reduce_motion(cx) {
+                if remaining.abs() >= 0.5 {
+                    self.state.scroll_by(px(remaining));
+                    self.motion.applied += remaining;
+                }
+                self.motion.reveal = None;
+            } else {
+                let step = eased_step(remaining, fraction);
+                self.state.scroll_by(px(step));
+                self.motion.applied += step;
+                window.request_animation_frame();
+            }
+        }
+    }
+
+    /// 让第 `ix` 行完整露出还要滚多少 px：在同一棵 sum tree 上试算后还原（r2-02 §3.5）。
+    fn reveal_distance(&self, ix: usize) -> f32 {
+        if self.state.viewport_bounds().size.height <= px(0.) {
+            return 0.;
+        }
+
+        let saved = self.state.logical_scroll_top();
+        let current = -self.state.scroll_px_offset_for_scrollbar().y.as_f32();
+        self.state.scroll_to_reveal_item(ix);
+        let target = -self.state.scroll_px_offset_for_scrollbar().y.as_f32();
+        self.state.scroll_to(saved);
+
+        target - current
+    }
+
+    /// 到顶的那一帧消费挂起的刷新（L3）。
+    fn consume_reload_at_top(&mut self, cx: &mut Context<Self>) {
+        if self.visible && self.controller.take_reload_at_top(self.at_top()) {
+            log::debug!("deferred list reload consumed at the top");
+            self.reload(cx);
+        }
+    }
+
+    // ---------------------------------------------------------------- 键盘与指针
+
+    pub(super) fn navigate(&mut self, nav: Nav, cx: &mut Context<Self>) {
+        let (outcome, request) = self.controller.navigate(nav, &mut self.model);
+        if let Some(request) = request {
+            self.fetch(request, cx);
+        }
+        if let NavOutcome::Moved { index } = outcome
+            && index >= self.rows.pinned
+        {
+            // 置顶块不滚动，只有列表里的行需要露出。
+            self.motion.reveal = Some(index - self.rows.pinned);
+        }
+        cx.notify();
+    }
+
+    fn select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Nav::Up, cx);
+    }
+
+    fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Nav::Down, cx);
+    }
+
+    fn paste_selected(&mut self, _: &PasteSelected, _: &mut Window, cx: &mut Context<Self>) {
+        self.request_paste(false, cx);
+    }
+
+    fn paste_selected_plain(
+        &mut self,
+        _: &PasteSelectedPlain,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_paste(true, cx);
+    }
+
+    fn request_paste(&mut self, plain: bool, cx: &mut Context<Self>) {
+        let Some(item) = self.controller.active_item(&self.model) else {
+            return;
+        };
+        let id = item.id.clone();
+        log::info!("paste requested for {id} (plain: {plain})");
+        cx.emit(ListIntent::Paste { id, plain });
+    }
+
+    /// Esc：U1 只有最后一层“隐藏窗口”（预览、多选、分组、类别几层在 U2 加上）。
+    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        platform::request(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Ui)));
+    }
+
+    fn hover_item(&mut self, id: &Arc<str>, cx: &mut Context<Self>) {
+        if self.controller.hover(id) {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn on_wheel_lines(&mut self, lines: f32, cx: &mut Context<Self>) {
+        let distance = -lines * dp(WHEEL_LINE).to_pixels(self.rem).as_f32();
+        if self.reduce_motion(cx) {
+            self.state.scroll_by(px(distance));
+        } else {
+            self.motion.wheel += distance;
+        }
+        cx.notify();
+    }
+
+    // ---------------------------------------------------------------- 渲染
+
+    /// 一张卡片的图片区状态：已有路径就交给 KpImageCache；图片记录没有缩略图时先向数据源要。
+    fn visual(
+        &mut self,
+        item: &ListItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Visual> {
+        let target = card::image_target(item, &self.layout)?;
+        let path = match (&target.path, &target.file_name) {
+            (Some(path), _) => path.clone(),
+            (None, Some(file_name)) => match self.thumbnails.get(file_name).cloned() {
+                Some(Thumbnail::Ready(path)) => path,
+                Some(Thumbnail::Failed) => return Some(Visual::Failed),
+                Some(Thumbnail::Pending) => return Some(Visual::Loading),
+                None => {
+                    self.request_thumbnail(file_name.clone(), cx);
+                    return Some(Visual::Loading);
+                }
+            },
+            (None, None) => return Some(Visual::Failed),
+        };
+
+        let scale = window.scale_factor();
+        let to_physical = |value: f32| {
+            (dp(value).to_pixels(self.rem).as_f32() * scale)
+                .round()
+                .max(1.) as u32
+        };
+        let key = ImageKey {
+            path: path_of(&path),
+            width: to_physical(target.display.width),
+            height: to_physical(target.display.height),
+        };
+
+        Some(
+            match self
+                .images
+                .update(cx, |images, cx| images.request(key, window, cx))
+            {
+                ImageState::Ready(image) => Visual::Ready(image),
+                ImageState::Loading => Visual::Loading,
+                ImageState::Failed => Visual::Failed,
+            },
+        )
+    }
+
+    fn request_thumbnail(&mut self, file_name: Arc<str>, cx: &mut Context<Self>) {
+        self.thumbnails
+            .insert(file_name.clone(), Thumbnail::Pending);
+        let future = self.source.thumbnail(file_name.clone());
+
+        cx.spawn(async move |this, cx| {
+            let result = future.await;
+            this.update(cx, |list, cx| {
+                let thumbnail = match result {
+                    Ok(path) => Thumbnail::Ready(Arc::from(path.to_string_lossy().as_ref())),
+                    Err(err) => {
+                        log::warn!("thumbnail for {file_name} is unavailable: {err:#}");
+                        Thumbnail::Failed
+                    }
+                };
+                list.thumbnails.insert(file_name, thumbnail);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn render_row(
+        &mut self,
+        index: usize,
+        env: &CardEnv<'_>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(item) = self.model.get(index).cloned() else {
+            return card::placeholder(env);
+        };
+        let image = self.visual(&item, window, cx);
+        let active = self.controller.is_active(index, &item.id);
+        let id = item.id.clone();
+        let paste_id = item.id.clone();
+
+        card::card(env, &item, index, CardState { active, image })
+            .on_hover(cx.listener(move |list, hovered: &bool, _, cx| {
+                if *hovered {
+                    list.hover_item(&id, cx);
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|list, _, window, cx| {
+                    window.focus(&list.focus.clone(), cx);
+                }),
+            )
+            .on_click(cx.listener(move |list, event: &gpui::ClickEvent, _, cx| {
+                // 1.x 默认 `autoPaste = doubleClickPaste`：单击只选中，双击粘贴。
+                if event.click_count() >= 2 {
+                    list.controller.hover(&paste_id);
+                    list.request_paste(false, cx);
+                }
+            }))
+            .into_any_element()
+    }
+
+    fn render_list_item(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let tokens = theme::tokens(cx);
+        let layout = self.layout;
+        let env = CardEnv {
+            tokens,
+            layout: &layout,
+            now: self.now,
+            reduce_motion: self.reduce_motion(cx),
+        };
+        let index = ix + self.rows.pinned;
+        let placeholder = self.model.get(index).is_none();
+        if placeholder {
+            self.placeholders.borrow_mut().insert(ix);
+        }
+        let element = self.render_row(index, &env, window, cx);
+
+        if let Some(timing) = &self.timing {
+            let mut timing = timing.borrow_mut();
+            timing.items_rendered += 1;
+            timing.placeholders_rendered += u32::from(placeholder);
+        }
+        element
+    }
+
+    fn render_empty(&self, cx: &App) -> AnyElement {
+        let tokens = theme::tokens(cx);
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .gap(dp(8.))
+            .child(
+                Icon::new(IconName::Inbox)
+                    .size(dp(40.))
+                    .color(tokens.quaternary),
+            )
+            .child(
+                div()
+                    .kp_text(TextSize::Sm)
+                    .text_color(tokens.description)
+                    .child(t("clipboard:empty.history")),
+            )
+            .into_any_element()
+    }
+
+    fn render_footer(&self, cx: &App) -> AnyElement {
+        let tokens = theme::tokens(cx);
+        let total = i64::try_from(self.model.total()).unwrap_or(i64::MAX);
+
+        div()
+            .flex()
+            .flex_none()
+            .h(dp(32.))
+            .items_center()
+            .px(dp(12.))
+            .kp_text(TextSize::Xs)
+            .text_color(tokens.tertiary)
+            .child(t_count("clipboard:footer.total", total, &[]))
+            .into_any_element()
+    }
+}
+
+/// 指数缓动的一步；不足 1 px 时直接走完，免得尾巴拖很久。
+fn eased_step(remaining: f32, fraction: f32) -> f32 {
+    let step = remaining * fraction;
+    if step.abs() < 1. {
+        remaining.signum() * remaining.abs().min(1.)
+    } else {
+        step
+    }
+}
+
+impl Render for ClipboardList {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let render_start = Instant::now();
+        self.rem = window.rem_size();
+        // 时间标签每帧按当前本地时间算（附录 D §8 第 4 条）；一帧只取一次时钟。
+        self.now = Local::now();
+        if let Some(timing) = &self.timing {
+            *timing.borrow_mut() = FrameTiming {
+                render_start: Some(render_start),
+                ..FrameTiming::default()
+            };
+        }
+        if let Some(bench) = self.bench.clone() {
+            Bench::before_frame(&bench, self, render_start, window, cx);
+        }
+
+        self.consume_snapshot(cx);
+        self.placeholders.borrow_mut().clear();
+        self.apply_hints();
+        self.run_motion(window, cx);
+        self.consume_reload_at_top(cx);
+
+        let tokens = theme::tokens(cx);
+        let layout = self.layout;
+        let env = CardEnv {
+            tokens,
+            layout: &layout,
+            now: self.now,
+            reduce_motion: self.reduce_motion(cx),
+        };
+
+        let empty = self.model.loaded_initial() && self.model.total() == 0;
+        let pinned: Vec<AnyElement> = (0..self.rows.pinned)
+            .map(|index| self.render_row(index, &env, window, cx))
+            .collect();
+
+        let content: AnyElement = if empty {
+            self.render_empty(cx)
+        } else {
+            let list_element = list(
+                self.state.clone(),
+                cx.processor(|list, ix, window, cx| list.render_list_item(ix, window, cx)),
+            )
+            .size_full()
+            .into_any_element();
+            let entity = cx.entity().downgrade();
+            let wheel = canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
+                        if phase != DispatchPhase::Capture || !bounds.contains(&event.position) {
+                            return;
+                        }
+                        // 只接管鼠标滚轮的“行”增量；触控板的像素增量（自带惯性）交给列表自己处理。
+                        let ScrollDelta::Lines(lines) = event.delta else {
+                            return;
+                        };
+                        if let Some(entity) = entity.upgrade() {
+                            entity.update(cx, |list, cx| list.on_wheel_lines(lines.y, cx));
+                            cx.stop_propagation();
+                        }
+                    });
+                },
+            )
+            // 不写 top_0 / left_0 时拿到的 bounds 不对，捕获会一直失败（r2-02 §3.6）。
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full();
+
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .overflow_hidden()
+                .pr(px(self.extra_right))
+                .child(ListFrame::new(
+                    list_element,
+                    self.state.clone(),
+                    self.snapshot.clone(),
+                    self.timing.clone(),
+                    (self.rows.count > 0).then(|| WidthHint {
+                        width: self.hints.width.clone(),
+                        estimate: px(self.height_estimate()),
+                    }),
+                ))
+                .child(wheel)
+                .child(ListScrollbar::new("clipboard-list-scrollbar", &self.state))
+                .into_any_element()
+        };
+
+        let root = div()
+            .id("clipboard-list")
+            .key_context("ClipboardList")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::select_previous))
+            .on_action(cx.listener(Self::select_next))
+            .on_action(cx.listener(Self::paste_selected))
+            .on_action(cx.listener(Self::paste_selected_plain))
+            .on_action(cx.listener(Self::dismiss))
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(tokens.bg_container)
+            .text_color(tokens.text)
+            .when(!pinned.is_empty(), |root| {
+                // 置顶块固定在滚动区上方，不吸顶（材质上任何遮挡底色都会成为色块）。
+                root.child(div().flex().flex_col().flex_none().children(pinned))
+            })
+            .child(content)
+            .child(self.render_footer(cx))
+            .into_any_element();
+
+        match &self.timing {
+            Some(timing) => {
+                let bench = self.bench.clone();
+                let on_painted: Option<PaintedCallback> = bench.map(|bench| {
+                    let callback: PaintedCallback = Box::new(move |timing| {
+                        bench.borrow_mut().after_paint(timing);
+                    });
+                    callback
+                });
+                FrameTimer::new(root, timing.clone(), on_painted).into_any_element()
+            }
+            None => root,
+        }
+    }
+}

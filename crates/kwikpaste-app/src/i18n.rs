@@ -416,6 +416,8 @@ mod tests {
     fn literal_keys_exist() {
         let mut literals = string_literals(include_str!("gallery.rs"));
         literals.extend(translated_literals(include_str!("i18n.rs")));
+        literals.extend(string_literals(include_str!("clipboard/view/card.rs")));
+        literals.extend(string_literals(include_str!("clipboard/view/list.rs")));
 
         let mut checked = 0;
         for key in literals {

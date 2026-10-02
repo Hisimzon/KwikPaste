@@ -1,6 +1,7 @@
 //! 快贴原生版（GPUI）入口。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod clipboard;
 mod core_host;
 mod gallery;
 mod i18n;
@@ -8,22 +9,7 @@ mod identity;
 mod platform;
 mod selftest;
 
-use gpui::{
-    App, AppContext, Application, Context, IntoElement, ParentElement, Render, Styled, Window, div,
-};
-
-struct Home;
-
-impl Render for Home {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(concat!("KwikPaste ", env!("CARGO_PKG_VERSION")))
-    }
-}
+use gpui::{App, Application};
 
 fn main() -> anyhow::Result<()> {
     let Some(launch) = platform::launch()? else {
@@ -36,6 +22,7 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx: &mut App| {
             kwikpaste_ui::init(cx);
             i18n::init(cx);
+            clipboard::init(cx);
 
             // 组件展示窗是自测模式：不建面板、托盘和热键，关掉窗口就退出。
             if gallery::open_if_requested(cx) {
@@ -48,9 +35,23 @@ fn main() -> anyhow::Result<()> {
                 return;
             }
 
-            if let Err(err) = platform::start(cx, launch, |_, cx| cx.new(|_| Home)) {
+            // 面板在 `platform::start` 里建好，列表视图由 `build_panel` 构造；普通启动的数据来自 core。
+            let source = clipboard::prepare_source();
+            let mut list = None;
+            if let Err(err) = platform::start(cx, launch, |window, cx| {
+                let view = clipboard::build_panel(&source, window, cx);
+                list = Some(view.clone());
+                view
+            }) {
                 log::error!("the panel could not be created: {err:#}");
                 std::process::exit(1);
+            }
+            if selftest::active() {
+                // 截图用的主题、语言、文本缩放覆盖，放在平台层按设置和系统应用之后。
+                gallery::apply_env_overrides(cx);
+            }
+            if let Some(list) = list {
+                clipboard::attach(&list, source, cx);
             }
 
             selftest::schedule(cx);

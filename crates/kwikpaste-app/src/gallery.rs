@@ -65,7 +65,9 @@ pub fn open_if_requested(cx: &mut App) -> bool {
     true
 }
 
-fn apply_env_overrides(cx: &mut App) {
+/// 自测截图用的覆盖：`KP_GALLERY_THEME`（light/dark/system）、`KP_GALLERY_LANG`、`KP_TEXT_SCALE`。
+/// 展示窗和列表自测（`--selftest-list-*`）共用。
+pub fn apply_env_overrides(cx: &mut App) {
     let preference = match std::env::var("KP_GALLERY_THEME").as_deref() {
         Ok("light") => Some(ThemePreference::Light),
         Ok("dark") => Some(ThemePreference::Dark),

@@ -23,6 +23,7 @@ production-identity = []
 [dependencies]
 anyhow.workspace = true
 async-channel.workspace = true
+chrono.workspace = true
 futures.workspace = true
 global-hotkey.workspace = true
 gpui.workspace = true
@@ -33,6 +34,8 @@ kwikpaste-ui.workspace = true
 log.workspace = true
 raw-window-handle.workspace = true
 semver.workspace = true
+# `rc`：列表条目的字符串用 `Arc<str>`，渲染时零拷贝转成 `SharedString`。
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 tray-icon.workspace = true
 

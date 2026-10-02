@@ -1,13 +1,33 @@
 {
+  "empty": {
+    "history": "No clipboard history yet"
+  },
+  "footer": {
+    "total": "{{count}} items"
+  },
   "groups": {
     "namePlaceholder": "Enter group name"
   },
   "header": {
     "searchPlaceholder": "Search clipboard..."
   },
+  "origin": {
+    "fromDevice": "From {{name}}"
+  },
   "shortcuts": {
     "copySelected": "Copy selected item",
     "focusSearch": "Focus search",
     "navigate": "Navigate up/down"
+  },
+  "types": {
+    "color": "Color",
+    "email": "Email",
+    "files": "Files",
+    "html": "HTML",
+    "image": "Image",
+    "path": "Path",
+    "rtf": "RTF",
+    "text": "Text",
+    "url": "Link"
   }
 }

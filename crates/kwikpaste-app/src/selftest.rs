@@ -33,10 +33,18 @@ pub const IME_NATIVE: &str = "--selftest-ime-native";
 pub const SETTINGS: &str = "--selftest-settings=";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
 pub const GALLERY: &str = "--selftest-gallery";
+/// 列表跑分：1 万行合成数据，附录 D §3.7 的门槛与锚定场景（见 `clipboard::view::bench`）。
+pub const LIST_BENCH: &str = "--selftest-list-bench";
+/// 列表演示：显示面板并保持打开，供截图核对（示例夹具；`KP_GALLERY_THEME` 等环境变量同展示窗）。
+pub const LIST_DEMO: &str = "--selftest-list-demo";
+/// 列表数据改由临时目录里的真 core 提供（灌入合成记录），可与 `--selftest-list-demo` 合用。
+pub const CORE_LIST: &str = "--selftest-core-list";
 
 const SMOKE_DURATION: Duration = Duration::from_secs(3);
 /// 平台探针最长运行时间：测量脚本中途出错时不留下进程。
 const PLATFORM_WATCHDOG: Duration = Duration::from_secs(15 * 60);
+/// 列表跑分和演示的最长运行时间。
+const LIST_WATCHDOG: Duration = Duration::from_secs(5 * 60);
 
 /// 本进程是否处于任一自测模式。
 pub fn active() -> bool {
@@ -62,6 +70,11 @@ pub fn enabled(flag: &str) -> bool {
 /// 是否打开组件展示窗（`--selftest-gallery`）。
 pub fn gallery_requested() -> bool {
     enabled(GALLERY)
+}
+
+/// 是否是列表自测（跑分或演示）。
+pub fn list_selftest() -> bool {
+    enabled(LIST_BENCH) || enabled(LIST_DEMO)
 }
 
 fn env_enabled() -> bool {
@@ -120,6 +133,19 @@ pub fn schedule(cx: &mut App) {
             cx.background_executor().timer(PLATFORM_WATCHDOG).await;
             log::warn!("platform selftest ran for {PLATFORM_WATCHDOG:?}; quitting");
             cx.update(|cx| cx.quit());
+        })
+        .detach();
+    }
+    if enabled(LIST_DEMO)
+        && let Some(panel) = cx.try_global::<Panel>()
+    {
+        panel.request(PanelCommand::Show(Trigger::now(TriggerSource::Selftest)));
+    }
+    if list_selftest() {
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(LIST_WATCHDOG).await;
+            log::warn!("list selftest ran for {LIST_WATCHDOG:?}; quitting");
+            std::process::exit(4);
         })
         .detach();
     }
