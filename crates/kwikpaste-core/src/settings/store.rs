@@ -5,6 +5,8 @@
 //! - 缺字段兼容：`Settings` 各结构体都 `#[serde(default)]`，新版本新增字段不影响旧文件。
 //! - 坏字段兼容：读盘时某个字段读不懂只让它回落默认值（见 `settings::lenient`），回落记录在
 //!   [`SettingsStore::load_report`] 里；历史清理相关的字段回落时自动清理暂停（[`SettingsStore::cleanup_paused`]）。
+//! - 整份损坏：文件读不懂时内存里用默认值，下次写盘前先把原文件复制成
+//!   `settings.json.corrupt-<UTC 时间>`，用户原来的设置还能找回来。
 
 use std::fs;
 use std::io::Write;
@@ -12,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, RwLock};
 
 use anyhow::Context;
+use chrono::Utc;
 
 use crate::error::{AppError, Result};
 use crate::paths::CorePaths;
@@ -40,11 +43,14 @@ struct DiskState {
     report: SettingsLoadReport,
     /// 读盘之后用户显式保存过历史设置，或整份替换过设置。
     history_confirmed: bool,
+    /// 文件整份读不懂：下次写盘前先备份原文件。
+    backup_pending: bool,
 }
 
 impl DiskState {
     fn loaded(report: SettingsLoadReport) -> Self {
         Self {
+            backup_pending: report.unreadable,
             report,
             history_confirmed: false,
         }
@@ -181,15 +187,34 @@ impl SettingsStore {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// 写盘；改到历史设置后解除自动清理的暂停。
+    /// 写盘：原文件整份读不懂时先备份一次；改到历史设置后解除自动清理的暂停。
     fn persist(&self, path: &Path, settings: &Settings, delta: &SettingsDelta) -> Result<()> {
         let mut disk = self.disk();
+        if disk.backup_pending {
+            backup_corrupt_file(path)?;
+            disk.backup_pending = false;
+        }
+
         write_atomic(path, settings)?;
         if delta.touches("clipboard.history") {
             disk.history_confirmed = true;
         }
         Ok(())
     }
+}
+
+/// 把读不懂的设置文件复制成 `settings.json.corrupt-<UTC 时间>`；文件已不存在时什么都不做。
+fn backup_corrupt_file(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let stamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let backup = path.with_file_name(format!("{FILENAME}.corrupt-{stamp}"));
+    fs::copy(path, &backup)
+        .with_context(|| format!("failed to back up unreadable settings to {backup:?}"))?;
+    log::warn!("unreadable settings file backed up to {backup:?} before overwriting");
+    Ok(())
 }
 
 /// 生成默认设置，并沿用首次启动的系统语言推导规则。
