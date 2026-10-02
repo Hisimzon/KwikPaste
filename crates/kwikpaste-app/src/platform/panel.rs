@@ -348,9 +348,9 @@ fn show(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
     let show_started = clock::now_ticks();
     native.show();
     let show_returned = clock::now_ticks();
-    // 列表跑分要让面板连续显示近一分钟，期间不装全局键鼠钩子，免得吞掉本机其它程序（包括同时在跑的
-    // 平台探针）的方向键、回车和外部点击。
-    if !crate::selftest::enabled(crate::selftest::LIST_BENCH) {
+    // 列表自测（跑分、截图、交互脚本）期间不装全局键鼠钩子，免得吞掉本机其它程序（包括同时在跑的
+    // 平台探针）的方向键、回车和外部点击；它们的按键由自测自己派发给面板窗口。
+    if !crate::selftest::list_selftest() {
         native.start_hooks();
     }
     if let Some(placement) = &placement {
