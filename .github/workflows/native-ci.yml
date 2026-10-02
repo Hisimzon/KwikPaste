@@ -3,6 +3,7 @@ name: Native CI
 # 原生 2.0（GPUI，根 workspace 的 crates/）的检查、构建和冒烟自测。
 #
 #   check  Windows x64：vendored GPUI 与“原版 + 补丁”逐字节一致、补丁版确实被用上、fmt、clippy、测试。
+#   core-macos  macOS 上跑 kwikpaste-core 的测试：迁移校验和在 macOS 是 LF 那一侧，Windows 上测不到。
 #   build  4 个发布目标的 release 构建，配置与以后发布一致（Windows 静态 CRT，macOS 最低 10.15）。
 #   smoke  在 4 个目标上真正启动应用：`--selftest-smoke` 打开窗口、几秒后正常退出，看退出码。
 #          GitHub 的 Windows 机器没有显卡，走的是 WARP 软件渲染；macOS Intel 在 Apple Silicon 上经 Rosetta 运行。
@@ -17,6 +18,8 @@ name: Native CI
       - "crates/**"
       - "third_party/**"
       - "scripts/gpui/**"
+      - "scripts/ci/**"
+      - "src-tauri/migrations/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rustfmt.toml"
@@ -29,6 +32,8 @@ name: Native CI
       - "crates/**"
       - "third_party/**"
       - "scripts/gpui/**"
+      - "scripts/ci/**"
+      - "src-tauri/migrations/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rustfmt.toml"
@@ -108,6 +113,24 @@ jobs:
       - name: Test
         shell: bash
         run: cargo test --locked --workspace
+
+  core-macos:
+    name: Core tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: native-core-macos
+
+      - name: Test
+        run: cargo test --locked -p kwikpaste-core
 
   build:
     name: Build ${{ matrix.label }}
