@@ -75,6 +75,58 @@ pub fn icon_png(path: &Path, size: Option<u32>) -> Option<Vec<u8>> {
     Some(out)
 }
 
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+
+    fn decoded_size(png: &[u8]) -> (u32, u32) {
+        let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+            .expect("icon_png returns a valid PNG");
+        (image.width(), image.height())
+    }
+
+    #[test]
+    fn icon_png_extracts_exe_folder_and_extension_icons() {
+        let system = std::env::var_os("SystemRoot").expect("SystemRoot is set");
+        let notepad = Path::new(&system).join("System32").join("notepad.exe");
+        let temp = tempfile::tempdir().unwrap();
+        let mut paths = vec![notepad, temp.path().to_path_buf()];
+        for extension in [
+            "txt",
+            "pdf",
+            "docx",
+            "xlsx",
+            "png",
+            "zip",
+            "mp3",
+            "kwikpaste-unknown",
+        ] {
+            let path = temp.path().join(format!("sample.{extension}"));
+            std::fs::write(&path, b"sample").unwrap();
+            paths.push(path);
+        }
+
+        let icons: Vec<Vec<u8>> = paths
+            .iter()
+            .map(|path| {
+                icon_png(path, None).unwrap_or_else(|| panic!("no icon for {}", path.display()))
+            })
+            .collect();
+
+        for (path, png) in paths.iter().zip(&icons) {
+            assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "{}", path.display());
+            let (width, height) = decoded_size(png);
+            assert!(
+                width >= 16 && height >= 16,
+                "{}: {width}x{height}",
+                path.display()
+            );
+        }
+        // exe 有自己的图标，与 .txt 的关联图标不同。
+        assert_ne!(icons[0], icons[2]);
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
