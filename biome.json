@@ -69,5 +69,10 @@
         "noExplicitAny": "off"
       }
     }
+  },
+  "vcs": {
+    "clientKind": "git",
+    "enabled": true,
+    "useIgnoreFile": true
   }
 }
