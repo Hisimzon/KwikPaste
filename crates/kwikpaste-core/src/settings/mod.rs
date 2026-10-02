@@ -10,4 +10,5 @@ mod store;
 pub use delta::SettingsDelta;
 pub use lenient::SettingsLoadReport;
 pub use model::*;
+pub(crate) use store::read_replacement;
 pub use store::SettingsStore;

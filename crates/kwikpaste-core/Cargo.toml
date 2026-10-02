@@ -12,29 +12,36 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+argon2.workspace = true
 blake3.workspace = true
+chacha20poly1305.workspace = true
 chrono.workspace = true
 clipboard-rs.workspace = true
 dirs.workspace = true
 file_icon_provider.workspace = true
 image.workspace = true
 log.workspace = true
+rand.workspace = true
 regex.workspace = true
+rust_xlsxwriter.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 unicode-segmentation.workspace = true
 uuid.workspace = true
+walkdir.workspace = true
+zeroize.workspace = true
+zip.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # 图片写回要同时放原始 PNG 和 CF_DIB，clipboard-rs 的接口做不到。
 clipboard-win.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 
 [lints]

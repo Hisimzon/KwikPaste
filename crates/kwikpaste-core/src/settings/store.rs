@@ -144,13 +144,12 @@ impl SettingsStore {
 
     /// 用完整设置文件替换当前设置；覆盖导入专用。
     pub fn replace_from_file(&self, path: &Path) -> Result<Settings> {
-        let content =
-            fs::read_to_string(path).with_context(|| format!("failed to read {path:?}"))?;
-        let next: Settings = serde_json::from_str(&content)
-            .map_err(|err| AppError::Other(anyhow::anyhow!("invalid settings file: {err}")))?;
+        let next = read_replacement(path)?;
+        self.replace(next)
+    }
 
-        validate_settings(&next)?;
-
+    /// 用一份已校验的完整设置替换当前设置并落盘。
+    pub(crate) fn replace(&self, next: Settings) -> Result<Settings> {
         let path = self.path();
         self.persist(&path, &next, &SettingsDelta::replaced())?;
         *self.current.write().expect("settings poisoned") = next.clone();
@@ -269,6 +268,16 @@ fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
     fs::rename(&tmp, path)
         .with_context(|| format!("failed to promote tmp settings to {path:?}"))?;
     Ok(())
+}
+
+/// 读一份完整设置文件（覆盖导入用）：整份严格解析并校验，不做逐字段回落。
+pub(crate) fn read_replacement(path: &Path) -> Result<Settings> {
+    let content = fs::read_to_string(path).with_context(|| format!("failed to read {path:?}"))?;
+    let next: Settings = serde_json::from_str(&content)
+        .map_err(|err| AppError::Other(anyhow::anyhow!("invalid settings file: {err}")))?;
+
+    validate_settings(&next)?;
+    Ok(next)
 }
 
 /// 校验设置之间的跨字段约束，避免非法配置写入磁盘。

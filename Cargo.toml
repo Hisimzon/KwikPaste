@@ -64,6 +64,16 @@ tray-icon = { version = "0.24", default-features = false }
 windows = "0.62"
 windows-registry = "0.6"
 
+# kwikpaste-core 的历史备份（.kwikpastebak 与 1.x 格式相同），版本与 src-tauri 一致。
+argon2 = { version = "0.5", features = ["std"] }
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+rand = "0.8"
+walkdir = "2"
+zeroize = "1"
+zip = { version = "4.6", default-features = false, features = ["deflate"] }
+# kwikpaste-core 的可读导出（Excel），与 src-tauri 相同。
+rust_xlsxwriter = "0.99"
+
 [workspace.lints.rust]
 unexpected_cfgs = "deny"
 

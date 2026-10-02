@@ -6,6 +6,7 @@
 //! 运行环境（dev / prod、数据根、系统语言）一律由宿主传入，core 里不出现 `cfg!(dev)`。
 //! 宿主经 [`Core`] 使用：[`CoreRuntime`] 建 runtime，[`Core::start`] 启动，[`EventSink`] 收通知。
 
+pub mod backup;
 pub mod clipboard;
 pub mod db;
 pub mod disk;
@@ -18,6 +19,7 @@ pub mod paths;
 pub mod platform;
 pub mod portable;
 pub mod presenter;
+pub mod readable_export;
 mod root;
 pub mod runtime;
 pub mod settings;
