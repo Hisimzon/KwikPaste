@@ -1,5 +1,5 @@
 //! 平台层的 GPUI 接线：创建平台、单实例、core、剪贴板面板、键盘与鼠标钩子、编辑态、
-//! 全局热键、托盘和系统设置信号。
+//! 粘贴链路、全局热键、托盘和系统设置信号。
 //!
 //! 启动顺序（附录 C §4.3 的子集）：[`launch`] 在创建 GPU 设备之前判重（第二实例把参数转交给
 //! 主实例后直接退出）并启动 core；[`create`] 创建 GPUI 平台；[`start`] 在 `Application::run`
@@ -21,6 +21,8 @@
 //!   收到 `EditingEnded` 把焦点还给列表。面板隐藏会自动结束编辑态。
 //! - 系统信号：[`SystemSignals`] 全局（文本大小、高对比度、减少动画），`cx.observe_global` 订阅；
 //!   文本大小已经同步给 `kwikpaste_ui::theme::set_text_scale`，减少动画已写进 `cx.reduce_motion()`。
+//! - 粘贴、复制：列表的意图交给 [`paste`] 模块（[`paste::paste`]、[`paste::paste_fragment`]、
+//!   [`paste::copy`]），流程与时序见该模块文档；全局快速粘贴由热键直接走 [`paste::quick_paste`]。
 //! - core：`crate::core_host::core(cx)` 取 `Core`；[`CoreEvents`] 转发 core 的全部事件。
 
 mod editing;
@@ -29,6 +31,7 @@ mod instance;
 mod keyboard;
 mod mouse;
 mod panel;
+pub mod paste;
 mod probe;
 mod probe_view;
 mod settings;

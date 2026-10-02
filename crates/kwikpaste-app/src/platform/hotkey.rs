@@ -1,34 +1,63 @@
 //! 全局热键：global-hotkey（1.x 的 tauri-plugin-global-shortcut 用的同一个 crate）。
 //!
-//! 切换面板的热键读设置 `shortcuts.openClipboard`（Tauri accelerator 字面量，如 `Alt+C`，
-//! 用 `HotKey::try_from` 解析，与 1.x 一致），设置变更时重新注册。管理器在主线程创建，
-//! `WM_HOTKEY` / Carbon 事件由 GPUI 的消息循环顺带派发；事件经「专用线程阻塞 `recv()` →
-//! `async_channel` → 面板命令循环」送回，不轮询，线程里只转发、不碰 GPUI。
+//! - 切换面板：设置 `shortcuts.openClipboard`（Tauri accelerator 字面量，如 `Alt+C`，用
+//!   `HotKey::try_from` 解析，与 1.x 一致）。
+//! - 快速粘贴：`shortcuts.quickPaste` 打开时注册「修饰键 + 1…9、0」，粘贴「全部」视图里的第 1…10 条
+//!   （见 [`super::paste::quick_paste`]）。
+//!
+//! 设置变更时重新注册。管理器在主线程创建，`WM_HOTKEY` / Carbon 事件由 GPUI 的消息循环顺带派发；
+//! 事件经「专用线程阻塞 `recv()` → `async_channel` → 主线程」送回，不轮询。线程里只转发、不碰 GPUI，
+//! 唯一的例外是快速粘贴按下时立刻屏蔽 Alt / Win 的单独松开：这一步必须趁修饰键还按着做。
 //!
 //! TODO：`shortcuts.openPreference` 等偏好窗建好后再注册。
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_channel::Sender;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use gpui::{App, Global};
+use gpui::{App, AsyncApp, Global};
 use kwikpaste_core::settings::Shortcuts;
 
 use super::panel::{PanelCommand, Trigger, TriggerSource};
+use super::paste;
 use crate::core_host;
 
 /// 开发构建在设置仍是出厂默认值时改用的热键。出厂默认的 Alt+C 属于本机正在运行的 1.x，
 /// 开发版抢先注册会让 1.x 重启后注册失败；Ctrl+Alt+Shift+F9 两边都不用。
 const DEVELOPMENT_TOGGLE: &str = "Control+Alt+Shift+F9";
 
+/// 快速粘贴的数字键与条目序号（从 0 起），与 1.x 相同：1…9 是第 1…9 条，0 是第 10 条。
+const QUICK_PASTE_KEYS: [(&str, i64); 10] = [
+    ("1", 0),
+    ("2", 1),
+    ("3", 2),
+    ("4", 3),
+    ("5", 4),
+    ("6", 5),
+    ("7", 6),
+    ("8", 7),
+    ("9", 8),
+    ("0", 9),
+];
+
+/// 热键按下后要做的事。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    TogglePanel,
+    QuickPaste(i64),
+}
+
+/// 当前注册的热键 id → 动作，事件桥线程据此分发。
+type Actions = Arc<Mutex<HashMap<u32, Action>>>;
+
 /// 持有管理器（丢弃时注销全部热键）和当前注册的热键。
 struct Hotkeys {
     manager: GlobalHotKeyManager,
-    registered: Option<HotKey>,
-    /// 事件桥线程据此认出切换面板的热键；0 表示没有注册。
-    toggle_id: Arc<AtomicU32>,
+    toggle: Option<HotKey>,
+    quick_paste: Vec<HotKey>,
+    actions: Actions,
 }
 
 impl Global for Hotkeys {}
@@ -36,32 +65,52 @@ impl Global for Hotkeys {}
 /// 创建管理器、启动事件桥，按当前设置注册热键。
 pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()> {
     let manager = GlobalHotKeyManager::new()?;
-    let toggle_id = Arc::new(AtomicU32::new(0));
+    let actions = Actions::default();
+    let (quick_sender, quick_receiver) = async_channel::unbounded();
 
-    let bridge_id = toggle_id.clone();
+    let bridge_actions = actions.clone();
     std::thread::Builder::new()
         .name("hotkey-bridge".to_owned())
         .spawn(move || {
             let receiver = GlobalHotKeyEvent::receiver();
             while let Ok(event) = receiver.recv() {
-                let toggle = bridge_id.load(Ordering::SeqCst);
-                if toggle == 0 || event.id != toggle || event.state != HotKeyState::Pressed {
+                if event.state != HotKeyState::Pressed {
                     continue;
                 }
-                let trigger = Trigger::now(TriggerSource::Hotkey);
-                if commands
-                    .send_blocking(PanelCommand::Toggle(trigger))
-                    .is_err()
-                {
+                let action = lock(&bridge_actions).get(&event.id).copied();
+                let delivered = match action {
+                    Some(Action::TogglePanel) => {
+                        let trigger = Trigger::now(TriggerSource::Hotkey);
+                        commands
+                            .send_blocking(PanelCommand::Toggle(trigger))
+                            .is_ok()
+                    }
+                    Some(Action::QuickPaste(offset)) => {
+                        if let Err(err) = kwikpaste_os::keystroke::mask_modifier_release() {
+                            log::warn!("modifier release could not be masked: {err}");
+                        }
+                        quick_sender.send_blocking(offset).is_ok()
+                    }
+                    None => true,
+                };
+                if !delivered {
                     break;
                 }
             }
         })?;
 
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while let Ok(offset) = quick_receiver.recv().await {
+            cx.update(|cx| paste::quick_paste(cx, offset)).detach();
+        }
+    })
+    .detach();
+
     cx.set_global(Hotkeys {
         manager,
-        registered: None,
-        toggle_id,
+        toggle: None,
+        quick_paste: Vec::new(),
+        actions,
     });
     if let Some(core) = core_host::core(cx) {
         let shortcuts = core.settings().shortcuts;
@@ -71,43 +120,110 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
     Ok(())
 }
 
-/// 按设置重新注册切换面板的热键；与当前相同时什么也不做。
+/// 按设置重新注册切换面板与快速粘贴的热键；与当前相同时什么也不做。
 pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
-    let Some(hotkeys) = cx.try_global::<Hotkeys>() else {
+    if !cx.has_global::<Hotkeys>() {
         return;
-    };
+    }
+    let toggle = wanted_toggle(shortcuts);
+    let quick_paste = wanted_quick_paste(shortcuts);
+
+    let hotkeys = cx.global_mut::<Hotkeys>();
+    if hotkeys.toggle != toggle {
+        if let Some(previous) = hotkeys.toggle.take() {
+            hotkeys.unregister(previous);
+        }
+        if let Some(hotkey) = toggle
+            && hotkeys.register(hotkey, Action::TogglePanel)
+        {
+            hotkeys.toggle = Some(hotkey);
+            log::info!("panel hotkey registered: {hotkey}");
+        }
+    }
+
+    let current: Vec<HotKey> = hotkeys.quick_paste.clone();
+    if current
+        != quick_paste
+            .iter()
+            .map(|(hotkey, _)| *hotkey)
+            .collect::<Vec<_>>()
+    {
+        for previous in current {
+            hotkeys.unregister(previous);
+        }
+        hotkeys.quick_paste = quick_paste
+            .into_iter()
+            .filter(|&(hotkey, offset)| hotkeys.register(hotkey, Action::QuickPaste(offset)))
+            .map(|(hotkey, _)| hotkey)
+            .collect();
+        if !hotkeys.quick_paste.is_empty() {
+            log::info!(
+                "quick paste hotkeys registered: {}",
+                hotkeys.quick_paste.len()
+            );
+        }
+    }
+}
+
+impl Hotkeys {
+    fn register(&mut self, hotkey: HotKey, action: Action) -> bool {
+        match self.manager.register(hotkey) {
+            Ok(()) => {
+                lock(&self.actions).insert(hotkey.id(), action);
+                true
+            }
+            Err(err) => {
+                log::error!("hotkey {hotkey} could not be registered: {err}");
+                false
+            }
+        }
+    }
+
+    fn unregister(&mut self, hotkey: HotKey) {
+        lock(&self.actions).remove(&hotkey.id());
+        if let Err(err) = self.manager.unregister(hotkey) {
+            log::warn!("hotkey {hotkey} could not be unregistered: {err}");
+        }
+    }
+}
+
+fn lock(actions: &Actions) -> MutexGuard<'_, HashMap<u32, Action>> {
+    actions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn wanted_toggle(shortcuts: &Shortcuts) -> Option<HotKey> {
     let accelerator = effective_accelerator(shortcuts);
-    let wanted = match parse(&accelerator) {
-        Ok(wanted) => wanted,
+    match parse(&accelerator) {
+        Ok(hotkey) => hotkey,
         Err(err) => {
             log::error!("panel hotkey {accelerator:?} is invalid: {err}");
             None
         }
-    };
-    if hotkeys.registered == wanted {
-        return;
     }
+}
 
-    let hotkeys = cx.global_mut::<Hotkeys>();
-    if let Some(previous) = hotkeys.registered.take()
-        && let Err(err) = hotkeys.manager.unregister(previous)
-    {
-        log::warn!("panel hotkey {previous} could not be unregistered: {err}");
+/// 快速粘贴打开时的十个热键与对应序号；关掉时为空。
+fn wanted_quick_paste(shortcuts: &Shortcuts) -> Vec<(HotKey, i64)> {
+    if !shortcuts.quick_paste.enabled {
+        return Vec::new();
     }
-    hotkeys.toggle_id.store(0, Ordering::SeqCst);
+    let modifiers = shortcuts.quick_paste.modifiers.accelerator();
 
-    let Some(hotkey) = wanted else {
-        log::info!("panel hotkey cleared");
-        return;
-    };
-    match hotkeys.manager.register(hotkey) {
-        Ok(()) => {
-            hotkeys.registered = Some(hotkey);
-            hotkeys.toggle_id.store(hotkey.id(), Ordering::SeqCst);
-            log::info!("panel hotkey registered: {hotkey}");
-        }
-        Err(err) => log::error!("panel hotkey {hotkey} could not be registered: {err}"),
-    }
+    QUICK_PASTE_KEYS
+        .iter()
+        .filter_map(|&(key, offset)| {
+            let accelerator = format!("{modifiers}+{key}");
+            match parse(&accelerator) {
+                Ok(hotkey) => hotkey.map(|hotkey| (hotkey, offset)),
+                Err(err) => {
+                    log::error!("quick paste hotkey {accelerator:?} is invalid: {err}");
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 /// 空字符串表示用户清空了快捷键。
@@ -131,6 +247,7 @@ fn effective_accelerator(shortcuts: &Shortcuts) -> String {
 #[cfg(test)]
 mod tests {
     use global_hotkey::hotkey::{Code, Modifiers};
+    use kwikpaste_core::settings::QuickPasteModifiers;
 
     use super::*;
 
@@ -161,5 +278,31 @@ mod tests {
 
         shortcuts.open_clipboard = "Control+Shift+F8".to_owned();
         assert_eq!(effective_accelerator(&shortcuts), "Control+Shift+F8");
+    }
+
+    #[test]
+    fn quick_paste_registers_ten_digits_only_when_enabled() {
+        let mut shortcuts = Shortcuts::default();
+        assert!(wanted_quick_paste(&shortcuts).is_empty());
+
+        shortcuts.quick_paste.enabled = true;
+        shortcuts.quick_paste.modifiers = QuickPasteModifiers::ControlAlt;
+        let wanted = wanted_quick_paste(&shortcuts);
+
+        assert_eq!(wanted.len(), 10);
+        assert_eq!(
+            wanted[0],
+            (
+                HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Digit1),
+                0
+            )
+        );
+        assert_eq!(
+            wanted[9],
+            (
+                HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Digit0),
+                9
+            )
+        );
     }
 }

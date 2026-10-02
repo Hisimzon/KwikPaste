@@ -60,7 +60,7 @@ pub fn follow(cx: &mut App) {
         let CoreEvent::SettingsUpdated { settings, delta } = event else {
             return;
         };
-        if delta.touches("shortcuts.openClipboard") {
+        if delta.touches("shortcuts.openClipboard") || delta.touches("shortcuts.quickPaste") {
             hotkey::apply(&settings.shortcuts, cx);
         }
         let language_changed = delta.touches("appearance.language");

@@ -55,6 +55,10 @@ features = [
     "NSWindow",
 ]
 
+[target.'cfg(target_os = "macos")'.dependencies.objc2-core-graphics]
+workspace = true
+features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation"]
+
 [target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
 workspace = true
 features = ["std", "NSArray", "NSData", "NSEnumerator", "NSGeometry", "NSLocale", "NSString", "NSURL"]

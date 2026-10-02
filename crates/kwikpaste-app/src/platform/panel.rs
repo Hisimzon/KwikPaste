@@ -36,6 +36,10 @@ pub enum TriggerSource {
     )]
     OutsideClick,
     Ui,
+    /// 粘贴前让出前台。
+    Paste,
+    /// 复制后按设置隐藏。
+    Copy,
     Selftest,
 }
 
@@ -47,6 +51,8 @@ impl TriggerSource {
             Self::SecondInstance => "second-instance",
             Self::OutsideClick => "outside-click",
             Self::Ui => "ui",
+            Self::Paste => "paste",
+            Self::Copy => "copy",
             Self::Selftest => "selftest",
         }
     }
@@ -69,7 +75,7 @@ impl Trigger {
 }
 
 /// 送给面板循环的命令。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum PanelCommand {
     Toggle(Trigger),
     Show(Trigger),
@@ -84,6 +90,12 @@ pub enum PanelCommand {
         expect(dead_code, reason = "macOS 没有单独的文本大小设置")
     )]
     SetTextScale(f64),
+    /// 粘贴前让出前台：编辑态先把前台还给进入前的窗口，`keep_visible` 为假时再隐藏面板。
+    /// 处理完后经 `done` 回报面板此前是否可见（见 [`super::paste`]）。
+    YieldForPaste {
+        keep_visible: bool,
+        done: Sender<bool>,
+    },
 }
 
 /// 面板状态变化，从 [`Panel::events`] 发出。
@@ -140,8 +152,11 @@ impl Panel {
 
     /// 发一条命令，在下一轮主循环里执行。
     pub fn request(&self, command: PanelCommand) {
-        if self.commands.try_send(command).is_err() {
-            log::warn!("panel command loop has stopped; dropped {command:?}");
+        if let Err(err) = self.commands.try_send(command) {
+            log::warn!(
+                "panel command loop has stopped; dropped {:?}",
+                err.into_inner()
+            );
         }
     }
 
@@ -284,6 +299,16 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
             }
             PanelCommand::SetTextScale(text_scale) => {
                 parts.native.set_text_scale(text_scale);
+                continue;
+            }
+            PanelCommand::YieldForPaste { keep_visible, done } => {
+                if visible {
+                    end_editing(&parts, cx);
+                    if !keep_visible {
+                        hide(&parts, Trigger::now(TriggerSource::Paste), cx);
+                    }
+                }
+                let _ = done.try_send(visible);
                 continue;
             }
         };

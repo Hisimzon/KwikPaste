@@ -6,6 +6,7 @@
 pub mod clock;
 pub mod geometry;
 pub mod hook_keys;
+pub mod keystroke;
 pub mod locale;
 pub mod services;
 pub mod single_instance;

@@ -3,6 +3,7 @@
 pub mod apps;
 pub mod ime;
 pub mod keyboard;
+pub mod keystroke;
 pub mod monitor;
 pub mod mouse;
 pub mod panel;

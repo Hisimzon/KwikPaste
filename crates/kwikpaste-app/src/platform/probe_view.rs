@@ -1,24 +1,27 @@
 //! `--selftest-platform` 下的面板内容：一个搜索框、一个当作列表的焦点区和一行状态，供
 //! `tools/platform-probes` 验证钩子按键、编辑态和输入法。不是正式界面，接法与正式 UI 相同：
 //! 收到 `Shown` 把焦点放到列表上，在输入框上按下鼠标或按 Ctrl+F 请求编辑态，
-//! `EditingStarted` 后聚焦输入框，Esc 退出编辑态。
+//! `EditingStarted` 后聚焦输入框，Esc 退出编辑态。Enter 粘贴最新一条记录，Ctrl+Enter 纯文本粘贴，
+//! 走 [`super::paste`]（正式列表粘贴选中的记录）。
 
 use gpui::{
     App, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding, MouseButton,
-    MouseDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window,
-    actions, div,
+    MouseDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription,
+    TaskExt as _, Window, actions, div,
 };
+use kwikpaste_core::db::models::ClipboardItemQuery;
 use kwikpaste_ui::{Input, TextInput, theme};
 
 use super::editing::EditTrigger;
 use super::panel::{Panel, PanelCommand, PanelEvent, Trigger, TriggerSource};
-use super::probe;
+use super::{paste, probe};
+use crate::core_host;
 
 const CONTEXT: &str = "PlatformProbe";
 
 actions!(
     platform_probe,
-    [EnterEditing, Next, Previous, Confirm, Dismiss]
+    [EnterEditing, Next, Previous, Confirm, PastePlain, Dismiss]
 );
 
 pub struct ProbeView {
@@ -36,6 +39,7 @@ impl ProbeView {
             KeyBinding::new("down", Next, Some(CONTEXT)),
             KeyBinding::new("up", Previous, Some(CONTEXT)),
             KeyBinding::new("enter", Confirm, Some(CONTEXT)),
+            KeyBinding::new("ctrl-enter", PastePlain, Some(CONTEXT)),
             KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
         ]);
         let input = TextInput::new("搜索 / search", window, cx);
@@ -85,6 +89,26 @@ impl ProbeView {
     fn request(command: PanelCommand, cx: &App) {
         super::request(cx, command);
     }
+
+    /// 粘贴「全部」视图里最新的一条记录；历史为空时什么都不做。
+    fn paste_newest(plain: bool, cx: &mut App) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        cx.spawn(async move |cx| {
+            let query = ClipboardItemQuery {
+                limit: 1,
+                ..ClipboardItemQuery::default()
+            };
+            let Some(newest) = core.list_items(query).await?.list.into_iter().next() else {
+                log::info!("nothing to paste: the history is empty");
+                return Ok(());
+            };
+            cx.update(|cx| paste::paste(cx, newest.item.id, plain, false))
+                .await
+        })
+        .detach_and_log_err(cx);
+    }
 }
 
 impl Render for ProbeView {
@@ -119,7 +143,8 @@ impl Render for ProbeView {
                 this.selected -= 1;
                 cx.notify();
             }))
-            .on_action(cx.listener(|_, _: &Confirm, _, _| {}))
+            .on_action(cx.listener(|_, _: &Confirm, _, cx| Self::paste_newest(false, cx)))
+            .on_action(cx.listener(|_, _: &PastePlain, _, cx| Self::paste_newest(true, cx)))
             .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
                 // Esc 先退出编辑态，再按一次才隐藏面板。
                 let command = if this.editing {

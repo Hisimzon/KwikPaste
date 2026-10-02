@@ -223,6 +223,38 @@ pub fn set_ime_native_mode() {
     }
 }
 
+/// 注入了一次粘贴键。`kind` 是 item / fragment / quick。
+pub fn pasted(
+    kind: &str,
+    id: &str,
+    plain: bool,
+    report: super::paste::InjectReport,
+    elapsed: std::time::Duration,
+) {
+    write(
+        "pasted",
+        &format!(
+            r#","kind":{},"id":{},"plain":{plain},"panel_was_visible":{},"foreground":{},"elapsed_ms":{:.3}"#,
+            json_string(kind),
+            json_string(id),
+            report.panel_was_visible,
+            report.foreground,
+            elapsed.as_secs_f64() * 1000.0,
+        ),
+    );
+}
+
+/// 一条记录写回了剪贴板（不粘贴）。
+pub fn copied(id: &str, plain: bool, hide_window: bool) {
+    write(
+        "copied",
+        &format!(
+            r#","id":{},"plain":{plain},"hide_window":{hide_window}"#,
+            json_string(id)
+        ),
+    );
+}
+
 /// 进程即将退出。
 pub fn quitting() {
     write("quit", "");
