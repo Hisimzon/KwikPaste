@@ -97,6 +97,11 @@ jobs:
         shell: bash
         run: node scripts/ci/check-release-config.mjs
 
+      # kwikpaste-updater 的测试解析这份样本；它必须与发布流水线生成清单的脚本一致。
+      - name: Update manifest sample matches the generator
+        shell: bash
+        run: node scripts/release/v2-manifest.mjs --sample --check crates/kwikpaste-updater/fixtures/latest-v2.sample.json
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.96.0
         with:

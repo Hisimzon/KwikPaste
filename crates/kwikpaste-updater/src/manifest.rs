@@ -205,6 +205,50 @@ mod tests {
         })
     }
 
+    /// 发布流水线（scripts/release/v2-manifest.mjs）生成的清单：每种安装形态、每个架构查找的平台键都能
+    /// 落到对的资产上，系统要求读得懂。样本由 `--sample` 生成，CI 核对它与脚本当前的输出一致。
+    #[test]
+    fn the_release_pipeline_manifest_serves_every_install_kind() {
+        let release = parse(include_bytes!("../fixtures/latest-v2.sample.json")).unwrap();
+
+        assert_eq!(release.version, semver::Version::new(2, 0, 0));
+        assert_eq!(
+            release.requires,
+            Requirements {
+                windows_build: Some(17134),
+                macos: Some((10, 15, 0)),
+            }
+        );
+        let asset = |keys: &[&str]| {
+            let keys: Vec<String> = keys.iter().map(|key| (*key).to_owned()).collect();
+            let (_, platform) = release.platform(&keys).unwrap();
+            platform
+                .url
+                .path_segments()
+                .unwrap()
+                .next_back()
+                .unwrap()
+                .to_owned()
+        };
+        for (arch, setup, portable, app) in [
+            ("x86_64", "x64", "x64", "x64"),
+            ("aarch64", "arm64", "arm64", "aarch64"),
+        ] {
+            assert_eq!(
+                asset(&[&format!("windows-{arch}-nsis"), &format!("windows-{arch}")]),
+                format!("KwikPaste_2.0.0_{setup}-setup.exe")
+            );
+            assert_eq!(
+                asset(&[&format!("windows-{arch}-portable")]),
+                format!("KwikPaste_2.0.0_{portable}_portable.zip")
+            );
+            assert_eq!(
+                asset(&[&format!("darwin-{arch}-app"), &format!("darwin-{arch}")]),
+                format!("KwikPaste_2.0.0_{app}.app.tar.gz")
+            );
+        }
+    }
+
     #[test]
     fn parses_the_tauri_static_format() {
         let release = manifest(json!({

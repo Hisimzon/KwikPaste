@@ -1,0 +1,54 @@
+{
+  "kwikpaste": {
+    "requires": {
+      "macos": "10.15",
+      "windowsBuild": 17134
+    },
+    "schema": 1
+  },
+  "notes": "Sample notes",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF9hYXJjaDY0LmFwcC50YXIuZ3o=",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_aarch64.app.tar.gz"
+    },
+    "darwin-aarch64-app": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF9hYXJjaDY0LmFwcC50YXIuZ3o=",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_aarch64.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF94NjQuYXBwLnRhci5neg==",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_x64.app.tar.gz"
+    },
+    "darwin-x86_64-app": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF94NjQuYXBwLnRhci5neg==",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_x64.app.tar.gz"
+    },
+    "windows-aarch64": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF9hcm02NC1zZXR1cC5leGU=",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_arm64-setup.exe"
+    },
+    "windows-aarch64-nsis": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF9hcm02NC1zZXR1cC5leGU=",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_arm64-setup.exe"
+    },
+    "windows-aarch64-portable": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF9hcm02NF9wb3J0YWJsZS56aXA=",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_arm64_portable.zip"
+    },
+    "windows-x86_64": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF94NjQtc2V0dXAuZXhl",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_x64-setup.exe"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF94NjQtc2V0dXAuZXhl",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_x64-setup.exe"
+    },
+    "windows-x86_64-portable": {
+      "signature": "c2lnbmF0dXJlIG9mIEt3aWtQYXN0ZV8yLjAuMF94NjRfcG9ydGFibGUuemlw",
+      "url": "https://github.com/ManSanDADADA/KwikPaste/releases/download/v2.0.0/KwikPaste_2.0.0_x64_portable.zip"
+    }
+  },
+  "pub_date": "2027-04-05T08:00:00Z",
+  "version": "2.0.0"
+}
