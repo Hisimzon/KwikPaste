@@ -27,6 +27,13 @@ impl FileIconStore {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test(root: PathBuf) -> Self {
+        Self {
+            root: Arc::new(RwLock::new(root)),
+        }
+    }
+
     /// 重新绑定到当前真实数据根；数据目录热迁移后由存储命令调用。
     pub fn rebase(&self, paths: &CorePaths) -> Result<()> {
         let next = paths.resources_dir()?.join(FILE_ICONS_DIR);

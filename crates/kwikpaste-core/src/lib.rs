@@ -15,6 +15,7 @@ pub mod events;
 pub mod i18n;
 pub mod paths;
 pub mod portable;
+pub mod presenter;
 mod root;
 pub mod runtime;
 pub mod settings;

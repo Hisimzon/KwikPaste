@@ -27,7 +27,7 @@ use crate::error::{AppError, Result};
 use crate::paths::CorePaths;
 
 /// 缩略图最长边像素。仅用于列表预览，够清晰即可。
-const THUMBNAIL_MAX: u32 = 300;
+pub const THUMBNAIL_MAX: u32 = 300;
 
 /// 剪贴板图片目录名，挂在 [`CorePaths::resources_dir`] 下（与 `app-icons` 并列）。
 const IMAGES_DIR: &str = "clipboard-images";

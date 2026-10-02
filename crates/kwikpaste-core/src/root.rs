@@ -23,6 +23,7 @@ use crate::env::{AppInfo, CoreOptions};
 use crate::error::Result;
 use crate::events::{CoreEvent, EventSink};
 use crate::paths::CorePaths;
+use crate::presenter::{self, ClipboardPreviewPayload, FileIconResult, PreviewContentMetrics};
 use crate::runtime::hop;
 use crate::settings::{
     History, Language, Settings, SettingsDelta, SettingsLoadReport, SettingsStore,
@@ -270,6 +271,122 @@ impl Core {
         .await
     }
 
+    /// 列表的一页：查询后经展示层加工（缩略图与图标路径、文件条目、颜色预览、显示时间、
+    /// 快捷信息、可用动作），敏感内容按设置脱敏。与 1.4.0 的 `list_clipboard_items` 输出一致。
+    pub async fn list_items(&self, query: ClipboardItemQuery) -> Result<ClipboardItemPage> {
+        let core = self.clone();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            let (mut list, total) = db::items::query_items_page(&pool, &query).await?;
+            let clipboard = core.0.settings.snapshot().clipboard;
+            let ctx = core.list_context(&pool, &clipboard);
+            for item in &mut list {
+                presenter::present_list_item(&ctx, item).await?;
+            }
+            let has_more = query.offset + (list.len() as i64) < total;
+
+            Ok(ClipboardItemPage {
+                list,
+                total,
+                has_more,
+            })
+        })
+        .await
+    }
+
+    /// 单条记录的列表视图，收到 [`CoreEvent::ClipboardUpserted`] 后按 id 刷新一张卡片用；
+    /// 与列表同样裁剪和加工。记录不存在时返回 `None`。
+    pub async fn list_item(&self, id: &str) -> Result<Option<ClipboardItem>> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            let Some(mut item) = db::items::find_item_for_list_by_id(&pool, &id).await? else {
+                return Ok(None);
+            };
+            let clipboard = core.0.settings.snapshot().clipboard;
+            presenter::present_list_item(&core.list_context(&pool, &clipboard), &mut item).await?;
+            Ok(Some(item))
+        })
+        .await
+    }
+
+    /// 预览面板的数据：文本（按设置脱敏）与可点选的词、图片原图路径、文件条目。
+    pub async fn preview_payload(&self, id: &str) -> Result<Option<ClipboardPreviewPayload>> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            let Some(item) = db::items::find_item_by_id(&pool, &id).await? else {
+                return Ok(None);
+            };
+            let redact = core
+                .0
+                .settings
+                .snapshot()
+                .clipboard
+                .sensitive
+                .redact_secrets;
+            let payload = presenter::build_preview_payload(
+                &pool,
+                &core.0.images,
+                &core.0.file_icons,
+                item,
+                redact,
+            )
+            .await?;
+            Ok(Some(payload))
+        })
+        .await
+    }
+
+    /// 预览面板定尺寸用的内容度量（文本行数或词块、图片宽高、文件条数）。
+    pub async fn preview_metrics(&self, id: &str) -> Result<Option<PreviewContentMetrics>> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            let Some(item) = db::items::find_item_by_id(&pool, &id).await? else {
+                return Ok(None);
+            };
+            let clipboard = core.0.settings.snapshot().clipboard;
+            Ok(Some(presenter::preview_content_metrics(&item, &clipboard)))
+        })
+        .await
+    }
+
+    /// 文件记录里第 `index` 个路径的类型图标（命中缓存或现抽）与是否仍存在。
+    /// `file_types` 是记录的 `file_types` 字段。
+    pub async fn file_icon(
+        &self,
+        path: &str,
+        file_types: Option<&str>,
+        index: usize,
+    ) -> Result<FileIconResult> {
+        let core = self.clone();
+        let path = path.to_owned();
+        let file_types = file_types.map(str::to_owned);
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            let (icon_path, exists) = presenter::resolve_file_icon_path(
+                &pool,
+                &core.0.file_icons,
+                &path,
+                file_types.as_deref(),
+                index,
+            )
+            .await?;
+            Ok(FileIconResult { icon_path, exists })
+        })
+        .await
+    }
+
+    /// 来源应用图标（`clipboard_apps.icon_file`）的绝对路径；文件名不合法时报错。
+    pub fn app_icon_path(&self, file_name: &str) -> Result<PathBuf> {
+        clipboard::validate_image_file_name(file_name)?;
+        Ok(self.0.app_icons.icon_path(file_name))
+    }
+
     /// 单条记录的完整字段，预览与写回用。
     pub async fn find_item(&self, id: &str) -> Result<Option<ClipboardItem>> {
         let core = self.clone();
@@ -332,6 +449,22 @@ impl Core {
         T: Send + 'static,
     {
         hop(&self.0.rt, fut).await
+    }
+
+    /// 列表加工上下文：显示时间按本机时区算。
+    fn list_context<'a>(
+        &'a self,
+        pool: &'a sqlx::SqlitePool,
+        clipboard: &crate::settings::Clipboard,
+    ) -> presenter::ListContext<'a, chrono::Local> {
+        presenter::ListContext::new(
+            pool,
+            &self.0.images,
+            &self.0.app_icons,
+            &self.0.file_icons,
+            clipboard,
+            chrono::Local::now(),
+        )
     }
 
     fn emit_settings(&self, settings: &Settings, delta: SettingsDelta) {
@@ -497,6 +630,21 @@ mod tests {
         let page = block_on(core.query_items_raw(ClipboardItemQuery::default())).unwrap();
         assert_eq!(page.total, 2);
         assert!(!page.has_more);
+        let listed = block_on(core.list_items(ClipboardItemQuery::default())).unwrap();
+        assert_eq!(listed.total, 2);
+        assert!(listed
+            .list
+            .iter()
+            .all(|item| !item.available_actions.is_empty() && !item.display_created_at.is_empty()));
+        assert!(block_on(core.list_item(&first.id)).unwrap().is_some());
+        let preview = block_on(core.preview_payload(&first.id)).unwrap().unwrap();
+        assert_eq!(preview.text.as_deref(), Some("https://example.com"));
+        assert!(matches!(
+            block_on(core.preview_metrics(&image_item.id)).unwrap(),
+            Some(PreviewContentMetrics::Image { .. })
+        ));
+        let missing = block_on(core.file_icon("C:/kwikpaste/missing.txt", Some("f"), 0)).unwrap();
+        assert!(!missing.exists);
         let full = block_on(core.find_item(&first.id)).unwrap().unwrap();
         assert_eq!(full.content, "https://example.com");
         assert!(block_on(core.list_groups()).unwrap().is_empty());
