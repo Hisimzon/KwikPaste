@@ -1,9 +1,10 @@
 //! gpui-component 的隔离层：应用只经这个 crate 使用 gpui-component，它的破坏性升级只改这里。
 //!
 //! - [`theme`]：冻结的 antd token、语义层 [`theme::KpTokens`]、字号与度量，明暗切换与文本缩放。
-//! - 组件：[`Button`]、[`Checkbox`]、[`Switch`]、[`Input`]、[`Select`]、[`Tag`]、[`Kbd`]、[`KeyHint`]、
-//!   Tooltip（[`TooltipExt`]）、[`ListScrollbar`]、[`toast`]、[`confirm()`]。
-//! - 资源：[`Assets`]（组件图标加 1.x 导出的图标）。
+//! - 组件：[`Button`]、[`Checkbox`]、[`Switch`]、[`Input`]、[`TextArea`]、[`Select`]、[`Tag`]、[`Kbd`]、
+//!   [`KeyHint`]、Tooltip（[`TooltipExt`]）、[`ListScrollbar`]、[`toast`]、[`confirm()`]、[`form_dialog`]、
+//!   下拉与右键菜单（[`MenuTrigger`]、[`context_menu`]）。
+//! - 资源：[`Assets`]（组件图标加 1.x 导出的图标），自定义分组图标见 [`group_icon_path`]。
 //! - 组件层不带文案：默认文字由应用经 [`set_ui_strings`] 注入。
 // 渲染与事件回调里 panic 会让进程直接以 0xC0000409 退出，组件层一律不许 unwrap / expect / 越界下标。
 #![cfg_attr(
@@ -14,8 +15,10 @@
 mod assets;
 mod button;
 mod confirm;
+mod dialog;
 mod icon;
 mod input;
+mod menu;
 mod overlay;
 mod scrollbar;
 mod select;
@@ -29,11 +32,15 @@ mod tooltip;
 
 use gpui::{AnyWindowHandle, App, AppContext, Entity, Render, Window, WindowOptions};
 
-pub use assets::Assets;
+pub use assets::{Assets, group_icon_path, register_svg};
 pub use button::{Button, ButtonKind, ButtonSize};
 pub use confirm::{ConfirmBody, ConfirmSpec, confirm};
+pub use dialog::{DialogSpec, close_dialog, form_dialog, has_dialog};
 pub use icon::{Icon, IconName};
-pub use input::{Input, InputSize, TextInput};
+pub use input::{
+    INPUT_KEY_CONTEXT, Input, InputSize, TextArea, TextAreaInput, TextInput, TextInputEvent,
+};
+pub use menu::{MenuEntry, MenuIcon, MenuItem, MenuTrigger, context_menu};
 pub use scrollbar::ListScrollbar;
 pub use select::{Select, SelectOption, SelectState};
 pub use strings::{UiLocale, UiStrings, set_ui_strings, ui_strings};

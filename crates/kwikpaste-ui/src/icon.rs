@@ -1,10 +1,12 @@
 //! 图标。
 //!
 //! 组件常用的 lucide 图标借用 gpui-kit-assets 的默认图标集；默认集里没有的，从 1.x 用的 iconify
-//! 包导出到 `icons/`（见 `icons/export-icons.mjs`），由 [`crate::Assets`] 一起提供。附录 D §1.8 的
-//! 图标管线（lets-icons、分组图标）落地后继续往这里加，调用方不用改。
+//! 包导出到 `icons/`（见 `icons/export-icons.mjs`），由 [`crate::Assets`] 一起提供。自定义分组的
+//! 图标（预设或用户导入的 SVG）不在这里，见 [`crate::group_icon_path`]。
 
-use gpui::{App, Hsla, IntoElement, Rems, RenderOnce, Styled, Window, prelude::FluentBuilder as _};
+use gpui::{
+    App, Hsla, IntoElement, Radians, Rems, RenderOnce, Styled, Window, prelude::FluentBuilder as _,
+};
 
 use crate::assets::PREFIX;
 
@@ -13,14 +15,38 @@ use crate::assets::PREFIX;
 pub enum IconName {
     Check,
     ChevronDown,
+    /// 1.x `i-lucide:circle-check`：复制成功。
+    CircleCheck,
+    /// 1.x `i-lucide:clipboard-paste`：粘贴。
+    ClipboardPaste,
+    /// 1.x `i-lucide:clipboard-type`：纯文本粘贴。
+    ClipboardType,
     Close,
     Copy,
+    /// 1.x `i-lucide:copy-check`：复制为纯文本。
+    CopyCheck,
     Delete,
     Ellipsis,
     ExternalLink,
     Eye,
+    /// 1.x `i-lucide:eye-off`：隐藏分组。
+    EyeOff,
+    /// 1.x `i-lucide:file-symlink`：粘贴为路径。
+    FileSymlink,
     Folder,
+    /// 1.x `i-lucide:folder-open`：在文件管理器中显示。
+    FolderOpen,
     Globe,
+    /// 1.x `i-lets-icons:widget`：分组栏“全部”。
+    GroupAll,
+    /// 1.x `i-lets-icons:star`：分组栏“收藏”。
+    GroupFavorite,
+    /// 1.x `i-lets-icons:folder-file-alt`：分组栏“文件”。
+    GroupFiles,
+    /// 1.x `i-lets-icons:img-box`：分组栏“图片”。
+    GroupImage,
+    /// 1.x `i-lets-icons:file-dock`：分组栏“文本”。
+    GroupText,
     Heart,
     /// 1.x `i-lucide:image-off`：缩略图解码失败。
     ImageOff,
@@ -28,42 +54,88 @@ pub enum IconName {
     Info,
     /// 1.x `i-lucide:key-round`：敏感内容标记。
     KeyRound,
+    /// 1.x `i-lucide:keyboard`：快捷键列表。
+    Keyboard,
     /// 1.x `i-lucide:laptop`：来自 macOS 设备的同步记录。
     Laptop,
+    /// 1.x `i-lucide:list-checks`：多选。
+    ListChecks,
+    /// 1.x `i-lucide:mail`：发送邮件。
+    Mail,
     /// 1.x `i-lucide:monitor`：来自 Windows 设备的同步记录。
     Monitor,
     Moon,
     /// 1.x `i-lucide:notebook-pen`：便签。
     NotebookPen,
     Palette,
+    /// 1.x `i-lucide:pencil`：编辑分组。
+    Pencil,
+    /// 1.x `i-lets-icons:pin`：固定窗口。
+    PinWindow,
     /// 1.x `i-ph:push-pin-bold`：置顶标记。
     PushPin,
     Plus,
     Search,
     Settings,
+    /// 1.x `i-lucide:settings-2`：管理分组。
+    Settings2,
+    /// 1.x `i-lets-icons:setting-line`：偏好设置。
+    SettingLine,
+    /// 1.x `i-lucide:square-arrow-out-up-right`：打开链接。
+    SquareArrowOutUpRight,
     Star,
     Sun,
+    /// 1.x `i-lucide:text-select`：拆词。
+    TextSelect,
     TextSize,
+    /// 1.x `i-lucide:trash`：删除记录。
+    Trash,
+    /// 1.x `i-lucide:trash-2`：删除分组。
+    Trash2,
 }
 
 impl IconName {
     /// 从 1.x iconify 包导出的图标的资源文件名；其余用 gpui-kit-assets 的默认集。
     fn exported(self) -> Option<&'static str> {
         Some(match self {
+            Self::CircleCheck => "lucide-circle-check.svg",
+            Self::ClipboardPaste => "lucide-clipboard-paste.svg",
+            Self::ClipboardType => "lucide-clipboard-type.svg",
+            Self::CopyCheck => "lucide-copy-check.svg",
+            Self::EyeOff => "lucide-eye-off.svg",
+            Self::FileSymlink => "lucide-file-symlink.svg",
+            Self::FolderOpen => "lucide-folder-open.svg",
+            Self::GroupAll => "lets-icons-widget.svg",
+            Self::GroupFavorite => "lets-icons-star.svg",
+            Self::GroupFiles => "lets-icons-folder-file-alt.svg",
+            Self::GroupImage => "lets-icons-img-box.svg",
+            Self::GroupText => "lets-icons-file-dock.svg",
             Self::ImageOff => "lucide-image-off.svg",
             Self::KeyRound => "lucide-key-round.svg",
+            Self::Keyboard => "lucide-keyboard.svg",
             Self::Laptop => "lucide-laptop.svg",
+            Self::ListChecks => "lucide-list-checks.svg",
+            Self::Mail => "lucide-mail.svg",
             Self::Monitor => "lucide-monitor.svg",
             Self::NotebookPen => "lucide-notebook-pen.svg",
+            Self::Pencil => "lucide-pencil.svg",
+            Self::PinWindow => "lets-icons-pin.svg",
             Self::PushPin => "ph-push-pin-bold.svg",
+            Self::Settings2 => "lucide-settings-2.svg",
+            Self::SettingLine => "lets-icons-setting-line.svg",
+            Self::SquareArrowOutUpRight => "lucide-square-arrow-out-up-right.svg",
+            Self::TextSelect => "lucide-text-select.svg",
+            Self::Trash => "lucide-trash.svg",
+            Self::Trash2 => "lucide-trash-2.svg",
             _ => return None,
         })
     }
 
-    fn kit(self) -> gpui_component::IconName {
+    /// gpui-kit-assets 默认集里的图标；导出的图标返回 `None`。
+    fn kit(self) -> Option<gpui_component::IconName> {
         use gpui_component::IconName as Kit;
 
-        match self {
+        Some(match self {
             Self::Check => Kit::Check,
             Self::ChevronDown => Kit::ChevronDown,
             Self::Close => Kit::Close,
@@ -85,20 +157,15 @@ impl IconName {
             Self::Star => Kit::Star,
             Self::Sun => Kit::Sun,
             Self::TextSize => Kit::ALargeSmall,
-            // 导出的图标不经过这里（见 `kit_icon`），给一个占位以保持 match 穷尽。
-            Self::ImageOff
-            | Self::KeyRound
-            | Self::Laptop
-            | Self::Monitor
-            | Self::NotebookPen
-            | Self::PushPin => Kit::Info,
-        }
+            _ => return None,
+        })
     }
 
     pub(crate) fn kit_icon(self) -> gpui_component::Icon {
-        match self.exported() {
-            Some(file) => gpui_component::Icon::empty().path(format!("{PREFIX}{file}")),
-            None => gpui_component::Icon::new(self.kit()),
+        match (self.exported(), self.kit()) {
+            (Some(file), _) => gpui_component::Icon::empty().path(format!("{PREFIX}{file}")),
+            (None, Some(kit)) => gpui_component::Icon::new(kit),
+            (None, None) => gpui_component::Icon::new(gpui_component::IconName::Info),
         }
     }
 }
@@ -109,6 +176,7 @@ pub struct Icon {
     name: IconName,
     size: Option<Rems>,
     color: Option<Hsla>,
+    rotation: Option<Radians>,
 }
 
 impl Icon {
@@ -117,6 +185,7 @@ impl Icon {
             name,
             size: None,
             color: None,
+            rotation: None,
         }
     }
 
@@ -129,6 +198,12 @@ impl Icon {
         self.color = Some(color);
         self
     }
+
+    /// 旋转（1.x 置顶按钮的 `-rotate-45`）。
+    pub fn rotate(mut self, radians: Radians) -> Self {
+        self.rotation = Some(radians);
+        self
+    }
 }
 
 impl RenderOnce for Icon {
@@ -137,5 +212,61 @@ impl RenderOnce for Icon {
             .kit_icon()
             .when_some(self.size, |icon, size| icon.size(size))
             .when_some(self.color, |icon, color| icon.text_color(color))
+            .when_some(self.rotation, |icon, radians| icon.rotate(radians))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 每个图标要么是导出的、要么在默认集里，导出的文件都内嵌了。
+    #[test]
+    fn every_icon_has_a_source() {
+        use gpui::AssetSource as _;
+
+        let all = [
+            IconName::Check,
+            IconName::CircleCheck,
+            IconName::ClipboardPaste,
+            IconName::ClipboardType,
+            IconName::CopyCheck,
+            IconName::EyeOff,
+            IconName::FileSymlink,
+            IconName::FolderOpen,
+            IconName::GroupAll,
+            IconName::GroupFavorite,
+            IconName::GroupFiles,
+            IconName::GroupImage,
+            IconName::GroupText,
+            IconName::Keyboard,
+            IconName::ListChecks,
+            IconName::Mail,
+            IconName::Pencil,
+            IconName::PinWindow,
+            IconName::Settings2,
+            IconName::SettingLine,
+            IconName::SquareArrowOutUpRight,
+            IconName::TextSelect,
+            IconName::Trash,
+            IconName::Trash2,
+            IconName::PushPin,
+        ];
+        for icon in all {
+            match (icon.exported(), icon.kit()) {
+                (Some(file), None) => {
+                    let path = format!("{PREFIX}{file}");
+                    assert!(
+                        crate::Assets.load(&path).ok().flatten().is_some(),
+                        "{path} is embedded"
+                    );
+                }
+                (None, Some(_)) => {}
+                (exported, kit) => panic!(
+                    "{icon:?} must have exactly one source (exported {exported:?}, kit {})",
+                    kit.is_some()
+                ),
+            }
+        }
     }
 }

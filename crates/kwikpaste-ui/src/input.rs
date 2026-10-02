@@ -1,21 +1,36 @@
-//! 单行输入框与搜索框。
+//! 单行输入框、搜索框与多行文本框。
 //!
 //! 右键菜单一律关闭：gpui-component 的输入框菜单在 Windows 上是 Win32 原生菜单
 //! （`SetForegroundWindow` + `TrackPopupMenuEx`），会抢前台、破坏不激活面板。
 
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, Rems, RenderOnce, SharedString,
-    Styled as _, Subscription, Window, prelude::FluentBuilder as _,
+    App, AppContext as _, Context, Entity, EntityInputHandler as _, FocusHandle, Focusable as _,
+    IntoElement, ParentElement as _, Rems, RenderOnce, SharedString, Styled as _, Subscription,
+    Window, div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
     Sizable as _,
-    input::{Input as KitInput, InputEvent, InputState},
+    input::{Input as KitInput, InputEvent, InputState, Textarea as KitTextarea, TextareaState},
 };
 
 use crate::{
     icon::{Icon, IconName},
+    tag::KeyHint,
     theme,
 };
+
+/// 输入框的 key context。应用要在输入框聚焦时改写某个键（例如搜索框把 ↑/↓ 交给列表），就用
+/// `"<自己的 context> > Input"` 绑定：与输入框自己的绑定同深度，后注册的优先。
+pub const INPUT_KEY_CONTEXT: &str = "Input";
+
+/// 输入框的事件。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TextInputEvent {
+    /// 内容变了（输入、粘贴、清空）。输入法组字期间不发，组字结束时补发一次。
+    Change(SharedString),
+    Focus,
+    Blur,
+}
 
 /// 输入框的内容状态，在视图里长期持有，渲染时交给 [`Input`]。
 #[derive(Clone)]
@@ -64,7 +79,21 @@ impl TextInput {
         self.state.update(cx, |state, cx| state.focus(window, cx));
     }
 
-    /// 内容变化时回调（输入、粘贴、清空）。返回的订阅要由视图保存。
+    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.state.read(cx).focus_handle(cx)
+    }
+
+    pub fn is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.focus_handle(cx).is_focused(window)
+    }
+
+    /// 全选已有内容（再次聚焦搜索框时便于直接覆盖输入）。
+    pub fn select_all(&self, window: &mut Window, cx: &mut App) {
+        self.state
+            .update(cx, |state, cx| state.select_all(window, cx));
+    }
+
+    /// 内容变化时回调（输入、粘贴、清空，含输入法组字的中间态）。返回的订阅要由视图保存。
     pub fn on_change<V: 'static>(
         &self,
         cx: &mut Context<V>,
@@ -76,6 +105,38 @@ impl TextInput {
                 handler(view, value, cx);
             }
         })
+    }
+
+    /// 内容变化（输入法组字期间不发，组字结束时补发）、获得焦点、失去焦点。返回的订阅要由视图保存。
+    pub fn on_event_in<V: 'static>(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<V>,
+        handler: impl Fn(&mut V, TextInputEvent, &mut Window, &mut Context<V>) + 'static,
+    ) -> Subscription {
+        cx.subscribe_in(
+            &self.state,
+            window,
+            move |view, state, event: &InputEvent, window, cx| {
+                let event = match event {
+                    InputEvent::Change => {
+                        // 1.x 搜索框在 compositionstart..compositionend 之间不回调：拼音的中间串
+                        // 不该触发查询。组字确认时输入框再发一次 Change，那时已没有标记文本。
+                        let composing = state.update(cx, |state, cx| {
+                            state.marked_text_range(window, cx).is_some()
+                        });
+                        if composing {
+                            return;
+                        }
+                        TextInputEvent::Change(state.read(cx).value())
+                    }
+                    InputEvent::Focus => TextInputEvent::Focus,
+                    InputEvent::Blur => TextInputEvent::Blur,
+                    InputEvent::PressEnter { .. } => return,
+                };
+                handler(view, event, window, cx);
+            },
+        )
     }
 }
 
@@ -97,6 +158,7 @@ pub struct Input {
     cleanable: bool,
     disabled: bool,
     search: bool,
+    hint_key: Option<SharedString>,
     accessibility_label: Option<SharedString>,
 }
 
@@ -109,6 +171,7 @@ impl Input {
             cleanable: false,
             disabled: false,
             search: false,
+            hint_key: None,
             accessibility_label: None,
         }
     }
@@ -142,6 +205,12 @@ impl Input {
         self
     }
 
+    /// 按住修饰键时搜索图标换成快捷键角标（1.x 搜索框的 `KeyHint hintKey="F"`）；`None` 时显示图标。
+    pub fn hint_key(mut self, key: Option<SharedString>) -> Self {
+        self.hint_key = key;
+        self
+    }
+
     /// 读屏名称；不给时用占位文字。
     pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
         self.accessibility_label = Some(label.into());
@@ -156,6 +225,7 @@ impl RenderOnce for Input {
             InputSize::Small => theme::TextSize::Sm.font_size(),
             InputSize::Medium => theme::TextSize::Base.font_size(),
         };
+        let hint_key = self.hint_key;
 
         KitInput::new(&self.input.state)
             .when(self.size == InputSize::Small, |input| input.small())
@@ -163,14 +233,104 @@ impl RenderOnce for Input {
             .cleanable(self.cleanable)
             .disabled(self.disabled)
             .when(self.search, |input| {
+                // 角标叠在图标的位置上，图标只是隐去，宽度不变，输入文字不会跳动。
                 input.prefix(
-                    Icon::new(IconName::Search)
-                        .size(icon_size)
-                        .color(tokens.quaternary),
+                    div()
+                        .relative()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .when(hint_key.is_some(), |icon| icon.opacity(0.))
+                                .child(
+                                    Icon::new(IconName::Search)
+                                        .size(icon_size)
+                                        .color(tokens.quaternary),
+                                ),
+                        )
+                        .when_some(hint_key, |prefix, key| {
+                            prefix.child(
+                                div()
+                                    .absolute()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size_full()
+                                    .child(KeyHint::new(key)),
+                            )
+                        }),
                 )
             })
             .when_some(self.accessibility_label, |input, label| {
                 input.aria_label(label)
             })
+    }
+}
+
+/// 多行文本框的内容状态，在视图里长期持有，渲染时交给 [`TextArea`]。
+#[derive(Clone)]
+pub struct TextAreaInput {
+    state: Entity<TextareaState>,
+}
+
+impl TextAreaInput {
+    /// 随内容在 `min_rows`..=`max_rows` 行之间自动增高（antd `autoSize`）。
+    pub fn new(
+        placeholder: impl Into<SharedString>,
+        min_rows: usize,
+        max_rows: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
+        let placeholder = placeholder.into();
+        let state = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder(placeholder)
+                .context_menu(false)
+                .auto_grow(min_rows, max_rows)
+        });
+
+        Self { state }
+    }
+
+    pub fn value(&self, cx: &App) -> SharedString {
+        self.state.read(cx).value()
+    }
+
+    /// 改写内容，不触发变化回调。
+    pub fn set_value(&self, value: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
+        let value: SharedString = value.into();
+        self.state.update(cx, |state, cx| {
+            state.set_value(value.to_string(), window, cx)
+        });
+    }
+
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.state.update(cx, |state, cx| state.focus(window, cx));
+    }
+
+    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.state.read(cx).focus_handle(cx)
+    }
+}
+
+/// 多行文本框（antd `Input.TextArea`）。
+#[derive(IntoElement)]
+pub struct TextArea {
+    input: TextAreaInput,
+}
+
+impl TextArea {
+    pub fn new(input: &TextAreaInput) -> Self {
+        Self {
+            input: input.clone(),
+        }
+    }
+}
+
+impl RenderOnce for TextArea {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        KitTextarea::new(&self.input.state).w_full()
     }
 }
