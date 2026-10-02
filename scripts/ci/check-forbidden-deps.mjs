@@ -28,7 +28,17 @@ const say = (line) => {
 const dependents = (target, krate) => {
   const result = spawnSync(
     "cargo",
-    ["tree", "--locked", "--workspace", "--target", target, "--invert", krate, "--edges", "normal,build,dev"],
+    [
+      "tree",
+      "--locked",
+      "--workspace",
+      "--target",
+      target,
+      "--invert",
+      krate,
+      "--edges",
+      "normal,build,dev",
+    ],
     { cwd: ROOT, encoding: "utf8" },
   );
 
@@ -38,7 +48,9 @@ const dependents = (target, krate) => {
       return "";
     }
 
-    throw new Error(`cargo tree failed for ${krate} on ${target}:\n${result.stderr}`);
+    throw new Error(
+      `cargo tree failed for ${krate} on ${target}:\n${result.stderr}`,
+    );
   }
 
   return result.stdout.trim();
@@ -65,4 +77,6 @@ if (failed) {
   process.exit(1);
 }
 
-say(`${FORBIDDEN.join(" and ")} stay out of all ${TARGETS.length} release targets.`);
+say(
+  `${FORBIDDEN.join(" and ")} stay out of all ${TARGETS.length} release targets.`,
+);

@@ -18,7 +18,8 @@ const APP = "crates/kwikpaste-app";
 const UI = "crates/kwikpaste-ui";
 const THEME_DIR = `${UI}/src/theme/`;
 
-const COMPONENT_DEPENDENCY = /^\s*(gpui-component|gpui-base|gpui_component|gpui_base)\b/;
+const COMPONENT_DEPENDENCY =
+  /^\s*(gpui-component|gpui-base|gpui_component|gpui_base)\b/;
 const COMPONENT_PATH = /\b(gpui_component|gpui_base)\b/;
 const COLOR_LITERALS = [
   /\b(rgb|rgba|hsl|hsla)\s*\(/,
@@ -36,7 +37,9 @@ const say = (line) => {
 const rustFiles = (dir) => {
   const files = [];
   const walk = (current) => {
-    for (const entry of readdirSync(join(ROOT, current), { withFileTypes: true })) {
+    for (const entry of readdirSync(join(ROOT, current), {
+      withFileTypes: true,
+    })) {
       const path = `${current}/${entry.name}`;
       if (entry.isDirectory()) {
         walk(path);
@@ -58,7 +61,11 @@ function* codeLines(path) {
   const lines = readFileSync(join(ROOT, path), "utf8").split(/\r?\n/);
   for (const [index, line] of lines.entries()) {
     const trimmed = line.trimStart();
-    if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) {
+    if (
+      trimmed.startsWith("//") ||
+      trimmed.startsWith("*") ||
+      trimmed.startsWith("/*")
+    ) {
       continue;
     }
     yield [index + 1, line.replace(/"(?:\\.|[^"\\])*"/g, '""')];
@@ -69,14 +76,18 @@ const problems = [];
 
 for (const [number, line] of codeLines(`${APP}/Cargo.toml`)) {
   if (!line.trimStart().startsWith("#") && COMPONENT_DEPENDENCY.test(line)) {
-    problems.push(`${APP}/Cargo.toml:${number}: kwikpaste-app must not depend on gpui-component or gpui-base`);
+    problems.push(
+      `${APP}/Cargo.toml:${number}: kwikpaste-app must not depend on gpui-component or gpui-base`,
+    );
   }
 }
 
 for (const path of rustFiles(`${APP}/src`)) {
   for (const [number, line] of codeLines(path)) {
     if (COMPONENT_PATH.test(line)) {
-      problems.push(`${path}:${number}: use the kwikpaste-ui wrappers instead of gpui-component / gpui-base`);
+      problems.push(
+        `${path}:${number}: use the kwikpaste-ui wrappers instead of gpui-component / gpui-base`,
+      );
     }
   }
 }
@@ -87,7 +98,9 @@ for (const path of [...rustFiles(`${APP}/src`), ...rustFiles(`${UI}/src`)]) {
   }
   for (const [number, line] of codeLines(path)) {
     if (COLOR_LITERALS.some((pattern) => pattern.test(line))) {
-      problems.push(`${path}:${number}: color literal outside ${THEME_DIR} (take it from KpTokens)`);
+      problems.push(
+        `${path}:${number}: color literal outside ${THEME_DIR} (take it from KpTokens)`,
+      );
     }
   }
 }
