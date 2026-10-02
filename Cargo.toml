@@ -25,6 +25,24 @@ anyhow = "1"
 
 kwikpaste-ui = { path = "crates/kwikpaste-ui" }
 
+# kwikpaste-core。数据契约相关的 crate 与 src-tauri 用同一主版本，锁定版本尽量与 src-tauri/Cargo.lock 一致：
+# sqlx 和它带的 libsqlite3-sys（SQLite 版本、迁移校验和）、serde 系、chrono、blake3（去重指纹）。
+kwikpaste-core = { path = "crates/kwikpaste-core" }
+blake3 = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+dirs = "6"
+log = "0.4"
+regex = "1"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "chrono", "migrate"] }
+tempfile = "3"
+thiserror = "2"
+tokio = "1"
+unicode-segmentation = "1"
+uuid = { version = "1", features = ["v4"] }
+
 [workspace.lints.rust]
 unexpected_cfgs = "deny"
 
@@ -66,4 +84,8 @@ opt-level = 3
 opt-level = 3
 
 [profile.release.package.adler2]
+opt-level = 3
+
+# 与 src-tauri 一致：去重指纹与图片哈希是热路径。
+[profile.release.package.blake3]
 opt-level = 3
