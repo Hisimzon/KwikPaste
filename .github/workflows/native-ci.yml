@@ -3,10 +3,13 @@ name: Native CI
 # 原生 2.0（GPUI，根 workspace 的 crates/）的检查、构建和冒烟自测。
 #
 #   check  Windows x64：vendored GPUI 与“原版 + 补丁”逐字节一致、补丁版确实被用上、fmt、clippy、测试。
-#   core-macos  macOS 上跑 kwikpaste-core 的测试：迁移校验和在 macOS 是 LF 那一侧，Windows 上测不到。
+#   core-macos  macOS 上跑 kwikpaste-core 的测试：迁移校验和在 macOS 是 LF 那一侧，Windows 上测不到；
+#               以及 kwikpaste-os 的测试（应用包扫描、NSSound 解码提示音），本机没有 Mac。
 #   build  4 个发布目标的 release 构建，配置与以后发布一致（Windows 静态 CRT，macOS 最低 10.15）。
 #   smoke  在 4 个目标上真正启动应用：`--selftest-smoke` 打开窗口、几秒后正常退出，看退出码。
 #          GitHub 的 Windows 机器没有显卡，走的是 WARP 软件渲染；macOS Intel 在 Apple Silicon 上经 Rosetta 运行。
+#          Windows x64 另跑 tools/platform-probes/panel-invariants.ps1：面板窗口样式、MA_NOACTIVATE、
+#          显示位置、最小尺寸、不抢前台。它不注入键鼠，只要有桌面会话。
 #
 # 1.x 的 Tauri 版（src/、src-tauri/）不在这里检查，见 pr-check.yml 和 release.yml。
 
@@ -19,6 +22,7 @@ name: Native CI
       - "third_party/**"
       - "scripts/gpui/**"
       - "scripts/ci/**"
+      - "tools/platform-probes/**"
       - "src-tauri/migrations/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -33,6 +37,7 @@ name: Native CI
       - "third_party/**"
       - "scripts/gpui/**"
       - "scripts/ci/**"
+      - "tools/platform-probes/**"
       - "src-tauri/migrations/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -115,7 +120,7 @@ jobs:
         run: cargo test --locked --workspace
 
   core-macos:
-    name: Core tests (macOS)
+    name: Core and OS tests (macOS)
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -130,7 +135,7 @@ jobs:
           key: native-core-macos
 
       - name: Test
-        run: cargo test --locked -p kwikpaste-core
+        run: cargo test --locked -p kwikpaste-core -p kwikpaste-os
 
   build:
     name: Build ${{ matrix.label }}
@@ -257,6 +262,28 @@ jobs:
           if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'KwikPaste did not exit within 60 s.' }
           if ($process.ExitCode -ne 0) { throw "KwikPaste exited with $($process.ExitCode)." }
           'KwikPaste started and exited cleanly.'
+
+      - name: Checkout probe scripts
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/checkout@v4
+        with:
+          path: source
+          sparse-checkout: tools/platform-probes
+
+      # 脚本按 Windows PowerShell 5.1 写（Add-Type 编译探针的 C#）。runner 的屏幕约 1024×768、96 DPI。
+      - name: Panel invariants on Windows x64
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File source/tools/platform-probes/panel-invariants.ps1 -Exe ./KwikPaste.exe -Rounds 20
+
+      - name: Upload panel probe results
+        if: failure() && matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-invariants-${{ matrix.target }}
+          path: source/tools/platform-probes/results
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Smoke test on macOS
         if: runner.os == 'macOS'
