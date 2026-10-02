@@ -15,12 +15,14 @@ use crate::paths::CorePaths;
 /// `migrations/` 里 0001–0005 是 src-tauri 已发布迁移的原样副本，git blob 必须一致
 /// （`scripts/ci/check-migration-parity.mjs`）。校验和按检出的字节算：Windows 检出 CRLF、
 /// macOS 检出 LF，与各平台已发布版本写进用户库的值相同，所以 `*.sql` 不能加任何换行规则。
-/// 新迁移从 0006 开始，只加在这里。
+/// 新迁移从 0006 开始，只加在这里。用了 0006 起的迁移的库，1.4.0 打不开、也不能覆盖导入它的备份
+/// （F8 接受：不承诺能从 2.0 退回 1.x）。
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-/// 已发布迁移的 sha384：LF 是 macOS 检出的字节，CRLF 是 Windows 检出的字节。
-/// 用户库的 `_sqlx_migrations` 里存的就是这两种之一，对不上的话存量用户启动即失败。
-pub(crate) const PUBLISHED: [(i64, &str, &str); 5] = [
+/// 已发布（含 2.0 新增）迁移的 sha384：LF 是 macOS 检出的字节，CRLF 是 Windows 检出的字节。
+/// 用户库的 `_sqlx_migrations` 里存的就是这两种之一，对不上的话存量用户启动即失败；
+/// 跨平台覆盖导入备份时按这张表换算（[`adopt_published_checksums`]）。新增迁移要在这里补上两种值。
+pub(crate) const PUBLISHED: [(i64, &str, &str); 6] = [
     (
         1,
         "bfa656aa68eed66f8dab5bacb9efa4bafeb11713fd417239e05f7b4c5757330fae5eafeeb138771c6d18785670c44b05",
@@ -45,6 +47,11 @@ pub(crate) const PUBLISHED: [(i64, &str, &str); 5] = [
         5,
         "6fbf1887b4c8d108c6fb6fa3c237a1486970f4056bb19b1490fc6c7225cd8473808cb1388c5833ea52f3377ba135e7ad",
         "0a444601708a31b745efa22d573e93ca11ed53a6e637d28027a17403040a612f8317ac7352849933340a223066aacbd9",
+    ),
+    (
+        6,
+        "907b97f834b3e60f65f1b80987bad3fd5f8d258bf2a5b7cfff1fd38ed5fb79b4c8913162ba30f51f8e3ba6d80fac0a31",
+        "cfe2f21fbf619b6c763709a1f882668e9891a0dd875cd5e92b1fcf8e4589df08cbd87530a79cf80f47f7b954f5765586",
     ),
 ];
 

@@ -947,6 +947,7 @@ async fn overwrite_import(core: &CoreInner, root: &Path) -> Result<ImportHistory
         let live = crate::db::db_path(&core.paths)?;
         let staged =
             stage_backup_database(&root.join(DB_ARCHIVE_DIR).join(DB_FILENAME), &live).await?;
+        let counter = crate::db::sync::sync_counter(&core.db.pool().await).await?;
         let swap_error = Mutex::new(None::<AppError>);
         core.db
             .close_and_replace(|| swap_in_staged_database(core, &live, &staged, &swap_error))
@@ -954,6 +955,8 @@ async fn overwrite_import(core: &CoreInner, root: &Path) -> Result<ImportHistory
         if let Some(err) = lock(&swap_error).take() {
             return Err(err);
         }
+        // 导入的记录都不是这台电脑复制的：不能当成本机采集补齐给已配对设备；计数器不回退。
+        crate::db::sync::reset_after_import(&core.db.pool().await, counter).await?;
 
         let resources_src = root.join(RESOURCES_ARCHIVE_DIR);
         if resources_src.exists() {

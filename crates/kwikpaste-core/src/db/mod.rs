@@ -8,6 +8,7 @@ pub mod overview;
 pub mod path;
 pub mod retention;
 pub mod state;
+pub mod sync;
 
 pub use init::{init, MIGRATOR};
 pub use path::db_path;

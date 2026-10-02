@@ -241,6 +241,24 @@ fn contents(core: &Core) -> Vec<String> {
     contents
 }
 
+/// 带同步序号的记录条数与计数器：只有本机复制的记录有序号。
+fn sync_state(core: &Core) -> (i64, i64) {
+    block_on(core.hop({
+        let core = core.clone();
+        async move {
+            let pool = core.0.db.pool().await;
+            let local: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM clipboard_items WHERE sync_seq IS NOT NULL",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            Ok((local, crate::db::sync::sync_counter(&pool).await?))
+        }
+    }))
+    .unwrap()
+}
+
 fn input(path: &Path, password: Option<&str>) -> ImportHistoryBackupInput {
     ImportHistoryBackupInput {
         path: path.to_path_buf(),
@@ -337,6 +355,8 @@ fn plain_export_merges_into_another_instance() {
         .is_file());
     assert_eq!(block_on(core.list_groups()).unwrap().len(), 1);
     assert_eq!(core.settings().appearance.theme, Theme::Dark);
+    // 合并进来的记录不是这台电脑复制的，没有同步序号，不会补齐给已配对设备。
+    assert_eq!(sync_state(&core), (2, 2));
 
     let events = fixture.take_events();
     assert!(events
@@ -416,9 +436,14 @@ fn encrypted_export_overwrites_another_instance() {
         CoreEvent::SettingsUpdated { delta, .. } if delta.touches("shortcuts")
     )));
 
+    // 覆盖进来的记录都没有同步序号；计数器取两边较大的，不回退。
+    assert_eq!(sync_state(&source.core).1, 3);
+    assert_eq!(sync_state(&core), (0, 3));
+
     // 换上的库照常可写。
     store(&core, text("after overwrite"));
     assert_eq!(contents(&core).len(), 3);
+    assert_eq!(sync_state(&core), (1, 4));
     block_on(core.shutdown()).unwrap();
     block_on(source.core.shutdown()).unwrap();
 }
