@@ -31,6 +31,13 @@ pub const IME_STATE: &str = "--selftest-ime-state";
 pub const IME_NATIVE: &str = "--selftest-ime-native";
 /// `--selftest-settings=<JSON patch>`：经 core 更新设置。
 pub const SETTINGS: &str = "--selftest-settings=";
+/// 平台探针改用本机系统剪贴板并开始监听（默认是内存剪贴板、不监听）。只给真机剪贴板验证用：
+/// 跑之前要先退出本机的 1.x，免得测试内容进了用户的历史。
+pub const REAL_CLIPBOARD: &str = "--selftest-real-clipboard";
+/// `--selftest-copy-item=<id>`：把一条记录写回剪贴板（不粘贴），走 `platform::paste::copy`。
+pub const COPY_ITEM: &str = "--selftest-copy-item=";
+/// 手动读取一次当前剪贴板并入库（`Core::read_clipboard_now`）。
+pub const READ_NOW: &str = "--selftest-read-now";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
 pub const GALLERY: &str = "--selftest-gallery";
 /// 列表跑分：1 万行合成数据，附录 D §3.7 的门槛与锚定场景（见 `clipboard::view::bench`）。
@@ -54,12 +61,26 @@ pub fn active() -> bool {
 /// 本进程是平台探针本身（`--selftest-platform`）或者给它转交命令的后启动实例。
 /// 它们用单独的 identifier，别的自测进程（冒烟、展示窗、界面的测量）同时启动时不会被转交进来。
 pub fn platform_probe() -> bool {
-    const COMMANDS: [&str; 9] = [
-        PLATFORM, SHOW, HIDE, TOGGLE, QUIT, EDIT, END_EDIT, IME_STATE, IME_NATIVE,
+    const COMMANDS: [&str; 11] = [
+        PLATFORM,
+        SHOW,
+        HIDE,
+        TOGGLE,
+        QUIT,
+        EDIT,
+        END_EDIT,
+        IME_STATE,
+        IME_NATIVE,
+        REAL_CLIPBOARD,
+        READ_NOW,
     ];
 
     env_enabled()
-        && std::env::args().any(|arg| COMMANDS.contains(&arg.as_str()) || arg.starts_with(SETTINGS))
+        && std::env::args().any(|arg| {
+            COMMANDS.contains(&arg.as_str())
+                || arg.starts_with(SETTINGS)
+                || arg.starts_with(COPY_ITEM)
+        })
 }
 
 /// 本进程是否打开了某个自测开关。

@@ -29,7 +29,8 @@ pub struct StartedCore {
 }
 
 /// 建 runtime 并启动 core（读设置、打开并迁移数据库、启动自动清理），再接上平台能力
-/// （前台应用、应用扫描、提示音）。在创建 GPUI 平台之前调用，期间阻塞当前线程。
+/// （前台应用、应用扫描、提示音），普通启动时开始监听系统剪贴板。在创建 GPUI 平台之前调用，
+/// 期间阻塞当前线程。
 pub fn start() -> anyhow::Result<StartedCore> {
     let identity = crate::identity::current();
     let version = semver::Version::parse(env!("CARGO_PKG_VERSION"))
@@ -60,8 +61,14 @@ pub fn start() -> anyhow::Result<StartedCore> {
     ))
     .context("kwikpaste-core did not start")?;
     core.set_platform_services(Arc::new(NativeServices));
-    // 自测进程绝不读写本机剪贴板。剪贴板监听（start_watcher）要等用户同意后由正式流程打开，这里不启动。
-    if crate::selftest::active() {
+    // 自测进程不读写本机剪贴板，也不监听；只有真机剪贴板探针（`--selftest-real-clipboard`）例外。
+    let real_clipboard =
+        !crate::selftest::active() || crate::selftest::enabled(crate::selftest::REAL_CLIPBOARD);
+    if real_clipboard {
+        if let Err(err) = core.start_watcher() {
+            log::error!("the clipboard watcher did not start: {err}");
+        }
+    } else {
         core.set_clipboard_provider(Arc::new(MemoryClipboard::new()));
     }
     log::info!(

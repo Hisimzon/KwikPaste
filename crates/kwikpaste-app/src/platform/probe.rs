@@ -255,6 +255,69 @@ pub fn copied(id: &str, plain: bool, hide_window: bool) {
     );
 }
 
+/// `--selftest-read-now` 的结果。
+pub fn read_now(result: &kwikpaste_core::Result<Option<kwikpaste_core::ops::CapturedItem>>) {
+    let fields = match result {
+        Ok(Some(captured)) => format!(
+            r#","id":{},"deduplicated":{}"#,
+            json_string(&captured.id),
+            captured.deduplicated
+        ),
+        Ok(None) => r#","id":null"#.to_owned(),
+        Err(err) => format!(r#","error":{}"#, json_string(&err.to_string())),
+    };
+    write("read_now", &fields);
+}
+
+/// 探针模式下把每条入库 / 命中去重的记录连同完整字段和来源应用图标写进日志，供真机剪贴板验证判定。
+pub fn follow_clipboard(cx: &mut gpui::App) {
+    if !enabled() {
+        return;
+    }
+    let Some(hub) = super::core_events(cx) else {
+        return;
+    };
+    cx.subscribe(&hub, |_, event: &kwikpaste_core::CoreEvent, cx| {
+        let kwikpaste_core::CoreEvent::ClipboardUpserted {
+            id, deduplicated, ..
+        } = event
+        else {
+            return;
+        };
+        let Some(core) = crate::core_host::core(cx).cloned() else {
+            return;
+        };
+        let (id, deduplicated) = (id.clone(), *deduplicated);
+        cx.background_executor()
+            .spawn(async move {
+            let item = core.find_item(&id).await;
+            let icon = core
+                .list_item(&id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|view| view.source_app_icon_path);
+            let item = match item {
+                Ok(item) => serde_json::to_string(&item).unwrap_or_else(|_| "null".to_owned()),
+                Err(err) => format!(r#"{{"error":{}}}"#, json_string(&err.to_string())),
+            };
+            let icon_exists = icon
+                .as_deref()
+                .is_some_and(|path| std::path::Path::new(path).is_file());
+            write(
+                "clipboard",
+                &format!(
+                    r#","id":{},"deduplicated":{deduplicated},"item":{item},"icon":{},"icon_exists":{icon_exists}"#,
+                    json_string(&id),
+                    icon.as_deref().map_or("null".to_owned(), json_string),
+                ),
+            );
+        })
+        .detach();
+    })
+    .detach();
+}
+
 /// 进程即将退出。
 pub fn quitting() {
     write("quit", "");

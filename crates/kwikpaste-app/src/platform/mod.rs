@@ -161,6 +161,7 @@ pub fn start<V: Render>(
         }
     }
     settings::follow(cx);
+    probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
 
     Ok(())

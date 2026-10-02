@@ -6,7 +6,7 @@ use kwikpaste_os::single_instance::{Invocation, PrimaryInstance};
 
 use super::editing::EditTrigger;
 use super::panel::{PanelCommand, Trigger, TriggerSource};
-use super::probe;
+use super::{paste, probe};
 use crate::{core_host, selftest};
 
 /// 开机自启带的参数：第二实例带它时静默退出，主实例什么也不做（与 1.x 相同）。
@@ -82,21 +82,36 @@ async fn handle_selftest(
         match arg.as_str() {
             selftest::IME_STATE => probe::ime_state(),
             selftest::IME_NATIVE => probe::set_ime_native_mode(),
+            selftest::READ_NOW => read_now(cx).await,
             selftest::QUIT => {
                 probe::quitting();
                 cx.update(|cx| cx.quit());
             }
             _ => {
-                let Some(patch) = arg.strip_prefix(selftest::SETTINGS) else {
+                if let Some(patch) = arg.strip_prefix(selftest::SETTINGS) {
+                    update_settings(patch, cx).await;
+                } else if let Some(id) = arg.strip_prefix(selftest::COPY_ITEM) {
+                    let copied = cx.update(|cx| paste::copy(cx, id.to_owned(), false, true));
+                    if let Err(err) = copied.await {
+                        log::error!("selftest copy of {id} failed: {err}");
+                    }
+                } else {
                     continue;
-                };
-                update_settings(patch, cx).await;
+                }
             }
         }
         return true;
     }
 
     false
+}
+
+/// `--selftest-read-now`：手动读取一次剪贴板，结果写进探针日志。
+async fn read_now(cx: &mut AsyncApp) {
+    let Some(core) = cx.update(|cx| core_host::core(cx).cloned()) else {
+        return;
+    };
+    probe::read_now(&core.read_clipboard_now().await);
 }
 
 /// `--selftest-settings=<JSON patch>`：经 core 更新设置，走与偏好页相同的 `SettingsUpdated` 路径。

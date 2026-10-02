@@ -72,7 +72,6 @@ pub fn paste_fragment(
 }
 
 /// 把记录写回剪贴板（不粘贴）；设置要求复制后隐藏且面板没固定时隐藏面板。
-#[allow(dead_code, reason = "UI 接线用的接口，见本模块文档")]
 pub fn copy(
     cx: &mut App,
     id: String,
