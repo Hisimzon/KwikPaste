@@ -99,6 +99,9 @@ tar = "0.4"
 blake2 = "0.10"
 ed25519-dalek = "2"
 
+# 局域网同步 v2：IPv6 监听要显式设 IPV6_V6ONLY，与同端口的 IPv4 监听并存（tokio 已经依赖它）。
+socket2 = "0.6"
+
 [workspace.lints.rust]
 unexpected_cfgs = "deny"
 

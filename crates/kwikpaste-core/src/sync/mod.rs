@@ -5,9 +5,11 @@
 //! - [`transport`]：Noise XX 加密通道；
 //! - [`discovery`]：mDNS 广播与发现；
 //! - [`service`]：监听、拨号、会话与状态；
-//! - [`engine`]：记录与线上格式互转、收到后入库和写剪贴板。
+//! - [`engine`]：记录与线上格式互转、按水位线补齐、收到后入库和写剪贴板。
 //!
-//! 协议照搬 1.x（1.x 从未对外开放同步，2.0 可以重新定协议，见 PLAN F9）。
+//! 线上协议是 v2（1.x 的 v1 从未对外开放，不兼容），完整约定见同目录的 `PROTOCOL.md`。
+//! 只同步本机采集的新记录：本机采集时分到一个递增的同步序号（`clipboard_items.sync_seq`），
+//! 从别的设备收到的、从备份导入的记录没有序号，不会再转给别人。
 //! 宿主调用 [`Core::start_lan_sync`] 后服务才按设置启停；本机身份与已配对设备在
 //! [`crate::CorePaths::sync_dir`]，不随数据目录搬走，也不进备份。
 
@@ -76,6 +78,16 @@ impl Core {
             .await
     }
 
+    /// 按地址连接一台已配对的设备：mDNS 不通（组播被路由器拦掉、跨网段）而记着的地址又变了时用。
+    /// `address` 支持 `192.168.1.8`、`192.168.1.8:41573`、`[fe80::1%12]:41573`、`fe80::1%en0`
+    /// 和主机名，缺端口时用 [`DEFAULT_PORT`]。成功返回对方设备名；对方不是已配对设备时报错，
+    /// 要先用 [`Core::pair_lan_device`] 配对。
+    pub async fn connect_lan_device(&self, address: String) -> Result<String> {
+        let core = self.clone();
+        self.hop(async move { core.0.sync.connect(&core.0, &address).await })
+            .await
+    }
+
     /// 取消与一台设备的配对；对方在线时一并通知它。
     pub async fn remove_lan_device(&self, device_id: String) -> Result<()> {
         let core = self.clone();
@@ -104,8 +116,9 @@ pub(crate) async fn shutdown(core: &CoreInner) {
     core.sync.stop().await;
 }
 
-/// 本机采集到一条记录后调用：在线设备实时收到，离线设备下次连上时补齐。
-pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem) {
+/// 本机采集到一条记录后调用：在线设备实时收到，离线设备下次连上时补齐。`seq` 是这次采集分到的
+/// 本机序号；不需要推送的采集也要报给在线设备的检查点，对方的水位线才能越过它。
+pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem, seq: Option<i64>) {
     let Some(shared) = core.sync.shared() else {
         return;
     };
@@ -113,8 +126,10 @@ pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem) {
         return;
     }
 
+    let seq = seq.and_then(|seq| u64::try_from(seq).ok());
     let lan = core.settings.snapshot().sync.lan;
     if !engine::is_syncable(item, &lan) || !shared.should_send(&item.content_hash) {
+        shared.deliver(seq, None);
         return;
     }
     let Some(owner) = shared.core() else {
@@ -123,16 +138,20 @@ pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem) {
 
     let item = item.clone();
     core.rt.spawn(async move {
-        match engine::wire_from_item(&owner, &item, &lan).await {
+        // 本机上限先挡一次，各设备自己申报的上限在推送时再按设备挡。
+        match engine::wire_from_item(&owner, &item, lan.max_image_bytes()).await {
             Ok(Some((wire, attachment))) => {
                 let push = Message::Push {
                     item: wire,
                     live: true,
                 };
-                shared.broadcast(&push, Arc::new(attachment));
+                shared.deliver(seq, Some((push, Arc::new(attachment))));
             }
-            Ok(None) => {}
-            Err(err) => log::warn!("lan sync send failed: {err:#}"),
+            Ok(None) => shared.deliver(seq, None),
+            Err(err) => {
+                log::warn!("lan sync send failed: {err:#}");
+                shared.deliver_failed();
+            }
         }
     });
 }

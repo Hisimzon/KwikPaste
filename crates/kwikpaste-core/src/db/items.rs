@@ -133,30 +133,6 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     Ok(())
 }
 
-/// 局域网同步补齐：本机采集、非敏感、非文件的记录中 `updated_at` 晚于 `since` 的最近 `limit` 条，
-/// 按时间从旧到新返回，对端按这个顺序入库后列表顺序与本机一致。
-pub async fn list_local_items_updated_since(
-    pool: &SqlitePool,
-    since: chrono::DateTime<Utc>,
-    limit: i64,
-) -> Result<Vec<ClipboardItem>> {
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(SELECT_ITEM);
-    qb.push(
-        " WHERE origin_device_id IS NULL AND is_sensitive = 0 AND kind <> 'files' \
-         AND updated_at > ",
-    );
-    qb.push_bind(since);
-    qb.push(" ORDER BY updated_at DESC LIMIT ");
-    qb.push_bind(limit);
-    let mut items = qb
-        .build_query_as::<ClipboardItem>()
-        .fetch_all(pool)
-        .await
-        .context("failed to list local clipboard items for sync catch-up")?;
-    items.reverse();
-    Ok(items)
-}
-
 /// 仅返回项的轻量查询：生产路径走 [`query_items_page`]（顺带返回 total），
 /// 本函数留给单元测试做断言。
 #[cfg(test)]

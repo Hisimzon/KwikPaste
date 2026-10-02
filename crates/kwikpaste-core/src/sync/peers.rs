@@ -27,8 +27,14 @@ pub struct TrustedPeer {
     pub address: Option<String>,
     pub paired_at: DateTime<Utc>,
     pub last_seen_at: Option<DateTime<Utc>>,
-    /// 已收到的对方最新记录时间（对方时钟），重连时请求这之后的记录。
-    pub cursor: Option<DateTime<Utc>>,
+    /// 补齐水位线：已经收齐的对方本机序号（对方的 `sync_seq`），重连时请求这之后的记录。
+    /// 只在一页补齐全部入库后推进，不用任何一边的时钟。
+    #[serde(default)]
+    pub watermark: u64,
+    /// 水位线属于对方哪一代序号。对方的数据库重建过（重装、清空数据）序号会从头编，
+    /// 代次跟着变，这时水位线作废、从头补齐。
+    #[serde(default)]
+    pub epoch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,8 +128,8 @@ impl PeerStore {
         self.save(&state);
     }
 
-    /// 补齐进度只往前走。
-    pub fn advance_cursor(&self, device_id: &str, stamp: DateTime<Utc>) {
+    /// 补齐水位线：同一代序号里只往前走；对方换了一代时整个替换。
+    pub fn advance_watermark(&self, device_id: &str, epoch: &str, until: u64) {
         let mut state = self.lock();
         let Some(peer) = state
             .peers
@@ -133,11 +139,15 @@ impl PeerStore {
             return;
         };
 
-        if peer.cursor.is_some_and(|cursor| cursor >= stamp) {
-            return;
+        if peer.epoch.as_deref() == Some(epoch) {
+            if peer.watermark >= until {
+                return;
+            }
+        } else {
+            peer.epoch = Some(epoch.to_owned());
         }
 
-        peer.cursor = Some(stamp);
+        peer.watermark = until;
         self.save(&state);
     }
 
@@ -233,7 +243,8 @@ mod tests {
             address: None,
             paired_at: Utc::now(),
             last_seen_at: None,
-            cursor: None,
+            watermark: 0,
+            epoch: None,
         }
     }
 
@@ -262,16 +273,24 @@ mod tests {
     }
 
     #[test]
-    fn cursor_only_moves_forward() {
+    fn watermark_only_moves_forward_and_persists() {
         let dir = tempfile::tempdir().unwrap();
         let store = PeerStore::load(dir.path());
         store.add(peer("a"));
-        let later = Utc::now();
-        let earlier = later - chrono::Duration::seconds(10);
 
-        store.advance_cursor("a", later);
-        store.advance_cursor("a", earlier);
+        store.advance_watermark("a", "e1", 40);
+        store.advance_watermark("a", "e1", 12);
 
-        assert_eq!(store.get("a").unwrap().cursor, Some(later));
+        assert_eq!(store.get("a").unwrap().watermark, 40);
+        let reloaded = PeerStore::load(dir.path()).get("a").unwrap();
+        assert_eq!(
+            (reloaded.epoch.as_deref(), reloaded.watermark),
+            (Some("e1"), 40)
+        );
+
+        // 对方序号换了一代：水位线可以回到更小的值。
+        store.advance_watermark("a", "e2", 3);
+        let peer = store.get("a").unwrap();
+        assert_eq!((peer.epoch.as_deref(), peer.watermark), (Some("e2"), 3));
     }
 }

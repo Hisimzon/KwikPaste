@@ -44,6 +44,9 @@ pub enum CommandKey {
     SyncUnreachable,
     SyncInvalidAddress,
     SyncIncompatible,
+    SyncPeerOutdated,
+    SyncSelfOutdated,
+    SyncNotPaired,
     SyncDeviceNotFound,
     SyncSelfPairing,
 }

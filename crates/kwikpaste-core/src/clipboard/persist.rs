@@ -28,10 +28,14 @@ pub(crate) async fn persist_and_notify(
 
     let result = store_and_emit(core, &item_to_write).await?;
     // 本机复制的记录才有同步序号：对端补齐时按它取「上次之后本机复制过的」。
-    if let Err(err) = crate::db::sync::assign_sync_seq(&core.db.pool().await, &result.id).await {
-        log::warn!("assign sync sequence failed: {err}");
-    }
-    crate::sync::on_local_capture(core, &item_to_write);
+    let seq = match crate::db::sync::assign_sync_seq(&core.db.pool().await, &result.id).await {
+        Ok(seq) => seq,
+        Err(err) => {
+            log::warn!("assign sync sequence failed: {err}");
+            None
+        }
+    };
+    crate::sync::on_local_capture(core, &item_to_write, seq);
     if core.settings.snapshot().clipboard.feedback.copy_sound {
         core.platform().play_copy_sound();
     }

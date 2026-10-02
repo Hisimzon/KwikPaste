@@ -1,20 +1,24 @@
 //! mDNS / DNS-SD 广播与发现。
 //!
-//! 实例名就是设备 id；TXT 里放名称、平台和协议版本，不放任何密钥或内容。
-//! 只走 IPv4：局域网里够用，也省掉 IPv6 链路本地地址的 scope 问题。
+//! 实例名就是设备 id；TXT 里放名称、平台和支持的协议版本范围，不放任何密钥或内容。
+//! IPv4 与 IPv6 都广播；链路本地的 IPv6 地址带上收到它的网卡编号（scope id），否则连不上。
+//! 协议版本不兼容的设备照样列出，由界面提示升级。
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 
 use anyhow::{anyhow, Context};
-use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{IfKind, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 
-use super::protocol::{PROTOCOL_VERSION, SERVICE_TYPE};
+use super::protocol::{VersionRange, SERVICE_TYPE};
 use crate::db::models::Platform;
 
 const TXT_ID: &str = "id";
 const TXT_NAME: &str = "name";
 const TXT_PLATFORM: &str = "pf";
+/// 支持的最高协议版本；1.x 只写了这一项（它只支持 1）。
 const TXT_VERSION: &str = "v";
+/// 支持的最低协议版本，v2 起才有，缺省等于最高版本。
+const TXT_MIN_VERSION: &str = "vmin";
 
 /// 发现到的一台设备。
 #[derive(Debug, Clone)]
@@ -22,6 +26,7 @@ pub struct Discovered {
     pub device_id: String,
     pub name: String,
     pub platform: Platform,
+    pub protocol: VersionRange,
     pub addresses: Vec<SocketAddr>,
 }
 
@@ -34,6 +39,7 @@ pub struct Discovery {
     daemon: ServiceDaemon,
     fullname: String,
     device_id: String,
+    protocol: VersionRange,
     port: u16,
 }
 
@@ -43,18 +49,20 @@ impl Discovery {
         device_id: &str,
         name: &str,
         platform: Platform,
+        protocol: VersionRange,
         port: u16,
         on_event: impl Fn(DiscoveryEvent) + Send + 'static,
     ) -> anyhow::Result<Self> {
         let daemon = ServiceDaemon::new().map_err(mdns_err)?;
         daemon
-            .disable_interface(vec![IfKind::IPv6, IfKind::LoopbackV4, IfKind::LoopbackV6])
+            .disable_interface(vec![IfKind::LoopbackV4, IfKind::LoopbackV6])
             .map_err(mdns_err)?;
 
         let discovery = Self {
             daemon,
             fullname: String::new(),
             device_id: device_id.to_owned(),
+            protocol,
             port,
         };
         let fullname = discovery.register(name, platform)?;
@@ -68,13 +76,20 @@ impl Discovery {
                 while let Ok(event) = receiver.recv() {
                     match event {
                         ServiceEvent::ServiceResolved(service) => {
+                            let port = service.get_port();
+                            let addresses = service
+                                .get_addresses()
+                                .iter()
+                                .filter_map(|ip| socket_addr(ip, port));
                             let Some(found) = parse_service(
-                                service.get_property_val_str(TXT_ID),
-                                service.get_property_val_str(TXT_NAME),
-                                service.get_property_val_str(TXT_PLATFORM),
-                                service.get_property_val_str(TXT_VERSION),
-                                service.get_addresses_v4().into_iter().map(IpAddr::V4),
-                                service.get_port(),
+                                TxtRecord {
+                                    id: service.get_property_val_str(TXT_ID),
+                                    name: service.get_property_val_str(TXT_NAME),
+                                    platform: service.get_property_val_str(TXT_PLATFORM),
+                                    version: service.get_property_val_str(TXT_VERSION),
+                                    min_version: service.get_property_val_str(TXT_MIN_VERSION),
+                                },
+                                addresses,
                             ) else {
                                 continue;
                             };
@@ -125,12 +140,14 @@ impl Discovery {
     }
 
     fn register(&self, name: &str, platform: Platform) -> anyhow::Result<String> {
-        let version = PROTOCOL_VERSION.to_string();
+        let version = self.protocol.max.to_string();
+        let min_version = self.protocol.min.to_string();
         let properties = [
             (TXT_ID, self.device_id.as_str()),
             (TXT_NAME, name),
             (TXT_PLATFORM, platform_tag(platform)),
             (TXT_VERSION, version.as_str()),
+            (TXT_MIN_VERSION, min_version.as_str()),
         ];
         let host_name = format!("kwikpaste-{}.local.", self.device_id);
         let info = ServiceInfo::new(
@@ -149,37 +166,67 @@ impl Discovery {
     }
 }
 
+/// 广播里的 TXT 字段。
+struct TxtRecord<'a> {
+    id: Option<&'a str>,
+    name: Option<&'a str>,
+    platform: Option<&'a str>,
+    version: Option<&'a str>,
+    min_version: Option<&'a str>,
+}
+
+/// mDNS 解析出的地址转成能直接连接的地址。链路本地 IPv6 带上网卡编号，没有编号的连不上，丢掉。
+fn socket_addr(ip: &ScopedIp, port: u16) -> Option<SocketAddr> {
+    match ip {
+        ScopedIp::V4(v4) => Some(SocketAddr::new(IpAddr::V4(*v4.addr()), port)),
+        ScopedIp::V6(v6) => {
+            let addr = *v6.addr();
+            if !addr.is_unicast_link_local() {
+                return Some(SocketAddr::new(IpAddr::V6(addr), port));
+            }
+            let scope = v6.scope_id().index;
+            (scope != 0).then(|| SocketAddr::V6(SocketAddrV6::new(addr, port, 0, scope)))
+        }
+        _ => None,
+    }
+}
+
 fn parse_service(
-    id: Option<&str>,
-    name: Option<&str>,
-    platform: Option<&str>,
-    version: Option<&str>,
-    ips: impl Iterator<Item = IpAddr>,
-    port: u16,
+    txt: TxtRecord<'_>,
+    addresses: impl Iterator<Item = SocketAddr>,
 ) -> Option<Discovered> {
-    let device_id = id?.trim();
-    if device_id.is_empty() || version? != PROTOCOL_VERSION.to_string() {
+    let device_id = txt.id?.trim();
+    if device_id.is_empty() {
         return None;
     }
+    let max = txt.version?.trim().parse::<u16>().ok()?;
+    let min = match txt.min_version {
+        Some(min) => min.trim().parse::<u16>().ok()?.min(max),
+        None => max,
+    };
 
-    let platform = match platform? {
+    let platform = match txt.platform? {
         "macos" => Platform::Macos,
         "windows" => Platform::Windows,
         _ => return None,
     };
-    let addresses: Vec<SocketAddr> = ips
-        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
-        .map(|ip| SocketAddr::new(ip, port))
-        .collect();
-    if addresses.is_empty() {
+    let mut unique: Vec<SocketAddr> = Vec::new();
+    for addr in addresses {
+        if addr.ip().is_loopback() || addr.ip().is_unspecified() || unique.contains(&addr) {
+            continue;
+        }
+        unique.push(addr);
+    }
+    if unique.is_empty() {
         return None;
     }
 
     Some(Discovered {
         device_id: device_id.to_owned(),
-        name: name.unwrap_or(device_id).to_owned(),
+        name: txt.name.unwrap_or(device_id).to_owned(),
         platform,
-        addresses,
+        protocol: VersionRange { min, max },
+        addresses: unique,
     })
 }
 
@@ -201,45 +248,52 @@ fn mdns_err(err: mdns_sd::Error) -> anyhow::Error {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     use super::*;
 
-    #[test]
-    fn parses_valid_service_and_drops_loopback() {
-        let ips = vec![
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 8)),
-        ];
-
-        let found = parse_service(
-            Some("abc"),
-            Some("MacBook"),
-            Some("macos"),
-            Some("1"),
-            ips.into_iter(),
-            41573,
-        )
-        .unwrap();
-
-        assert_eq!(found.device_id, "abc");
-        assert_eq!(found.platform, Platform::Macos);
-        assert_eq!(found.addresses, vec!["192.168.1.8:41573".parse().unwrap()]);
+    fn txt<'a>(version: Option<&'a str>, min_version: Option<&'a str>) -> TxtRecord<'a> {
+        TxtRecord {
+            id: Some("abc"),
+            name: Some("MacBook"),
+            platform: Some("macos"),
+            version,
+            min_version,
+        }
     }
 
     #[test]
-    fn rejects_other_protocol_versions() {
-        let ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 8))];
+    fn parses_valid_service_and_drops_loopback() {
+        let link_local = SocketAddr::V6(SocketAddrV6::new("fe80::1".parse().unwrap(), 41573, 0, 7));
+        let addresses = vec![
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 41573),
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 41573),
+            "192.168.1.8:41573".parse().unwrap(),
+            "192.168.1.8:41573".parse().unwrap(),
+            link_local,
+        ];
 
-        assert!(parse_service(
-            Some("abc"),
-            None,
-            Some("windows"),
-            Some("2"),
-            ips.into_iter(),
-            1
-        )
-        .is_none());
+        let found = parse_service(txt(Some("3"), Some("2")), addresses.into_iter()).unwrap();
+
+        assert_eq!(found.device_id, "abc");
+        assert_eq!(found.platform, Platform::Macos);
+        assert_eq!(found.protocol, VersionRange { min: 2, max: 3 });
+        assert_eq!(
+            found.addresses,
+            vec!["192.168.1.8:41573".parse().unwrap(), link_local]
+        );
+    }
+
+    /// 1.x 只写了 `v`，照样列出（界面提示版本不兼容）；版本读不懂的不列。
+    #[test]
+    fn reads_version_ranges_from_old_and_new_devices() {
+        let addresses = || vec!["192.168.1.8:41573".parse().unwrap()].into_iter();
+
+        let old = parse_service(txt(Some("1"), None), addresses()).unwrap();
+        assert_eq!(old.protocol, VersionRange { min: 1, max: 1 });
+
+        assert!(parse_service(txt(Some("x"), None), addresses()).is_none());
+        assert!(parse_service(txt(None, Some("2")), addresses()).is_none());
     }
 
     #[test]

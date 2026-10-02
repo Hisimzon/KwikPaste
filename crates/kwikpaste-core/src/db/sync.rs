@@ -43,6 +43,17 @@ pub async fn assign_sync_seq(pool: &SqlitePool, item_id: &str) -> Result<Option<
     Ok(Some(seq))
 }
 
+/// 序号的代次：计数器那一行的创建时间。数据库重建（重装、清空数据）后会变，对端据此知道
+/// 以前的水位线作废；覆盖导入备份时也会变，对端多补一次，靠内容指纹去重。
+pub async fn sync_epoch(pool: &SqlitePool) -> Result<String> {
+    Ok(
+        sqlx::query_scalar("SELECT created_at FROM sync_counter WHERE id = 1")
+            .fetch_one(pool)
+            .await
+            .context("failed to read the sync epoch")?,
+    )
+}
+
 /// 计数器当前值：已经发出去的最大序号。
 pub async fn sync_counter(pool: &SqlitePool) -> Result<i64> {
     Ok(
@@ -53,7 +64,16 @@ pub async fn sync_counter(pool: &SqlitePool) -> Result<i64> {
     )
 }
 
-/// 一页补齐：序号大于 `after`、`cutoff` 之后用过的记录，按序号从小到大，最多 `page` 条；
+/// 补齐的候选：有序号、`cutoff` 之后用过、不是敏感内容也不是文件（这两类从不同步）。
+/// 宏形式便于 `concat!` 拼出静态 SQL。
+macro_rules! catch_up_filter {
+    () => {
+        "sync_seq > ? AND COALESCE(last_used_at, updated_at) >= ? \
+         AND is_sensitive = 0 AND kind <> 'files'"
+    };
+}
+
+/// 一页补齐：序号大于 `after` 的候选记录，按序号从小到大，最多 `page` 条；
 /// 总量只取最新的 `total` 条（更早的跳过）。返回 `(id, 序号)` 与后面是否还有。
 pub async fn catch_up_page(
     pool: &SqlitePool,
@@ -62,11 +82,11 @@ pub async fn catch_up_page(
     total: i64,
     page: i64,
 ) -> Result<(Vec<(String, i64)>, bool)> {
-    let floor: Option<i64> = sqlx::query_scalar(
-        "SELECT sync_seq FROM clipboard_items \
-         WHERE sync_seq > ? AND COALESCE(last_used_at, updated_at) >= ? \
-         ORDER BY sync_seq DESC LIMIT 1 OFFSET ?",
-    )
+    let floor: Option<i64> = sqlx::query_scalar(concat!(
+        "SELECT sync_seq FROM clipboard_items WHERE ",
+        catch_up_filter!(),
+        " ORDER BY sync_seq DESC LIMIT 1 OFFSET ?"
+    ))
     .bind(after)
     .bind(cutoff)
     .bind((total - 1).max(0))
@@ -75,11 +95,11 @@ pub async fn catch_up_page(
     .context("failed to bound the catch-up window")?;
     let start = floor.map_or(after, |floor| after.max(floor - 1));
 
-    let mut rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT id, sync_seq FROM clipboard_items \
-         WHERE sync_seq > ? AND COALESCE(last_used_at, updated_at) >= ? \
-         ORDER BY sync_seq ASC LIMIT ?",
-    )
+    let mut rows: Vec<(String, i64)> = sqlx::query_as(concat!(
+        "SELECT id, sync_seq FROM clipboard_items WHERE ",
+        catch_up_filter!(),
+        " ORDER BY sync_seq ASC LIMIT ?"
+    ))
     .bind(start)
     .bind(cutoff)
     .bind(page + 1)
@@ -161,6 +181,8 @@ mod tests {
         insert_item(&pool, &item("b", now)).await.unwrap();
 
         assert_eq!(sync_counter(&pool).await.unwrap(), 0);
+        let epoch = sync_epoch(&pool).await.unwrap();
+        assert!(!epoch.is_empty());
         assert_eq!(assign_sync_seq(&pool, "a").await.unwrap(), Some(1));
         assert_eq!(assign_sync_seq(&pool, "b").await.unwrap(), Some(2));
         sqlx::query("DELETE FROM clipboard_items WHERE id = 'b'")
@@ -173,6 +195,7 @@ mod tests {
         assert_eq!(assign_sync_seq(&pool, "a").await.unwrap(), Some(4));
         assert_eq!(assign_sync_seq(&pool, "missing").await.unwrap(), None);
         assert_eq!(sync_counter(&pool).await.unwrap(), 4);
+        assert_eq!(sync_epoch(&pool).await.unwrap(), epoch);
     }
 
     #[tokio::test]
@@ -188,8 +211,12 @@ mod tests {
             insert_item(&pool, &item(&id, now)).await.unwrap();
             assign_sync_seq(&pool, &id).await.unwrap();
         }
-        // 没有序号的（同步收到的、导入的）永远不补齐。
+        // 没有序号的（同步收到的、导入的）永远不补齐；敏感内容有序号也不补齐。
         insert_item(&pool, &item("received", now)).await.unwrap();
+        let mut sensitive = item("sensitive", now);
+        sensitive.is_sensitive = true;
+        insert_item(&pool, &sensitive).await.unwrap();
+        assign_sync_seq(&pool, "sensitive").await.unwrap();
         let cutoff = now - Duration::days(7);
 
         let (page, more) = catch_up_page(&pool, 0, cutoff, 500, 3).await.unwrap();

@@ -1,19 +1,19 @@
-//! 局域网同步运行时：监听端口、mDNS 发现、拨号、配对与同步会话。
+//! 局域网同步运行时：监听端口、mDNS 发现、拨号、配对与同步会话（协议 v2，见 `PROTOCOL.md`）。
 //!
 //! 每台设备既监听也主动连接，没有主机角色；同一对设备只保留一条连接
-//! （两边同时连上时，保留设备 id 较小一方发起的那条）。连上后先互相请求补齐，
+//! （两边同时连上时，保留设备 id 较小一方发起的那条）。连上后先按水位线互相请求补齐，
 //! 之后本机每次复制都实时推给所有在线设备。
 //!
-//! 监听地址、端口与要不要 mDNS 由 [`LanSyncNetwork`] 决定：正式运行监听所有网卡并广播，
-//! 自动测试只用本机回环地址、不广播。
+//! IPv4 与 IPv6 都监听（同一个端口）；链路本地的 IPv6 地址带 scope id。监听范围、端口与要不要
+//! mDNS 由 [`LanSyncNetwork`] 决定：正式运行监听所有网卡并广播，自动测试只用本机回环地址、不广播。
 
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::collections::{BTreeSet, HashMap};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::net::{TcpListener, TcpStream};
@@ -25,7 +25,8 @@ use super::identity::{self, device_id_for, DeviceIdentity};
 use super::pairing::{self, PairingCode, Role, Transcript};
 use super::peers::{PeerStore, TrustedPeer};
 use super::protocol::{
-    from_hex, to_hex, DeviceInfo, Intent, Message, RejectReason, PROTOCOL_VERSION,
+    from_hex, incompatibility, to_hex, DeviceInfo, Incompatibility, Intent, Message, RejectReason,
+    VersionRange, MAX_HEADER_BYTES, SUPPORTED,
 };
 use super::transport::{handshake, Handshaken, SecureReader, SecureWriter, HANDSHAKE_TIMEOUT};
 use super::{current_platform, default_device_name, effective_device_name};
@@ -47,27 +48,28 @@ const MAX_PENDING_HANDSHAKES: usize = 16;
 const BACKOFF_BASE_SECS: u64 = 5;
 const BACKOFF_MAX_SECS: u64 = 120;
 const UNPAIR_FLUSH_DELAY: Duration = Duration::from_millis(300);
+const LISTEN_BACKLOG: i32 = 128;
 
 type Outgoing = (Message, Arc<Vec<u8>>);
 
 /// 同步服务的网络行为。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanSyncNetwork {
-    /// 监听地址。
-    pub listen_ip: IpAddr,
-    /// 首选端口，被占用时改用随机端口；0 表示直接用随机端口。
+    /// 首选端口，被占用时改用随机端口；0 表示直接用随机端口。IPv4 与 IPv6 用同一个端口。
     pub port: u16,
     /// 是否在局域网里用 mDNS 广播本机并发现附近设备。
     pub discovery: bool,
+    /// 只监听本机回环地址（127.0.0.1 与 ::1），不对局域网开放。
+    pub loopback_only: bool,
 }
 
 impl Default for LanSyncNetwork {
-    /// 正式运行：监听所有 IPv4 网卡的 41573 端口并用 mDNS 广播。
+    /// 正式运行：监听所有网卡（IPv4 与 IPv6）的 41573 端口并用 mDNS 广播。
     fn default() -> Self {
         Self {
-            listen_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: DEFAULT_PORT,
             discovery: true,
+            loopback_only: false,
         }
     }
 }
@@ -76,16 +78,27 @@ impl LanSyncNetwork {
     /// 只在本机回环地址上监听、随机端口、不广播，供自动测试与自测使用。
     pub fn loopback() -> Self {
         Self {
-            listen_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 0,
             discovery: false,
+            loopback_only: true,
+        }
+    }
+
+    fn listen_ips(&self) -> (Ipv4Addr, Ipv6Addr) {
+        if self.loopback_only {
+            (Ipv4Addr::LOCALHOST, Ipv6Addr::LOCALHOST)
+        } else {
+            (Ipv4Addr::UNSPECIFIED, Ipv6Addr::UNSPECIFIED)
         }
     }
 
     /// 界面上给用户看的本机地址：回环模式只有回环地址，否则列出可被别的设备连接的地址。
     fn advertised_addresses(&self) -> Vec<String> {
-        if self.listen_ip.is_loopback() {
-            return vec![self.listen_ip.to_string()];
+        if self.loopback_only {
+            return vec![
+                Ipv4Addr::LOCALHOST.to_string(),
+                Ipv6Addr::LOCALHOST.to_string(),
+            ];
         }
 
         local_addresses()
@@ -103,6 +116,7 @@ pub struct LanSyncState {
     pub default_device_name: String,
     pub platform: Platform,
     pub port: Option<u16>,
+    /// 本机可被连接的地址：IPv4 在前，链路本地 IPv6 带 `%scope`，可以直接填进对方的「按地址连接」。
     pub addresses: Vec<String>,
     pub pairing_code: Option<String>,
     pub pairing_attempts_left: u8,
@@ -129,6 +143,8 @@ pub struct LanNearbyView {
     pub name: String,
     pub platform: Platform,
     pub address: String,
+    /// 双方有共同的协议版本；为假时界面提示升级（哪边旧了在配对时报出）。
+    pub compatible: bool,
 }
 
 /// 配对目标：附近设备列表里的一台，或手动输入的地址。
@@ -146,6 +162,8 @@ pub struct LanSyncService {
     lifecycle: tokio::sync::Mutex<Option<Runtime>>,
     shared: RwLock<Option<Arc<Shared>>>,
     error: Mutex<Option<String>>,
+    /// 本机申报的协议版本范围；只有测试会改，用来模拟新旧版本。
+    supported: Mutex<VersionRange>,
 }
 
 struct Runtime {
@@ -164,6 +182,7 @@ impl LanSyncService {
             lifecycle: tokio::sync::Mutex::new(None),
             shared: RwLock::new(None),
             error: Mutex::new(None),
+            supported: Mutex::new(SUPPORTED),
         }
     }
 
@@ -174,6 +193,12 @@ impl LanSyncService {
 
     pub(crate) fn peers(&self) -> &PeerStore {
         &self.peers
+    }
+
+    /// 测试用：假装本机支持另一个版本范围，下次启动运行时生效。
+    #[cfg(test)]
+    pub(crate) fn override_supported(&self, range: VersionRange) {
+        *self.supported.lock().expect("lan sync poisoned") = range;
     }
 
     pub(super) fn shared(&self) -> Option<Arc<Shared>> {
@@ -250,12 +275,13 @@ impl LanSyncService {
             self.peers.forget_all();
         }
 
-        let listener = bind_listener(network).await?;
-        let port = listener.local_addr()?.port();
+        let (listeners, port) = bind_listeners(network)?;
+        let supported = *self.supported.lock().expect("lan sync poisoned");
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let shared = Arc::new(Shared {
             core: Arc::downgrade(core),
             app_version: core.info.version.to_string(),
+            supported,
             identity: loaded.identity,
             peers: self.peers.clone(),
             port,
@@ -270,7 +296,9 @@ impl LanSyncService {
             next_conn_id: AtomicU64::new(1),
         });
 
-        tokio::spawn(accept_loop(shared.clone(), listener));
+        for listener in listeners {
+            tokio::spawn(accept_loop(shared.clone(), listener));
+        }
         tokio::spawn(dial_loop(shared.clone()));
 
         let lan = core.settings.snapshot().sync.lan;
@@ -282,6 +310,7 @@ impl LanSyncService {
                 shared.identity.device_id(),
                 &name,
                 current_platform(),
+                supported,
                 port,
                 move |event| {
                     if let Some(shared) = weak.upgrade() {
@@ -402,7 +431,6 @@ impl LanSyncService {
         target: PairTarget,
         code: &str,
     ) -> Result<String> {
-        let lang = core.language();
         let shared = self.require_running(core)?;
         let Some(code) = pairing::normalize_code(code) else {
             return Err(sync_error(core, Key::SyncInvalidCode));
@@ -428,23 +456,37 @@ impl LanSyncService {
                     log::info!("lan sync pairing could not reach {addr}: {err:#}");
                     continue;
                 }
-                Err(DialError::SelfConnection) => Key::SyncSelfPairing,
-                Err(DialError::WrongCode) | Err(DialError::Rejected(RejectReason::WrongCode)) => {
-                    Key::SyncWrongCode
-                }
-                Err(DialError::Rejected(RejectReason::PairingUnavailable)) => {
-                    Key::SyncPairingUnavailable
-                }
-                Err(DialError::Rejected(RejectReason::Incompatible)) => Key::SyncIncompatible,
                 Err(DialError::Rejected(RejectReason::NotPaired)) => continue,
                 Err(DialError::Other(err)) => {
                     log::info!("lan sync pairing with {addr} failed: {err:#}");
                     continue;
                 }
+                Err(err) => err.key(),
             };
-            return Err(AppError::Sync(
-                crate::i18n::commands::label(lang, key).to_owned(),
-            ));
+            return Err(sync_error(core, key));
+        }
+
+        Err(sync_error(core, Key::SyncUnreachable))
+    }
+
+    /// 按地址连接一台已配对的设备（mDNS 不通、记着的地址也换了时用），返回对方设备名。
+    pub(super) async fn connect(&self, core: &CoreInner, address: &str) -> Result<String> {
+        let shared = self.require_running(core)?;
+        let addresses = resolve_address(address)
+            .await
+            .ok_or_else(|| sync_error(core, Key::SyncInvalidAddress))?;
+
+        for addr in addresses {
+            match dial(&shared, addr, &DialGoal::SyncAny).await {
+                Ok(name) => {
+                    shared.emit_state();
+                    return Ok(name);
+                }
+                Err(DialError::Unreachable(err)) | Err(DialError::Other(err)) => {
+                    log::info!("lan sync connect to {addr} failed: {err:#}");
+                }
+                Err(err) => return Err(sync_error(core, err.key())),
+            }
         }
 
         Err(sync_error(core, Key::SyncUnreachable))
@@ -482,11 +524,63 @@ struct Connection {
     dialer_is_me: bool,
     tx: mpsc::Sender<Outgoing>,
     kill: Arc<watch::Sender<bool>>,
+    /// 对方申报的附件上限，实时推送按它跳过放不下的图片。
+    max_attachment: u64,
+    live: LiveCursor,
+}
+
+/// 实时推送的检查点。本机序号是连续发出的，每个序号对应一次本机采集；补齐的最后一页发出后，
+/// 对方已收齐到 `confirmed`，之后每个序号要么推送了、要么按规则不需要推送（敏感、文件、超限），
+/// 从 `confirmed` 起连续处理过的部分就可以作为检查点发给对方推进水位线，重连时不必再补发。
+#[derive(Default)]
+struct LiveCursor {
+    /// `(代次, 序号)`：最后一页补齐发出后才知道。
+    confirmed: Option<(String, u64)>,
+    /// 已经处理过、还没连上 `confirmed` 的序号。
+    handled: BTreeSet<u64>,
+    /// 有记录因为发送队列满被丢掉（或读图失败）：这次连接不再发检查点，留给下次补齐。
+    broken: bool,
+}
+
+impl LiveCursor {
+    /// 记下一个处理过的序号；能推进时返回检查点。
+    fn handle(&mut self, seq: u64) -> Option<Message> {
+        self.handled.insert(seq);
+        self.advance()
+    }
+
+    /// 补齐的最后一页已经发出：对方收齐到 `until`。之后连续处理过的序号随即作为检查点发出。
+    fn confirm(&mut self, epoch: String, until: u64) -> Option<Message> {
+        match &mut self.confirmed {
+            Some((current, confirmed)) if *current == epoch => *confirmed = (*confirmed).max(until),
+            _ => self.confirmed = Some((epoch, until)),
+        }
+        self.advance()
+    }
+
+    fn advance(&mut self) -> Option<Message> {
+        if self.broken {
+            return None;
+        }
+        let (epoch, until) = self.confirmed.as_mut()?;
+        self.handled = self.handled.split_off(&(*until + 1));
+        let start = *until;
+        while self.handled.remove(&(*until + 1)) {
+            *until += 1;
+        }
+
+        (*until > start).then(|| Message::CatchUpPage {
+            until: *until,
+            more: false,
+            epoch: epoch.clone(),
+        })
+    }
 }
 
 struct Nearby {
     name: String,
     platform: Platform,
+    protocol: VersionRange,
     addresses: Vec<SocketAddr>,
 }
 
@@ -501,6 +595,7 @@ pub(super) struct Shared {
     /// 弱引用：会话任务不该让已经关闭的 core 一直活着。
     core: Weak<CoreInner>,
     app_version: String,
+    supported: VersionRange,
     identity: DeviceIdentity,
     peers: Arc<PeerStore>,
     port: u16,
@@ -520,6 +615,18 @@ impl Shared {
         self.core.upgrade()
     }
 
+    /// 本机愿意接收的附件上限：跟随设置里的图片大小上限；不收图片时为 0。
+    fn max_attachment(&self) -> u64 {
+        self.core().map_or(0, |core| {
+            let lan = core.settings.snapshot().sync.lan;
+            if lan.image {
+                lan.max_image_bytes()
+            } else {
+                0
+            }
+        })
+    }
+
     fn my_info(&self) -> DeviceInfo {
         let name = self
             .core()
@@ -529,8 +636,9 @@ impl Shared {
             name,
             platform: current_platform(),
             app_version: self.app_version.clone(),
-            protocol: PROTOCOL_VERSION,
+            protocol: self.supported,
             listen_port: self.port,
+            max_attachment_bytes: self.max_attachment(),
         }
     }
 
@@ -566,17 +674,49 @@ impl Shared {
             .should_send(content_hash)
     }
 
-    /// 推给所有在线设备；某台设备的发送队列满了就丢掉这一条（它重连后会补齐）。
-    pub(super) fn broadcast(&self, message: &Message, attachment: Arc<Vec<u8>>) {
-        let connections = self.connections.lock().expect("lan sync poisoned");
-        for (peer_id, connection) in connections.iter() {
-            if connection
-                .tx
-                .try_send((message.clone(), attachment.clone()))
-                .is_err()
-            {
-                log::warn!("lan sync queue to {peer_id} is full, dropping an item");
+    /// 处理一次本机采集：`push` 推给所有在线设备（附件超过对方上限的跳过；某台设备的发送队列满了
+    /// 就丢掉这一条，它重连后会补齐），`seq` 是这次采集的本机序号，记为已处理并按需发检查点。
+    /// 不需要推送的采集（敏感、文件、超限）也要调用，`push` 传 `None`。
+    pub(super) fn deliver(&self, seq: Option<u64>, push: Option<(Message, Arc<Vec<u8>>)>) {
+        let mut connections = self.connections.lock().expect("lan sync poisoned");
+        for (peer_id, connection) in connections.iter_mut() {
+            if let Some((message, attachment)) = &push {
+                if attachment.len() as u64 > connection.max_attachment {
+                    log::info!("lan sync skips an attachment over the limit of {peer_id}");
+                } else if connection
+                    .tx
+                    .try_send((message.clone(), attachment.clone()))
+                    .is_err()
+                {
+                    log::warn!("lan sync queue to {peer_id} is full, dropping an item");
+                    connection.live.broken = true;
+                }
             }
+            if let Some(checkpoint) = seq.and_then(|seq| connection.live.handle(seq)) {
+                let _ = connection.tx.try_send((checkpoint, Arc::new(Vec::new())));
+            }
+        }
+    }
+
+    /// 本机这次采集的记录没法转成线上格式（读图失败）：这次连接不再发检查点，重连时补齐。
+    pub(super) fn deliver_failed(&self) {
+        let mut connections = self.connections.lock().expect("lan sync poisoned");
+        for connection in connections.values_mut() {
+            connection.live.broken = true;
+        }
+    }
+
+    /// 补齐的最后一页已经排进 `connection_id` 的发送队列：记下对方收齐到哪里。
+    fn confirm_catch_up(&self, peer_id: &str, connection_id: u64, epoch: String, until: u64) {
+        let mut connections = self.connections.lock().expect("lan sync poisoned");
+        let Some(connection) = connections
+            .get_mut(peer_id)
+            .filter(|connection| connection.id == connection_id)
+        else {
+            return;
+        };
+        if let Some(checkpoint) = connection.live.confirm(epoch, until) {
+            let _ = connection.tx.try_send((checkpoint, Arc::new(Vec::new())));
         }
     }
 
@@ -631,13 +771,16 @@ impl Shared {
                 rank_addresses(&mut found.addresses, &local_ipv4s());
                 let mut nearby = self.nearby.lock().expect("lan sync poisoned");
                 let changed = nearby.get(&found.device_id).is_none_or(|existing| {
-                    existing.name != found.name || existing.addresses != found.addresses
+                    existing.name != found.name
+                        || existing.addresses != found.addresses
+                        || existing.protocol != found.protocol
                 });
                 nearby.insert(
                     found.device_id.clone(),
                     Nearby {
                         name: found.name,
                         platform: found.platform,
+                        protocol: found.protocol,
                         addresses: found.addresses,
                     },
                 );
@@ -675,6 +818,7 @@ impl Shared {
                     name: device.name.clone(),
                     platform: device.platform,
                     address: device.addresses.first()?.to_string(),
+                    compatible: self.supported.negotiate(device.protocol).is_some(),
                 })
             })
             .collect();
@@ -761,18 +905,51 @@ impl Shared {
     }
 }
 
-async fn bind_listener(network: &LanSyncNetwork) -> anyhow::Result<TcpListener> {
-    let ip = network.listen_ip;
-    match TcpListener::bind((ip, network.port)).await {
-        Ok(listener) => Ok(listener),
-        Err(err) => {
+/// IPv4 与 IPv6 各一个监听，用同一个端口。IPv6 显式设为只收 IPv6（不同系统默认值不同，
+/// macOS 默认双栈会和 IPv4 的监听冲突）；IPv6 起不来（系统关了 IPv6）时只用 IPv4。
+fn bind_listeners(network: &LanSyncNetwork) -> anyhow::Result<(Vec<TcpListener>, u16)> {
+    let (v4, v6) = network.listen_ips();
+    let ipv4 = match bind_socket(SocketAddr::new(IpAddr::V4(v4), network.port)) {
+        Ok(listener) => listener,
+        Err(err) if network.port != 0 => {
             log::info!(
-                "lan sync port {} unavailable ({err}), using a random port",
+                "lan sync port {} unavailable ({err:#}), using a random port",
                 network.port
             );
-            Ok(TcpListener::bind((ip, 0)).await?)
+            bind_socket(SocketAddr::new(IpAddr::V4(v4), 0))?
         }
+        Err(err) => return Err(err),
+    };
+    let port = ipv4.local_addr()?.port();
+
+    let mut listeners = vec![ipv4];
+    match bind_socket(SocketAddr::new(IpAddr::V6(v6), port)) {
+        Ok(listener) => listeners.push(listener),
+        Err(err) => log::info!("lan sync listens on IPv4 only: {err:#}"),
     }
+    Ok((listeners, port))
+}
+
+fn bind_socket(addr: SocketAddr) -> anyhow::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))
+        .context("failed to create listening socket")?;
+    if addr.is_ipv6() {
+        socket
+            .set_only_v6(true)
+            .context("failed to restrict the socket to IPv6")?;
+    }
+    socket
+        .bind(&addr.into())
+        .with_context(|| format!("failed to bind {addr}"))?;
+    socket
+        .listen(LISTEN_BACKLOG)
+        .with_context(|| format!("failed to listen on {addr}"))?;
+    socket
+        .set_nonblocking(true)
+        .context("failed to make the socket non-blocking")?;
+    TcpListener::from_std(socket.into()).context("failed to register the listener")
 }
 
 async fn accept_loop(shared: Arc<Shared>, listener: TcpListener) {
@@ -823,10 +1000,18 @@ async fn handle_incoming(
     let Message::Hello { device, intent } = message else {
         return Err(anyhow!("expected hello"));
     };
-    if device.protocol != PROTOCOL_VERSION {
-        reject(&mut writer, RejectReason::Incompatible).await;
-        return Err(anyhow!("incompatible protocol {}", device.protocol));
-    }
+    let Some(version) = shared.supported.negotiate(device.protocol) else {
+        reject(
+            &mut writer,
+            RejectReason::Incompatible,
+            Some(shared.supported),
+        )
+        .await;
+        return Err(anyhow!(
+            "no common protocol version with {:?}",
+            device.protocol
+        ));
+    };
 
     match intent {
         Intent::Sync => {
@@ -834,13 +1019,14 @@ async fn handle_incoming(
                 .peers
                 .is_trusted(&remote_id, &to_hex(&remote_public_key))
             {
-                reject(&mut writer, RejectReason::NotPaired).await;
+                reject(&mut writer, RejectReason::NotPaired, None).await;
                 return Err(anyhow!("unpaired device {remote_id} asked to sync"));
             }
             writer
                 .send_message(
                     &Message::Welcome {
                         device: shared.my_info(),
+                        protocol: version,
                     },
                     &[],
                 )
@@ -854,8 +1040,18 @@ async fn handle_incoming(
                 device: &device,
                 spake: &spake,
                 addr,
+                version,
             };
             accept_pairing(&shared, &mut reader, &mut writer, request).await?;
+        }
+        Intent::Unknown => {
+            reject(
+                &mut writer,
+                RejectReason::Incompatible,
+                Some(shared.supported),
+            )
+            .await;
+            return Err(anyhow!("unknown intent from {remote_id}"));
         }
     }
 
@@ -871,6 +1067,7 @@ struct PairRequest<'a> {
     device: &'a DeviceInfo,
     spake: &'a str,
     addr: SocketAddr,
+    version: u16,
 }
 
 /// 显示配对码的一方：校验对方的确认值，通过后记为已配对设备并换一个新配对码。
@@ -887,19 +1084,20 @@ async fn accept_pairing(
         .begin_attempt();
     shared.emit_state();
     let Some(code) = code else {
-        reject(writer, RejectReason::PairingUnavailable).await;
+        reject(writer, RejectReason::PairingUnavailable, None).await;
         return Err(anyhow!("pairing attempts used up"));
     };
 
     let (spake, outbound) = pairing::start_listener(&code);
     let Ok(key) = spake.finish(&from_hex(request.spake)?) else {
-        reject(writer, RejectReason::WrongCode).await;
+        reject(writer, RejectReason::WrongCode, None).await;
         return Err(anyhow!("invalid spake message"));
     };
     writer
         .send_message(
             &Message::PairChallenge {
                 device: shared.my_info(),
+                protocol: request.version,
                 spake: to_hex(&outbound),
             },
             &[],
@@ -917,7 +1115,7 @@ async fn accept_pairing(
     };
     let expected = pairing::confirmation(&key, Role::Dialer, &transcript);
     if !pairing::verify_confirmation(&expected, &mac) {
-        reject(writer, RejectReason::WrongCode).await;
+        reject(writer, RejectReason::WrongCode, None).await;
         return Err(anyhow!("wrong pairing code from {}", request.addr));
     }
 
@@ -937,10 +1135,11 @@ async fn accept_pairing(
         public_key: to_hex(request.remote_key),
         name: request.device.name.clone(),
         platform: request.device.platform,
-        address: Some(SocketAddr::new(request.addr.ip(), request.device.listen_port).to_string()),
+        address: Some(with_port(request.addr, request.device.listen_port).to_string()),
         paired_at: now,
         last_seen_at: Some(now),
-        cursor: None,
+        watermark: 0,
+        epoch: None,
     });
     *shared.pairing.lock().expect("lan sync poisoned") = PairingCode::new();
     log::info!(
@@ -955,8 +1154,15 @@ async fn accept_pairing(
 }
 
 enum DialGoal {
-    Sync { device_id: String },
-    Pair { code: String },
+    /// 连一台指定的已配对设备。
+    Sync {
+        device_id: String,
+    },
+    /// 按地址连接，对方是任何一台已配对设备都行。
+    SyncAny,
+    Pair {
+        code: String,
+    },
 }
 
 #[derive(Debug)]
@@ -965,8 +1171,42 @@ enum DialError {
     Unreachable(anyhow::Error),
     SelfConnection,
     WrongCode,
+    /// 按地址连接时，对方不是已配对设备。
+    NotPaired,
     Rejected(RejectReason),
+    /// 没有共同的协议版本；`None` 是对方没说明自己支持哪些版本。
+    Incompatible(Option<Incompatibility>),
     Other(anyhow::Error),
+}
+
+impl DialError {
+    /// 给用户看的原因。
+    fn key(&self) -> Key {
+        match self {
+            Self::SelfConnection => Key::SyncSelfPairing,
+            Self::WrongCode | Self::Rejected(RejectReason::WrongCode) => Key::SyncWrongCode,
+            Self::Rejected(RejectReason::PairingUnavailable) => Key::SyncPairingUnavailable,
+            Self::NotPaired | Self::Rejected(RejectReason::NotPaired) => Key::SyncNotPaired,
+            Self::Incompatible(Some(Incompatibility::PeerOutdated)) => Key::SyncPeerOutdated,
+            Self::Incompatible(Some(Incompatibility::SelfOutdated)) => Key::SyncSelfOutdated,
+            Self::Incompatible(None) | Self::Rejected(RejectReason::Incompatible) => {
+                Key::SyncIncompatible
+            }
+            Self::Rejected(RejectReason::Unknown) | Self::Unreachable(_) | Self::Other(_) => {
+                Key::SyncUnreachable
+            }
+        }
+    }
+}
+
+/// 对方拒绝时的错误：版本不兼容要分清是哪边旧了。
+fn rejection(shared: &Shared, reason: RejectReason, supported: Option<VersionRange>) -> DialError {
+    if reason == RejectReason::Incompatible {
+        return DialError::Incompatible(
+            supported.and_then(|theirs| incompatibility(shared.supported, theirs)),
+        );
+    }
+    DialError::Rejected(reason)
 }
 
 /// 主动连接 `addr`；成功时已在后台开始同步会话，返回对方设备名。
@@ -993,15 +1233,18 @@ async fn dial(
     }
 
     let device = match goal {
-        DialGoal::Sync { device_id } => {
-            if &remote_id != device_id
-                || !shared
-                    .peers
-                    .is_trusted(&remote_id, &to_hex(&remote_public_key))
-            {
-                return Err(DialError::Other(anyhow!(
-                    "{addr} now belongs to another device"
-                )));
+        DialGoal::Sync { .. } | DialGoal::SyncAny => {
+            let trusted = shared
+                .peers
+                .is_trusted(&remote_id, &to_hex(&remote_public_key));
+            match goal {
+                DialGoal::Sync { device_id } if &remote_id != device_id || !trusted => {
+                    return Err(DialError::Other(anyhow!(
+                        "{addr} now belongs to another device"
+                    )));
+                }
+                DialGoal::SyncAny if !trusted => return Err(DialError::NotPaired),
+                _ => {}
             }
 
             let hello = Message::Hello {
@@ -1017,8 +1260,17 @@ async fn dial(
                 .map_err(DialError::Unreachable)?
                 .0
             {
-                Message::Welcome { device } => device,
-                Message::Reject { reason } => return Err(DialError::Rejected(reason)),
+                Message::Welcome { device, protocol } if shared.supported.contains(protocol) => {
+                    device
+                }
+                Message::Welcome { protocol, .. } => {
+                    return Err(DialError::Other(anyhow!(
+                        "peer chose unsupported protocol {protocol}"
+                    )));
+                }
+                Message::Reject { reason, supported } => {
+                    return Err(rejection(shared, reason, supported));
+                }
                 other => return Err(DialError::Other(anyhow!("unexpected reply {other:?}"))),
             }
         }
@@ -1038,10 +1290,11 @@ async fn dial(
                 public_key: to_hex(&remote_public_key),
                 name: device.name.clone(),
                 platform: device.platform,
-                address: Some(SocketAddr::new(addr.ip(), device.listen_port).to_string()),
+                address: Some(with_port(addr, device.listen_port).to_string()),
                 paired_at: now,
                 last_seen_at: Some(now),
-                cursor: None,
+                watermark: 0,
+                epoch: None,
             });
             log::info!("lan sync paired with {} ({remote_id})", device.name);
             device
@@ -1078,8 +1331,17 @@ async fn pair_as_dialer(
         .map_err(DialError::Unreachable)?;
 
     let (device, spake_hex) = match recv_within(reader).await.map_err(DialError::Unreachable)?.0 {
-        Message::PairChallenge { device, spake } => (device, spake),
-        Message::Reject { reason } => return Err(DialError::Rejected(reason)),
+        Message::PairChallenge {
+            device,
+            protocol,
+            spake,
+        } if shared.supported.contains(protocol) => (device, spake),
+        Message::PairChallenge { protocol, .. } => {
+            return Err(DialError::Other(anyhow!(
+                "peer chose unsupported protocol {protocol}"
+            )));
+        }
+        Message::Reject { reason, supported } => return Err(rejection(shared, reason, supported)),
         other => return Err(DialError::Other(anyhow!("unexpected reply {other:?}"))),
     };
     let inbound = from_hex(&spake_hex).map_err(DialError::Other)?;
@@ -1110,7 +1372,7 @@ async fn pair_as_dialer(
                 Err(DialError::WrongCode)
             }
         }
-        Message::Reject { reason } => Err(DialError::Rejected(reason)),
+        Message::Reject { reason, supported } => Err(rejection(shared, reason, supported)),
         other => Err(DialError::Other(anyhow!("unexpected reply {other:?}"))),
     }
 }
@@ -1157,7 +1419,7 @@ async fn dial_peer(shared: Arc<Shared>, peer: TrustedPeer, addresses: Vec<Socket
     shared.finish_dial(&peer.device_id, connected);
 }
 
-/// 已认证连接上的同步会话：登记连接、请求补齐，然后收发直到断开。
+/// 已认证连接上的同步会话：登记连接、按水位线请求补齐，然后收发直到断开。
 async fn run_session(
     shared: Arc<Shared>,
     peer_id: String,
@@ -1178,6 +1440,8 @@ async fn run_session(
             dialer_is_me,
             tx: tx.clone(),
             kill: kill_tx.clone(),
+            max_attachment: device.max_attachment_bytes,
+            live: LiveCursor::default(),
         },
     );
     if !registered {
@@ -1185,7 +1449,11 @@ async fn run_session(
         return;
     }
 
-    let address = SocketAddr::new(addr.ip(), device.listen_port).to_string();
+    // 认证完成：放宽到 JSON 头上限加本机的附件上限。
+    let own_limit = usize::try_from(shared.max_attachment()).unwrap_or(usize::MAX);
+    reader.set_limit(4 + MAX_HEADER_BYTES.saturating_add(own_limit));
+
+    let address = with_port(addr, device.listen_port).to_string();
     shared
         .peers
         .touch(&peer_id, &device.name, device.platform, Some(address));
@@ -1204,24 +1472,20 @@ async fn run_session(
         shared.shutdown.clone(),
     ));
 
-    let since = shared
+    let (after, epoch) = shared
         .peers
         .get(&peer_id)
-        .and_then(|peer| peer.cursor)
-        .map(|cursor| cursor.to_rfc3339());
-    let _ = tx
-        .send((Message::CatchUp { since }, Arc::new(Vec::new())))
-        .await;
+        .map_or((0, None), |peer| (peer.watermark, peer.epoch));
+    let request = Message::CatchUp { after, epoch };
+    let _ = tx.send((request, Arc::new(Vec::new()))).await;
 
-    read_loop(
-        &shared,
-        &peer_id,
-        device.platform,
-        &mut reader,
-        &tx,
-        kill_rx,
-    )
-    .await;
+    let session = Session {
+        peer_id: &peer_id,
+        connection_id,
+        platform: device.platform,
+        peer_max_attachment: device.max_attachment_bytes,
+    };
+    read_loop(&shared, &session, &mut reader, &tx, kill_rx).await;
 
     let _ = kill_tx.send(true);
     drop(tx);
@@ -1232,14 +1496,21 @@ async fn run_session(
     shared.dial_now.notify_one();
 }
 
+struct Session<'a> {
+    peer_id: &'a str,
+    connection_id: u64,
+    platform: Platform,
+    peer_max_attachment: u64,
+}
+
 async fn read_loop(
     shared: &Arc<Shared>,
-    peer_id: &str,
-    platform: Platform,
+    session: &Session<'_>,
     reader: &mut SecureReader,
     tx: &mpsc::Sender<Outgoing>,
     mut kill: watch::Receiver<bool>,
 ) {
+    let peer_id = session.peer_id;
     let mut shutdown = shared.shutdown.clone();
     loop {
         let received = tokio::select! {
@@ -1265,12 +1536,11 @@ async fn read_loop(
                 let Some(core) = shared.core() else {
                     return;
                 };
-                let stamp = engine::parse_stamp(&item.stamp);
                 if let Err(err) = engine::receive(
                     &core,
                     &shared.echo,
                     peer_id,
-                    platform,
+                    session.platform,
                     item,
                     attachment,
                     live,
@@ -1279,22 +1549,33 @@ async fn read_loop(
                 {
                     log::warn!("lan sync receive from {peer_id} failed: {err:#}");
                 }
-                if let Some(stamp) = stamp {
-                    shared.peers.advance_cursor(peer_id, stamp);
-                }
             }
-            Message::CatchUp { since } => {
+            Message::CatchUp { after, epoch } => {
                 let Some(core) = shared.core() else {
                     return;
                 };
-                let tx = tx.clone();
+                let request = CatchUpRequest {
+                    shared: shared.clone(),
+                    peer_id: peer_id.to_owned(),
+                    connection_id: session.connection_id,
+                    tx: tx.clone(),
+                    attachment_limit: session.peer_max_attachment,
+                };
                 tokio::spawn(async move {
-                    send_catch_up(core, tx, since).await;
+                    send_catch_up(core, request, after, epoch).await;
                 });
             }
-            Message::CatchUpDone { until } => {
-                if let Some(stamp) = engine::parse_stamp(&until) {
-                    shared.peers.advance_cursor(peer_id, stamp);
+            // 这一页（或检查点）之前的记录都已经在上面逐条入库，可以推进水位线。
+            Message::CatchUpPage { until, more, epoch } => {
+                shared.peers.advance_watermark(peer_id, &epoch, until);
+                if more {
+                    let next = Message::CatchUp {
+                        after: until,
+                        epoch: Some(epoch),
+                    };
+                    if tx.send((next, Arc::new(Vec::new()))).await.is_err() {
+                        return;
+                    }
                 }
             }
             Message::Unpair => {
@@ -1303,29 +1584,60 @@ async fn read_loop(
                 shared.emit_state();
                 return;
             }
+            Message::Unknown => log::debug!("lan sync skips a message it does not understand"),
             other => log::debug!("lan sync ignores unexpected {other:?}"),
         }
     }
 }
 
-async fn send_catch_up(core: Arc<CoreInner>, tx: mpsc::Sender<Outgoing>, since: Option<String>) {
-    let (items, until) = match engine::collect_catch_up(&core, since.as_deref()).await {
-        Ok(result) => result,
-        Err(err) => {
-            log::warn!("lan sync catch-up failed: {err:#}");
-            return;
-        }
-    };
+/// 对方的一次补齐请求要回到哪条连接。
+struct CatchUpRequest {
+    shared: Arc<Shared>,
+    peer_id: String,
+    connection_id: u64,
+    tx: mpsc::Sender<Outgoing>,
+    attachment_limit: u64,
+}
 
-    for (item, attachment) in items {
+async fn send_catch_up(
+    core: Arc<CoreInner>,
+    request: CatchUpRequest,
+    after: u64,
+    epoch: Option<String>,
+) {
+    let page =
+        match engine::collect_catch_up(&core, after, epoch.as_deref(), request.attachment_limit)
+            .await
+        {
+            Ok(page) => page,
+            Err(err) => {
+                log::warn!("lan sync catch-up failed: {err:#}");
+                return;
+            }
+        };
+
+    for (item, attachment) in page.items {
         let push = Message::Push { item, live: false };
-        if tx.send((push, Arc::new(attachment))).await.is_err() {
+        if request.tx.send((push, Arc::new(attachment))).await.is_err() {
             return;
         }
     }
-    let _ = tx
-        .send((Message::CatchUpDone { until }, Arc::new(Vec::new())))
-        .await;
+    let done = Message::CatchUpPage {
+        until: page.until,
+        more: page.more,
+        epoch: page.epoch.clone(),
+    };
+    if request.tx.send((done, Arc::new(Vec::new()))).await.is_err() {
+        return;
+    }
+    if !page.more {
+        request.shared.confirm_catch_up(
+            &request.peer_id,
+            request.connection_id,
+            page.epoch,
+            page.until,
+        );
+    }
 }
 
 async fn write_loop(
@@ -1363,23 +1675,36 @@ async fn recv_within(reader: &mut SecureReader) -> anyhow::Result<(Message, Vec<
         .map_err(|_| anyhow!("peer did not answer in time"))?
 }
 
-async fn reject(writer: &mut SecureWriter, reason: RejectReason) {
-    if let Err(err) = writer.send_message(&Message::Reject { reason }, &[]).await {
+async fn reject(writer: &mut SecureWriter, reason: RejectReason, supported: Option<VersionRange>) {
+    if let Err(err) = writer
+        .send_message(&Message::Reject { reason, supported }, &[])
+        .await
+    {
         log::debug!("lan sync reject not delivered: {err:#}");
     }
 }
 
-/// 解析手动输入的地址：`ip`、`ip:端口`、`主机名[:端口]`，缺端口时用默认端口。
+/// 换成对方的监听端口；IPv6 保留 scope id（链路本地地址少了它连不上）。
+fn with_port(addr: SocketAddr, port: u16) -> SocketAddr {
+    match addr {
+        SocketAddr::V4(v4) => SocketAddr::new(IpAddr::V4(*v4.ip()), port),
+        SocketAddr::V6(v6) => SocketAddr::V6(SocketAddrV6::new(*v6.ip(), port, 0, v6.scope_id())),
+    }
+}
+
+/// 解析手动输入的地址：`ip`、`ip:端口`、`[ipv6]:端口`、带 `%网卡` 的链路本地 IPv6
+/// （网卡写编号或名字都行）、`主机名[:端口]`。缺端口时用默认端口。
 async fn resolve_address(text: &str) -> Option<Vec<SocketAddr>> {
     let text = text.trim();
     if text.is_empty() {
         return None;
     }
-    if let Ok(addr) = text.parse::<SocketAddr>() {
+    if let Some(addr) = parse_literal_address(text) {
         return Some(vec![addr]);
     }
-    if let Ok(ip) = text.parse::<IpAddr>() {
-        return Some(vec![SocketAddr::new(ip, DEFAULT_PORT)]);
+    // 像 IPv6 字面量却没解析出来（网卡不存在、括号不配对）：主机名里不会有这些字符，不必再查 DNS。
+    if text.contains(['%', '[', ']']) {
+        return None;
     }
 
     let with_port = if text.contains(':') {
@@ -1387,16 +1712,54 @@ async fn resolve_address(text: &str) -> Option<Vec<SocketAddr>> {
     } else {
         format!("{text}:{DEFAULT_PORT}")
     };
-    let addresses: Vec<SocketAddr> = tokio::net::lookup_host(with_port)
-        .await
-        .ok()?
-        .filter(SocketAddr::is_ipv4)
-        .collect();
+    let addresses: Vec<SocketAddr> = tokio::net::lookup_host(with_port).await.ok()?.collect();
     (!addresses.is_empty()).then_some(addresses)
 }
 
+/// 不查 DNS 就能解析的地址字面量。
+fn parse_literal_address(text: &str) -> Option<SocketAddr> {
+    if let Ok(addr) = text.parse::<SocketAddr>() {
+        return Some(addr);
+    }
+    if let Ok(ip) = text.parse::<IpAddr>() {
+        return Some(SocketAddr::new(ip, DEFAULT_PORT));
+    }
+
+    // 带 scope 的 IPv6：`[fe80::1%en0]:41573` 或 `fe80::1%12`。
+    let (host, port) = match text.strip_prefix('[') {
+        Some(rest) => {
+            let (host, tail) = rest.split_once(']')?;
+            let port = match tail.strip_prefix(':') {
+                Some(port) => port.parse().ok()?,
+                None if tail.is_empty() => DEFAULT_PORT,
+                None => return None,
+            };
+            (host, port)
+        }
+        None => (text, DEFAULT_PORT),
+    };
+    let (ip, scope) = host.split_once('%')?;
+    let ip: Ipv6Addr = ip.parse().ok()?;
+    let scope = scope
+        .parse::<u32>()
+        .ok()
+        .or_else(|| interface_index(scope))?;
+    Some(SocketAddr::V6(SocketAddrV6::new(ip, port, 0, scope)))
+}
+
+/// 网卡名对应的编号。
+fn interface_index(name: &str) -> Option<u32> {
+    if_addrs::get_if_addrs()
+        .ok()?
+        .into_iter()
+        .find(|interface| interface.name == name)
+        .and_then(|interface| interface.index)
+}
+
 fn local_addresses() -> Vec<String> {
-    local_ipv4s().into_iter().map(|ip| ip.to_string()).collect()
+    let mut addresses: Vec<String> = local_ipv4s().into_iter().map(|ip| ip.to_string()).collect();
+    addresses.extend(local_ipv6s());
+    addresses
 }
 
 /// 本机可被别的设备连接的 IPv4 地址，默认路由所在网卡排第一。
@@ -1433,6 +1796,43 @@ fn local_ipv4s() -> Vec<Ipv4Addr> {
     addresses
 }
 
+/// 物理网卡上的 IPv6 地址：全局地址在前，链路本地地址带 `%scope`（Windows 写网卡编号，
+/// macOS 写网卡名，与系统自己的写法一致）。
+fn local_ipv6s() -> Vec<String> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+
+    let mut global = Vec::new();
+    let mut link_local = Vec::new();
+    for interface in interfaces {
+        let IpAddr::V6(ip) = interface.ip() else {
+            continue;
+        };
+        if ip.is_loopback() || ip.is_unspecified() || is_virtual_adapter(&interface.name) {
+            continue;
+        }
+        if ip.is_unicast_link_local() {
+            let scope = if cfg!(target_os = "windows") {
+                interface.index.map(|index| index.to_string())
+            } else {
+                Some(interface.name.clone())
+            };
+            if let Some(scope) = scope {
+                link_local.push(format!("{ip}%{scope}"));
+            }
+        } else {
+            global.push(ip.to_string());
+        }
+    }
+    global.sort();
+    global.dedup();
+    link_local.sort();
+    link_local.dedup();
+    global.extend(link_local);
+    global
+}
+
 fn is_virtual_adapter(name: &str) -> bool {
     const MARKERS: [&str; 7] = [
         "vethernet",
@@ -1457,21 +1857,103 @@ fn primary_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
-/// 和本机同一网段（/24）的地址排前面：拨号先试最可能连通的，界面也显示这一个。
+/// 拨号顺序：和本机同一网段（/24）的 IPv4 最先，其次别的 IPv4，再是全局 IPv6，最后链路本地 IPv6。
+/// 界面上也显示排第一的那个。
 fn rank_addresses(addresses: &mut [SocketAddr], local: &[Ipv4Addr]) {
-    addresses.sort_by_key(|addr| {
-        let IpAddr::V4(ip) = addr.ip() else {
-            return true;
-        };
-        !local
-            .iter()
-            .any(|local| local.octets()[..3] == ip.octets()[..3])
+    addresses.sort_by_key(|addr| match addr.ip() {
+        IpAddr::V4(ip) => {
+            let same_subnet = local
+                .iter()
+                .any(|local| local.octets()[..3] == ip.octets()[..3]);
+            if same_subnet {
+                0
+            } else {
+                1
+            }
+        }
+        IpAddr::V6(ip) if ip.is_unicast_link_local() => 3,
+        IpAddr::V6(_) => 2,
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn connection(id: u64, max_attachment: u64) -> (Connection, mpsc::Receiver<Outgoing>) {
+        let (tx, rx) = mpsc::channel(4);
+        let connection = Connection {
+            id,
+            dialer_is_me: true,
+            tx,
+            kill: Arc::new(watch::channel(false).0),
+            max_attachment,
+            live: LiveCursor::default(),
+        };
+        (connection, rx)
+    }
+
+    fn checkpoint(message: Option<Message>) -> Option<u64> {
+        match message? {
+            Message::CatchUpPage {
+                until,
+                more: false,
+                epoch,
+            } if epoch == "e" => Some(until),
+            other => panic!("unexpected checkpoint {other:?}"),
+        }
+    }
+
+    /// 补齐确认之前处理过的序号先记着；确认之后连续的部分随即成为检查点，有空洞时停在空洞前。
+    #[test]
+    fn live_checkpoints_follow_contiguous_sequences() {
+        let mut cursor = LiveCursor::default();
+
+        assert_eq!(checkpoint(cursor.handle(11)), None);
+        assert_eq!(checkpoint(cursor.handle(9)), None);
+        assert_eq!(checkpoint(cursor.confirm("e".to_owned(), 10)), Some(11));
+        assert_eq!(checkpoint(cursor.handle(13)), None);
+        assert_eq!(checkpoint(cursor.handle(12)), Some(13));
+
+        cursor.broken = true;
+        assert_eq!(checkpoint(cursor.handle(14)), None);
+    }
+
+    /// 实时推送按每台设备申报的附件上限分别跳过，不因为一台设备的上限小而影响别的设备。
+    #[test]
+    fn broadcast_skips_attachments_over_each_peers_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_shutdown, shutdown) = watch::channel(false);
+        let shared = Shared {
+            core: Weak::new(),
+            app_version: "test".to_owned(),
+            supported: SUPPORTED,
+            identity: identity::load_or_create(dir.path()).unwrap().identity,
+            peers: Arc::new(PeerStore::load(dir.path())),
+            port: 0,
+            connections: Mutex::new(HashMap::new()),
+            nearby: Mutex::new(HashMap::new()),
+            pairing: Mutex::new(PairingCode::new()),
+            echo: Mutex::new(EchoFilter::default()),
+            dials: Mutex::new(HashMap::new()),
+            dial_now: Notify::new(),
+            handshakes: Arc::new(Semaphore::new(1)),
+            shutdown,
+            next_conn_id: AtomicU64::new(1),
+        };
+        let (small, mut small_rx) = connection(1, 10);
+        let (large, mut large_rx) = connection(2, 100);
+        assert!(shared.register("small", small));
+        assert!(shared.register("large", large));
+
+        shared.deliver(None, Some((Message::Ping, Arc::new(vec![0; 50]))));
+        shared.deliver(None, Some((Message::Unpair, Arc::new(vec![0; 10]))));
+
+        assert!(matches!(small_rx.try_recv(), Ok((Message::Unpair, _))));
+        assert!(small_rx.try_recv().is_err());
+        assert!(matches!(large_rx.try_recv(), Ok((Message::Ping, _))));
+        assert!(matches!(large_rx.try_recv(), Ok((Message::Unpair, _))));
+    }
 
     #[tokio::test]
     async fn resolves_manual_addresses() {
@@ -1487,17 +1969,49 @@ mod tests {
     }
 
     #[test]
-    fn same_subnet_addresses_come_first() {
+    fn parses_ipv6_literals_with_and_without_scope() {
+        assert_eq!(
+            parse_literal_address("::1"),
+            Some("[::1]:41573".parse().unwrap())
+        );
+        assert_eq!(
+            parse_literal_address("[2001:db8::5]:5000"),
+            Some("[2001:db8::5]:5000".parse().unwrap())
+        );
+        let scoped = SocketAddr::V6(SocketAddrV6::new("fe80::1".parse().unwrap(), 41573, 0, 12));
+        assert_eq!(parse_literal_address("fe80::1%12"), Some(scoped));
+        assert_eq!(parse_literal_address("[fe80::1%12]"), Some(scoped));
+        assert_eq!(
+            parse_literal_address("[fe80::1%12]:5000"),
+            Some(with_port(scoped, 5000))
+        );
+        // scope id 要原样带回界面和 peers.json，写回去还能再解析出来。
+        assert_eq!(
+            with_port(scoped, 5000)
+                .to_string()
+                .parse::<SocketAddr>()
+                .ok(),
+            Some(with_port(scoped, 5000))
+        );
+        assert_eq!(parse_literal_address("fe80::1%no-such-interface"), None);
+        assert_eq!(parse_literal_address("[fe80::1%12]x"), None);
+    }
+
+    #[test]
+    fn addresses_rank_ipv4_first_then_global_then_link_local_ipv6() {
         let mut addresses: Vec<SocketAddr> = vec![
+            SocketAddr::V6(SocketAddrV6::new("fe80::9".parse().unwrap(), 41573, 0, 7)),
+            "[2001:db8::7]:41573".parse().unwrap(),
             "172.30.16.1:41573".parse().unwrap(),
             "192.168.1.20:41573".parse().unwrap(),
-            "10.0.0.5:41573".parse().unwrap(),
         ];
 
         rank_addresses(&mut addresses, &[Ipv4Addr::new(192, 168, 1, 8)]);
 
         assert_eq!(addresses[0], "192.168.1.20:41573".parse().unwrap());
         assert_eq!(addresses[1], "172.30.16.1:41573".parse().unwrap());
+        assert_eq!(addresses[2], "[2001:db8::7]:41573".parse().unwrap());
+        assert!(addresses[3].ip().is_ipv6());
     }
 
     #[test]
@@ -1506,5 +2020,24 @@ mod tests {
         assert!(is_virtual_adapter("VMware Network Adapter VMnet8"));
         assert!(!is_virtual_adapter("以太网"));
         assert!(!is_virtual_adapter("en0"));
+    }
+
+    /// 回环模式在 127.0.0.1 和 ::1 上用同一个随机端口监听。
+    #[tokio::test]
+    async fn loopback_listens_on_both_families_with_one_port() {
+        let (listeners, port) = bind_listeners(&LanSyncNetwork::loopback()).unwrap();
+
+        assert_ne!(port, 0);
+        let addresses: Vec<SocketAddr> = listeners
+            .iter()
+            .map(|listener| listener.local_addr().unwrap())
+            .collect();
+        assert_eq!(
+            addresses[0],
+            SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port)
+        );
+        if let Some(v6) = addresses.get(1) {
+            assert_eq!(*v6, SocketAddr::new(Ipv6Addr::LOCALHOST.into(), port));
+        }
     }
 }

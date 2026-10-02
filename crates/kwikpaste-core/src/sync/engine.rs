@@ -1,4 +1,4 @@
-//! 记录与线上格式互转，以及收到记录后的入库 / 写剪贴板。
+//! 记录与线上格式互转、按水位线补齐，以及收到记录后的入库 / 写剪贴板。
 //!
 //! 收到的内容先还原成剪贴板载荷，再走本机采集同一条 `build_item_with_settings`：
 //! 接收方自己的采集类型、大小上限和敏感内容规则照样生效，去重指纹也与本机复制一致。
@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
-use super::protocol::WireItem;
+use super::protocol::{WireItem, MAX_HEADER_BYTES};
 use crate::clipboard::{
     build_item_with_settings, png_dimensions, write_to_clipboard, ClipboardPayload, ImagePayload,
     TextPayload,
@@ -18,9 +18,12 @@ use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind, Platform
 use crate::root::CoreInner;
 use crate::settings::LanSync;
 
-/// 断线重连补齐时最多回看多久、最多补多少条。
-const CATCH_UP_WINDOW: chrono::Duration = chrono::Duration::hours(24);
-const CATCH_UP_LIMIT: i64 = 50;
+/// 补齐最多回看多久、总共最多补多少条、每页多少条。
+const CATCH_UP_DAYS: i64 = 7;
+const CATCH_UP_TOTAL: i64 = 500;
+const CATCH_UP_PAGE: i64 = 50;
+/// 文本放在 JSON 头里，给其余字段留出余量。
+const MAX_TEXT_BYTES: usize = MAX_HEADER_BYTES - 64 * 1024;
 /// 最近一次同步过的内容在这段时间内视为回声。
 const ECHO_WINDOW: Duration = Duration::from_secs(60);
 
@@ -64,7 +67,7 @@ impl EchoFilter {
     }
 }
 
-/// 这条记录按当前设置是否参与同步。
+/// 这条记录按当前设置是否参与同步。文件和敏感内容不同步。
 pub fn is_syncable(item: &ClipboardItem, lan: &LanSync) -> bool {
     if item.is_sensitive {
         return false;
@@ -77,34 +80,42 @@ pub fn is_syncable(item: &ClipboardItem, lan: &LanSync) -> bool {
     }
 }
 
-/// 把本机记录转成线上格式；图片读原图作为附件，超过大小上限返回 `None`。
+/// 把本机记录转成线上格式；图片读原图作为附件。附件超过 `attachment_limit`（本机设置与
+/// 对方申报的上限中较小的那个）或文本超过 JSON 头上限时返回 `None`。
 pub async fn wire_from_item(
     core: &CoreInner,
     item: &ClipboardItem,
-    lan: &LanSync,
+    attachment_limit: u64,
 ) -> anyhow::Result<Option<(WireItem, Vec<u8>)>> {
-    let stamp = item.updated_at.to_rfc3339();
     match item.kind {
-        ClipboardKind::Text => Ok(Some((
-            WireItem {
-                kind: item.kind,
-                sub_kind: item.sub_kind,
-                content: item.content.clone(),
-                search_text: item.search_text.clone(),
-                summary: item.summary.clone(),
-                width: None,
-                height: None,
-                stamp,
-            },
-            Vec::new(),
-        ))),
+        ClipboardKind::Text => {
+            let text_bytes = item.content.len()
+                + item.search_text.as_ref().map_or(0, String::len)
+                + item.summary.as_ref().map_or(0, String::len);
+            if text_bytes > MAX_TEXT_BYTES {
+                log::info!("lan sync skips text of {text_bytes} bytes over the message limit");
+                return Ok(None);
+            }
+            Ok(Some((
+                WireItem {
+                    kind: item.kind,
+                    sub_kind: item.sub_kind,
+                    content: item.content.clone(),
+                    search_text: item.search_text.clone(),
+                    summary: item.summary.clone(),
+                    width: None,
+                    height: None,
+                },
+                Vec::new(),
+            )))
+        }
         ClipboardKind::Image => {
             let path = core.images.origin_path(&item.content);
             let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
                 .await
                 .context("image read task failed")?
                 .context("failed to read image for sync")?;
-            if bytes.len() as u64 > lan.max_image_bytes() {
+            if bytes.len() as u64 > attachment_limit {
                 log::info!(
                     "lan sync skips image of {} bytes over the size limit",
                     bytes.len()
@@ -121,7 +132,6 @@ pub async fn wire_from_item(
                     summary: None,
                     width: item.width,
                     height: item.height,
-                    stamp,
                 },
                 bytes,
             )))
@@ -130,36 +140,69 @@ pub async fn wire_from_item(
     }
 }
 
-/// 断线重连时对方请求的补齐内容，外加这次补齐覆盖到的时间点（本机时钟）。
-pub async fn collect_catch_up(
-    core: &CoreInner,
-    since: Option<&str>,
-) -> anyhow::Result<(Vec<(WireItem, Vec<u8>)>, String)> {
-    let now = Utc::now();
-    let until = now.to_rfc3339();
-    // 刚配对的设备没有进度，只把当前时间给它当起点，不把历史整个灌过去。
-    let Some(since) = since.and_then(parse_stamp) else {
-        return Ok((Vec::new(), until));
-    };
-    let since = since.max(now - CATCH_UP_WINDOW);
-
-    let lan = core.settings.snapshot().sync.lan;
-    let pool = core.db.pool().await;
-    let items =
-        crate::db::items::list_local_items_updated_since(&pool, since, CATCH_UP_LIMIT).await?;
-
-    let mut out = Vec::with_capacity(items.len());
-    for item in items.iter().filter(|item| is_syncable(item, &lan)) {
-        match wire_from_item(core, item, &lan).await {
-            Ok(Some(wire)) => out.push(wire),
-            Ok(None) => {}
-            Err(err) => log::warn!("lan sync catch-up skips item {}: {err:#}", item.id),
-        }
-    }
-    Ok((out, until))
+/// 一页补齐。
+pub struct CatchUpPage {
+    pub items: Vec<(WireItem, Vec<u8>)>,
+    /// 这一页覆盖到的本机序号：对方收齐这页后把水位线推进到这里。
+    pub until: u64,
+    pub more: bool,
+    /// 本机序号的代次。
+    pub epoch: String,
 }
 
-/// 入库一条收到的记录；`live` 且设置允许时写入系统剪贴板。
+/// 对方请求本机序号大于 `after` 的记录：最近 7 天、最新的 500 条以内，按序号从小到大分页。
+/// 对方的水位线属于另一代序号（本机数据库重建过）或还没有水位线时从头发。
+/// 最后一页的 `until` 是本机当前的计数器，不参与同步的记录（敏感、文件）也一并跳过。
+pub async fn collect_catch_up(
+    core: &CoreInner,
+    after: u64,
+    epoch: Option<&str>,
+    attachment_limit: u64,
+) -> anyhow::Result<CatchUpPage> {
+    let lan = core.settings.snapshot().sync.lan;
+    let pool = core.db.pool().await;
+    let own_epoch = crate::db::sync::sync_epoch(&pool).await?;
+    let after = if epoch == Some(own_epoch.as_str()) {
+        after
+    } else {
+        0
+    };
+    // 先读计数器再取这一页：取页期间新复制的记录序号比它大，留到下一次补齐，不会被跳过。
+    let counter = crate::db::sync::sync_counter(&pool).await?.max(0) as u64;
+    let cutoff = Utc::now() - chrono::Duration::days(CATCH_UP_DAYS);
+    let after_signed = i64::try_from(after).unwrap_or(i64::MAX);
+    let (rows, more) =
+        crate::db::sync::catch_up_page(&pool, after_signed, cutoff, CATCH_UP_TOTAL, CATCH_UP_PAGE)
+            .await?;
+
+    let last = rows.last().map_or(after, |(_, seq)| (*seq).max(0) as u64);
+    let until = if more { last } else { counter.max(last) };
+    let mut items = Vec::with_capacity(rows.len());
+    for (id, _) in rows {
+        let Some(item) = crate::db::items::find_item_by_id(&pool, &id).await? else {
+            continue;
+        };
+        if !is_syncable(&item, &lan) {
+            continue;
+        }
+        let limit = attachment_limit.min(lan.max_image_bytes());
+        match wire_from_item(core, &item, limit).await {
+            Ok(Some(wire)) => items.push(wire),
+            Ok(None) => {}
+            Err(err) => log::warn!("lan sync catch-up skips item {id}: {err:#}"),
+        }
+    }
+
+    Ok(CatchUpPage {
+        items,
+        until,
+        more,
+        epoch: own_epoch,
+    })
+}
+
+/// 入库一条收到的记录。`live` 且设置允许时写入系统剪贴板；补齐的历史只在本机还没有这条内容时
+/// 插入，已有的不动（不刷新时间、不增加使用次数），重连后重复补到的记录不会把列表顺序打乱。
 pub async fn receive(
     core: &Arc<CoreInner>,
     echo: &std::sync::Mutex<EchoFilter>,
@@ -205,6 +248,16 @@ pub async fn receive(
     };
     item.origin_device_id = Some(peer_id.to_owned());
     item.platform = peer_platform;
+
+    if !live {
+        let pool = core.db.pool().await;
+        if crate::db::items::find_item_by_content_hash(&pool, &item.content_hash)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+    }
 
     // 补齐的是历史记录，不代表对方剪贴板的现状，不参与回声判断，也不写剪贴板。
     // 实时记录先记回声再写剪贴板：写回被本机监听到时要能认出来。
@@ -254,12 +307,6 @@ fn text_payload(wire: &WireItem) -> anyhow::Result<ClipboardPayload> {
     }))
 }
 
-pub fn parse_stamp(stamp: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(stamp)
-        .ok()
-        .map(|time| time.with_timezone(&Utc))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,7 +320,6 @@ mod tests {
             summary: None,
             width: None,
             height: None,
-            stamp: Utc::now().to_rfc3339(),
         }
     }
 

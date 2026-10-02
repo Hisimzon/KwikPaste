@@ -14,7 +14,10 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
 use super::identity::DeviceIdentity;
-use super::protocol::{self, Message, MAX_MESSAGE_BYTES, NOISE_PARAMS, NOISE_PROLOGUE};
+use super::protocol::{
+    self, Message, HANDSHAKE_MESSAGE_BYTES, MAX_HEADER_BYTES, NOISE_PARAMS, NOISE_PROLOGUE,
+};
+use crate::settings::LAN_SYNC_MAX_IMAGE_MB_MAX;
 
 const NOISE_MAX_MESSAGE: usize = 65535;
 const NOISE_TAG: usize = 16;
@@ -23,6 +26,9 @@ const KEY_LEN: usize = 32;
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// 预分配上限：总长字段来自对端，先按小块分配，收到多少再长多少。
 const INITIAL_RECV_CAPACITY: usize = 1024 * 1024;
+/// 发出的单条消息的硬上限：JSON 头上限加设置里能选的最大附件。真正的附件上限按对方申报的来。
+const MAX_SEND_BYTES: usize =
+    4 + MAX_HEADER_BYTES + LAN_SYNC_MAX_IMAGE_MB_MAX as usize * 1024 * 1024;
 
 /// 握手完成后的通道。
 pub struct Handshaken {
@@ -100,6 +106,7 @@ async fn handshake_inner(
             transport: transport.clone(),
             nonce: 0,
             buffer: vec![0u8; NOISE_MAX_MESSAGE],
+            limit: HANDSHAKE_MESSAGE_BYTES,
         },
         writer: SecureWriter {
             inner: writer,
@@ -130,7 +137,7 @@ impl SecureWriter {
     }
 
     async fn send(&mut self, plaintext: &[u8]) -> anyhow::Result<()> {
-        if plaintext.len() > MAX_MESSAGE_BYTES {
+        if plaintext.len() > MAX_SEND_BYTES {
             return Err(anyhow!("sync message too large: {} bytes", plaintext.len()));
         }
 
@@ -161,9 +168,16 @@ pub struct SecureReader {
     transport: Arc<StatelessTransportState>,
     nonce: u64,
     buffer: Vec<u8>,
+    /// 单条消息上限：认证完成前很小，之后放宽到 JSON 头上限加本机的附件上限。
+    limit: usize,
 }
 
 impl SecureReader {
+    /// 认证完成后放宽单条消息上限。
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit;
+    }
+
     pub async fn recv_message(&mut self) -> anyhow::Result<(Message, Vec<u8>)> {
         let bytes = self.recv().await?;
         protocol::decode(bytes)
@@ -176,7 +190,7 @@ impl SecureReader {
             .try_into()
             .map_err(|_| anyhow!("sync message length chunk malformed"))?;
         let total = u32::from_be_bytes(header) as usize;
-        if total > MAX_MESSAGE_BYTES {
+        if total > self.limit {
             return Err(anyhow!("sync message too large: {total} bytes"));
         }
 
@@ -257,6 +271,8 @@ mod tests {
             tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut channel = handshake(stream, &b, false).await.unwrap();
+                // 认证前的上限挡住大消息，放宽之后才收得下。
+                channel.reader.set_limit(1024 * 1024);
                 let (message, attachment) = channel.reader.recv_message().await.unwrap();
                 assert!(matches!(message, Message::Ping));
                 assert_eq!(attachment, big);

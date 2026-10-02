@@ -32,10 +32,13 @@ pub fn label(key: Key) -> &'static str {
         Key::SyncUnreachable => {
             "Can't reach this device. Make sure both are on the same network and LAN sync is on"
         }
-        Key::SyncInvalidAddress => "Enter an address like 192.168.1.8:41573",
+        Key::SyncInvalidAddress => "Enter an address like 192.168.1.8:41573 or [fe80::1%12]:41573",
         Key::SyncIncompatible => {
             "The other device runs an incompatible KwikPaste version. Update both to the latest"
         }
+        Key::SyncPeerOutdated => "The other device runs an older KwikPaste. Update it first",
+        Key::SyncSelfOutdated => "This device runs an older KwikPaste. Update it first",
+        Key::SyncNotPaired => "This device isn't paired yet. Pair it with a code first",
         Key::SyncDeviceNotFound => "This device is no longer in the nearby list",
         Key::SyncSelfPairing => "You can't pair this device with itself",
     }
