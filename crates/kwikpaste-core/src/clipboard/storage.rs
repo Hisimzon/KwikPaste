@@ -126,8 +126,8 @@ impl ImageStore {
     /// [`Self::ensure_thumbnail`] 的异步版本：先拿并发许可，再到阻塞线程池里解码，
     /// 已存在的缩略图不占许可直接返回。列表首次展示与预览取图都走这里。
     ///
-    /// 必须在 tokio runtime 里调用。
-    pub async fn ensure_thumbnail_async(&self, file_name: &str) -> Result<PathBuf> {
+    /// 必须在 core 的 tokio runtime 里调用；宿主经 `Core::ensure_thumbnail` 使用。
+    pub(crate) async fn ensure_thumbnail_async(&self, file_name: &str) -> Result<PathBuf> {
         let thumb_path = self.thumbnail_path(file_name);
         if thumb_path.exists() {
             return Ok(thumb_path);

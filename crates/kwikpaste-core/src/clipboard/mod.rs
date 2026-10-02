@@ -1,9 +1,10 @@
-//! 剪贴板管线：读取、归类、内容识别、图片与图标落盘、写回与回环抑制。
+//! 剪贴板管线：读取、归类、内容识别、图片与图标落盘、写回、回环抑制与历史自动清理。
 //!
-//! 监听线程、前台应用识别与来源应用登记随后续批次加入。
+//! 监听线程、前台应用识别与来源应用登记随后续批次加入；入库请经 `Core::store_item`。
 
 mod app_store;
 mod backend;
+pub(crate) mod cleanup;
 mod detect;
 mod file_icon_store;
 mod fragment;
@@ -11,6 +12,7 @@ mod guard;
 mod icon;
 mod ingest;
 mod payload;
+pub(crate) mod persist;
 mod read;
 mod secrets;
 mod storage;
@@ -21,6 +23,7 @@ pub use backend::{
     ClipboardBackend, ClipboardFormat, ClipboardWrite, DecodedImage, MemoryClipboard, MemoryState,
     SystemClipboard,
 };
+pub use cleanup::{CleanupPreview, CleanupReport, CleanupStatus, RulePreview, StorageCheck};
 pub use detect::{detect_text_sub_kind, sanitize_css_color};
 pub use file_icon_store::FileIconStore;
 pub use fragment::{

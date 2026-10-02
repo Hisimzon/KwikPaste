@@ -33,6 +33,24 @@ pub struct AppInfo {
     pub env: AppEnv,
 }
 
+/// 宿主给 core 的运行参数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreOptions {
+    /// SQLite 连接池上限。1.x 用 sqlx 默认的 10；原生版只有一个进程内的界面在读写，3 个足够。
+    pub db_max_connections: u32,
+    /// 系统语言标签（BCP 47，如 `zh-CN`），只在首次启动和恢复默认设置时决定界面语言。
+    pub locale: Option<String>,
+}
+
+impl Default for CoreOptions {
+    fn default() -> Self {
+        Self {
+            db_max_connections: 3,
+            locale: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

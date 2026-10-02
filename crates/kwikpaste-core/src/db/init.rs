@@ -18,7 +18,10 @@ use crate::paths::CorePaths;
 /// 新迁移从 0006 开始，只加在这里。
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-pub async fn init(paths: &CorePaths) -> Result<SqlitePool> {
+/// 打开（必要时创建）`<data_root>/db/clipboard.db` 并跑迁移。必须在 tokio 上下文里调用。
+///
+/// `max_connections` 是连接池上限，见 [`crate::CoreOptions::db_max_connections`]。
+pub async fn init(paths: &CorePaths, max_connections: u32) -> Result<SqlitePool> {
     let path = db_path(paths)?;
 
     // 新库建表前就开启增量 auto_vacuum，自动清理删行后可以随时收缩文件；
@@ -33,6 +36,7 @@ pub async fn init(paths: &CorePaths) -> Result<SqlitePool> {
         .disable_statement_logging();
 
     let pool = SqlitePoolOptions::new()
+        .max_connections(max_connections.max(1))
         .connect_with(options)
         .await
         .with_context(|| format!("failed to open sqlite database at {path:?}"))?;
@@ -124,7 +128,7 @@ mod tests {
         let local = root.join("local");
         let paths = CorePaths::new(AppEnv::Prod, local.clone(), local.join("logs"), None);
 
-        let pool = init(&paths).await.unwrap();
+        let pool = init(&paths, 3).await.unwrap();
         let applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
             .fetch_one(&pool)
             .await

@@ -4,18 +4,19 @@
 //! - 写入流程：先写到 `settings.json.tmp`，再原子替换主文件，避免中途断电留下半截 JSON。
 //! - 缺字段兼容：`Settings` 各结构体都 `#[serde(default)]`，新版本新增字段不影响旧文件。
 //! - 坏字段兼容：读盘时某个字段读不懂只让它回落默认值（见 `settings::lenient`），回落记录在
-//!   [`SettingsStore::load_report`] 里。
+//!   [`SettingsStore::load_report`] 里；历史清理相关的字段回落时自动清理暂停（[`SettingsStore::cleanup_paused`]）。
 
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Mutex, MutexGuard, RwLock};
 
 use anyhow::Context;
 
 use crate::error::{AppError, Result};
 use crate::paths::CorePaths;
 
+use super::delta::SettingsDelta;
 use super::lenient::{self, SettingsLoadReport};
 use super::model::{
     LanSync, Language, RetentionRule, Settings, LAN_SYNC_DEVICE_NAME_MAX_CHARS,
@@ -30,7 +31,24 @@ pub struct SettingsStore {
     current: RwLock<Settings>,
     /// 宿主传入的系统 locale（如 `zh-CN`），首次启动与恢复默认时决定界面语言。
     system_locale: Option<String>,
-    load_report: RwLock<SettingsLoadReport>,
+    disk: Mutex<DiskState>,
+}
+
+/// 最近一次读盘留下的、影响之后行为的状态。
+#[derive(Debug, Default)]
+struct DiskState {
+    report: SettingsLoadReport,
+    /// 读盘之后用户显式保存过历史设置，或整份替换过设置。
+    history_confirmed: bool,
+}
+
+impl DiskState {
+    fn loaded(report: SettingsLoadReport) -> Self {
+        Self {
+            report,
+            history_confirmed: false,
+        }
+    }
 }
 
 impl SettingsStore {
@@ -61,7 +79,7 @@ impl SettingsStore {
             path: RwLock::new(path),
             current: RwLock::new(current),
             system_locale,
-            load_report: RwLock::new(report),
+            disk: Mutex::new(DiskState::loaded(report)),
         })
     }
 
@@ -71,10 +89,14 @@ impl SettingsStore {
 
     /// 最近一次从磁盘读取设置时，哪些字段没有采用文件原值。
     pub fn load_report(&self) -> SettingsLoadReport {
-        self.load_report
-            .read()
-            .expect("settings report poisoned")
-            .clone()
+        self.disk().report.clone()
+    }
+
+    /// 历史清理相关的设置读盘时有回落（或整份读不懂），且用户之后还没有显式保存过历史设置。
+    /// 为真时自动清理（含存储上限清理和释放空闲页）暂停：回落值可能比用户原来的设置删得更多。
+    pub fn cleanup_paused(&self) -> bool {
+        let disk = self.disk();
+        disk.report.history_degraded() && !disk.history_confirmed
     }
 
     /// 恢复默认设置并落盘，返回新的完整快照。
@@ -82,7 +104,7 @@ impl SettingsStore {
         let next = default_settings_with_system_locale(self.system_locale.as_deref());
 
         let path = self.path();
-        write_atomic(&path, &next)?;
+        self.persist(&path, &next, &SettingsDelta::replaced())?;
         *self.current.write().expect("settings poisoned") = next.clone();
         Ok(next)
     }
@@ -96,6 +118,7 @@ impl SettingsStore {
             )));
         }
 
+        let delta = SettingsDelta::from_patch(&patch);
         let mut guard = self.current.write().expect("settings poisoned");
 
         let mut merged = serde_json::to_value(&*guard)
@@ -108,7 +131,7 @@ impl SettingsStore {
         validate_settings(&next)?;
 
         let path = self.path();
-        write_atomic(&path, &next)?;
+        self.persist(&path, &next, &delta)?;
         *guard = next.clone();
         Ok(next)
     }
@@ -123,7 +146,7 @@ impl SettingsStore {
         validate_settings(&next)?;
 
         let path = self.path();
-        write_atomic(&path, &next)?;
+        self.persist(&path, &next, &SettingsDelta::replaced())?;
         *self.current.write().expect("settings poisoned") = next.clone();
         Ok(next)
     }
@@ -144,12 +167,28 @@ impl SettingsStore {
 
         *self.path.write().expect("settings path poisoned") = path;
         *self.current.write().expect("settings poisoned") = current.clone();
-        *self.load_report.write().expect("settings report poisoned") = report;
+        *self.disk() = DiskState::loaded(report);
         Ok(current)
     }
 
     fn path(&self) -> PathBuf {
         self.path.read().expect("settings path poisoned").clone()
+    }
+
+    fn disk(&self) -> MutexGuard<'_, DiskState> {
+        self.disk
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 写盘；改到历史设置后解除自动清理的暂停。
+    fn persist(&self, path: &Path, settings: &Settings, delta: &SettingsDelta) -> Result<()> {
+        let mut disk = self.disk();
+        write_atomic(path, settings)?;
+        if delta.touches("clipboard.history") {
+            disk.history_confirmed = true;
+        }
+        Ok(())
     }
 }
 
