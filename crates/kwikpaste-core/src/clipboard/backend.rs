@@ -6,7 +6,7 @@
 //!
 //! 实现不要求 `Send`：clipboard-rs 的上下文是 `!Send`，调用方在同一线程的同步段里创建、用完、丢弃。
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext, ContentFormat};
@@ -310,13 +310,37 @@ mod windows_png {
     }
 }
 
+/// 每次需要读写剪贴板时打开一个后端。`Core` 的高层读写都经它拿后端，测试换成 [`MemoryClipboard`]。
+///
+/// 返回的后端只在打开它的线程上用完即弃（系统剪贴板句柄是 `!Send`）。
+pub trait ClipboardProvider: Send + Sync + 'static {
+    fn open(&self) -> Result<Box<dyn ClipboardBackend>>;
+}
+
+/// 本机系统剪贴板的提供者。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SystemClipboardProvider;
+
+impl ClipboardProvider for SystemClipboardProvider {
+    fn open(&self) -> Result<Box<dyn ClipboardBackend>> {
+        Ok(Box::new(SystemClipboard::new()?))
+    }
+}
+
 /// 内存里的假剪贴板：自动测试和自测入口用它代替本机剪贴板。
 ///
 /// 行为按真实剪贴板建模：每次写入先清空，再放入这次给出的表示；图片只保存 PNG 字节，
-/// `get_png` 原样返回，`get_image_as_png` 从 PNG 头读出宽高。
-#[derive(Debug, Default)]
+/// `get_png` 原样返回，`get_image_as_png` 从 PNG 头读出宽高。克隆出的实例共享同一份内容，
+/// 所以它本身也是一个 [`ClipboardProvider`]。
+#[derive(Debug, Default, Clone)]
 pub struct MemoryClipboard {
-    state: Mutex<MemoryState>,
+    state: Arc<Mutex<MemoryState>>,
+}
+
+impl ClipboardProvider for MemoryClipboard {
+    fn open(&self) -> Result<Box<dyn ClipboardBackend>> {
+        Ok(Box::new(self.clone()))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -336,7 +360,7 @@ impl MemoryClipboard {
     /// 用给定内容初始化，模拟别的应用刚复制了这些表示。
     pub fn with_state(state: MemoryState) -> Self {
         Self {
-            state: Mutex::new(state),
+            state: Arc::new(Mutex::new(state)),
         }
     }
 

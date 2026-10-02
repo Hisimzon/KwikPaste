@@ -8,7 +8,8 @@ use crate::error::Result;
 use crate::events::CoreEvent;
 use crate::root::CoreInner;
 
-/// 先写来源应用再去重入库，然后通知清理与宿主。
+/// 先写来源应用再去重入库，然后通知清理与宿主，最后按设置播放复制提示音。
+/// 本机复制（监听、手动读取）走这里；局域网同步收到的记录走 [`store_and_emit`]，不放提示音。
 ///
 /// 应用 upsert 失败不阻断条目入库——清掉 `source_app_id` 后继续，避免单次系统调用抽风丢内容。
 pub(crate) async fn persist_and_notify(
@@ -25,7 +26,11 @@ pub(crate) async fn persist_and_notify(
         }
     }
 
-    store_and_emit(core, &item_to_write).await
+    let result = store_and_emit(core, &item_to_write).await?;
+    if core.settings.snapshot().clipboard.feedback.copy_sound {
+        core.platform().play_copy_sound();
+    }
+    Ok(result)
 }
 
 /// 去重入库 + 通知清理 + 发 [`CoreEvent::ClipboardUpserted`]。

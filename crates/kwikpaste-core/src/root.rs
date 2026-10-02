@@ -5,22 +5,26 @@
 //! 带 [`ClipboardBackend`] 参数的方法要在创建该后端的线程上调用（系统剪贴板句柄是 `!Send`）。
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock};
 
+use clipboard_rs::WatcherShutdown;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 use crate::clipboard::{
-    self, AppIconStore, CleanupPreview, CleanupReport, CleanupStatus, ClipboardBackend,
-    ClipboardPayload, ClipboardReader, FileIconStore, ImageStore, WritebackGuard,
+    self, AppIconStore, AppsRegistry, CleanupPreview, CleanupReport, CleanupStatus,
+    ClipboardBackend, ClipboardPayload, ClipboardProvider, ClipboardReader, FileIconStore,
+    ImageStore, WatcherPause, WritebackGuard,
 };
 use crate::db::items::UpsertResult;
-use crate::db::models::{ClipboardApp, ClipboardGroup, ClipboardItem, ClipboardItemQuery};
+use crate::db::models::{ClipboardApp, ClipboardItem, ClipboardItemQuery};
 use crate::db::{self, DatabaseState};
 use crate::env::{AppInfo, CoreOptions};
 use crate::error::Result;
 use crate::events::{CoreEvent, EventSink};
 use crate::paths::CorePaths;
+use crate::platform::{NoPlatformServices, PlatformServices};
 use crate::presenter::{
     self, ClipboardItemPage, ClipboardItemView, ClipboardPreviewPayload, FileIconResult,
     PreviewContentMetrics,
@@ -32,7 +36,7 @@ use crate::settings::{
 
 /// core 的句柄，克隆很便宜，各处共用同一份状态。
 #[derive(Clone)]
-pub struct Core(Arc<CoreInner>);
+pub struct Core(pub(crate) Arc<CoreInner>);
 
 pub(crate) struct CoreInner {
     pub(crate) info: AppInfo,
@@ -46,9 +50,17 @@ pub(crate) struct CoreInner {
     pub(crate) app_icons: AppIconStore,
     pub(crate) file_icons: FileIconStore,
     pub(crate) cleanup: clipboard::cleanup::CleanupScheduler,
+    /// 来源应用缓存，监听与偏好页共用。
+    pub(crate) apps: AppsRegistry,
+    pub(crate) watcher_pause: WatcherPause,
     /// 去重入库串行执行，见 [`clipboard::persist::store_and_emit`]。
     pub(crate) upsert_lock: tokio::sync::Mutex<()>,
+    /// 快速粘贴进行中：上一次还没粘完时新的触发直接忽略，避免连按叠出多次粘贴。
+    pub(crate) quick_paste_running: AtomicBool,
+    platform: RwLock<Arc<dyn PlatformServices>>,
+    clipboard_provider: RwLock<Arc<dyn ClipboardProvider>>,
     cleanup_task: Mutex<Option<JoinHandle<()>>>,
+    watcher: Mutex<Option<WatcherShutdown>>,
 }
 
 impl Core {
@@ -82,9 +94,19 @@ impl Core {
                 app_icons,
                 file_icons,
                 cleanup: Default::default(),
+                apps: AppsRegistry::default(),
+                watcher_pause: WatcherPause::default(),
                 upsert_lock: tokio::sync::Mutex::new(()),
+                quick_paste_running: AtomicBool::new(false),
+                platform: RwLock::new(Arc::new(NoPlatformServices)),
+                clipboard_provider: RwLock::new(default_clipboard_provider()),
                 cleanup_task: Mutex::new(None),
+                watcher: Mutex::new(None),
             });
+
+            if let Err(err) = inner.apps.load_from_db(&inner).await {
+                log::warn!("apps registry: initial DB load failed: {err}");
+            }
 
             if inner.settings.cleanup_paused() {
                 log::warn!(
@@ -99,8 +121,10 @@ impl Core {
         .await
     }
 
-    /// 停止后台清理并关闭连接池（SQLite 借此做 WAL checkpoint）。之后不要再调用其它 async 方法。
+    /// 停止剪贴板监听与后台清理并关闭连接池（SQLite 借此做 WAL checkpoint）。
+    /// 之后不要再调用其它 async 方法。
     pub async fn shutdown(&self) -> Result<()> {
+        drop(lock(&self.0.watcher).take());
         let core = self.clone();
         self.hop(async move {
             if let Some(task) = core.0.cleanup_task().take() {
@@ -110,6 +134,61 @@ impl Core {
             Ok(())
         })
         .await
+    }
+
+    /// 接上平台层能力（前台应用识别、应用扫描、提示音）。启动后、开始监听前调用一次；
+    /// 接上后在后台把默认忽略的应用补成完整记录（偏好页的忽略列表能显示名称和图标）。
+    pub fn set_platform_services(&self, services: Arc<dyn PlatformServices>) {
+        *self
+            .0
+            .platform
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = services;
+
+        let core = self.clone();
+        let excluded = self
+            .0
+            .settings
+            .snapshot()
+            .clipboard
+            .filters
+            .excluded_app_ids;
+        self.0.rt.spawn(async move {
+            if let Err(err) = clipboard::apps_registry::add_apps_from_ids(&core.0, excluded).await {
+                log::warn!("apps registry: excluded app materialization failed: {err}");
+            }
+        });
+    }
+
+    /// 换掉打开剪贴板的方式。默认是本机系统剪贴板；自测和测试换成 [`clipboard::MemoryClipboard`]。
+    pub fn set_clipboard_provider(&self, provider: Arc<dyn ClipboardProvider>) {
+        *self
+            .0
+            .clipboard_provider
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = provider;
+    }
+
+    /// 在独立线程上启动 OS 级剪贴板监听：每次复制按设置入库并发 [`CoreEvent::ClipboardUpserted`]。
+    /// 已在监听时什么都不做；[`Core::shutdown`] 时停止。
+    pub fn start_watcher(&self) -> Result<()> {
+        let mut watcher = lock(&self.0.watcher);
+        if watcher.is_some() {
+            return Ok(());
+        }
+
+        *watcher = Some(clipboard::watcher::spawn(&self.0)?);
+        Ok(())
+    }
+
+    /// 暂停或恢复采集。暂停期间监听收到的变化直接丢弃（切换存储位置、覆盖导入备份时用）。
+    pub fn set_capture_paused(&self, paused: bool) {
+        self.0.watcher_pause.set_paused(paused);
+    }
+
+    /// 播放一次复制提示音（偏好页试听）。
+    pub fn play_copy_sound(&self) {
+        self.0.platform().play_copy_sound();
     }
 
     pub fn info(&self) -> &AppInfo {
@@ -396,15 +475,6 @@ impl Core {
         .await
     }
 
-    pub async fn list_groups(&self) -> Result<Vec<ClipboardGroup>> {
-        let core = self.clone();
-        self.hop(async move {
-            let pool = core.0.db.pool().await;
-            db::groups::list_groups(&pool).await
-        })
-        .await
-    }
-
     // ---- 历史清理 ----
 
     /// 清理状态快照（最近一次清理、存储占用、自动清理是否暂停）。
@@ -441,7 +511,7 @@ impl Core {
         .await
     }
 
-    async fn hop<T, F>(&self, fut: F) -> Result<T>
+    pub(crate) async fn hop<T, F>(&self, fut: F) -> Result<T>
     where
         F: std::future::Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
@@ -475,111 +545,56 @@ impl Core {
 
 impl CoreInner {
     fn cleanup_task(&self) -> std::sync::MutexGuard<'_, Option<JoinHandle<()>>> {
-        self.cleanup_task
-            .lock()
+        lock(&self.cleanup_task)
+    }
+
+    /// 当前接上的平台层能力。
+    pub(crate) fn platform(&self) -> Arc<dyn PlatformServices> {
+        self.platform
+            .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// 打开剪贴板。返回的后端只在当前线程上同步用完，不能跨 await 持有。
+    pub(crate) fn clipboard(&self) -> Result<Box<dyn ClipboardBackend>> {
+        self.clipboard_provider
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .open()
+    }
+
+    /// 当前界面语言。
+    pub(crate) fn language(&self) -> Language {
+        crate::i18n::current_language(&self.settings)
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 默认打开本机系统剪贴板；core 自己的单元测试默认用内存剪贴板，绝不碰本机剪贴板。
+fn default_clipboard_provider() -> Arc<dyn ClipboardProvider> {
+    if cfg!(test) {
+        Arc::new(clipboard::MemoryClipboard::new())
+    } else {
+        Arc::new(clipboard::SystemClipboardProvider)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-    use std::pin::pin;
-    use std::sync::Mutex as StdMutex;
-    use std::task::{Context, Poll, Wake, Waker};
-
     use chrono::{Duration, Utc};
     use serde_json::json;
 
     use super::*;
     use crate::clipboard::{MemoryClipboard, MemoryState};
     use crate::db::models::ClipboardKind;
-    use crate::env::AppEnv;
-    use crate::runtime::CoreRuntime;
-
-    /// 不依赖 tokio 的最小执行器：模拟 GPUI 这类非 tokio 执行器在自己的线程上等待 core 的 future。
-    fn block_on<F: Future>(future: F) -> F::Output {
-        struct ThreadWaker(std::thread::Thread);
-
-        impl Wake for ThreadWaker {
-            fn wake(self: Arc<Self>) {
-                self.0.unpark();
-            }
-        }
-
-        let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
-        let mut context = Context::from_waker(&waker);
-        let mut future = pin!(future);
-        loop {
-            if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
-                return output;
-            }
-            std::thread::park();
-        }
-    }
-
-    struct Fixture {
-        _temp: tempfile::TempDir,
-        runtime: CoreRuntime,
-        paths: CorePaths,
-        events: Arc<StdMutex<Vec<CoreEvent>>>,
-    }
-
-    impl Fixture {
-        fn new() -> Self {
-            let temp = tempfile::tempdir().unwrap();
-            let local = temp.path().join("local");
-            let paths = CorePaths::new(AppEnv::Dev, local.clone(), local.join("logs"), None);
-
-            Self {
-                _temp: temp,
-                runtime: CoreRuntime::new().unwrap(),
-                paths,
-                events: Arc::default(),
-            }
-        }
-
-        fn write_settings(&self, content: &str) {
-            let dir = self.paths.config_dir().unwrap();
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("settings.json"), content).unwrap();
-        }
-
-        fn start(&self) -> Core {
-            let events = self.events.clone();
-            let sink = move |event: CoreEvent| {
-                events.lock().unwrap().push(event);
-            };
-            let info = AppInfo {
-                name: crate::APP_NAME,
-                identifier: crate::APP_IDENTIFIER,
-                version: semver::Version::new(2, 0, 0),
-                env: AppEnv::Dev,
-            };
-
-            block_on(Core::start(
-                info,
-                self.paths.clone(),
-                CoreOptions::default(),
-                Arc::new(sink),
-                self.runtime.handle(),
-            ))
-            .unwrap()
-        }
-
-        fn take_events(&self) -> Vec<CoreEvent> {
-            std::mem::take(&mut *self.events.lock().unwrap())
-        }
-    }
-
-    fn sample_png(w: u32, h: u32) -> Vec<u8> {
-        let buf = image::RgbaImage::from_pixel(w, h, image::Rgba([9, 8, 7, 255]));
-        let mut out = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgba8(buf)
-            .write_to(&mut out, image::ImageFormat::Png)
-            .unwrap();
-        out.into_inner()
-    }
+    use crate::testing::{block_on, sample_png, Fixture};
 
     /// 测试线程上没有 tokio 上下文，每个公开方法都直接在自制执行器里 await。
     #[test]

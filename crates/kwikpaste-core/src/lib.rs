@@ -13,12 +13,16 @@ pub mod env;
 pub mod error;
 pub mod events;
 pub mod i18n;
+pub mod ops;
 pub mod paths;
+pub mod platform;
 pub mod portable;
 pub mod presenter;
 mod root;
 pub mod runtime;
 pub mod settings;
+#[cfg(test)]
+mod testing;
 
 pub use env::{AppEnv, AppInfo, CoreOptions, APP_IDENTIFIER, APP_NAME};
 pub use error::{AppError, Result};

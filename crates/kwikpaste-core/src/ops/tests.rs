@@ -1,0 +1,493 @@
+//! 记录、分组与应用操作的端到端测试：真实的 core（临时目录 + 内存数据库文件），
+//! 内存剪贴板与假的平台层，绝不碰本机剪贴板。
+
+use std::time::Duration;
+
+use serde_json::json;
+
+use super::{ClipboardGroupInput, ClipboardGroupLayoutInput};
+use crate::clipboard::{
+    ClipboardBackend, ClipboardFragment, ClipboardReader, MemoryClipboard, MemoryState,
+};
+use crate::db::models::{ClipboardItemQuery, ClipboardKind};
+use crate::db::overview::{ClearScope, ContentCategory};
+use crate::events::CoreEvent;
+use crate::root::Core;
+use crate::testing::{block_on, sample_png, Fixture};
+
+const NO_RETRY: [Duration; 0] = [];
+
+/// 让「别的应用」往内存剪贴板里复制一次，再按监听路径入库，返回生效行 id。
+fn copy_in(core: &Core, state: MemoryState) -> Option<String> {
+    let reader = ClipboardReader::with_backend(MemoryClipboard::with_state(state));
+    let (item, source) = crate::clipboard::watcher::capture_change(&core.0, &reader, &NO_RETRY)?;
+    let result = block_on(core.hop({
+        let core = core.clone();
+        async move {
+            crate::clipboard::persist::persist_and_notify(&core.0, &item, source.as_ref()).await
+        }
+    }))
+    .unwrap();
+    Some(result.id)
+}
+
+fn text(value: &str) -> MemoryState {
+    MemoryState {
+        text: Some(value.to_owned()),
+        ..MemoryState::default()
+    }
+}
+
+fn use_count(core: &Core, id: &str) -> i64 {
+    block_on(core.find_item(id)).unwrap().unwrap().use_count
+}
+
+#[test]
+fn capture_records_source_app_plays_sound_and_dedups() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    block_on(core.update_settings(json!({"clipboard": {"feedback": {"copySound": true}}})))
+        .unwrap();
+    fixture
+        .platform
+        .set_frontmost("C:/Apps/Editor.exe", "Editor");
+
+    let first = copy_in(&core, text("e2e kwikpaste watcher")).unwrap();
+    let again = copy_in(&core, text("e2e kwikpaste watcher")).unwrap();
+
+    assert_eq!(first, again);
+    assert_eq!(use_count(&core, &first), 2);
+    let stored = block_on(core.find_item(&first)).unwrap().unwrap();
+    assert_eq!(stored.content, "e2e kwikpaste watcher");
+    assert_eq!(stored.source_app_id.as_deref(), Some("C:/Apps/Editor.exe"));
+    assert_eq!(
+        block_on(core.list_apps(vec!["C:/Apps/Editor.exe".to_owned()]))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(fixture.platform.sounds(), 2);
+
+    let upserts: Vec<bool> = fixture
+        .take_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            CoreEvent::ClipboardUpserted { deduplicated, .. } => Some(deduplicated),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(upserts, [false, true]);
+}
+
+#[test]
+fn capture_skips_excluded_apps_self_writes_and_pauses() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    block_on(core.update_settings(
+        json!({"clipboard": {"filters": {"excludedAppIds": ["C:/Apps/Vault.exe"]}}}),
+    ))
+    .unwrap();
+
+    fixture.platform.set_frontmost("C:/Apps/Vault.exe", "Vault");
+    assert_eq!(copy_in(&core, text("hunter2 secret")), None);
+
+    fixture
+        .platform
+        .set_frontmost("C:/Apps/Editor.exe", "Editor");
+    core.set_capture_paused(true);
+    assert_eq!(copy_in(&core, text("while paused")), None);
+    core.set_capture_paused(false);
+
+    // 自己写回的内容被回环抑制吞掉一次；再复制一次同样的内容就是用户的真实复制。
+    let id = copy_in(&core, text("self writeback content")).unwrap();
+    block_on(core.copy_item(&id, false)).unwrap();
+    let state = fixture.clipboard.snapshot();
+    assert_eq!(copy_in(&core, state.clone()), None);
+    assert_eq!(copy_in(&core, state), Some(id));
+}
+
+#[test]
+fn captured_images_store_the_origin_and_thumbnail_lazily() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+
+    let id = copy_in(
+        &core,
+        MemoryState {
+            png: Some(sample_png(40, 24)),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+    let item = block_on(core.find_item(&id)).unwrap().unwrap();
+
+    assert_eq!(item.kind, ClipboardKind::Image);
+    assert_eq!((item.width, item.height), (Some(40), Some(24)));
+    assert!(core.image_origin_path(&item.content).unwrap().is_file());
+    assert!(!core.image_store().thumbnail_path(&item.content).exists());
+    assert!(block_on(core.ensure_thumbnail(&item.content))
+        .unwrap()
+        .is_file());
+}
+
+#[test]
+fn read_clipboard_now_captures_and_dedups() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+
+    assert!(block_on(core.read_clipboard_now()).unwrap().is_none());
+
+    ClipboardBackend::set_text(&fixture.clipboard, "manual read".to_owned()).unwrap();
+    let first = block_on(core.read_clipboard_now()).unwrap().unwrap();
+    let second = block_on(core.read_clipboard_now()).unwrap().unwrap();
+
+    assert!(!first.deduplicated);
+    assert!(second.deduplicated);
+    assert_eq!(first.id, second.id);
+    assert_eq!(first.item.content, "manual read");
+}
+
+#[test]
+fn copy_and_paste_follow_plain_text_settings_and_reuse() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let id = copy_in(
+        &core,
+        MemoryState {
+            text: Some("Hello World".to_owned()),
+            html: Some("<b>Hello</b> World".to_owned()),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+    fixture.take_events();
+
+    let outcome = block_on(core.copy_item(&id, false)).unwrap();
+    assert!(!outcome.hide_window);
+    assert_eq!(
+        fixture.clipboard.snapshot(),
+        MemoryState {
+            text: Some("Hello World".to_owned()),
+            html: Some("<b>Hello</b> World".to_owned()),
+            ..MemoryState::default()
+        }
+    );
+    // 默认不计复用：次数不变、不发事件，只记下最后使用时间。
+    assert_eq!(use_count(&core, &id), 1);
+    assert!(fixture.take_events().is_empty());
+
+    block_on(core.update_settings(json!({"clipboard": {"content": {
+        "pastePlain": true, "updateOnReuse": true, "copyThenHideWindow": true
+    }}})))
+    .unwrap();
+    fixture.take_events();
+
+    block_on(core.prepare_paste(&id, false)).unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot(),
+        MemoryState {
+            text: Some("Hello World".to_owned()),
+            ..MemoryState::default()
+        }
+    );
+    assert_eq!(use_count(&core, &id), 2);
+    assert!(fixture.take_events().iter().any(|event| matches!(
+        event,
+        CoreEvent::ClipboardUpserted {
+            deduplicated: true,
+            ..
+        }
+    )));
+
+    assert!(block_on(core.copy_item(&id, false)).unwrap().hide_window);
+    assert!(block_on(core.copy_item("missing", false)).is_err());
+}
+
+#[test]
+fn fragments_and_word_split_follow_the_record() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let id = copy_in(&core, text("订单 20260924 已发货")).unwrap();
+
+    block_on(core.copy_fragment(
+        &id,
+        ClipboardFragment::Snippet {
+            text: "20260924".to_owned(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot().text.as_deref(),
+        Some("20260924")
+    );
+
+    block_on(core.prepare_paste_fragment(
+        &id,
+        ClipboardFragment::Words {
+            indices: vec![0, 1],
+        },
+    ))
+    .unwrap();
+    assert_eq!(fixture.clipboard.snapshot().text.as_deref(), Some("订单"));
+
+    let err = block_on(core.copy_fragment(
+        &id,
+        ClipboardFragment::Snippet {
+            text: "不存在".to_owned(),
+        },
+    ))
+    .unwrap_err();
+    assert_eq!(err.to_string(), "所选内容已不在这条记录中");
+
+    let split = block_on(core.split_item(&id)).unwrap();
+    assert_eq!(split.tokens[0].text, "订");
+
+    let secret = copy_in(&core, text("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890")).unwrap();
+    assert_eq!(
+        block_on(core.split_item(&secret)).unwrap_err().to_string(),
+        "敏感内容已脱敏显示，不能拆词"
+    );
+    let image = copy_in(
+        &core,
+        MemoryState {
+            png: Some(sample_png(2, 2)),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        block_on(core.split_item(&image)).unwrap_err().to_string(),
+        "只有文本记录可以拆词"
+    );
+}
+
+#[test]
+fn quick_paste_writes_the_nth_record_once_at_a_time() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    copy_in(&core, text("older")).unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+    let newest = copy_in(&core, text("newest")).unwrap();
+
+    let ticket = block_on(core.prepare_quick_paste(0)).unwrap().unwrap();
+    assert_eq!(ticket.item_id, newest);
+    assert_eq!(fixture.clipboard.snapshot().text.as_deref(), Some("newest"));
+    // 上一次还没粘完：新的触发直接忽略。
+    assert!(block_on(core.prepare_quick_paste(1)).unwrap().is_none());
+
+    drop(ticket);
+    let second = block_on(core.prepare_quick_paste(1)).unwrap().unwrap();
+    assert_eq!(fixture.clipboard.snapshot().text.as_deref(), Some("older"));
+    drop(second);
+
+    assert!(block_on(core.prepare_quick_paste(9)).unwrap().is_none());
+    assert!(block_on(core.prepare_quick_paste(0)).unwrap().is_some());
+}
+
+#[test]
+fn notes_marks_and_groups() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let id = copy_in(&core, text("group me")).unwrap();
+
+    assert!(block_on(core.toggle_favorite(&id)).unwrap());
+    assert!(!block_on(core.toggle_favorite(&id)).unwrap());
+    assert!(block_on(core.toggle_pinned(&id)).unwrap());
+
+    let note = block_on(core.update_note(&id, Some("  记一下 ".to_owned()))).unwrap();
+    assert_eq!(note.note.as_deref(), Some("记一下"));
+    assert!(!note.auto_favorited);
+    block_on(core.update_settings(json!({"clipboard": {"content": {"autoFavorite": true}}})))
+        .unwrap();
+    assert!(
+        block_on(core.update_note(&id, Some("再记".to_owned())))
+            .unwrap()
+            .auto_favorited
+    );
+    assert!(block_on(core.find_item(&id)).unwrap().unwrap().is_favorite);
+    assert_eq!(
+        block_on(core.update_note(&id, Some("   ".to_owned())))
+            .unwrap()
+            .note,
+        None
+    );
+
+    fixture.take_events();
+    let group = block_on(core.create_group(ClipboardGroupInput {
+        name: " 工作 ".to_owned(),
+        icon: String::new(),
+        is_hidden: false,
+    }))
+    .unwrap();
+    assert_eq!(group.name, "工作");
+    assert_eq!(group.icon, super::DEFAULT_CLIPBOARD_GROUP_ICON);
+    assert!(block_on(core.set_item_group(&id, "nope")).is_err());
+    block_on(core.set_item_group(&id, &group.id)).unwrap();
+    assert_eq!(
+        block_on(core.find_item(&id)).unwrap().unwrap().group_id,
+        Some(group.id.clone())
+    );
+
+    block_on(core.update_group(
+        &group.id,
+        ClipboardGroupInput {
+            name: "Work".to_owned(),
+            icon: "i-lets-icons:star".to_owned(),
+            is_hidden: false,
+        },
+    ))
+    .unwrap();
+    block_on(core.update_groups_layout(ClipboardGroupLayoutInput {
+        order: vec![group.id.clone()],
+        visible_ids: Vec::new(),
+    }))
+    .unwrap();
+    let groups = block_on(core.list_groups()).unwrap();
+    assert_eq!(groups[0].name, "Work");
+    assert!(groups[0].is_hidden);
+    block_on(core.delete_group(&group.id)).unwrap();
+    assert_eq!(
+        block_on(core.find_item(&id)).unwrap().unwrap().group_id,
+        None
+    );
+
+    let updates = fixture
+        .take_events()
+        .iter()
+        .filter(|event| matches!(event, CoreEvent::GroupsUpdated))
+        .count();
+    assert_eq!(updates, 4);
+
+    let svg = fixture.root().join("icon.svg");
+    std::fs::write(&svg, "<svg><path d='M0 0'/></svg>").unwrap();
+    assert!(core.import_group_svg(&svg).is_ok());
+    std::fs::write(&svg, "<svg><script/></svg>").unwrap();
+    assert!(core.import_group_svg(&svg).is_err());
+    assert!(core
+        .import_group_svg(&fixture.root().join("icon.png"))
+        .is_err());
+}
+
+#[test]
+fn deletes_remove_image_files_and_clears_notify() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let image = copy_in(
+        &core,
+        MemoryState {
+            png: Some(sample_png(8, 8)),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+    let file = block_on(core.find_item(&image)).unwrap().unwrap().content;
+    let origin = core.image_origin_path(&file).unwrap();
+    let kept = copy_in(&core, text("favorite")).unwrap();
+    block_on(core.toggle_favorite(&kept)).unwrap();
+    let a = copy_in(&core, text("a")).unwrap();
+    let b = copy_in(&core, text("b")).unwrap();
+
+    let refs = block_on(core.list_item_refs(ClipboardItemQuery::default())).unwrap();
+    assert_eq!(refs.len(), 4);
+    assert!(refs.iter().any(|r| r.id == kept && r.is_favorite));
+
+    block_on(core.delete_item(&image)).unwrap();
+    assert!(!origin.exists());
+    assert_eq!(
+        block_on(core.delete_items(vec![a, "missing".to_owned()])).unwrap(),
+        1
+    );
+
+    fixture.take_events();
+    assert_eq!(block_on(core.clear_items(false, false)).unwrap(), 1);
+    assert!(block_on(core.find_item(&b)).unwrap().is_none());
+    assert!(block_on(core.find_item(&kept)).unwrap().is_some());
+    assert!(fixture
+        .take_events()
+        .iter()
+        .any(|event| matches!(event, CoreEvent::ClipboardCleaned { removed: 1 })));
+
+    let image = copy_in(
+        &core,
+        MemoryState {
+            png: Some(sample_png(9, 9)),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+    let origin = core
+        .image_origin_path(&block_on(core.find_item(&image)).unwrap().unwrap().content)
+        .unwrap();
+    assert_eq!(
+        block_on(core.clear_items_in_scope(ClearScope::Category {
+            category: ContentCategory::Image
+        }))
+        .unwrap(),
+        1
+    );
+    assert!(!origin.exists());
+}
+
+#[test]
+fn link_reveal_and_image_save_targets() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let url = copy_in(&core, text("www.example.com")).unwrap();
+    let image = copy_in(
+        &core,
+        MemoryState {
+            png: Some(sample_png(3, 3)),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        block_on(core.link_target(&url, false)).unwrap().as_deref(),
+        Some("https://www.example.com")
+    );
+    assert_eq!(
+        block_on(core.reveal_target(&url)).unwrap().as_deref(),
+        Some("www.example.com")
+    );
+
+    let save = block_on(core.prepare_image_save(&image)).unwrap();
+    assert!(save.source.is_file());
+    assert!(save.default_file_name.starts_with("KwikPaste-image-"));
+    assert!(block_on(core.prepare_image_save(&url)).is_err());
+}
+
+#[test]
+fn apps_list_merges_running_apps_and_manual_additions() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    fixture
+        .platform
+        .set_frontmost("C:/Apps/Editor.exe", "Editor");
+    copy_in(&core, text("from editor")).unwrap();
+    fixture
+        .platform
+        .running
+        .lock()
+        .unwrap()
+        .push(crate::platform::ScannedApp {
+            id: "C:/Apps/Browser.exe".to_owned(),
+            name: "browser".to_owned(),
+            path: None,
+            platform: crate::db::models::Platform::Windows,
+        });
+
+    let apps = block_on(core.list_all_apps()).unwrap();
+    let names: Vec<_> = apps.iter().map(|app| app.name.as_str()).collect();
+    assert_eq!(names, ["browser", "Editor"]);
+
+    let added = block_on(core.add_app_from_path("C:/Tools/viewer.exe".into())).unwrap();
+    assert_eq!(added.name, "viewer");
+    assert!(block_on(core.add_app_from_path("C:/Tools/readme.txt".into())).is_err());
+
+    let deleted = block_on(
+        core.delete_unreferenced_apps(vec![added.id.clone(), "C:/Apps/Editor.exe".to_owned()]),
+    )
+    .unwrap();
+    assert_eq!(deleted, [added.id]);
+}

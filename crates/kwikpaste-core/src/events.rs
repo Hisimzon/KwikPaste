@@ -49,4 +49,6 @@ pub enum CoreEvent {
     },
     /// 清理状态变化（1.x `cleanup://status`）。
     CleanupStatus(CleanupStatus),
+    /// 自定义分组增删改或排序变了（1.x `clipboard-groups://updated`），分组栏需要重新拉取。
+    GroupsUpdated,
 }

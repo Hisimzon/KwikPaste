@@ -283,6 +283,17 @@ pub(crate) async fn storage_bytes_in_use(core: &CoreInner, pool: &SqlitePool) ->
     Ok(total.saturating_sub(reusable))
 }
 
+/// 按范围删除记录后删掉对应图片文件并通知宿主刷新列表；没删到记录时什么都不做。
+pub(crate) fn apply_outcome(core: &CoreInner, outcome: &CleanupOutcome, reason: &str) {
+    if outcome.removed == 0 {
+        return;
+    }
+
+    remove_files(core, outcome);
+    log::info!("{reason} cleanup removed {} item(s)", outcome.removed);
+    emit_cleanup(core, outcome.removed);
+}
+
 impl CleanupScheduler {
     fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
         self.pending

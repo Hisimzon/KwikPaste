@@ -1,8 +1,9 @@
-//! 剪贴板管线：读取、归类、内容识别、图片与图标落盘、写回、回环抑制与历史自动清理。
+//! 剪贴板管线：监听、读取、归类、内容识别、图片与图标落盘、写回、回环抑制、来源应用登记与历史自动清理。
 //!
-//! 监听线程、前台应用识别与来源应用登记随后续批次加入；入库请经 `Core::store_item`。
+//! 直接调用 Win32 / AppKit 的部分（前台应用识别、应用扫描、提示音）经 [`crate::platform`] 由平台层提供。
 
 mod app_store;
+pub(crate) mod apps_registry;
 mod backend;
 pub(crate) mod cleanup;
 mod detect;
@@ -16,12 +17,14 @@ pub(crate) mod persist;
 mod read;
 mod secrets;
 mod storage;
+pub(crate) mod watcher;
 mod write;
 
 pub use app_store::AppIconStore;
+pub use apps_registry::{materialize_source, AppsRegistry};
 pub use backend::{
-    ClipboardBackend, ClipboardFormat, ClipboardWrite, DecodedImage, MemoryClipboard, MemoryState,
-    SystemClipboard,
+    ClipboardBackend, ClipboardFormat, ClipboardProvider, ClipboardWrite, DecodedImage,
+    MemoryClipboard, MemoryState, SystemClipboard, SystemClipboardProvider,
 };
 pub use cleanup::{CleanupPreview, CleanupReport, CleanupStatus, RulePreview, StorageCheck};
 pub use detect::{detect_text_sub_kind, sanitize_css_color};
@@ -39,4 +42,5 @@ pub use payload::{ClipboardPayload, ImagePayload, TextPayload};
 pub use read::{png_dimensions, ClipboardReader};
 pub use secrets::contains_secret;
 pub use storage::{validate_image_file_name, ImageStore, StoredImage, THUMBNAIL_MAX};
+pub use watcher::WatcherPause;
 pub use write::{write_text_fragment, write_to_clipboard};
