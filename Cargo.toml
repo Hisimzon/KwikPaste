@@ -42,6 +42,11 @@ thiserror = "2"
 tokio = "1"
 unicode-segmentation = "1"
 uuid = { version = "1", features = ["v4"] }
+# kwikpaste-core 的剪贴板管线，与 src-tauri 相同。
+clipboard-rs = "0.3"
+clipboard-win = "5"
+file_icon_provider = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [workspace.lints.rust]
 unexpected_cfgs = "deny"
@@ -88,4 +93,8 @@ opt-level = 3
 
 # 与 src-tauri 一致：去重指纹与图片哈希是热路径。
 [profile.release.package.blake3]
+opt-level = 3
+
+# 与 src-tauri 一致：clipboard-rs 的 to_png / thumbnail 在调用方单态化，图片热路径保持 3。
+[profile.release.package.clipboard-rs]
 opt-level = 3

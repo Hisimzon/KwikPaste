@@ -14,7 +14,10 @@ publish.workspace = true
 anyhow.workspace = true
 blake3.workspace = true
 chrono.workspace = true
+clipboard-rs.workspace = true
 dirs.workspace = true
+file_icon_provider.workspace = true
+image.workspace = true
 log.workspace = true
 regex.workspace = true
 semver.workspace = true
@@ -22,13 +25,17 @@ serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 unicode-segmentation.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# 图片写回要同时放原始 PNG 和 CF_DIB，clipboard-rs 的接口做不到。
+clipboard-win.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
-uuid.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 
 [lints]
 workspace = true
