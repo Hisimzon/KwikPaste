@@ -143,6 +143,8 @@ pub(crate) struct Handoff<'a> {
     pub host: &'a dyn HandoffHost,
     pub launcher: &'a dyn Launcher,
     /// 当前 exe 与启动参数（不含 argv[0]），重启时原样带上。
+    /// macOS 换包后经 LaunchServices 按 .app 路径重启，用不到 exe。
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
     pub exe: PathBuf,
     pub args: Vec<OsString>,
     pub from: String,
