@@ -38,6 +38,7 @@ mod settings;
 mod system;
 mod tray;
 mod updater;
+mod window_state;
 
 #[cfg(target_os = "macos")]
 #[path = "native_macos.rs"]
@@ -139,6 +140,9 @@ pub fn start<V: Render>(
     settings::serve(cx, events);
     settings::apply_language(cx);
     let text_scale = system::init(cx);
+    if let Some(core) = core_host::core(cx) {
+        window_state::migrate_legacy(core);
+    }
 
     if selftest::enabled(selftest::PLATFORM) {
         panel::open(cx, text_scale, |window, cx| {

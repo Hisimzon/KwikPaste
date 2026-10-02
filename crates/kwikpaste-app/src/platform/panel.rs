@@ -19,7 +19,7 @@ use kwikpaste_os::clock;
 
 use super::editing::EditTrigger;
 use super::native::NativePanel;
-use super::probe;
+use super::{probe, window_state};
 
 /// 面板的默认、最小内容区尺寸（逻辑像素），与 1.x 相同；Windows 上再乘系统「文本大小」。
 pub const PANEL_SIZE: (f64, f64) = (360.0, 600.0);
@@ -324,8 +324,9 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
 
 fn show(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
     let native = &parts.native;
+    let layout = cx.update(|cx| window_state::layout(cx));
     let placement = native
-        .place_near_cursor()
+        .place(&layout)
         .inspect_err(|err| log::error!("panel placement failed, showing in place: {err:#}"))
         .ok();
 
@@ -377,9 +378,12 @@ fn hide(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
     // 编辑中隐藏：系统自己把前台交还给原窗口，不再去抢。
     native.end_editing(false);
     native.stop_hooks();
-    native.hide();
+    let geometry = native.hide();
 
     cx.update(|cx| {
+        if let Some(geometry) = geometry {
+            window_state::save(cx, geometry);
+        }
         // 钩子停了，之后真实的 Ctrl 松开收不到，先把修饰键状态复位，免得快捷键提示残留。
         let _ = parts.window.update(cx, |_, window, cx| {
             window.dispatch_event(

@@ -5,13 +5,14 @@
 
 use std::io;
 
-use windows::Win32::Foundation::POINT;
+use windows::Win32::Foundation::{LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
-    MonitorFromPoint,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
+    MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+use windows::core::BOOL;
 
 use super::{point_from_win32, rect_from_win32};
 use crate::geometry::{Point, Rect};
@@ -59,6 +60,40 @@ pub fn primary() -> io::Result<MonitorInfo> {
     };
 
     Ok(MonitorInfo { cursor, ..info })
+}
+
+/// 全部显示器；`cursor` 取各自工作区中心。顺序是系统枚举的顺序。
+pub fn all() -> Vec<MonitorInfo> {
+    unsafe extern "system" fn collect(
+        monitor: HMONITOR,
+        _: HDC,
+        _: *mut RECT,
+        data: LPARAM,
+    ) -> BOOL {
+        let monitors = unsafe { &mut *(data.0 as *mut Vec<HMONITOR>) };
+        monitors.push(monitor);
+        true.into()
+    }
+
+    let mut handles = Vec::<HMONITOR>::new();
+    let enumerated = unsafe {
+        EnumDisplayMonitors(None, None, Some(collect), LPARAM(&raw mut handles as isize))
+    };
+    if !enumerated.as_bool() {
+        log::warn!("display monitors could not be enumerated");
+    }
+
+    handles
+        .into_iter()
+        .filter_map(|handle| {
+            let info = describe(handle, POINT::default()).ok()?;
+            let cursor = Point {
+                x: info.work_area.left + info.work_area.width() / 2,
+                y: info.work_area.top + info.work_area.height() / 2,
+            };
+            Some(MonitorInfo { cursor, ..info })
+        })
+        .collect()
 }
 
 fn describe(monitor: HMONITOR, cursor: POINT) -> io::Result<MonitorInfo> {
@@ -117,6 +152,19 @@ mod tests {
         if let Ok(info) = at_cursor() {
             assert_sane(info);
         }
+    }
+
+    #[test]
+    fn all_monitors_include_the_primary_one() {
+        let monitors = all();
+        let primary = primary().expect("a primary monitor");
+
+        assert!(
+            monitors
+                .iter()
+                .any(|monitor| monitor.monitor == primary.monitor)
+        );
+        monitors.into_iter().for_each(assert_sane);
     }
 
     #[test]

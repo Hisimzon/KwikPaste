@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, anyhow, bail};
 use gpui::Window;
-use kwikpaste_os::geometry::{Rect, follow_cursor, scale_size};
+use kwikpaste_core::settings::WindowPosition;
+use kwikpaste_core::window_state::WindowGeometry;
+use kwikpaste_os::geometry::{Point, Rect, Size, center_in, follow_cursor, scale_size};
 use kwikpaste_os::win::monitor::{self, BASE_DPI, MonitorInfo};
 use kwikpaste_os::win::panel::{self as win_panel, PanelOptions};
 use kwikpaste_os::win::{self as os, keyboard, mouse};
@@ -13,6 +15,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::editing::{EditReport, EditTrigger};
 use super::panel::PANEL_SIZE;
+use super::window_state::PanelLayout;
 
 /// 钩子确认吞掉带标记的 Alt 的最长等待（实测约 1.5 ms）。
 const MARKED_ALT_TIMEOUT: Duration = Duration::from_millis(50);
@@ -26,8 +29,8 @@ pub struct Placement {
 
 pub struct NativePanel {
     panel: win_panel::Panel,
-    /// 上次隐藏时的内容区尺寸（逻辑像素，已含文本缩放），用户拉伸过就沿用。
-    logical_size: Cell<Option<(f64, f64)>>,
+    /// 本次运行里上次隐藏时的几何；比存档新，存档在后台写盘。
+    last: Cell<Option<WindowGeometry>>,
     /// 系统「文本大小」系数。
     text_scale: Cell<f64>,
     /// 编辑态：进入前的前台窗口；`None` 表示不在编辑态。
@@ -45,7 +48,7 @@ impl NativePanel {
         Ok(Self {
             // GPUI 在主线程创建窗口，面板永不销毁。
             panel: unsafe { win_panel::Panel::from_raw(handle.hwnd.get()) },
-            logical_size: Cell::new(None),
+            last: Cell::new(None),
             text_scale: Cell::new(text_scale),
             editing: Cell::new(None),
         })
@@ -73,15 +76,36 @@ impl NativePanel {
         self.panel.set_text_scale(text_scale);
     }
 
-    /// 光标所在显示器、光标附近；取不到光标时放到主显示器中央。
-    pub fn place_near_cursor(&self) -> anyhow::Result<Placement> {
-        let monitor = monitor::at_cursor()
+    /// 按设置的摆放方式定位：跟随光标（光标所在显示器、光标附近）、居中（光标所在显示器的工作区正中）
+    /// 或回到记住的位置（那里已没有显示器时居中到光标所在显示器，与 1.x 相同）。取不到光标时用主显示器。
+    pub fn place(&self, layout: &PanelLayout) -> anyhow::Result<Placement> {
+        let cursor_monitor = monitor::at_cursor()
             .or_else(|err| {
                 log::warn!("cursor monitor unavailable ({err}); using the primary monitor");
                 monitor::primary()
             })
             .context("no monitor to show the panel on")?;
-        let client = self.target_client_rect(&monitor);
+        let saved = self.last.get().or(layout.saved);
+        let remembered = match layout.position {
+            WindowPosition::Remember => saved.and_then(|geometry| self.remembered_origin(geometry)),
+            WindowPosition::FollowCursor | WindowPosition::Center => None,
+        };
+
+        let (monitor, client) = match (layout.position, remembered) {
+            (WindowPosition::FollowCursor, _) => {
+                let size = self.target_size(saved, &cursor_monitor);
+                let client = follow_cursor(cursor_monitor.cursor, cursor_monitor.work_area, size);
+                (cursor_monitor, client)
+            }
+            (_, Some((monitor, origin))) => {
+                let size = self.target_size(saved, &monitor);
+                (monitor, follow_cursor(origin, monitor.work_area, size))
+            }
+            (WindowPosition::Center | WindowPosition::Remember, None) => {
+                let size = self.target_size(saved, &cursor_monitor);
+                (cursor_monitor, center_in(cursor_monitor.work_area, size))
+            }
+        };
         let outer = self.panel.place(client, monitor.dpi)?;
 
         Ok(Placement {
@@ -91,16 +115,46 @@ impl NativePanel {
         })
     }
 
-    /// 默认尺寸是 360×600 × 文本缩放；用户拉大过就沿用，但不小于当前文本缩放下的默认尺寸。
-    fn target_client_rect(&self, monitor: &MonitorInfo) -> Rect {
+    /// 内容区尺寸：默认 360×600 × 文本缩放；存档里更大就沿用，但不小于当前文本缩放下的默认尺寸。
+    fn target_size(&self, saved: Option<WindowGeometry>, monitor: &MonitorInfo) -> Size {
         let text_scale = self.text_scale.get();
         let default = (PANEL_SIZE.0 * text_scale, PANEL_SIZE.1 * text_scale);
-        let logical = self.logical_size.get().map_or(default, |(width, height)| {
-            (width.max(default.0), height.max(default.1))
+        let logical = saved.map_or(default, |geometry| {
+            (
+                geometry.width.max(default.0),
+                geometry.height.max(default.1),
+            )
         });
-        let size = scale_size(logical, monitor.scale());
 
-        follow_cursor(monitor.cursor, monitor.work_area, size)
+        scale_size(logical, monitor.scale())
+    }
+
+    /// 记住的外框左上角所在的显示器和对应的内容区左上角；那里已经没有显示器时为 `None`。
+    fn remembered_origin(&self, geometry: WindowGeometry) -> Option<(MonitorInfo, Point)> {
+        let outer = Point {
+            x: (geometry.x * geometry.scale).round() as i32,
+            y: (geometry.y * geometry.scale).round() as i32,
+        };
+        let monitor = monitor::all().into_iter().find(|info| {
+            let rect = info.monitor;
+            outer.x >= rect.left
+                && outer.x < rect.right
+                && outer.y >= rect.top
+                && outer.y < rect.bottom
+        })?;
+        let insets = self
+            .panel
+            .client_rect()
+            .and_then(|client| Ok(client.insets_within(self.panel.window_rect()?)))
+            .ok()?;
+
+        Some((
+            monitor,
+            Point {
+                x: outer.x + insets.left,
+                y: outer.y + insets.top,
+            },
+        ))
     }
 
     pub fn show(&self) {
@@ -145,15 +199,28 @@ impl NativePanel {
         }
     }
 
-    pub fn hide(&self) {
-        if let Ok(client) = self.panel.client_rect() {
-            let scale = f64::from(self.panel.dpi()) / f64::from(BASE_DPI);
-            self.logical_size.set(Some((
-                f64::from(client.width()) / scale,
-                f64::from(client.height()) / scale,
-            )));
+    /// 隐藏面板，返回隐藏前的几何（外框左上角与内容区尺寸，逻辑像素），供存档。
+    pub fn hide(&self) -> Option<WindowGeometry> {
+        let geometry = self.geometry();
+        if geometry.is_some() {
+            self.last.set(geometry);
         }
         self.panel.hide();
+        geometry
+    }
+
+    fn geometry(&self) -> Option<WindowGeometry> {
+        let outer = self.panel.window_rect().ok()?;
+        let client = self.panel.client_rect().ok()?;
+        let scale = f64::from(self.panel.dpi()) / f64::from(BASE_DPI);
+
+        Some(WindowGeometry {
+            x: f64::from(outer.left) / scale,
+            y: f64::from(outer.top) / scale,
+            width: f64::from(client.width()) / scale,
+            height: f64::from(client.height()) / scale,
+            scale,
+        })
     }
 
     pub fn is_editing(&self) -> bool {

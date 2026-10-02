@@ -41,7 +41,17 @@ function Assert-Desktop([int]$IdleSeconds, [switch]$NeedsInput) {
     }
 }
 
-function Start-ProbeApp([string]$Exe, [string]$ResultDir) {
+# The probe instance's own data directory (never the installed app's).
+$script:ProbeDataDir = Join-Path $env:LOCALAPPDATA 'com.fastthree.kwikpaste.native-dev.selftest-platform\dev'
+
+# Starts the probe app. Its saved panel geometry is cleared first, so every script starts from the
+# default size at the cursor; -KeepState keeps it (window-state.ps1 checks persistence across launches).
+function Start-ProbeApp([string]$Exe, [string]$ResultDir, [switch]$KeepState) {
+    if (-not $KeepState) {
+        foreach ($name in 'window-state.gpui.json', 'window-state.json') {
+            Remove-Item (Join-Path $script:ProbeDataDir "state\$name") -ErrorAction SilentlyContinue
+        }
+    }
     $log = Join-Path $ResultDir 'probe.jsonl'
     $stderr = Join-Path $ResultDir 'app-stderr.txt'
     [Probe]::ResetLog()

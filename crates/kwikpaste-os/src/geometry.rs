@@ -105,9 +105,59 @@ pub fn follow_cursor(cursor: Point, work_area: Rect, size: Size) -> Rect {
     Rect::from_origin_size(Point { x, y }, size)
 }
 
+/// 面板内容区放在工作区正中；比工作区还大时收到工作区大小。
+pub fn center_in(work_area: Rect, size: Size) -> Rect {
+    let size = Size {
+        width: size.width.clamp(1, work_area.width().max(1)),
+        height: size.height.clamp(1, work_area.height().max(1)),
+    };
+    let origin = Point {
+        x: work_area.left + (work_area.width() - size.width) / 2,
+        y: work_area.top + (work_area.height() - size.height) / 2,
+    };
+
+    Rect::from_origin_size(origin, size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn centers_inside_the_work_area_and_clamps_the_size() {
+        let work = Rect {
+            left: 100,
+            top: 50,
+            right: 1100,
+            bottom: 850,
+        };
+
+        let centered = center_in(
+            work,
+            Size {
+                width: 400,
+                height: 600,
+            },
+        );
+        let clamped = center_in(
+            work,
+            Size {
+                width: 4000,
+                height: 600,
+            },
+        );
+
+        assert_eq!(
+            centered,
+            Rect {
+                left: 400,
+                top: 150,
+                right: 800,
+                bottom: 750,
+            }
+        );
+        assert_eq!((clamped.left, clamped.width()), (100, 1000));
+    }
 
     const WORK: Rect = Rect {
         left: 0,

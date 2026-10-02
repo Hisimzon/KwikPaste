@@ -11,7 +11,10 @@ use gpui::Window;
 use kwikpaste_os::mac::panel as mac_panel;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+use kwikpaste_core::window_state::WindowGeometry;
+
 use super::editing::{EditReport, EditTrigger};
+use super::window_state::PanelLayout;
 
 /// macOS 上定位不需要回读校验。
 pub struct Placement;
@@ -52,7 +55,8 @@ impl NativePanel {
     /// macOS 没有「文本大小」设置。
     pub fn set_text_scale(&self, _text_scale: f64) {}
 
-    pub fn place_near_cursor(&self) -> anyhow::Result<Placement> {
+    /// TODO(macOS)：按 `layout` 的摆放方式和存档尺寸定位；现在总是跟随光标、默认尺寸。
+    pub fn place(&self, _layout: &PanelLayout) -> anyhow::Result<Placement> {
         self.panel.place_near_cursor()?;
         Ok(Placement)
     }
@@ -71,8 +75,10 @@ impl NativePanel {
         self.panel.show_without_activating();
     }
 
-    pub fn hide(&self) {
+    /// TODO(macOS)：返回隐藏前的几何供存档。
+    pub fn hide(&self) -> Option<WindowGeometry> {
         self.panel.hide();
+        None
     }
 
     pub fn is_editing(&self) -> bool {
