@@ -147,11 +147,15 @@ pub fn start<V: Render>(
     mouse::serve(cx, commands.clone());
     system::serve(cx, commands.clone());
 
-    if let Err(err) = hotkey::register(cx, commands.clone()) {
-        log::error!("global hotkey is unavailable: {err:#}");
-    }
-    if let Err(err) = tray::create(cx, commands.clone()) {
-        log::error!("tray icon is unavailable: {err:#}");
+    // 列表自测（跑分、截图）不碰全局热键和托盘：热键是系统范围独占的，会抢走同时在跑的平台探针
+    // 或手动开着的开发实例的热键。
+    if !crate::selftest::list_selftest() {
+        if let Err(err) = hotkey::register(cx, commands.clone()) {
+            log::error!("global hotkey is unavailable: {err:#}");
+        }
+        if let Err(err) = tray::create(cx, commands.clone()) {
+            log::error!("tray icon is unavailable: {err:#}");
+        }
     }
     settings::follow(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
