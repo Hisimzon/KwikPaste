@@ -1,3 +1,4 @@
+mod announcement;
 mod portable;
 mod usage;
 
@@ -170,6 +171,7 @@ impl UpdateState {
 pub fn init(app: &AppHandle) {
     app.manage(UpdateState::new());
     app.manage(usage::UsageState::default());
+    app.manage(announcement::AnnouncementState::default());
 
     if crate::core::portable::is_portable() {
         portable::cleanup_leftovers();
@@ -187,6 +189,7 @@ pub async fn check(app: &AppHandle, mode: CheckMode) -> Result<AppUpdateStatus> 
     }
 
     usage::schedule(app, usage::Trigger::Check);
+    announcement::schedule(app, announcement::Trigger::Check);
 
     let settings = app.state::<SettingsStore>().snapshot();
     let channels = update_channels(
@@ -286,6 +289,7 @@ pub fn schedule_auto_check(app: &AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(AUTO_CHECK_INITIAL_DELAY_SECONDS)).await;
+        announcement::schedule(&handle, announcement::Trigger::Launch);
 
         loop {
             let delay = next_auto_check_delay(&handle);

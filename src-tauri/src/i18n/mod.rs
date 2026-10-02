@@ -2,6 +2,7 @@
 //!
 //! 仅放会直接展示给用户的短文案；日志与内部错误上下文不走这里。
 
+pub mod announcement;
 pub mod clipboard_menu;
 pub mod commands;
 mod en_us;
