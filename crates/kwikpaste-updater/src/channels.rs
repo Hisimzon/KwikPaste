@@ -1,6 +1,8 @@
 //! 读哪些清单、怎么从各渠道里挑出要装的版本。
 //!
-//! 2.x 只读 v2 地址：每个渠道先读七牛 CDN（国内可达），失败再读 GitHub 的 `channel-v2-*` 发布。
+//! 2.x 只读 v2 地址：每个渠道先读七牛 CDN（国内可达）的 `kwikpaste/v2/<渠道>/latest.json`，失败再读
+//! GitHub 的 `channel-v2-<渠道>` 发布里的 `latest-v2.json`。GitHub 上 2.x 的资产永远不叫 `latest.json`：
+//! 老客户端的备用地址是 `releases/latest/download/latest.json`，万一哪个 2.x 发布被标成 latest 也不会被读到。
 //! **绝不读 1.x 的旧地址**（`kwikpaste/{stable,beta,nightly}/latest.json` 与 GitHub 的
 //! `latest`、`channel-beta`、`channel-nightly`），那里只有 1.x。
 //!
@@ -16,11 +18,11 @@ use crate::os::OsVersion;
 
 const STABLE_ENDPOINTS: &[&str] = &[
     "https://dl.fastthree.com/kwikpaste/v2/stable/latest.json",
-    "https://github.com/ManSanDADADA/KwikPaste/releases/download/channel-v2-stable/latest.json",
+    "https://github.com/ManSanDADADA/KwikPaste/releases/download/channel-v2-stable/latest-v2.json",
 ];
 const BETA_ENDPOINTS: &[&str] = &[
     "https://dl.fastthree.com/kwikpaste/v2/beta/latest.json",
-    "https://github.com/ManSanDADADA/KwikPaste/releases/download/channel-v2-beta/latest.json",
+    "https://github.com/ManSanDADADA/KwikPaste/releases/download/channel-v2-beta/latest-v2.json",
 ];
 /// 清单正文上限，防止把一个误配置成大文件的地址整个读进内存。
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
@@ -295,6 +297,9 @@ mod tests {
                 path.contains("/v2/") || path.contains("/channel-v2-"),
                 "{url}"
             );
+            if url.host_str() == Some("github.com") {
+                assert!(path.ends_with("/latest-v2.json"), "{url}");
+            }
         }
         for legacy in [
             "https://dl.fastthree.com/kwikpaste/stable/latest.json",
