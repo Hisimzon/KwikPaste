@@ -5,6 +5,7 @@
 //!
 //! 运行环境（dev / prod、数据根、系统语言）一律由宿主传入，core 里不出现 `cfg!(dev)`。
 
+pub mod db;
 pub mod disk;
 pub mod env;
 pub mod error;
