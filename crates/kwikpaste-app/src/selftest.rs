@@ -1,6 +1,6 @@
 //! 自测开关：必须同时传 `--selftest-*` 参数并设置 `KWIKPASTE_SELFTEST=1`，普通启动不会误触。
 //!
-//! 自测进程用带 `.selftest` 后缀的 identifier（平台探针 `.selftest-platform`，见 [`crate::identity`]），
+//! 自测进程按种类用 `.selftest-<kind>` 后缀的 identifier（见 [`kind`] 与 [`crate::identity`]），
 //! 把日志打到 stderr。
 
 use std::cell::Cell;
@@ -60,9 +60,34 @@ pub fn active() -> bool {
     env_enabled() && std::env::args().any(|arg| arg.starts_with(PREFIX))
 }
 
+/// 这次自测的种类，用作 identifier 的后缀（`….selftest-<kind>`）：每种自测各有自己的单实例名字和
+/// 数据目录，同时跑的冒烟、展示窗、列表跑分和平台探针互不转交参数、互不共用数据。
+/// 平台探针本身和给它转交命令的后启动实例是同一种（`platform`）。不在自测模式时为 `None`。
+pub fn kind() -> Option<&'static str> {
+    if !active() {
+        return None;
+    }
+    if platform_probe() {
+        return Some("platform");
+    }
+    let kinds = [
+        (SMOKE, "smoke"),
+        (GALLERY, "gallery"),
+        (LIST_BENCH, "list-bench"),
+        (LIST_DEMO, "list-demo"),
+        (CORE_LIST, "core-list"),
+    ];
+
+    Some(
+        kinds
+            .into_iter()
+            .find(|(flag, _)| enabled(flag))
+            .map_or("other", |(_, kind)| kind),
+    )
+}
+
 /// 本进程是平台探针本身（`--selftest-platform`）或者给它转交命令的后启动实例。
-/// 它们用单独的 identifier，别的自测进程（冒烟、展示窗、界面的测量）同时启动时不会被转交进来。
-pub fn platform_probe() -> bool {
+fn platform_probe() -> bool {
     const COMMANDS: [&str; 11] = [
         PLATFORM,
         SHOW,
