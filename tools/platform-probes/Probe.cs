@@ -25,6 +25,11 @@ public class TargetForm : Form {
     public List<string> Log = new List<string>();
     public int MenuActivations;
     public int F9KeyDowns;
+    /// Alt (Menu) key downs and WM_SYSCOMMAND SC_KEYMENU the form saw: the panel must never leak Alt.
+    public int AltKeyDowns;
+    public int KeyMenuCommands;
+    /// Every key down the form saw, by key code.
+    public Dictionary<Keys, int> KeyDowns = new Dictionary<Keys, int>();
     int drained;
 
     public TargetForm() {
@@ -50,12 +55,19 @@ public class TargetForm : Form {
         Strip.MenuActivate += delegate { MenuActivations++; Add("MENU ACTIVATED"); };
         KeyDown += delegate(object s, KeyEventArgs e) {
             if (e.KeyCode == Keys.F9) F9KeyDowns++;
+            if (e.KeyCode == Keys.Menu || e.KeyCode == Keys.LMenu || e.KeyCode == Keys.RMenu) AltKeyDowns++;
+            int seen;
+            KeyDowns.TryGetValue(e.KeyCode, out seen);
+            KeyDowns[e.KeyCode] = seen + 1;
             Add("KeyDown " + e.KeyCode);
         };
     }
 
     protected override void WndProc(ref Message m) {
-        if (m.Msg == 0x0112) Add("WM_SYSCOMMAND 0x" + ((long)m.WParam & 0xFFF0).ToString("X"));
+        if (m.Msg == 0x0112) {
+            if (((long)m.WParam & 0xFFF0) == 0xF100) KeyMenuCommands++;
+            Add("WM_SYSCOMMAND 0x" + ((long)m.WParam & 0xFFF0).ToString("X"));
+        }
         base.WndProc(ref m);
     }
 
@@ -160,14 +172,17 @@ public static class Probe {
 
     /// Presses Ctrl+Alt+Shift+F9 (Ctrl first, so Windows never sees a lone Alt) and returns the
     /// Stopwatch timestamp taken right before F9 goes down.
-    public static long DevHotkey(TargetForm form, IntPtr panel) {
+    public static long DevHotkey(TargetForm form, IntPtr panel) { return DevHotkeyWith(form, panel, VK_F9); }
+
+    /// Ctrl+Alt+Shift+<vk>; returns the timestamp taken right before the key goes down.
+    public static long DevHotkeyWith(TargetForm form, IntPtr panel, ushort key) {
         RequireForeground(form, panel, "the hotkey");
         Key(VK_CONTROL, false); Pump(8);
         Key(VK_MENU, false); Pump(8);
         Key(VK_SHIFT, false); Pump(8);
         long injected = Stopwatch.GetTimestamp();
-        Key(VK_F9, false); Pump(25);
-        Key(VK_F9, true); Pump(8);
+        Key(key, false); Pump(25);
+        Key(key, true); Pump(8);
         Key(VK_SHIFT, true); Pump(8);
         Key(VK_MENU, true); Pump(8);
         Key(VK_CONTROL, true);
@@ -183,6 +198,28 @@ public static class Probe {
             input[0].u.mi.dy = (int)(((long)(y - vy) * 65535) / (vh - 1));
         }
         SendInput(1, input, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    /// Taps one key (down, up). Only while our form or the panel is the foreground window.
+    public static void Tap(TargetForm form, IntPtr panel, ushort vk) {
+        RequireForeground(form, panel, "key 0x" + vk.ToString("X"));
+        Key(vk, false); Pump(25);
+        Key(vk, true); Pump(40);
+    }
+
+    /// Ctrl + one key.
+    public static void CtrlTap(TargetForm form, IntPtr panel, ushort vk) {
+        RequireForeground(form, panel, "ctrl+0x" + vk.ToString("X"));
+        Key(VK_CONTROL, false); Pump(10);
+        Key(vk, false); Pump(25);
+        Key(vk, true); Pump(10);
+        Key(VK_CONTROL, true); Pump(40);
+    }
+
+    /// Types ASCII letters with real key events (virtual key plus scan code), so they go through
+    /// the input method of whatever window has the keyboard.
+    public static void TypeLetters(TargetForm form, IntPtr panel, string letters) {
+        foreach (char c in letters.ToUpperInvariant()) Tap(form, panel, (ushort)c);
     }
 
     /// Moves the real cursor (absolute, virtual desktop) and nudges it onto the exact pixel.
@@ -283,13 +320,15 @@ public static class Probe {
     static int RoundAway(double v) { return (int)Math.Round(v, MidpointRounding.AwayFromZero); }
 
     /// The content rect the app must produce for a cursor position, computed from scratch.
-    public static int[] ExpectedClient(int cursorX, int cursorY) {
+    public static int[] ExpectedClient(int cursorX, int cursorY) { return ExpectedClient(cursorX, cursorY, TextScaleFactor()); }
+
+    /// Same, with an explicit text scale (the app may run with KP_TEXT_SCALE).
+    public static int[] ExpectedClient(int cursorX, int cursorY, double tsf) {
         var cursor = new POINT(); cursor.X = cursorX; cursor.Y = cursorY;
         IntPtr monitor = MonitorFromPoint(cursor, 2);
         var info = new MONITORINFO(); info.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
         GetMonitorInfoW(monitor, ref info);
         uint dpiX, dpiY; GetDpiForMonitor(monitor, 0, out dpiX, out dpiY);
-        double tsf = TextScaleFactor();
         double scale = (double)dpiX / 96.0;
         RECT work = info.rcWork;
         int workW = Math.Max(1, work.R - work.L), workH = Math.Max(1, work.B - work.T);
@@ -298,6 +337,39 @@ public static class Probe {
         int x = Math.Max(Math.Min(cursorX, work.R - w), work.L);
         int y = Math.Max(Math.Min(cursorY, work.B - h), work.T);
         return new int[] { x, y, x + w, y + h };
+    }
+
+    /// Where the app puts the panel when it cannot read the cursor (no input desktop): the middle of
+    /// the primary monitor's work area, computed the same way.
+    /// The primary monitor's work area [left, top, right, bottom] (physical px).
+    public static int[] PrimaryWorkArea() {
+        var info = new MONITORINFO(); info.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+        GetMonitorInfoW(MonitorFromPoint(new POINT(), 1), ref info);
+        return new int[] { info.rcWork.L, info.rcWork.T, info.rcWork.R, info.rcWork.B };
+    }
+
+    public static POINT CursorOrPrimaryCenter() {
+        POINT p;
+        if (GetCursorPos(out p)) return p;
+        var origin = new POINT();
+        IntPtr monitor = MonitorFromPoint(origin, 1);
+        var info = new MONITORINFO(); info.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+        GetMonitorInfoW(monitor, ref info);
+        p.X = info.rcWork.L + (info.rcWork.R - info.rcWork.L) / 2;
+        p.Y = info.rcWork.T + (info.rcWork.B - info.rcWork.T) / 2;
+        return p;
+    }
+
+    /// The panel's minimum track size (outer, physical px), asked cross-process with WM_GETMINMAXINFO.
+    public static int[] MinTrackSize(IntPtr h) {
+        IntPtr buffer = Marshal.AllocHGlobal(40);
+        try {
+            for (int i = 0; i < 40; i += 4) Marshal.WriteInt32(buffer, i, 0);
+            SendMessageW(h, 0x0024, IntPtr.Zero, buffer);
+            return new int[] { Marshal.ReadInt32(buffer, 24), Marshal.ReadInt32(buffer, 28) };
+        } finally {
+            Marshal.FreeHGlobal(buffer);
+        }
     }
 
     public static string Rect(int[] r) { return "[" + String.Join(",", r) + "]"; }

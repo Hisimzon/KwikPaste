@@ -9,11 +9,18 @@
 #   3. Rounds x (show, hide) through the single-instance path: after each show the window rect equals
 #      the rect the app wrote, the content rect equals the independently computed target, and the
 #      foreground window never changes.
-#   4. PHANTOM_ACTIVATIONS == 0 and no WM_MOUSEACTIVATE override (patch W0002 in effect).
+#   4. The minimum track size (WM_GETMINMAXINFO, cross-process) is 360x600 logical x DPI x text scale
+#      plus the resize border, clamped to the work area.
+#   5. PHANTOM_ACTIVATIONS == 0 and no WM_MOUSEACTIVATE override (patch W0002 in effect).
+#
+# -TextScale 1.5 runs the app with KP_TEXT_SCALE (honoured only in selftest mode) to check the text
+# size compensation without touching the system setting. While the panel is shown the keyboard hook
+# is live, so run it while nobody is typing (-IdleSeconds); a CI runner has no user.
 param(
     [string]$Exe = '',
     [int]$Rounds = 20,
-    [int]$IdleSeconds = 0
+    [int]$IdleSeconds = 0,
+    [double]$TextScale = 0
 )
 
 . "$PSScriptRoot\common.ps1"
@@ -25,8 +32,12 @@ function Note([string]$Line) { $report.Add($Line); Write-Host $Line }
 Assert-Desktop -IdleSeconds $IdleSeconds
 $app = $null
 $failures = 0
+$tsf = if ($TextScale -gt 0) { $TextScale } else { [Probe]::TextScaleFactor() }
 try {
+    if ($TextScale -gt 0) { $env:KP_TEXT_SCALE = "$TextScale" }
     $app = Start-ProbeApp $Exe $results
+    Remove-Item Env:KP_TEXT_SCALE -ErrorAction SilentlyContinue
+    Note "text scale $tsf"
     $panel = $app.Hwnd
     Note ("app pid {0} panel hwnd 0x{1:X} exe {2}" -f $app.Process.Id, $panel.ToInt64(), $Exe)
 
@@ -52,9 +63,19 @@ try {
         $client = [Probe]::ClientRectOnScreen($panel)
         $target = [int[]]$shown.target_outer
         # Nothing moves the cursor here, so the target can be recomputed from where it is now.
-        $cursor = New-Object Probe+POINT
-        [void][Probe]::GetCursorPos([ref]$cursor)
-        $expected = [Probe]::ExpectedClient($cursor.X, $cursor.Y)
+        $cursor = [Probe]::CursorOrPrimaryCenter()
+        $expected = [Probe]::ExpectedClient($cursor.X, $cursor.Y, $tsf)
+        if ($round -eq 1) {
+            $insets = @(($client[0] - $window[0]), ($client[1] - $window[1]), ($window[2] - $client[2]), ($window[3] - $client[3]))
+            $work = [System.Windows.Forms.Screen]::FromHandle($panel).WorkingArea
+            $scale = [double]$shown.dpi / 96.0
+            $minWidth = [math]::Min([math]::Round(360 * $tsf * $scale, [MidpointRounding]::AwayFromZero), $work.Width - $insets[0] - $insets[2]) + $insets[0] + $insets[2]
+            $minHeight = [math]::Min([math]::Round(600 * $tsf * $scale, [MidpointRounding]::AwayFromZero), $work.Height - $insets[1] - $insets[3]) + $insets[1] + $insets[3]
+            $minTrack = [Probe]::MinTrackSize($panel)
+            $minOk = $minTrack[0] -eq $minWidth -and $minTrack[1] -eq $minHeight
+            Note ("min track size {0}x{1}, expected {2}x{3} -> {4}" -f $minTrack[0], $minTrack[1], $minWidth, $minHeight, $(if ($minOk) { 'ok' } else { 'FAIL' }))
+            if (-not $minOk) { $failures++ }
+        }
         if ([Probe]::Same($window, $target)) { $rectOk++ } else { Note "round ${round}: window $([Probe]::Rect($window)) != written $([Probe]::Rect($target))" }
         if ([Probe]::Same($client, $expected) -and [Probe]::Same($client, [int[]]$shown.target_client)) { $clientOk++ } else {
             Note "round ${round}: client $([Probe]::Rect($client)) app target $([Probe]::Rect([int[]]$shown.target_client)) expected $([Probe]::Rect($expected))"

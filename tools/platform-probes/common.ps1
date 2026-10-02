@@ -9,7 +9,7 @@
 $ErrorActionPreference = 'Stop'
 
 if (-not ('Probe' -as [type])) {
-    Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -Path (Join-Path $PSScriptRoot 'Probe.cs')
+    Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -Path (Join-Path $PSScriptRoot 'Probe.cs'), (Join-Path $PSScriptRoot 'Ime.cs')
 }
 [Probe]::Init()
 
@@ -44,6 +44,7 @@ function Start-ProbeApp([string]$Exe, [string]$ResultDir) {
     $log = Join-Path $ResultDir 'probe.jsonl'
     $stderr = Join-Path $ResultDir 'app-stderr.txt'
     [Probe]::ResetLog()
+    $script:ProbeEvents.Clear()
     $env:KWIKPASTE_SELFTEST = '1'
     $env:KWIKPASTE_PROBE_LOG = $log
     $process = Start-Process -FilePath $Exe -ArgumentList '--selftest-platform' -PassThru -RedirectStandardError $stderr -NoNewWindow
@@ -55,26 +56,77 @@ function Start-ProbeApp([string]$Exe, [string]$ResultDir) {
     return [pscustomobject]@{ Process = $process; Hwnd = [IntPtr][long]$ready.hwnd; Ready = $ready; Log = $log; Stderr = $stderr }
 }
 
-# Hands a --selftest-* command to the running app through a second launch.
+# Hands a --selftest-* command to the running app through a second launch. Double quotes (JSON in
+# --selftest-settings=) are escaped for the C runtime's command-line parser.
 function Send-ProbeCommand([string]$Exe, [string]$Command) {
     $env:KWIKPASTE_SELFTEST = '1'
-    $second = Start-Process -FilePath $Exe -ArgumentList $Command -PassThru -NoNewWindow -RedirectStandardError $script:SecondStderr
+    $argument = $Command.Replace('"', '\"')
+    $second = Start-Process -FilePath $Exe -ArgumentList $argument -PassThru -NoNewWindow -RedirectStandardError $script:SecondStderr
     $null = $second.Handle
     if (-not $second.WaitForExit(15000)) { $second.Kill(); throw "The second launch with $Command did not exit." }
     if ($second.ExitCode -ne 0) { throw "The second launch with $Command exited with $($second.ExitCode); see $script:SecondStderr" }
 }
 
-# Waits for the next probe event of the given kind, pumping WinForms messages meanwhile.
+$script:ProbeEvents = New-Object System.Collections.ArrayList
+
+# Reads newly appended probe events into the pending queue.
+function Read-ProbeEvents {
+    foreach ($line in [Probe]::ReadNewLines($script:ProbeLog)) {
+        [void]$script:ProbeEvents.Add(($line | ConvertFrom-Json))
+    }
+}
+
+# Takes the oldest pending probe event of the given kind, waiting for it (pumping WinForms messages)
+# up to TimeoutMs. Events of other kinds stay queued.
 function Wait-ProbeEvent([string]$Kind, [int]$TimeoutMs = 3000) {
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    while ($watch.ElapsedMilliseconds -lt $TimeoutMs) {
-        foreach ($line in [Probe]::ReadNewLines($script:ProbeLog)) {
-            $event = $line | ConvertFrom-Json
-            if ($event.event -eq $Kind) { return $event }
+    while ($true) {
+        Read-ProbeEvents
+        for ($i = 0; $i -lt $script:ProbeEvents.Count; $i++) {
+            $event = $script:ProbeEvents[$i]
+            if ($event.event -eq $Kind) { $script:ProbeEvents.RemoveAt($i); return $event }
         }
+        if ($watch.ElapsedMilliseconds -ge $TimeoutMs) { return $null }
         [Probe]::Pump(5)
     }
-    return $null
+}
+
+# Takes every pending probe event of the given kind (after a final read).
+function Get-ProbeEvents([string]$Kind) {
+    Read-ProbeEvents
+    $taken = @($script:ProbeEvents | Where-Object { $_.event -eq $Kind })
+    foreach ($event in $taken) { $script:ProbeEvents.Remove($event) }
+    return $taken
+}
+
+# Drops every pending probe event.
+function Clear-ProbeEvents {
+    Read-ProbeEvents
+    $script:ProbeEvents.Clear()
+}
+
+# Opens our WinForms target and makes it the foreground window with its text box focused.
+function New-TargetForm {
+    $form = New-Object TargetForm
+    $primary = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $form.Bounds = New-Object System.Drawing.Rectangle(($primary.X + 60), ($primary.Y + 60), 560, 200)
+    # Topmost only while it takes the foreground, so the click below lands on it.
+    $form.TopMost = $true
+    $form.Show()
+    [Probe]::Pump(300)
+    $form.Activate()
+    [void]$form.Box.Focus()
+    [Probe]::Pump(300)
+    if ([Probe]::GetForegroundWindow() -ne $form.Handle) { [void][Probe]::SetForegroundWindow($form.Handle); [Probe]::Pump(300) }
+    if ([Probe]::GetForegroundWindow() -ne $form.Handle) { [void][Probe]::ClickIntoForeground($form) }
+    $form.TopMost = $false
+    [Probe]::Pump(200)
+    if ([Probe]::GetForegroundWindow() -ne $form.Handle) { $form.Close(); throw 'The probe form could not take the foreground.' }
+    [void]$form.Box.Focus()
+    $form.Box.Text = 'probe'
+    $form.Box.SelectionStart = $form.Box.Text.Length
+    [void]$form.Drain()
+    return $form
 }
 
 function Stop-ProbeApp($App, [string]$Exe) {

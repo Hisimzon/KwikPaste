@@ -5,8 +5,9 @@
 #
 # 1. A left button up on the icon (tray-icon's callback message 6002 with WM_LBUTTONUP) shows the panel.
 # 2. A right button up opens the menu at the real cursor; its items are read through MN_GETHMENU and
-#    must be 显示面板 / 退出. Choosing 显示面板 (keyboard on the popup menu) shows the panel.
-# 3. Opening the menu again and choosing 退出 makes the app exit with code 0.
+#    must be the 1.x items from kwikpaste-core's tray strings in the default language zh-CN
+#    (Preference, Exit). Choosing Preference shows the panel until the preference window exists.
+# 3. Opening the menu again and choosing Exit makes the app exit with code 0.
 # Opening a tray menu takes the foreground, like any tray menu; the script puts it back afterwards.
 param(
     [string]$Exe = '',
@@ -90,10 +91,12 @@ try {
     $menu = Open-Menu $trayWindow $processId
     $items = [Tray]::Items($menu)
     Note "menu items: $items"
-    if ($items -ne "$([char]0x663E)$([char]0x793A)$([char]0x9762)$([char]0x677F) / $([char]0x9000)$([char]0x51FA)") { $failures++ }
+    # zh-CN "Preference" / "Exit app", as code points so the script stays ASCII.
+    $expected = "$([char]0x504F)$([char]0x597D)$([char]0x8BBE)$([char]0x7F6E) / $([char]0x9000)$([char]0x51FA)$([char]0x5E94)$([char]0x7528)"
+    if ($items -ne $expected) { $failures++ }
     Choose $menu 0
     $shown = Wait-ProbeEvent 'shown' 3000
-    Note "menu 'show panel' -> shown by $($shown.source)"
+    Note "menu 'preference' -> shown by $($shown.source)"
     if ($null -eq $shown -or $shown.source -ne 'tray') { $failures++ }
     Send-ProbeCommand $Exe '--selftest-hide'
     [void](Wait-ProbeEvent 'hidden' 3000)
@@ -101,7 +104,7 @@ try {
     $menu = Open-Menu $trayWindow $processId
     Choose $menu 1
     $exited = $app.Process.WaitForExit(10000)
-    Note "menu 'quit' -> exited $exited with code $($app.Process.ExitCode)"
+    Note "menu 'exit' -> exited $exited with code $($app.Process.ExitCode)"
     if (-not $exited -or $app.Process.ExitCode -ne 0) { $failures++ }
 } catch {
     $failures++
