@@ -175,6 +175,48 @@ mod tests {
         }
     }
 
+    /// 另一平台建的库原样打开会迁移失败；换算后通过，不认识的校验和保持原样。
+    #[tokio::test]
+    async fn foreign_platform_checksums_are_adopted() {
+        let pool = crate::db::test_support::memory_pool().await;
+        for (version, lf, crlf) in PUBLISHED {
+            let embedded = MIGRATOR
+                .iter()
+                .find(|migration| migration.version == version)
+                .unwrap();
+            let other = if hex(&embedded.checksum) == lf {
+                crlf
+            } else {
+                lf
+            };
+            let bytes: Vec<u8> = (0..other.len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&other[index..index + 2], 16).unwrap())
+                .collect();
+            sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+                .bind(bytes)
+                .bind(version)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        assert!(MIGRATOR.run(&pool).await.is_err());
+
+        assert_eq!(
+            adopt_published_checksums(&pool).await.unwrap(),
+            PUBLISHED.len() as u64
+        );
+        MIGRATOR.run(&pool).await.unwrap();
+        assert_eq!(adopt_published_checksums(&pool).await.unwrap(), 0);
+
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = x'00' WHERE version = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(adopt_published_checksums(&pool).await.unwrap(), 0);
+        assert!(MIGRATOR.run(&pool).await.is_err());
+    }
+
     #[tokio::test]
     async fn init_creates_database_under_db_dir() {
         let root = std::env::temp_dir().join(format!("kwikpaste-db-init-{}", uuid::Uuid::new_v4()));
