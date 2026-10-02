@@ -10,9 +10,11 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+futures.workspace = true
 gpui.workspace = true
 gpui-base.workspace = true
 gpui-component.workspace = true
+gpui-kit-assets.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

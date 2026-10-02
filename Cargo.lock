@@ -4085,8 +4085,10 @@ name = "kwikpaste-ui"
 version = "2.0.0-alpha.0"
 dependencies = [
  "anyhow",
+ "futures",
  "gpui-base",
  "gpui-component",
+ "gpui-kit-assets",
  "gpui-pre",
  "serde_json",
 ]
