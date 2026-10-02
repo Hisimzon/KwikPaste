@@ -1,0 +1,126 @@
+{
+  "appearance": {
+    "language": "zh-CN",
+    "material": "default",
+    "theme": "auto"
+  },
+  "clipboard": {
+    "capture": {
+      "files": true,
+      "html": true,
+      "image": true,
+      "maxImageMb": 100,
+      "maxTextMb": 4,
+      "order": ["files", "image", "html", "rtf", "text"],
+      "rtf": true,
+      "text": true
+    },
+    "content": {
+      "autoFavorite": false,
+      "autoPaste": "doubleClickPaste",
+      "copyPlain": false,
+      "copyThenHideWindow": false,
+      "deleteConfirm": true,
+      "deleteFavoriteConfirm": true,
+      "deleteFavoriteItems": false,
+      "deleteFavoriteItemsOnlyInFavoriteGroup": true,
+      "deletePinnedConfirm": true,
+      "deletePinnedItems": false,
+      "itemActionOrder": [
+        "paste",
+        "pastePlain",
+        "pastePath",
+        "copy",
+        "copyPlain",
+        "splitWords",
+        "openLink",
+        "sendEmail",
+        "reveal",
+        "note",
+        "star",
+        "pinItem",
+        "delete"
+      ],
+      "itemActions": ["copy", "splitWords", "star", "pinItem", "delete"],
+      "middleClick": "disabled",
+      "pasteFilesAsPath": false,
+      "pastePlain": false,
+      "showOriginalPreview": true,
+      "sort": "updatedAtDesc",
+      "updateOnReuse": false
+    },
+    "display": {
+      "fileMaxCount": 3,
+      "imageMaxHeight": 64,
+      "quickSnippets": true,
+      "textMaxLines": 3
+    },
+    "feedback": {
+      "copySound": false
+    },
+    "filters": {
+      "excludedAppIds": []
+    },
+    "history": {
+      "maxCount": 0,
+      "retention": {
+        "unit": "forever",
+        "value": 0
+      },
+      "rules": [],
+      "storageLimitAction": "remind",
+      "storageLimitMb": 1024
+    },
+    "preview": {
+      "hoverDelayMs": "ms500",
+      "hoverEnabled": true,
+      "spaceEnabled": true,
+      "textView": "plain"
+    },
+    "search": {
+      "clearOnHide": true,
+      "defaultFocus": false
+    },
+    "sensitive": {
+      "collectSecrets": true,
+      "redactSecrets": true
+    },
+    "window": {
+      "idleDestroySeconds": 60,
+      "lightweightMode": true,
+      "position": "followCursor",
+      "scrollToTopOnOpen": true,
+      "selectCategoryOnOpen": "all",
+      "selectGroupOnOpen": "all",
+      "selectRangeOnOpen": "all"
+    }
+  },
+  "general": {
+    "autoStart": false,
+    "dockIcon": false,
+    "runAsAdmin": false,
+    "trayIcon": true
+  },
+  "onboarding": {
+    "completed": false,
+    "lastStep": 0
+  },
+  "shortcuts": {
+    "mouseTrigger": "disabled",
+    "openClipboard": "Alt+C",
+    "openPreference": "Alt+X",
+    "quickPaste": {
+      "enabled": false,
+      "modifiers": "controlShift"
+    },
+    "winV": false
+  },
+  "update": {
+    "autoCheck": true,
+    "frequency": "daily",
+    "includeBeta": true,
+    "includeNightly": true,
+    "lastCheckedAt": null,
+    "skippedVersion": null
+  }
+}

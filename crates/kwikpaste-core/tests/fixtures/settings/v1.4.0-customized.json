@@ -1,0 +1,218 @@
+{
+  "appearance": {
+    "language": "en-US",
+    "material": "acrylic",
+    "theme": "dark"
+  },
+  "clipboard": {
+    "capture": {
+      "files": false,
+      "html": false,
+      "image": false,
+      "maxImageMb": 20,
+      "maxTextMb": 0,
+      "order": ["text", "html", "rtf", "image", "files"],
+      "rtf": false,
+      "text": false
+    },
+    "content": {
+      "autoFavorite": true,
+      "autoPaste": "singleClickCopy",
+      "copyPlain": true,
+      "copyThenHideWindow": true,
+      "deleteConfirm": false,
+      "deleteFavoriteConfirm": false,
+      "deleteFavoriteItems": true,
+      "deleteFavoriteItemsOnlyInFavoriteGroup": false,
+      "deletePinnedConfirm": false,
+      "deletePinnedItems": true,
+      "itemActionOrder": [
+        "delete",
+        "pinItem",
+        "star",
+        "note",
+        "reveal",
+        "sendEmail",
+        "openLink",
+        "splitWords",
+        "copyPlain",
+        "copy",
+        "pastePath",
+        "pastePlain",
+        "paste"
+      ],
+      "itemActions": ["paste", "pastePlain", "openLink", "note"],
+      "middleClick": "singleClickPastePlain",
+      "pasteFilesAsPath": true,
+      "pastePlain": true,
+      "showOriginalPreview": false,
+      "sort": "useCountDesc",
+      "updateOnReuse": true
+    },
+    "display": {
+      "customLayout": {
+        "headerRow": false,
+        "itemGap": 4,
+        "paddingY": 10
+      },
+      "density": "custom",
+      "fileMaxCount": 5,
+      "imageMaxHeight": 120,
+      "listStyle": "seamless",
+      "quickSnippets": false,
+      "textMaxLines": 5
+    },
+    "feedback": {
+      "copySound": true
+    },
+    "filters": {
+      "excludedAppIds": ["C:\\Program Files\\KeePassXC\\KeePassXC.exe"]
+    },
+    "history": {
+      "maxCount": 1000,
+      "retention": {
+        "unit": "days",
+        "value": 30
+      },
+      "rules": [
+        {
+          "categories": ["image", "files"],
+          "enabled": false,
+          "id": "big-images",
+          "keep": {
+            "unit": "hours",
+            "value": 3
+          },
+          "minSizeKb": 5120,
+          "sensitiveOnly": false,
+          "sourceAppIds": ["C:\\Windows\\System32\\SnippingTool.exe"],
+          "unusedOnly": true
+        },
+        {
+          "categories": [
+            "text",
+            "html",
+            "rtf",
+            "url",
+            "email",
+            "color",
+            "path"
+          ],
+          "enabled": true,
+          "id": "secrets",
+          "keep": {
+            "unit": "minutes",
+            "value": 30
+          },
+          "minSizeKb": 0,
+          "sensitiveOnly": true,
+          "sourceAppIds": [],
+          "unusedOnly": false
+        },
+        {
+          "categories": [],
+          "enabled": true,
+          "id": "weekly",
+          "keep": {
+            "unit": "weeks",
+            "value": 2
+          },
+          "minSizeKb": 0,
+          "sensitiveOnly": false,
+          "sourceAppIds": [],
+          "unusedOnly": false
+        },
+        {
+          "categories": ["text"],
+          "enabled": true,
+          "id": "monthly",
+          "keep": {
+            "unit": "months",
+            "value": 6
+          },
+          "minSizeKb": 0,
+          "sensitiveOnly": false,
+          "sourceAppIds": [],
+          "unusedOnly": false
+        },
+        {
+          "categories": ["url"],
+          "enabled": true,
+          "id": "keep-forever",
+          "keep": {
+            "unit": "forever",
+            "value": 0
+          },
+          "minSizeKb": 0,
+          "sensitiveOnly": false,
+          "sourceAppIds": [],
+          "unusedOnly": false
+        }
+      ],
+      "storageLimitAction": "cleanup",
+      "storageLimitMb": 4096
+    },
+    "preview": {
+      "hoverDelayMs": "ms1000",
+      "hoverEnabled": false,
+      "spaceEnabled": true,
+      "textView": "plain"
+    },
+    "search": {
+      "clearOnHide": false,
+      "defaultFocus": true
+    },
+    "sensitive": {
+      "collectSecrets": false,
+      "redactSecrets": false
+    },
+    "window": {
+      "idleDestroySeconds": 300,
+      "lightweightMode": false,
+      "position": "remember",
+      "scrollToTopOnOpen": false,
+      "selectCategoryOnOpen": "image",
+      "selectGroupOnOpen": "group:9a1c7e52-2f4b-4d8e-9b0a-6f3d2c1b0a99",
+      "selectRangeOnOpen": "favorite"
+    }
+  },
+  "general": {
+    "autoStart": true,
+    "dockIcon": true,
+    "runAsAdmin": true,
+    "trayClick": "preference",
+    "trayIcon": false
+  },
+  "onboarding": {
+    "completed": true,
+    "lastStep": 4
+  },
+  "shortcuts": {
+    "mouseTrigger": "back",
+    "openClipboard": "Control+Shift+V",
+    "openPreference": "Alt+P",
+    "quickPaste": {
+      "enabled": true,
+      "modifiers": "altShift"
+    },
+    "winV": true
+  },
+  "sync": {
+    "lan": {
+      "deviceName": "书房电脑",
+      "enabled": true,
+      "image": false,
+      "maxImageMb": 50,
+      "text": false,
+      "writeClipboard": false
+    }
+  },
+  "update": {
+    "autoCheck": false,
+    "frequency": "monthly",
+    "includeBeta": false,
+    "includeNightly": false,
+    "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+    "skippedVersion": "1.4.1"
+  }
+}

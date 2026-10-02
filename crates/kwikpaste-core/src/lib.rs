@@ -12,6 +12,7 @@ pub mod env;
 pub mod error;
 pub mod paths;
 pub mod portable;
+pub mod settings;
 
 pub use env::{AppEnv, AppInfo, APP_IDENTIFIER, APP_NAME};
 pub use error::{AppError, Result};
