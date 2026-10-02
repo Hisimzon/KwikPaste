@@ -82,6 +82,23 @@ mdns-sd = { version = "0.21", default-features = false, features = ["logging"] }
 snow = { version = "0.10", default-features = false, features = ["use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
 spake2 = "0.4"
 
+# kwikpaste-updater：2.x 自带的更新器（v2 清单、minisign 验签、三种安装交接、使用统计、公告）。
+# reqwest 关掉默认特性（默认是 rustls + aws-lc-rs），成员 crate 里显式打开 native-tls 与 system-proxy，
+# TLS 走系统实现，不把 rustls / ring 编进安装包。
+kwikpaste-updater = { path = "crates/kwikpaste-updater" }
+base64 = "0.22"
+minisign-verify = "0.2"
+reqwest = { version = "0.13", default-features = false }
+time = "0.3"
+url = "2"
+windows-sys = "0.61"
+# macOS 的 .app.tar.gz 解包；Windows 上只在测试里用。
+flate2 = "1"
+tar = "0.4"
+# 只在测试里用：临时生成一次性 minisign 密钥对并签名（Ed25519 + BLAKE2b-512 预哈希）。
+blake2 = "0.10"
+ed25519-dalek = "2"
+
 [workspace.lints.rust]
 unexpected_cfgs = "deny"
 

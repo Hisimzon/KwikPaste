@@ -133,7 +133,7 @@ impl Core {
         .await
     }
 
-    /// 停止剪贴板监听、局域网同步与后台清理并关闭连接池（SQLite 借此做 WAL checkpoint）。
+    /// 停止剪贴板监听、局域网同步与后台清理，WAL checkpoint 后关闭连接池。
     /// 之后不要再调用其它 async 方法。
     pub async fn shutdown(&self) -> Result<()> {
         drop(lock(&self.0.watcher).take());
@@ -143,7 +143,15 @@ impl Core {
             if let Some(task) = core.0.cleanup_task().take() {
                 task.abort();
             }
-            core.0.db.pool().await.close().await;
+            let pool = core.0.db.pool().await;
+            // 关库前把 WAL 写回主库并截断：安装更新、换数据目录之前尽量让数据都落在主文件里。
+            if let Err(err) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(&pool)
+                .await
+            {
+                log::warn!("wal checkpoint before shutdown failed: {err}");
+            }
+            pool.close().await;
             Ok(())
         })
         .await

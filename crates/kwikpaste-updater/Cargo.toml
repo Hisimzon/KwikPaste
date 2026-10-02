@@ -1,0 +1,52 @@
+[package]
+name = "kwikpaste-updater"
+description = "KwikPaste 2.x self-updater: v2 manifests, minisign verification, install handoff, usage stats and announcements."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[features]
+# 端到端测试专用：读 `KWIKPASTE_UPDATE_*` 等环境变量覆盖更新、统计、公告的地址和验签公钥。
+# 发布产物永远不开；不开时这些环境变量一律忽略（包括从旧进程继承来的）。
+e2e-overrides = []
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+kwikpaste-core.workspace = true
+log.workspace = true
+minisign-verify.workspace = true
+reqwest = { workspace = true, features = ["native-tls", "system-proxy"] }
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+time = { workspace = true, features = ["parsing", "formatting"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+url = { workspace = true, features = ["serde"] }
+uuid.workspace = true
+zip.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# 安装形态判定（NSIS 写的安装目录键）与系统 build 号。
+windows-registry.workspace = true
+# ShellExecuteW 拉起 NSIS 安装包。
+windows-sys = { workspace = true, features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+flate2.workspace = true
+tar.workspace = true
+
+[dev-dependencies]
+blake2.workspace = true
+ed25519-dalek.workspace = true
+flate2.workspace = true
+rand.workspace = true
+tar.workspace = true
+
+[lints]
+workspace = true
