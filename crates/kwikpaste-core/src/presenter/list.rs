@@ -9,8 +9,8 @@ use super::image_display_size;
 use super::text::mask_sensitive_text;
 use super::view::{ClipboardAction, ClipboardItemView, FileEntry, FilesPreviewKind};
 use crate::clipboard::{
-    quick_snippets, sanitize_css_color, validate_image_file_name, AppIconStore, FileIconStore,
-    ImageStore,
+    image_file_dimensions, quick_snippets, sanitize_css_color, validate_image_file_name,
+    AppIconStore, FileIconStore, ImageStore,
 };
 use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind};
 use crate::error::Result;
@@ -83,6 +83,7 @@ where
     redact_sensitive_list_item(&mut view, ctx.redact_sensitive);
     view.available_actions = compute_available_actions(&view.item, ctx.redact_sensitive);
     attach_image_display_size(&mut view, ctx.image_max_height);
+    attach_file_image_preview(ctx.images, &mut view, ctx.image_max_height);
     Ok(view)
 }
 
@@ -171,6 +172,33 @@ fn attach_image_display_size(view: &mut ClipboardItemView, max_height: u16) {
         view.item.height,
         max_height,
     ));
+}
+
+/// 单图文件记录按图片卡片的规则展示：显示尺寸用文件头里的宽高算（不解码整图），
+/// 缩略图同样只给**已生成**的，没有时界面先画同尺寸占位，再经 `Core::ensure_file_thumbnail` 生成。
+fn attach_file_image_preview(store: &ImageStore, view: &mut ClipboardItemView, max_height: u16) {
+    if view.files_preview_kind != Some(FilesPreviewKind::ImagePreview) {
+        return;
+    }
+    let Some(path) = view
+        .file_entries
+        .as_deref()
+        .and_then(<[FileEntry]>::first)
+        .map(|entry| std::path::PathBuf::from(&entry.path))
+    else {
+        return;
+    };
+
+    let dimensions = image_file_dimensions(&path);
+    view.image_display_size = Some(image_display_size(
+        dimensions.map(|(width, _)| i64::from(width)),
+        dimensions.map(|(_, height)| i64::from(height)),
+        max_height,
+    ));
+    view.image_thumbnail_path = store
+        .file_thumbnail_path(&path)
+        .filter(|thumb| thumb.exists())
+        .and_then(|thumb| thumb.to_str().map(str::to_owned));
 }
 
 /// 把 `created_at`（UTC）按 `now` 所在时区做三档格式化：

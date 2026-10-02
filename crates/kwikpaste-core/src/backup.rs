@@ -596,6 +596,9 @@ fn add_dir_contents<W: Write + Seek>(
         let relative = path
             .strip_prefix(root)
             .with_context(|| format!("failed to strip root {root:?} from {path:?}"))?;
+        if is_rebuildable_cache(relative) {
+            continue;
+        }
         let archive_name = archive_path(archive_root, relative)?;
         add_file(zip, path, &archive_name, options)?;
     }
@@ -630,6 +633,13 @@ fn should_skip_backup_path(path: &Path, file_name: &str, target_path: &Path) -> 
         || file_name.ends_with(".temp")
         || file_name.starts_with(".tmp")
         || file_name == ".DS_Store"
+}
+
+/// 随时能重建的缓存不进备份：单图文件记录的缩略图（2.0 新增，1.x 的备份里本来就没有）。
+fn is_rebuildable_cache(relative: &Path) -> bool {
+    let mut parts = relative.components().map(|part| part.as_os_str());
+    parts.next() == Some(std::ffi::OsStr::new("clipboard-images"))
+        && parts.next() == Some(std::ffi::OsStr::new(crate::clipboard::FILE_THUMBNAILS_DIR))
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {

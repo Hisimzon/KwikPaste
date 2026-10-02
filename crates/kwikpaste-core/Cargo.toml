@@ -20,7 +20,8 @@ clipboard-rs.workspace = true
 dirs.workspace = true
 file_icon_provider.workspace = true
 if-addrs.workspace = true
-image.workspace = true
+# 单图文件记录的宽高与缩略图要读常见图片格式；这些解码器 clipboard-rs 的默认特性已经打开，这里写明依赖。
+image = { workspace = true, features = ["bmp", "gif", "ico", "jpeg", "tiff", "webp"] }
 log.workspace = true
 mdns-sd.workspace = true
 rand.workspace = true

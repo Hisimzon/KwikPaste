@@ -82,6 +82,13 @@ fn payload_zip_contains_only_backup_whitelist() {
     fs::write(root.join("window-state.json"), b"skip").unwrap();
     fs::write(root.join("settings.json.bak"), b"skip").unwrap();
     fs::write(resources.join("clipboard-images/origin/demo.png"), b"image").unwrap();
+    // 单图文件记录的缩略图是缓存，不进备份。
+    fs::create_dir_all(resources.join("clipboard-images/file-thumbnails/ab")).unwrap();
+    fs::write(
+        resources.join("clipboard-images/file-thumbnails/ab/ab12.png"),
+        b"cache",
+    )
+    .unwrap();
 
     let payload = root.join("payload.zip");
     let target = root.join("backup.kwikpastebak");

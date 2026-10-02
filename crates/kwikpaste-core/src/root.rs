@@ -360,6 +360,20 @@ impl Core {
             .await
     }
 
+    /// 单图文件记录（`filesPreviewKind = imagePreview`）的缩略图：确保存在并返回路径，规则与图片记录相同。
+    /// `path` 是记录里那个文件的路径；只接受存在的图片文件。
+    pub async fn ensure_file_thumbnail(&self, path: &str) -> Result<PathBuf> {
+        let source = PathBuf::from(path);
+        if !source.is_absolute() || !presenter::is_image_path(path) || !source.is_file() {
+            return Err(crate::error::AppError::Clipboard(format!(
+                "not an image file: {path:?}"
+            )));
+        }
+        let core = self.clone();
+        self.hop(async move { core.0.images.ensure_file_thumbnail_async(&source).await })
+            .await
+    }
+
     // ---- 记录查询 ----
 
     /// 一页列表的数据库原始行与总数，没有经过展示层（敏感内容未脱敏）。只给测试用。

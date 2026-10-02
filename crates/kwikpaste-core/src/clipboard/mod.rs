@@ -41,6 +41,9 @@ pub use ingest::{build_item_with_settings, SUMMARY_MAX_CHARS};
 pub use payload::{ClipboardPayload, ImagePayload, TextPayload};
 pub use read::{png_dimensions, ClipboardReader};
 pub use secrets::contains_secret;
-pub use storage::{validate_image_file_name, ImageStore, StoredImage, THUMBNAIL_MAX};
+pub(crate) use storage::FILE_THUMBNAILS_DIR;
+pub use storage::{
+    image_file_dimensions, validate_image_file_name, ImageStore, StoredImage, THUMBNAIL_MAX,
+};
 pub use watcher::WatcherPause;
 pub use write::{write_text_fragment, write_to_clipboard};

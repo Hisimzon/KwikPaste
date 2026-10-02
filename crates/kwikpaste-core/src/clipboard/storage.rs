@@ -5,7 +5,10 @@
 //! <app_local_data>/resources/clipboard-images/
 //!   origin/<hash[..2]>/<hash>.png       原图（PNG），复制时落盘
 //!   thumbnails/<hash[..2]>/<hash>.png   缩略图（PNG，最长边 <= THUMBNAIL_MAX），首次预览时按需生成
+//!   file-thumbnails/<key[..2]>/<key>.png 单图文件记录（复制的是一个图片文件）的缩略图，按需生成；
+//!                                       key 由文件路径、大小和修改时间算出，文件改了就换一张
 //! ```
+//! `file-thumbnails` 是可以随时重建的缓存：清理缓存时整个清掉，也不进备份。
 //! 文件名取「PNG 字节的 blake3」：同一张图重复复制 → 同字节 → 同文件名，落盘幂等，
 //! 且与去重指纹同源（image 的 `content_hash` 即对 PNG 字节哈希）。
 //! 按 hash 前 2 位 hex 分 256 个子目录，避免重度使用下单目录文件爆量。
@@ -33,6 +36,10 @@ pub const THUMBNAIL_MAX: u32 = 300;
 const IMAGES_DIR: &str = "clipboard-images";
 const ORIGIN_DIR: &str = "origin";
 const THUMBNAILS_DIR: &str = "thumbnails";
+/// 单图文件记录的缩略图缓存目录名，挂在图片根目录下。
+pub(crate) const FILE_THUMBNAILS_DIR: &str = "file-thumbnails";
+/// 图片文件超过这个大小就不生成缩略图：解码一张几百 MB 的 TIFF 只为一个几十像素高的卡片不值得。
+const FILE_THUMBNAIL_SOURCE_MAX: u64 = 64 * 1024 * 1024;
 
 /// 一次图片落盘的结果，交给 ingest 写入 `ClipboardItem`。
 pub struct StoredImage {
@@ -142,6 +149,57 @@ impl ImageStore {
         let store = self.clone();
         let file_name = file_name.to_owned();
         tokio::task::spawn_blocking(move || store.ensure_thumbnail(&file_name))
+            .await
+            .map_err(|err| AppError::Clipboard(format!("thumbnail task join failed: {err}")))?
+    }
+
+    /// 单图文件记录的缩略图路径（不管生成没有）；读不到文件信息时返回 `None`。
+    pub fn file_thumbnail_path(&self, source: &Path) -> Option<PathBuf> {
+        let key = file_thumbnail_key(source)?;
+        let file_name = format!("{key}.png");
+        Some(self.shard_path(FILE_THUMBNAILS_DIR, &key, &file_name))
+    }
+
+    /// 确保单图文件记录的缩略图存在并返回路径。按 EXIF 方向摆正后缩放，与图片记录同样的尺寸规则。
+    pub fn ensure_file_thumbnail(&self, source: &Path) -> Result<PathBuf> {
+        let thumb_path = self
+            .file_thumbnail_path(source)
+            .ok_or_else(|| AppError::Clipboard(format!("image file is unreadable: {source:?}")))?;
+        if thumb_path.exists() {
+            return Ok(thumb_path);
+        }
+
+        let size = std::fs::metadata(source)
+            .with_context(|| format!("failed to read {source:?}"))?
+            .len();
+        if size > FILE_THUMBNAIL_SOURCE_MAX {
+            return Err(AppError::Clipboard(format!(
+                "image file is too large for a thumbnail: {size} bytes"
+            )));
+        }
+        let thumb_bytes = encode_file_thumbnail(source)?;
+        write_if_absent(&thumb_path, &thumb_bytes)?;
+        Ok(thumb_path)
+    }
+
+    /// [`Self::ensure_file_thumbnail`] 的异步版本，与图片记录共用并发许可。
+    pub(crate) async fn ensure_file_thumbnail_async(&self, source: &Path) -> Result<PathBuf> {
+        if let Some(path) = self
+            .file_thumbnail_path(source)
+            .filter(|path| path.exists())
+        {
+            return Ok(path);
+        }
+
+        let _permit = self
+            .thumbnail_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|err| AppError::Clipboard(format!("thumbnail semaphore closed: {err}")))?;
+        let store = self.clone();
+        let source = source.to_path_buf();
+        tokio::task::spawn_blocking(move || store.ensure_file_thumbnail(&source))
             .await
             .map_err(|err| AppError::Clipboard(format!("thumbnail task join failed: {err}")))?
     }
@@ -273,6 +331,90 @@ fn remove_dir_if_empty(dir: Option<&Path>) {
     if let Some(dir) = dir {
         let _ = std::fs::remove_dir(dir);
     }
+}
+
+/// 图片文件的显示宽高：只读文件头，不解码整图；按 EXIF 方向摆正（转 90° 的宽高互换）。
+/// 不认识的格式（如 SVG）或读不出来时返回 `None`。
+pub fn image_file_dimensions(path: &Path) -> Option<(u32, u32)> {
+    use image::ImageDecoder;
+
+    let mut decoder = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_decoder()
+        .ok()?;
+    let (width, height) = decoder.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    Some(if swaps_axes(orientation) {
+        (height, width)
+    } else {
+        (width, height)
+    })
+}
+
+fn swaps_axes(orientation: image::metadata::Orientation) -> bool {
+    use image::metadata::Orientation;
+
+    matches!(
+        orientation,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    )
+}
+
+/// 缓存键：路径 + 大小 + 修改时间的 blake3。文件被改写后键随之变化，不会拿到旧图。
+fn file_thumbnail_key(source: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(source).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos());
+
+    let mut hasher = Hasher::new();
+    hasher.update(source.to_string_lossy().as_bytes());
+    hasher.update(&[0x1f]);
+    hasher.update(&metadata.len().to_le_bytes());
+    hasher.update(&modified.to_le_bytes());
+    Some(hasher.finalize().to_hex().to_string())
+}
+
+/// 解码图片文件（PNG、JPEG、GIF、WebP、BMP、TIFF、ICO）→ 按 EXIF 方向摆正 → 缩放 → 编码 PNG。
+fn encode_file_thumbnail(source: &Path) -> Result<Vec<u8>> {
+    use image::ImageDecoder;
+
+    let mut decoder = image::ImageReader::open(source)
+        .with_context(|| format!("failed to open {source:?}"))?
+        .with_guessed_format()
+        .with_context(|| format!("failed to read {source:?}"))?
+        .into_decoder()
+        .map_err(clip_err)?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut image = image::DynamicImage::from_decoder(decoder).map_err(clip_err)?;
+    image.apply_orientation(orientation);
+
+    // 只缩小不放大，与显示尺寸的算法（缩放比不超过 1）一致。
+    if image.width().max(image.height()) > THUMBNAIL_MAX {
+        image = image.thumbnail(THUMBNAIL_MAX, THUMBNAIL_MAX);
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut out, image::ImageFormat::Png)
+        .map_err(clip_err)?;
+    Ok(out.into_inner())
 }
 
 /// 把原图 PNG 字节解码 → 生成缩略图（最长边 <= [`THUMBNAIL_MAX`]，保持比例）→ 重新编码 PNG。
@@ -653,5 +795,117 @@ mod tests {
                 std::fs::remove_dir_all(&self.0).ok();
             }
         }
+    }
+}
+
+/// 单图文件记录：文件头读宽高、按 EXIF 方向摆正、缩略图按文件内容变化换新。
+#[cfg(test)]
+mod file_image_tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    fn encode(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+        let buf = image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([(x * 7) as u8, (y * 5) as u8, 90])
+        });
+        let mut out = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(buf)
+            .write_to(&mut out, format)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// 在 JPEG 的 SOI 之后插一段只含方向标记的 EXIF（APP1）。
+    fn with_exif_orientation(jpeg: &[u8], orientation: u16) -> Vec<u8> {
+        let mut tiff = b"II*\x00\x08\x00\x00\x00\x01\x00\x12\x01\x03\x00\x01\x00\x00\x00".to_vec();
+        tiff.extend_from_slice(&orientation.to_le_bytes());
+        tiff.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        let mut payload = b"Exif\x00\x00".to_vec();
+        payload.extend_from_slice(&tiff);
+        let length = (payload.len() + 2) as u16;
+
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&[0xff, 0xe1]);
+        out.extend_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    fn store(temp: &tempfile::TempDir) -> ImageStore {
+        ImageStore::for_test(temp.path().join("resources").join("clipboard-images"))
+    }
+
+    #[test]
+    fn dimensions_come_from_the_header() {
+        let temp = tempfile::tempdir().unwrap();
+        for (name, format) in [
+            ("a.png", image::ImageFormat::Png),
+            ("b.jpg", image::ImageFormat::Jpeg),
+            ("c.gif", image::ImageFormat::Gif),
+            ("d.bmp", image::ImageFormat::Bmp),
+        ] {
+            let path = temp.path().join(name);
+            std::fs::write(&path, encode(40, 20, format)).unwrap();
+            assert_eq!(image_file_dimensions(&path), Some((40, 20)), "{name}");
+        }
+
+        let svg = temp.path().join("e.svg");
+        std::fs::write(&svg, b"<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+        assert_eq!(image_file_dimensions(&svg), None);
+        assert_eq!(
+            image_file_dimensions(&temp.path().join("missing.png")),
+            None
+        );
+    }
+
+    /// 手机拍的照片常带「转 90°」的方向标记：宽高互换，缩略图也摆正。
+    #[test]
+    fn exif_rotation_swaps_the_axes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("photo.jpg");
+        std::fs::write(
+            &path,
+            with_exif_orientation(&encode(40, 20, image::ImageFormat::Jpeg), 6),
+        )
+        .unwrap();
+
+        assert_eq!(image_file_dimensions(&path), Some((20, 40)));
+        let thumb = store(&temp).ensure_file_thumbnail(&path).unwrap();
+        assert_eq!(image_file_dimensions(&thumb), Some((20, 40)));
+    }
+
+    #[test]
+    fn file_thumbnails_are_cached_until_the_file_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        let path = temp.path().join("wide.png");
+        std::fs::write(&path, encode(900, 300, image::ImageFormat::Png)).unwrap();
+
+        let thumb = store.ensure_file_thumbnail(&path).unwrap();
+        assert!(thumb.starts_with(
+            temp.path()
+                .join("resources")
+                .join("clipboard-images")
+                .join(FILE_THUMBNAILS_DIR)
+        ));
+        assert_eq!(image_file_dimensions(&thumb), Some((THUMBNAIL_MAX, 100)));
+        assert_eq!(store.file_thumbnail_path(&path), Some(thumb.clone()));
+        assert_eq!(store.ensure_file_thumbnail(&path).unwrap(), thumb);
+
+        // 文件改写后（大小不同）缓存键随之变化，拿到的是新图的缩略图。
+        std::fs::write(&path, encode(200, 400, image::ImageFormat::Png)).unwrap();
+        let changed = store.ensure_file_thumbnail(&path).unwrap();
+        assert_ne!(changed, thumb);
+        assert_eq!(image_file_dimensions(&changed), Some((150, 300)));
+
+        let text = temp.path().join("notes.png");
+        std::fs::write(&text, b"not an image").unwrap();
+        assert!(store.ensure_file_thumbnail(&text).is_err());
+        assert!(store
+            .ensure_file_thumbnail(&temp.path().join("missing.png"))
+            .is_err());
+        assert_eq!(store.file_thumbnail_path(temp.path()), None);
     }
 }

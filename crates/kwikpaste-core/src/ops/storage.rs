@@ -537,6 +537,13 @@ async fn sweep_resource_cache(
         sweep,
         &mut stats,
     )?;
+    // 单图文件记录的缩略图是随时能重建的缓存，整个算作可清理。
+    clean_sharded_files(
+        &images_dir.join(crate::clipboard::FILE_THUMBNAILS_DIR),
+        &HashSet::new(),
+        sweep,
+        &mut stats,
+    )?;
     clean_flat_files(
         &resources_dir.join(APP_ICONS_DIR),
         &app_icon_files,

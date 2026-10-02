@@ -495,3 +495,55 @@ fn apps_list_merges_running_apps_and_manual_additions() {
     .unwrap();
     assert_eq!(deleted, [added.id]);
 }
+
+/// 复制的是单个图片文件：卡片按图片记录的规则给显示尺寸（读文件头）和已生成的缩略图；
+/// 缩略图是缓存，清理缓存时整个清掉，之后照样能重建。
+#[test]
+fn single_image_file_records_preview_like_image_records() {
+    use crate::presenter::{image_display_size, FilesPreviewKind};
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let photo = fixture.root().join("photos").join("wide.png");
+    std::fs::create_dir_all(photo.parent().unwrap()).unwrap();
+    std::fs::write(&photo, sample_png(900, 300)).unwrap();
+    let photo_path = photo.to_string_lossy().into_owned();
+    let id = copy_in(
+        &core,
+        MemoryState {
+            files: Some(vec![photo_path.clone()]),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+    let view = || block_on(core.list_item(&id)).unwrap().unwrap();
+
+    let first = view();
+    assert_eq!(
+        first.files_preview_kind,
+        Some(FilesPreviewKind::ImagePreview)
+    );
+    assert_eq!(
+        first.image_display_size,
+        Some(image_display_size(Some(900), Some(300), 64))
+    );
+    assert!(first.image_thumbnail_path.is_none());
+
+    let thumb = block_on(core.ensure_file_thumbnail(&photo_path)).unwrap();
+    assert!(thumb.is_file());
+    assert_eq!(view().image_thumbnail_path.as_deref(), thumb.to_str());
+    assert!(block_on(core.ensure_file_thumbnail("relative/wide.png")).is_err());
+    assert!(block_on(core.ensure_file_thumbnail(&format!("{photo_path}.txt"))).is_err());
+
+    let overview = block_on(core.storage_overview()).unwrap();
+    assert_eq!(overview.reclaimable.files, 1);
+    let cleaned = block_on(core.clean_resource_cache()).unwrap();
+    assert_eq!(cleaned.removed_files, 1);
+    assert!(!thumb.exists());
+    assert!(view().image_thumbnail_path.is_none());
+    assert_eq!(
+        block_on(core.ensure_file_thumbnail(&photo_path)).unwrap(),
+        thumb
+    );
+    block_on(core.shutdown()).unwrap();
+}
