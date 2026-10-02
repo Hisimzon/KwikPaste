@@ -2,7 +2,8 @@
 //!
 //! - [`theme`]：冻结的 antd token、语义层 [`theme::KpTokens`]、字号与度量，明暗切换与文本缩放。
 //! - 组件：[`Button`]、[`Checkbox`]、[`Switch`]、[`Input`]、[`Select`]、[`Tag`]、[`Kbd`]、[`KeyHint`]、
-//!   Tooltip（[`TooltipExt`]）、[`toast`]、[`confirm()`]。
+//!   Tooltip（[`TooltipExt`]）、[`ListScrollbar`]、[`toast`]、[`confirm()`]。
+//! - 资源：[`Assets`]（组件图标加 1.x 导出的图标）。
 //! - 组件层不带文案：默认文字由应用经 [`set_ui_strings`] 注入。
 // 渲染与事件回调里 panic 会让进程直接以 0xC0000409 退出，组件层一律不许 unwrap / expect / 越界下标。
 #![cfg_attr(
@@ -10,11 +11,13 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)
 )]
 
+mod assets;
 mod button;
 mod confirm;
 mod icon;
 mod input;
 mod overlay;
+mod scrollbar;
 mod select;
 mod strings;
 mod styled;
@@ -26,20 +29,18 @@ mod tooltip;
 
 use gpui::{AnyWindowHandle, App, AppContext, Entity, Render, Window, WindowOptions};
 
+pub use assets::Assets;
 pub use button::{Button, ButtonKind, ButtonSize};
 pub use confirm::{ConfirmBody, ConfirmSpec, confirm};
 pub use icon::{Icon, IconName};
 pub use input::{Input, InputSize, TextInput};
+pub use scrollbar::ListScrollbar;
 pub use select::{Select, SelectOption, SelectState};
 pub use strings::{UiLocale, UiStrings, set_ui_strings, ui_strings};
 pub use styled::KpStyled;
 pub use tag::{Kbd, KeyHint, Shortcut, Tag, TagColor};
 pub use toggle::{Checkbox, Switch};
 pub use tooltip::{TooltipBubble, TooltipExt};
-
-/// gpui-component 内置组件用到的图标资源（lucide 的默认子集）。创建 `Application` 时用
-/// `.with_assets(kwikpaste_ui::Assets)` 装上，否则勾选框、下拉箭头等图标是空的。
-pub use gpui_kit_assets::Assets;
 
 /// 初始化组件层：gpui-component（连带 gpui-base）、浮层插件、主题。打开任何窗口之前调用一次。
 pub fn init(cx: &mut App) {

@@ -5,6 +5,7 @@
 //! 装的观察者转发到这里。gpui-component 的主题只有 App 级一份，所有窗口同时切换。
 
 pub mod antd;
+mod css_color;
 pub mod fonts;
 mod kit;
 mod tokens;
@@ -14,6 +15,7 @@ use std::sync::LazyLock;
 use gpui::{App, Global, Window, WindowAppearance, px};
 use gpui_component::{Theme, ThemeMode};
 
+pub use css_color::css_color;
 pub use tokens::{KpTokens, TextSize, control_height, motion, radius, space};
 
 /// 用户的主题设置，对应 1.x `appearance.theme` 的 `auto` / `light` / `dark`。
