@@ -10,6 +10,7 @@ pub mod db;
 pub mod disk;
 pub mod env;
 pub mod error;
+pub mod i18n;
 pub mod paths;
 pub mod portable;
 pub mod settings;
