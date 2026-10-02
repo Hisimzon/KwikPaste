@@ -94,7 +94,7 @@ importers:
         specifier: ^11.0.1
         version: 11.0.1(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)(release-it@20.2.1(@types/node@25.9.5))
       '@tauri-apps/cli':
-        specifier: ^2.11.4
+        specifier: 2.11.4
         version: 2.11.4
       '@types/node':
         specifier: ^25.9.5

@@ -74,7 +74,7 @@
     "@iconify-json/ph": "^1.2.2",
     "@release-it/bumper": "^7.0.6",
     "@release-it/conventional-changelog": "^11.0.1",
-    "@tauri-apps/cli": "^2.11.4",
+    "@tauri-apps/cli": "2.11.4",
     "@types/node": "^25.9.5",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
