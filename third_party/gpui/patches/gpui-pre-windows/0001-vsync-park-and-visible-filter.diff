@@ -1,0 +1,74 @@
+--- a/src/vsync.rs
++++ b/src/vsync.rs
+@@ -22,6 +22,27 @@
+ const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);
+ const DEFAULT_VSYNC_INTERVAL: Duration = Duration::from_micros(16_666); // ~60Hz
+ 
++// [kwikpaste patch 0001] Park the vsync thread while no GPUI window is visible.
++static VSYNC_WAKE: LazyLock<(std::sync::Mutex<bool>, std::sync::Condvar)> =
++    LazyLock::new(|| (std::sync::Mutex::new(false), std::sync::Condvar::new()));
++
++/// Wake the vsync thread, e.g. because a window became visible.
++pub(crate) fn wake_vsync_thread() {
++    let (flag, condvar) = &*VSYNC_WAKE;
++    *flag.lock().unwrap() = true;
++    condvar.notify_all();
++}
++
++/// Block until [`wake_vsync_thread`] is called or `timeout` elapses.
++pub(crate) fn park_vsync_thread(timeout: Duration) {
++    let (flag, condvar) = &*VSYNC_WAKE;
++    let guard = flag.lock().unwrap();
++    let (mut guard, _) = condvar
++        .wait_timeout_while(guard, timeout, |woken| !*woken)
++        .unwrap();
++    *guard = false;
++}
++
+ pub(crate) struct VSyncProvider {
+     interval: Duration,
+     f: Box<dyn Fn() -> bool>,
+--- a/src/platform.rs
++++ b/src/platform.rs
+@@ -382,7 +382,19 @@
+             .spawn(move || {
+                 let vsync_provider = VSyncProvider::new();
+                 loop {
+-                    vsync_provider.wait_for_vsync();
++                    // [kwikpaste patch 0001] No visible window: park (device-lost is still
++                    // polled once per second) instead of waking at the refresh rate.
++                    let any_visible = all_windows.upgrade().is_some_and(|windows| {
++                        windows
++                            .read()
++                            .iter()
++                            .any(|hwnd| unsafe { IsWindowVisible(hwnd.as_raw()) }.as_bool())
++                    });
++                    if any_visible {
++                        vsync_provider.wait_for_vsync();
++                    } else {
++                        crate::vsync::park_vsync_thread(std::time::Duration::from_secs(1));
++                    }
+                     if check_device_lost(&directx_device.device)
+                         || invalidate_devices.fetch_and(false, Ordering::Acquire)
+                     {
+@@ -400,6 +412,10 @@
+                         break;
+                     };
+                     for hwnd in all_windows.read().iter() {
++                        // [kwikpaste patch 0001] A hidden window gets no WM_PAINT; don't invalidate it.
++                        if !unsafe { IsWindowVisible(hwnd.as_raw()) }.as_bool() {
++                            continue;
++                        }
+                         unsafe {
+                             let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);
+                         }
+--- a/src/events.rs
++++ b/src/events.rs
+@@ -1272,6 +1272,7 @@
+     ) -> Option<isize> {
+         self.report_visibility();
+         if wparam.0 == 1 {
++            crate::vsync::wake_vsync_thread(); // [kwikpaste patch 0001]
+             self.draw_window(handle, false);
+         }
+         None

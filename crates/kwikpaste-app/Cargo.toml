@@ -1,0 +1,32 @@
+[package]
+name = "kwikpaste-app"
+description = "KwikPaste native app (GPUI)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "KwikPaste"
+path = "src/main.rs"
+
+[features]
+default = ["runtime-shaders"]
+# 只影响 macOS：运行时编译 Metal 着色器，构建机不需要 Xcode 的 metal 工具链。
+runtime-shaders = ["gpui_platform/runtime_shaders"]
+
+[dependencies]
+anyhow.workspace = true
+gpui.workspace = true
+kwikpaste-ui.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui_windows.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_platform.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+--- a/src/events.rs
++++ b/src/events.rs
+@@ -93,7 +93,15 @@
+             // whichever window was active before the click. If that handler consumes the
+             // press, `DefWindowProc` never sees it, so the window is never activated at all.
+             // So, let's eagerly activate the window.
+-            WM_MOUSEACTIVATE => Some(MA_ACTIVATE as isize),
++            // [kwikpaste patch 0002] ...unless the app made the window non-activating.
++            WM_MOUSEACTIVATE => {
++                let ex_style = unsafe { GetWindowLongPtrW(handle, GWL_EXSTYLE) } as u32;
++                if ex_style & WS_EX_NOACTIVATE.0 != 0 {
++                    Some(MA_NOACTIVATE as isize)
++                } else {
++                    Some(MA_ACTIVATE as isize)
++                }
++            }
+             WM_ACTIVATE => self.handle_activate_msg(wparam),
+             WM_CREATE => self.handle_create_msg(handle),
+             WM_MOVE => self.handle_move_msg(handle, lparam),

@@ -19,3 +19,7 @@
 *.ico binary
 *.icns binary
 *.wav binary
+
+# *.sql 故意不设 eol：已发布版本在 Windows 存 CRLF 校验和、在 macOS 存 LF，任何 eol/-text 规则都会让存量用户启动失败。
+# third_party 保持与 crates.io 原样字节一致（放在最后，覆盖上面的 eol=lf）。
+third_party/** -text

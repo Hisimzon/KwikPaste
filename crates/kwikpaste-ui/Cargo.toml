@@ -1,0 +1,17 @@
+[package]
+name = "kwikpaste-ui"
+description = "KwikPaste's only door to gpui-component: wrapped widgets, theme and window helpers."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui-base.workspace = true
+gpui-component.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,69 @@
+# 原生 2.0（GPUI）的 workspace。src-tauri 是 1.x 的 Tauri 版，自成 workspace，不在这里构建。
+[workspace]
+members = ["crates/*"]
+exclude = ["src-tauri", "third_party"]
+resolver = "3"
+
+[workspace.package]
+version = "2.0.0-alpha.0"
+edition = "2024"
+authors = ["LILTT"]
+license = "Apache-2.0"
+homepage = "https://paste.fastthree.com"
+publish = false
+
+# gpui 系列必须 `=` 钉版，并且与 third_party/gpui 下的副本版本一致：版本对不上时 [patch] 只给一条警告，
+# 构建会悄悄换回 crates.io 上没打补丁的版本。只在 GPUI 升级时改这几行。
+[workspace.dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.7" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.7", default-features = false, features = ["font-kit"] }
+gpui_windows = { package = "gpui-pre-windows", version = "=0.3.7" }
+gpui-base = "=0.7.0"
+gpui-component = "=0.7.0"
+
+anyhow = "1"
+
+kwikpaste-ui = { path = "crates/kwikpaste-ui" }
+
+[workspace.lints.rust]
+unexpected_cfgs = "deny"
+
+[patch.crates-io]
+gpui-pre-windows = { path = "third_party/gpui/gpui-pre-windows" }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
+
+# 与 src-tauri 的 release 配置一致。不要打开 debug-assertions：GPUI 会在运行时从 CARGO_MANIFEST_DIR 编译 HLSL。
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+strip = true
+
+[profile.release.package.image]
+opt-level = 3
+
+[profile.release.package.png]
+opt-level = 3
+
+[profile.release.package.fdeflate]
+opt-level = 3
+
+[profile.release.package.miniz_oxide]
+opt-level = 3
+
+[profile.release.package.flate2]
+opt-level = 3
+
+[profile.release.package.crc32fast]
+opt-level = 3
+
+[profile.release.package.simd-adler32]
+opt-level = 3
+
+[profile.release.package.adler2]
+opt-level = 3
