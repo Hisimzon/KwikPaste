@@ -140,16 +140,32 @@ pub async fn persist_and_notify(
             }
         }
     }
-    let result = upsert_item(pool, &item_to_write).await?;
+    let result = store_and_emit(app, pool, &item_to_write).await?;
+    sound::maybe_play_copy(app);
+    Ok(result)
+}
+
+/// 去重入库 + 通知清理 + emit「剪贴板更新」，不放提示音。
+pub async fn store_and_emit(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    item: &ClipboardItem,
+) -> crate::core::Result<UpsertResult> {
+    // 去重是「先查再插」：一次复制会触发好几个剪贴板事件，并发的两次入库可能都查不到对方，
+    // 插出两行同样的内容，所以这一段串行执行。
+    static UPSERT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let result = {
+        let _serial = UPSERT_LOCK.lock().await;
+        upsert_item(pool, item).await?
+    };
     if !result.deduplicated {
         super::cleanup::notify_inserted(app);
     }
-    sound::maybe_play_copy(app);
     if let Err(err) = app.emit(
         CLIPBOARD_UPDATED_EVENT,
         json!({
             "id": result.id,
-            "kind": item_to_write.kind,
+            "kind": item.kind,
             "deduplicated": result.deduplicated,
         }),
     ) {
