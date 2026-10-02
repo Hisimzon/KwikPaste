@@ -260,15 +260,15 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_read_retry_gives_up_after_bounded_attempts() {
+    fn clipboard_read_retry_returns_final_error_after_exhaustion() {
         let attempts = Cell::new(0);
 
         let result = read_with_retry(&ZERO_DELAY_RETRIES, || {
             attempts.set(attempts.get() + 1);
-            Err::<Option<&'static str>, _>("clipboard busy")
+            Err::<Option<&'static str>, _>(attempts.get())
         });
 
-        assert_eq!(result, Err("clipboard busy"));
-        assert_eq!(attempts.get(), ZERO_DELAY_RETRIES.len() + 1);
+        assert_eq!(result, Err(4));
+        assert_eq!(attempts.get(), 4);
     }
 }
