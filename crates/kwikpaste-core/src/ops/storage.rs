@@ -289,6 +289,7 @@ async fn switch_storage_location(
         }
 
         let settings = rebase_storage_states(core).await?;
+        crate::sync::settings_changed(core);
         remove_old_storage_data(paths, &current)?;
         core.events.emit(CoreEvent::SettingsUpdated {
             settings: Arc::new(settings),

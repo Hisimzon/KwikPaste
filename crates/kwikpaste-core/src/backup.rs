@@ -1333,7 +1333,8 @@ async fn refresh_apps_registry(core: &CoreInner) {
     }
 }
 
-/// 导入会整体改设置：通知宿主重注册快捷键、同步托盘与自启并刷新界面；历史设置变了顺带请求一轮清理。
+/// 导入会整体改设置：通知宿主重注册快捷键、同步托盘与自启并刷新界面；历史设置变了顺带请求一轮清理，
+/// 同步设置变了按新设置启停局域网同步。
 fn apply_imported_settings(
     core: &CoreInner,
     settings: crate::settings::Settings,
@@ -1341,6 +1342,9 @@ fn apply_imported_settings(
 ) {
     if delta.touches("clipboard.history") {
         clipboard::cleanup::request(core);
+    }
+    if delta.touches("sync") {
+        crate::sync::settings_changed(core);
     }
     core.events.emit(CoreEvent::SettingsUpdated {
         settings: Arc::new(settings),

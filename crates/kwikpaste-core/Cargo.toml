@@ -19,18 +19,22 @@ chrono.workspace = true
 clipboard-rs.workspace = true
 dirs.workspace = true
 file_icon_provider.workspace = true
+if-addrs.workspace = true
 image.workspace = true
 log.workspace = true
+mdns-sd.workspace = true
 rand.workspace = true
 regex.workspace = true
 rust_xlsxwriter.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+snow.workspace = true
+spake2.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros"] }
 unicode-segmentation.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
@@ -40,9 +44,8 @@ zip.workspace = true
 [target.'cfg(target_os = "windows")'.dependencies]
 # 图片写回要同时放原始 PNG 和 CF_DIB，clipboard-rs 的接口做不到。
 clipboard-win.workspace = true
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["macros"] }
+# 局域网同步身份绑定这台电脑：读 MachineGuid。
+windows-registry.workspace = true
 
 [lints]
 workspace = true

@@ -56,6 +56,8 @@ pub(crate) struct CoreInner {
     pub(crate) cleanup: clipboard::cleanup::CleanupScheduler,
     /// 来源应用缓存，监听与偏好页共用。
     pub(crate) apps: AppsRegistry,
+    /// 局域网同步：已配对设备随 core 读入，网络部分由宿主启用。
+    pub(crate) sync: crate::sync::LanSyncService,
     pub(crate) watcher_pause: WatcherPause,
     /// 去重入库串行执行，见 [`clipboard::persist::store_and_emit`]。
     pub(crate) upsert_lock: tokio::sync::Mutex<()>,
@@ -86,6 +88,7 @@ impl Core {
             let app_icons = AppIconStore::new(&paths)?;
             let file_icons = FileIconStore::new(&paths)?;
             let window_state = WindowStateStore::new(&paths)?;
+            let peers = crate::sync::PeerStore::load(&paths.sync_dir());
 
             let inner = Arc::new(CoreInner {
                 info,
@@ -102,6 +105,7 @@ impl Core {
                 window_state,
                 cleanup: Default::default(),
                 apps: AppsRegistry::default(),
+                sync: crate::sync::LanSyncService::new(Arc::new(peers)),
                 watcher_pause: WatcherPause::default(),
                 upsert_lock: tokio::sync::Mutex::new(()),
                 quick_paste_running: AtomicBool::new(false),
@@ -111,6 +115,7 @@ impl Core {
                 watcher: Mutex::new(None),
             });
 
+            inner.sync.bind(Arc::downgrade(&inner));
             if let Err(err) = inner.apps.load_from_db(&inner).await {
                 log::warn!("apps registry: initial DB load failed: {err}");
             }
@@ -128,12 +133,13 @@ impl Core {
         .await
     }
 
-    /// 停止剪贴板监听与后台清理并关闭连接池（SQLite 借此做 WAL checkpoint）。
+    /// 停止剪贴板监听、局域网同步与后台清理并关闭连接池（SQLite 借此做 WAL checkpoint）。
     /// 之后不要再调用其它 async 方法。
     pub async fn shutdown(&self) -> Result<()> {
         drop(lock(&self.0.watcher).take());
         let core = self.clone();
         self.hop(async move {
+            crate::sync::shutdown(&core.0).await;
             if let Some(task) = core.0.cleanup_task().take() {
                 task.abort();
             }
@@ -237,6 +243,9 @@ impl Core {
             if delta.touches("clipboard.history") {
                 clipboard::cleanup::request(&core.0);
             }
+            if delta.touches("sync") {
+                crate::sync::settings_changed(&core.0);
+            }
             core.emit_settings(&next, delta);
             Ok(next)
         })
@@ -249,6 +258,7 @@ impl Core {
         self.hop(async move {
             let next = core.0.settings.reset()?;
             clipboard::cleanup::request(&core.0);
+            crate::sync::settings_changed(&core.0);
             core.emit_settings(&next, SettingsDelta::replaced());
             Ok(next)
         })
@@ -545,6 +555,7 @@ impl Core {
             clipboard,
             chrono::Local::now(),
         )
+        .with_devices(self.0.sync.peers())
     }
 
     fn emit_settings(&self, settings: &Settings, delta: SettingsDelta) {

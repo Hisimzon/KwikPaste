@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::events::CoreEvent;
 use crate::root::CoreInner;
 
-/// 先写来源应用再去重入库，然后通知清理与宿主，最后按设置播放复制提示音。
+/// 先写来源应用再去重入库，然后通知清理与宿主、推给在线的同步设备，最后按设置播放复制提示音。
 /// 本机复制（监听、手动读取）走这里；局域网同步收到的记录走 [`store_and_emit`]，不放提示音。
 ///
 /// 应用 upsert 失败不阻断条目入库——清掉 `source_app_id` 后继续，避免单次系统调用抽风丢内容。
@@ -27,6 +27,7 @@ pub(crate) async fn persist_and_notify(
     }
 
     let result = store_and_emit(core, &item_to_write).await?;
+    crate::sync::on_local_capture(core, &item_to_write);
     if core.settings.snapshot().clipboard.feedback.copy_sound {
         core.platform().play_copy_sound();
     }
@@ -35,12 +36,12 @@ pub(crate) async fn persist_and_notify(
 
 /// 去重入库 + 通知清理 + 发 [`CoreEvent::ClipboardUpserted`]。
 pub(crate) async fn store_and_emit(core: &CoreInner, item: &ClipboardItem) -> Result<UpsertResult> {
-    let pool = core.db.pool().await;
-
     // 去重是「先查再插」：一次复制触发的多个剪贴板事件、同步收到的记录和本机复制撞上时，
     // 并发的两次入库可能都查不到而插出两行同样的内容，所以这一段串行执行。
+    // 连接池在拿到锁之后再取：切换存储位置、覆盖导入换库期间持有这把锁，等它们换完拿到的是新库。
     let result = {
         let _serial = core.upsert_lock.lock().await;
+        let pool = core.db.pool().await;
         upsert_item(&pool, item).await?
     };
     if !result.deduplicated {

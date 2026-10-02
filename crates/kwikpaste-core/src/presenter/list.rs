@@ -15,6 +15,7 @@ use crate::clipboard::{
 use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind};
 use crate::error::Result;
 use crate::settings::Clipboard;
+use crate::sync::PeerStore;
 
 /// 一次列表加工用到的存储与设置。`now` 决定显示时间按哪天算「今天」。
 pub(crate) struct ListContext<'a, Tz: TimeZone> {
@@ -27,6 +28,8 @@ pub(crate) struct ListContext<'a, Tz: TimeZone> {
     pub image_max_height: u16,
     pub redact_sensitive: bool,
     pub quick_snippets: bool,
+    /// 已配对（含已移除）设备，同步收到的记录据此显示「来自 xxx」。
+    pub devices: Option<&'a PeerStore>,
 }
 
 impl<'a, Tz: TimeZone> ListContext<'a, Tz> {
@@ -49,7 +52,13 @@ impl<'a, Tz: TimeZone> ListContext<'a, Tz> {
             image_max_height: clipboard.display.image_max_height,
             redact_sensitive: clipboard.sensitive.redact_secrets,
             quick_snippets: clipboard.display.quick_snippets,
+            devices: None,
         }
+    }
+
+    pub fn with_devices(mut self, devices: &'a PeerStore) -> Self {
+        self.devices = Some(devices);
+        self
     }
 }
 
@@ -66,6 +75,7 @@ where
 
     attach_image_thumbnail_path(ctx.images, &mut view);
     attach_source_app_icon_path(ctx.app_icons, &mut view);
+    attach_origin_device_name(ctx.devices, &mut view);
     attach_file_entries(ctx.pool, ctx.file_icons, &mut view, ctx.file_entry_limit).await?;
     attach_color_preview(&mut view);
     attach_display_created_at(&mut view, &ctx.now);
@@ -74,6 +84,15 @@ where
     view.available_actions = compute_available_actions(&view.item, ctx.redact_sensitive);
     attach_image_display_size(&mut view, ctx.image_max_height);
     Ok(view)
+}
+
+/// 局域网同步收到的记录：按来源设备 id 回填设备名（已取消配对的设备也有）。
+fn attach_origin_device_name(devices: Option<&PeerStore>, view: &mut ClipboardItemView) {
+    view.origin_device_name = view
+        .item
+        .origin_device_id
+        .as_deref()
+        .and_then(|id| devices?.display_name(id));
 }
 
 /// 为 image 条目补齐**已存在**的缩略图绝对路径。

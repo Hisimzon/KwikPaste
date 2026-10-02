@@ -73,6 +73,12 @@ zeroize = "1"
 zip = { version = "4.6", default-features = false, features = ["deflate"] }
 # kwikpaste-core 的可读导出（Excel），与 src-tauri 相同。
 rust_xlsxwriter = "0.99"
+# kwikpaste-core 的局域网同步：mDNS 发现 + Noise 加密通道 + SPAKE2 配对码握手，与 src-tauri 相同。
+# snow 不开 std：它的 std 特性会连带打开 ring，把 ring 重新编进安装包。
+if-addrs = "0.15"
+mdns-sd = { version = "0.21", default-features = false, features = ["logging"] }
+snow = { version = "0.10", default-features = false, features = ["use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+spake2 = "0.4"
 
 [workspace.lints.rust]
 unexpected_cfgs = "deny"

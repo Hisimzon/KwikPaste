@@ -23,6 +23,7 @@ pub mod readable_export;
 mod root;
 pub mod runtime;
 pub mod settings;
+pub mod sync;
 #[cfg(test)]
 mod testing;
 pub mod window_state;
