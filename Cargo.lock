@@ -4019,6 +4019,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kwikpaste-os"
+version = "2.0.0-alpha.0"
+dependencies = [
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "windows 0.62.2",
+ "windows-registry 0.6.1",
+]
+
+[[package]]
 name = "kwikpaste-ui"
 version = "2.0.0-alpha.0"
 dependencies = [

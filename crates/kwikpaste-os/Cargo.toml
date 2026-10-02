@@ -1,0 +1,54 @@
+[package]
+name = "kwikpaste-os"
+description = "KwikPaste integrations that only need native handles and OS APIs (no GPUI)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[dependencies]
+log.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-registry.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
+workspace = true
+features = [
+    "std",
+    "NSApplication",
+    "NSEvent",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+]
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+workspace = true
+features = ["std", "NSArray", "NSEnumerator", "NSGeometry"]
+
+[lints]
+workspace = true

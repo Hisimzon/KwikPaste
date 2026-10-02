@@ -48,6 +48,14 @@ clipboard-win = "5"
 file_icon_provider = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# 平台层（kwikpaste-os 与 kwikpaste-app/src/platform）。托盘、热键与 1.x 的 Tauri 插件同一系 crate；
+# windows 与 GPUI 用同一个大版本，特性合并后不多编一份。
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false }
+objc2-foundation = { version = "0.3", default-features = false }
+windows = "0.62"
+windows-registry = "0.6"
+
 [workspace.lints.rust]
 unexpected_cfgs = "deny"
 
