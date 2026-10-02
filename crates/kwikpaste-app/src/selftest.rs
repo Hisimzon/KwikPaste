@@ -22,6 +22,8 @@ pub const SHOW: &str = "--selftest-show";
 pub const HIDE: &str = "--selftest-hide";
 pub const TOGGLE: &str = "--selftest-toggle";
 pub const QUIT: &str = "--selftest-quit";
+/// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
+pub const GALLERY: &str = "--selftest-gallery";
 
 const SMOKE_DURATION: Duration = Duration::from_secs(3);
 /// 平台探针最长运行时间：测量脚本中途出错时不留下进程。
@@ -35,6 +37,11 @@ pub fn active() -> bool {
 /// 本进程是否打开了某个自测开关。
 pub fn enabled(flag: &str) -> bool {
     env_enabled() && std::env::args().any(|arg| arg == flag)
+}
+
+/// 是否打开组件展示窗（`--selftest-gallery`）。
+pub fn gallery_requested() -> bool {
+    enabled(GALLERY)
 }
 
 fn env_enabled() -> bool {

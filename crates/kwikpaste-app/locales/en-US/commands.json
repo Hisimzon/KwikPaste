@@ -1,0 +1,16 @@
+{
+  "deleteConfirm": {
+    "content": "This item cannot be restored after deletion. Delete it?",
+    "title": "Delete item"
+  },
+  "error": "{{label}} failed: {{message}}",
+  "labels": {
+    "copy": "Copy",
+    "delete": "Delete"
+  },
+  "messages": {
+    "copied": "Copied",
+    "deleted": "Deleted",
+    "itemsDeleted": "Deleted {{count}} records"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "buttons": {
+    "disabled": "禁用",
+    "icons": "图标按钮（悬停查看提示）",
+    "loading": "加载中",
+    "sizes": "尺寸 32 / 24 / 20 px",
+    "tooltip": "悬停提示样式"
+  },
+  "controls": {
+    "textScale": "文本大小"
+  },
+  "feedback": {
+    "cancelled": "取消",
+    "confirm": "确认框",
+    "confirmed": "确定",
+    "errorMessage": "剪贴板正被其他程序占用",
+    "info": "这是一条普通提示",
+    "none": "无",
+    "result": "上次确认结果：{{result}}",
+    "toast": "提示",
+    "warning": "存储空间即将用尽"
+  },
+  "form": {
+    "disabled": "禁用",
+    "input": "输入框",
+    "search": "搜索框",
+    "select": "选择器"
+  },
+  "palette": {
+    "description": "1.x 前端实际用到的 antd 颜色 token，值与冻结表逐项相等"
+  },
+  "sections": {
+    "buttons": "按钮",
+    "feedback": "反馈",
+    "form": "表单控件",
+    "palette": "色板",
+    "tags": "标签与快捷键",
+    "typography": "字号"
+  },
+  "subtitle": "U0 设计系统：冻结的 antd token、字体栈与 kwikpaste-ui 包装组件",
+  "tags": {
+    "colors": {
+      "default": "默认",
+      "error": "错误",
+      "primary": "主色",
+      "success": "成功",
+      "warning": "警告"
+    },
+    "kbd": "快捷键",
+    "keyHint": "修饰键提示",
+    "tags": "标签"
+  },
+  "title": "组件展示",
+  "typography": {
+    "levels": "文字层级",
+    "mono": "等宽 0123456789 #1677FF iIl1 O0",
+    "sample": "快贴 KwikPaste：复制过的内容随时找回"
+  }
+}

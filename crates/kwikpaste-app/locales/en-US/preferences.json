@@ -1,0 +1,39 @@
+{
+  "schema": {
+    "settings": {
+      "appearance": {
+        "language": {
+          "options": {
+            "en-US": "English",
+            "zh-CN": "简体中文"
+          },
+          "title": "Language"
+        },
+        "theme": {
+          "options": {
+            "auto": "Follow system",
+            "dark": "Dark",
+            "light": "Light"
+          },
+          "title": "Theme"
+        }
+      },
+      "search": {
+        "clearOnHide": {
+          "title": "Clear Last Search"
+        },
+        "defaultFocus": {
+          "title": "Focus Search Box"
+        },
+        "sort": {
+          "options": {
+            "createdAtDesc": "Created Time",
+            "updatedAtDesc": "Updated Time",
+            "useCountDesc": "Usage Frequency"
+          },
+          "title": "Default Sort Order"
+        }
+      }
+    }
+  }
+}

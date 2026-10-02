@@ -1,6 +1,8 @@
 //! 快贴原生版（GPUI）入口。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod gallery;
+mod i18n;
 mod identity;
 mod platform;
 mod selftest;
@@ -28,16 +30,30 @@ fn main() -> anyhow::Result<()> {
     };
     let platform = platform::create()?;
 
-    Application::with_platform(platform).run(move |cx: &mut App| {
-        kwikpaste_ui::init(cx);
+    Application::with_platform(platform)
+        .with_assets(kwikpaste_ui::Assets)
+        .run(move |cx: &mut App| {
+            kwikpaste_ui::init(cx);
+            i18n::init(cx);
 
-        if let Err(err) = platform::start(cx, launch, |_, cx| cx.new(|_| Home)) {
-            log::error!("the panel could not be created: {err:#}");
-            std::process::exit(1);
-        }
+            // 组件展示窗是自测模式：不建面板、托盘和热键，关掉窗口就退出。
+            if gallery::open_if_requested(cx) {
+                cx.on_window_closed(|cx, _| {
+                    if cx.windows().is_empty() {
+                        cx.quit();
+                    }
+                })
+                .detach();
+                return;
+            }
 
-        selftest::schedule(cx);
-    });
+            if let Err(err) = platform::start(cx, launch, |_, cx| cx.new(|_| Home)) {
+                log::error!("the panel could not be created: {err:#}");
+                std::process::exit(1);
+            }
+
+            selftest::schedule(cx);
+        });
 
     Ok(())
 }

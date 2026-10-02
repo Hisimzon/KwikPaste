@@ -1,0 +1,21 @@
+{
+  "actions": {
+    "add": "Add",
+    "cancel": "Cancel",
+    "clear": "Clear",
+    "delete": "Delete",
+    "open": "Open",
+    "reset": "Reset",
+    "save": "Save"
+  },
+  "app": {
+    "tagline": "Cross-platform clipboard manager"
+  },
+  "ui": {
+    "ok": "OK",
+    "selectPlaceholder": "Please select"
+  },
+  "units": {
+    "items": "{{count}} items"
+  }
+}

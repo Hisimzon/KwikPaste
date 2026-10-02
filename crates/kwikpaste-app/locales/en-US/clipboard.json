@@ -1,0 +1,13 @@
+{
+  "groups": {
+    "namePlaceholder": "Enter group name"
+  },
+  "header": {
+    "searchPlaceholder": "Search clipboard..."
+  },
+  "shortcuts": {
+    "copySelected": "Copy selected item",
+    "focusSearch": "Focus search",
+    "navigate": "Navigate up/down"
+  }
+}

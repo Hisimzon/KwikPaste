@@ -1,0 +1,16 @@
+{
+  "deleteConfirm": {
+    "content": "删除后无法恢复，确定删除这条记录吗？",
+    "title": "删除记录"
+  },
+  "error": "{{label}}失败：{{message}}",
+  "labels": {
+    "copy": "复制",
+    "delete": "删除"
+  },
+  "messages": {
+    "copied": "已复制",
+    "deleted": "已删除",
+    "itemsDeleted": "已删除 {{count}} 条记录"
+  }
+}

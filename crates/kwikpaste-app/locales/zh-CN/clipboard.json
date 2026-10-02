@@ -1,0 +1,13 @@
+{
+  "groups": {
+    "namePlaceholder": "输入分组名称"
+  },
+  "header": {
+    "searchPlaceholder": "搜索剪贴板..."
+  },
+  "shortcuts": {
+    "copySelected": "复制选中项",
+    "focusSearch": "聚焦搜索框",
+    "navigate": "上下导航"
+  }
+}

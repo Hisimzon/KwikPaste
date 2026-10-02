@@ -1,0 +1,59 @@
+{
+  "buttons": {
+    "disabled": "Disabled",
+    "icons": "Icon buttons (hover for tooltips)",
+    "loading": "Loading",
+    "sizes": "Sizes 32 / 24 / 20 px",
+    "tooltip": "Tooltip style"
+  },
+  "controls": {
+    "textScale": "Text size"
+  },
+  "feedback": {
+    "cancelled": "Cancel",
+    "confirm": "Confirm dialogs",
+    "confirmed": "OK",
+    "errorMessage": "The clipboard is in use by another app",
+    "info": "This is an info message",
+    "none": "none",
+    "result": "Last answer: {{result}}",
+    "toast": "Toasts",
+    "warning": "Storage is almost full"
+  },
+  "form": {
+    "disabled": "Disabled",
+    "input": "Input",
+    "search": "Search box",
+    "select": "Select"
+  },
+  "palette": {
+    "description": "antd color tokens the 1.x frontend actually uses; each equals the frozen table"
+  },
+  "sections": {
+    "buttons": "Buttons",
+    "feedback": "Feedback",
+    "form": "Form controls",
+    "palette": "Palette",
+    "tags": "Tags and shortcuts",
+    "typography": "Type scale"
+  },
+  "subtitle": "U0 design system: frozen antd tokens, font stack and kwikpaste-ui wrappers",
+  "tags": {
+    "colors": {
+      "default": "Default",
+      "error": "Error",
+      "primary": "Primary",
+      "success": "Success",
+      "warning": "Warning"
+    },
+    "kbd": "Shortcuts",
+    "keyHint": "Modifier hints",
+    "tags": "Tags"
+  },
+  "title": "Component gallery",
+  "typography": {
+    "levels": "Text levels",
+    "mono": "Monospace 0123456789 #1677FF iIl1 O0",
+    "sample": "KwikPaste 快贴: find anything you copied"
+  }
+}
