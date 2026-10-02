@@ -172,9 +172,13 @@ fn copy_and_paste_follow_plain_text_settings_and_reuse() {
             ..MemoryState::default()
         }
     );
-    // 默认不计复用：次数不变、不发事件，只记下最后使用时间。
+    // 默认不计复用：次数不变、不发入库事件，只记下最后使用时间。
+    // 后台清理随时可能发出 CleanupStatus，所以只看入库事件。
     assert_eq!(use_count(&core, &id), 1);
-    assert!(fixture.take_events().is_empty());
+    assert!(!fixture
+        .take_events()
+        .iter()
+        .any(|event| matches!(event, CoreEvent::ClipboardUpserted { .. })));
 
     block_on(core.update_settings(json!({"clipboard": {"content": {
         "pastePlain": true, "updateOnReuse": true, "copyThenHideWindow": true
