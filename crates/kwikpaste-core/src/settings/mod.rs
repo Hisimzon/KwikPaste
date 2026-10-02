@@ -5,6 +5,7 @@
 mod delta;
 mod lenient;
 mod model;
+pub mod paths;
 mod store;
 
 pub use delta::SettingsDelta;
