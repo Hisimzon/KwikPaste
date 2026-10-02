@@ -35,15 +35,16 @@ const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_millis(75),
 ];
 
-fn read_with_retry<T, E>(
+fn read_with_retry<T, E: std::fmt::Display>(
     retry_delays: &[Duration],
     mut read: impl FnMut() -> std::result::Result<Option<T>, E>,
 ) -> std::result::Result<Option<T>, E> {
     let mut result = read();
     for delay in retry_delays {
-        if result.is_ok() {
+        let Err(err) = &result else {
             return result;
-        }
+        };
+        log::debug!("clipboard watcher: read failed ({err}); retrying in {delay:?}");
         std::thread::sleep(*delay);
         result = read();
     }

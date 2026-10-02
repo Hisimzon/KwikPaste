@@ -21,7 +21,9 @@ pub fn play_copy() {
             SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
         )
     };
-    if !played.as_bool() {
+    if played.as_bool() {
+        log::debug!("copy sound started");
+    } else {
         log::warn!("the copy sound could not be played");
     }
 }
