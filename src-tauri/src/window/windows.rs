@@ -2,18 +2,23 @@
 //! 弹层窗口按系统圆角裁剪。
 
 use std::ffi::c_void;
+use std::iter;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, WebviewWindow};
+use tauri::{AppHandle, Manager, WebviewWindow};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     DWM_WINDOW_CORNER_PREFERENCE,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, SetForegroundWindow};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, IsWindow, SetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+};
 
-use super::{get_window, CLIPBOARD_WINDOW_LABEL};
+use super::{get_window, CLIPBOARD_PREVIEW_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL};
 use crate::core::Result;
+use crate::menu::context_window::{CONTEXT_MENU_WINDOW_LABEL, CONTEXT_SUBMENU_WINDOW_LABEL};
 use crate::{keyboard, mouse};
 
 static PRE_EDIT_FOREGROUND_HWND: Mutex<Option<isize>> = Mutex::new(None);
@@ -31,10 +36,49 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     window.unminimize().map_err(|e| anyhow::anyhow!(e))?;
 
     if label == CLIPBOARD_WINDOW_LABEL {
+        raise_clipboard_window(app_handle, &window);
         keyboard::enable_navigation_keys(app_handle);
         mouse::enable_outside_click_hide(app_handle);
     } else {
         window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
+    }
+
+    Ok(())
+}
+
+/// 剪贴板窗口建窗时 `focus: false`，tao 之后每次 `show()` 都走 `SW_SHOWNOACTIVATE`，Z 序原地不动：
+/// 在它之后置顶的其它应用窗口（贴图、画中画等）会一直盖在上面，所以每次显示都压回 topmost 栈顶。
+/// 已可见时重复显示会反过来盖住还开着的预览和右键菜单，随后按从下到上的顺序把它们再压回去。
+fn raise_clipboard_window(app_handle: &AppHandle, window: &WebviewWindow) {
+    let popups = [
+        CLIPBOARD_PREVIEW_WINDOW_LABEL,
+        CONTEXT_MENU_WINDOW_LABEL,
+        CONTEXT_SUBMENU_WINDOW_LABEL,
+    ]
+    .into_iter()
+    .filter_map(|label| app_handle.get_webview_window(label))
+    .filter(|popup| popup.is_visible().unwrap_or(false));
+
+    for target in iter::once(window.clone()).chain(popups) {
+        if let Err(err) = raise_topmost(&target, false) {
+            log::warn!("raise {} window failed: {err}", target.label());
+        }
+    }
+}
+
+/// 把窗口压到 Windows topmost 栈顶，不激活、不动位置尺寸；`show` 为 true 时顺带显示。
+/// 同为置顶的窗口之间谁最后压栈谁在上。
+pub fn raise_topmost(window: &WebviewWindow, show: bool) -> Result<()> {
+    let raw_hwnd = window.hwnd().map_err(|e| anyhow::anyhow!(e))?;
+    let hwnd = HWND(raw_hwnd.0 as isize);
+    let mut flags = SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE;
+
+    if show {
+        flags |= SWP_SHOWWINDOW;
+    }
+
+    unsafe {
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags).map_err(|e| anyhow::anyhow!(e))?;
     }
 
     Ok(())
