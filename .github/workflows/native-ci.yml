@@ -224,17 +224,17 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "10.15"
         run: cargo build --locked --release -p kwikpaste-app --target ${{ matrix.target }}
 
+      # 图标组 ID 1（GPUI 的窗口图标）、VERSIONINFO、只有 GPUI 那一个 manifest、不导入 C 运行库（+crt-static）。
       - name: Check Windows binary
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          $exe = "target/${{ matrix.target }}/release/KwikPaste.exe"
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -Last 1
-          $dependents = & $dumpbin.FullName /dependents $exe
-          $dependents
-          if ($dependents -match 'VCRUNTIME140|api-ms-win-crt-') { throw 'The exe imports the VC++ runtime: +crt-static is missing.' }
-          "size: $((Get-Item $exe).Length) bytes"
+          set -euo pipefail
+
+          exe="target/${{ matrix.target }}/release/KwikPaste.exe"
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "kwikpaste-app") | .version')"
+          node scripts/ci/check-pe.mjs "${exe}" --version "${version}"
+          echo "size: $(stat -c %s "${exe}") bytes"
 
       - name: Check macOS binary
         if: runner.os == 'macOS'

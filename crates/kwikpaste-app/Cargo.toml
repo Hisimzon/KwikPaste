@@ -40,6 +40,9 @@ serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 tray-icon.workspace = true
 
+[build-dependencies]
+embed-resource.workspace = true
+
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_windows.workspace = true
 
