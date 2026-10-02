@@ -1,6 +1,7 @@
 //! 自测开关：必须同时传 `--selftest-*` 参数并设置 `KWIKPASTE_SELFTEST=1`，普通启动不会误触。
 //!
-//! 自测进程用带 `.selftest` 后缀的 identifier（见 [`crate::identity`]），把日志打到 stderr。
+//! 自测进程用带 `.selftest` 后缀的 identifier（平台探针 `.selftest-platform`，见 [`crate::identity`]），
+//! 把日志打到 stderr。
 
 use std::cell::Cell;
 use std::io::Write as _;
@@ -40,6 +41,17 @@ const PLATFORM_WATCHDOG: Duration = Duration::from_secs(15 * 60);
 /// 本进程是否处于任一自测模式。
 pub fn active() -> bool {
     env_enabled() && std::env::args().any(|arg| arg.starts_with(PREFIX))
+}
+
+/// 本进程是平台探针本身（`--selftest-platform`）或者给它转交命令的后启动实例。
+/// 它们用单独的 identifier，别的自测进程（冒烟、展示窗、界面的测量）同时启动时不会被转交进来。
+pub fn platform_probe() -> bool {
+    const COMMANDS: [&str; 9] = [
+        PLATFORM, SHOW, HIDE, TOGGLE, QUIT, EDIT, END_EDIT, IME_STATE, IME_NATIVE,
+    ];
+
+    env_enabled()
+        && std::env::args().any(|arg| COMMANDS.contains(&arg.as_str()) || arg.starts_with(SETTINGS))
 }
 
 /// 本进程是否打开了某个自测开关。

@@ -17,8 +17,9 @@ pub struct Identity {
     pub env: AppEnv,
 }
 
-/// 正式版：`com.fastthree.kwikpaste` + `prod`，与 1.x 互认、共用数据。开发版：独立的 identifier
-/// + `dev`。自测进程另加 `.selftest` 后缀，不会和手动开着的开发实例互认，也不共用数据。
+/// 正式版：`com.fastthree.kwikpaste` 加 `prod`，与 1.x 互认、共用数据。开发版：独立的
+/// identifier 加 `dev`。自测进程另加 `.selftest` 后缀，不会和手动开着的开发实例互认，也不共用
+/// 数据；平台探针用 `.selftest-platform`，和同时跑的其它自测进程互不转交。
 pub fn current() -> Identity {
     static IDENTITY: OnceLock<Identity> = OnceLock::new();
 
@@ -28,7 +29,9 @@ pub fn current() -> Identity {
         } else {
             (DEVELOPMENT, AppEnv::Dev)
         };
-        let identifier = if crate::selftest::active() {
+        let identifier = if crate::selftest::platform_probe() {
+            Box::leak(format!("{base}.selftest-platform").into_boxed_str())
+        } else if crate::selftest::active() {
             Box::leak(format!("{base}.selftest").into_boxed_str())
         } else {
             base

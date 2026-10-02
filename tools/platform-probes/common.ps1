@@ -1,7 +1,8 @@
 # Shared functions for the platform probe scripts. Dot-source it: . "$PSScriptRoot\common.ps1"
 #
 # The app under test runs in selftest mode: KWIKPASTE_SELFTEST=1 plus --selftest-platform, which
-# gives it the identifier com.fastthree.kwikpaste.native-dev.selftest (never the installed 1.x one)
+# gives it the identifier com.fastthree.kwikpaste.native-dev.selftest-platform (never the installed 1.x
+# one, nor other selftest runs such as --selftest-smoke that may start at the same time)
 # and makes it append one JSON line per ready/shown/hidden/quit event to $env:KWIKPASTE_PROBE_LOG.
 # Commands reach it through the real single-instance path: a second launch with --selftest-show,
 # --selftest-hide, --selftest-toggle or --selftest-quit hands its arguments to the running app.
