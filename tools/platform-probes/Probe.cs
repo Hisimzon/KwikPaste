@@ -112,6 +112,7 @@ public static class Probe {
     [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
     [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT p, uint flags);
     [DllImport("user32.dll")] public static extern bool GetMonitorInfoW(IntPtr monitor, ref MONITORINFO info);
     [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
@@ -273,10 +274,60 @@ public static class Probe {
     }
 
     public static void RequireForeground(TargetForm form, IntPtr panel, string what) {
+        RequireForegroundOf(form.Handle, panel, what);
+    }
+
+    // ------------------------------------------------- input for any window the probe opened itself
+    // (Notepad, Paint, an Explorer folder window, a WebBrowser form): same safety rule, the target or
+    // the panel must be the foreground window before anything is sent.
+
+    public static void RequireForegroundOf(IntPtr target, IntPtr panel, string what) {
         IntPtr fg = GetForegroundWindow();
-        if (fg != form.Handle && fg != panel) {
-            throw new Exception(String.Format("ABORT before {0}: foreground is 0x{1:X}, not the probe form (someone else took the foreground)", what, fg.ToInt64()));
+        if (fg != target && fg != panel) {
+            throw new Exception(String.Format("ABORT before {0}: foreground is 0x{1:X}, not the probe's target 0x{2:X} (someone else took the foreground)", what, fg.ToInt64(), target.ToInt64()));
         }
+    }
+
+    public static long DevHotkeyFor(IntPtr target, IntPtr panel) {
+        RequireForegroundOf(target, panel, "the hotkey");
+        Key(VK_CONTROL, false); Pump(8);
+        Key(VK_MENU, false); Pump(8);
+        Key(VK_SHIFT, false); Pump(8);
+        long injected = Stopwatch.GetTimestamp();
+        Key(VK_F9, false); Pump(25);
+        Key(VK_F9, true); Pump(8);
+        Key(VK_SHIFT, true); Pump(8);
+        Key(VK_MENU, true); Pump(8);
+        Key(VK_CONTROL, true);
+        return injected;
+    }
+
+    public static void TapFor(IntPtr target, IntPtr panel, ushort vk) {
+        RequireForegroundOf(target, panel, "key 0x" + vk.ToString("X"));
+        Key(vk, false); Pump(25);
+        Key(vk, true); Pump(40);
+    }
+
+    /// Holds the modifiers (virtual keys, pressed in order), taps `vk`, keeps the modifiers down for
+    /// `holdMs` more and releases them in reverse order. Quick paste hotkeys.
+    public static void ChordFor(IntPtr target, IntPtr panel, ushort[] modifiers, ushort vk, int holdMs) {
+        RequireForegroundOf(target, panel, "chord 0x" + vk.ToString("X"));
+        foreach (ushort modifier in modifiers) { Key(modifier, false); Pump(8); }
+        Key(vk, false); Pump(25);
+        Key(vk, true);
+        Pump(Math.Max(8, holdMs));
+        for (int i = modifiers.Length - 1; i >= 0; i--) { Key(modifiers[i], true); Pump(8); }
+    }
+
+    /// Clicks at (x, y) when that point is over `window`, to make a window the probe opened the
+    /// foreground window (a real click on it is never refused).
+    public static bool ClickIntoForegroundAt(IntPtr window, int x, int y) {
+        MoveTo(x, y);
+        Pump(100);
+        if (RootAt(x, y) != window) return false;
+        Mouse(0x0002, 0, 0); Pump(60);
+        Mouse(0x0004, 0, 0); Pump(300);
+        return GetForegroundWindow() == window;
     }
 
     // ---------------------------------------------------------------- windows

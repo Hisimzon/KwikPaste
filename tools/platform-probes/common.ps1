@@ -10,9 +10,10 @@
 $ErrorActionPreference = 'Stop'
 
 if (-not ('Probe' -as [type])) {
-    Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -Path (Join-Path $PSScriptRoot 'Probe.cs'), (Join-Path $PSScriptRoot 'Ime.cs')
+    Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -Path (Join-Path $PSScriptRoot 'Probe.cs'), (Join-Path $PSScriptRoot 'Ime.cs'), (Join-Path $PSScriptRoot 'Clip.cs')
 }
 [Probe]::Init()
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
@@ -46,7 +47,7 @@ $script:ProbeDataDir = Join-Path $env:LOCALAPPDATA 'com.fastthree.kwikpaste.nati
 
 # Starts the probe app. Its saved panel geometry is cleared first, so every script starts from the
 # default size at the cursor; -KeepState keeps it (window-state.ps1 checks persistence across launches).
-function Start-ProbeApp([string]$Exe, [string]$ResultDir, [switch]$KeepState) {
+function Start-ProbeApp([string]$Exe, [string]$ResultDir, [switch]$KeepState, [string[]]$Arguments = @()) {
     if (-not $KeepState) {
         foreach ($name in 'window-state.gpui.json', 'window-state.json') {
             Remove-Item (Join-Path $script:ProbeDataDir "state\$name") -ErrorAction SilentlyContinue
@@ -58,7 +59,7 @@ function Start-ProbeApp([string]$Exe, [string]$ResultDir, [switch]$KeepState) {
     $script:ProbeEvents.Clear()
     $env:KWIKPASTE_SELFTEST = '1'
     $env:KWIKPASTE_PROBE_LOG = $log
-    $process = Start-Process -FilePath $Exe -ArgumentList '--selftest-platform' -PassThru -RedirectStandardError $stderr -NoNewWindow
+    $process = Start-Process -FilePath $Exe -ArgumentList (@('--selftest-platform') + $Arguments) -PassThru -RedirectStandardError $stderr -NoNewWindow
     $null = $process.Handle
     $script:ProbeLog = $log
     $script:SecondStderr = Join-Path $ResultDir 'second-launch-stderr.txt'
@@ -114,6 +115,61 @@ function Get-ProbeEvents([string]$Kind) {
 function Clear-ProbeEvents {
     Read-ProbeEvents
     $script:ProbeEvents.Clear()
+}
+
+# Windows 11 Notepad restores its last session (tabs, unsaved text) from its LocalState folder, and a
+# Notepad window the probe opens rewrites that session when it closes. A probe that opens Notepad saves
+# the session first and puts it back after its own Notepad window has closed, so the user's session is
+# exactly as before. It refuses when Notepad is already running: those windows are the user's.
+$script:NotepadState = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsNotepad_8wekyb3d8bbwe\LocalState'
+$script:NotepadBackup = Join-Path $env:TEMP 'kwikpaste-probe-notepad-session'
+
+function Save-NotepadSession {
+    if (Get-Process Notepad -ErrorAction SilentlyContinue) { throw 'Notepad is already running; close it first (the probe must not touch the user''s Notepad).' }
+    if (Test-Path $script:NotepadBackup) { throw "An earlier Notepad session backup is still at $script:NotepadBackup; restore it with Restore-NotepadSession first." }
+    New-Item -ItemType Directory -Force -Path $script:NotepadBackup | Out-Null
+    foreach ($name in 'TabState', 'WindowState') {
+        $source = Join-Path $script:NotepadState $name
+        if (Test-Path $source) { Copy-Item $source (Join-Path $script:NotepadBackup $name) -Recurse }
+    }
+}
+
+function Restore-NotepadSession {
+    if (-not (Test-Path $script:NotepadBackup)) { return }
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ((Get-Process Notepad -ErrorAction SilentlyContinue) -and $watch.ElapsedMilliseconds -lt 15000) { Start-Sleep -Milliseconds 200 }
+    if (Get-Process Notepad -ErrorAction SilentlyContinue) {
+        Write-Warning "Notepad is still running; its session backup stays at $script:NotepadBackup"
+        return
+    }
+    foreach ($name in 'TabState', 'WindowState') {
+        $target = Join-Path $script:NotepadState $name
+        if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+        $saved = Join-Path $script:NotepadBackup $name
+        if (Test-Path $saved) { Copy-Item $saved $target -Recurse }
+    }
+    Remove-Item $script:NotepadBackup -Recurse -Force
+}
+
+# Closes a window the probe opened; when it asks to save (Paint, Notepad), answers "don't save" through
+# UI Automation. Only for the probe's own documents.
+function Close-WithoutSaving([IntPtr]$Window) {
+    [void][Probe]::PostMessageW($Window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+    $dontSave = [string][char]0x4E0D + [char]0x4FDD + [char]0x5B58
+    $buttons = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ([Probe]::IsWindow($Window) -and $watch.ElapsedMilliseconds -lt 6000) {
+        [Probe]::Pump(400)
+        if (-not [Probe]::IsWindow($Window)) { break }
+        foreach ($button in [System.Windows.Automation.AutomationElement]::FromHandle($Window).FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttons)) {
+            $name = $button.Current.Name
+            if ($name -eq $dontSave -or $name -match "^Don.?t save$") {
+                $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                Write-Host "  answered '$name' in 0x$('{0:X}' -f $Window.ToInt64())"
+                break
+            }
+        }
+    }
 }
 
 # Opens our WinForms target and makes it the foreground window with its text box focused.
