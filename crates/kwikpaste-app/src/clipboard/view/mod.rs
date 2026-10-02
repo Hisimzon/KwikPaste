@@ -13,7 +13,7 @@ mod list;
 
 use gpui::{App, KeyBinding, actions};
 
-pub use list::ClipboardList;
+pub use list::{ClipboardList, ListIntent};
 
 /// 列表的 key context。Windows 上面板收不到键盘消息，平台层的钩子用 `Window::dispatch_keystroke`
 /// 把按键注入面板窗口时，只要列表持有焦点（面板显示时它会自己拿焦点），就会命中这里的绑定。

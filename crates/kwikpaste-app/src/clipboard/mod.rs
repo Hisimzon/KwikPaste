@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-use gpui::{App, AppContext as _, Entity, Window};
+use gpui::{App, AppContext as _, Entity, TaskExt as _, Window};
 
 use self::{
     source::{
@@ -26,7 +26,7 @@ use self::{
         core_source::CoreSource,
         synthetic::{self, AssetSet},
     },
-    view::ClipboardList,
+    view::{ClipboardList, ListIntent},
 };
 use crate::{core_host, platform, selftest};
 
@@ -129,11 +129,18 @@ pub fn build_panel(
     };
 
     let list = cx.new(|cx| ClipboardList::new(source, window, cx));
-    // 只有数据来自平台层的 core 时才跟随它的记录事件；夹具和自测 core 不受本机开发数据影响。
-    if prepared.source.is_none()
-        && let Some(events) = platform::core_events(cx)
-    {
-        list.update(cx, |list, cx| list.follow_core_events(&events, cx));
+    // 只有数据来自平台层的 core 时才跟随它的记录事件、接上粘贴链路；夹具和自测 core 不受本机开发数据
+    // 影响，夹具里的记录也粘贴不了。
+    if prepared.source.is_none() {
+        if let Some(events) = platform::core_events(cx) {
+            list.update(cx, |list, cx| list.follow_core_events(&events, cx));
+        }
+        cx.subscribe(&list, |_, intent: &ListIntent, cx| match intent {
+            ListIntent::Paste { id, plain } => {
+                platform::paste::paste(cx, id.to_string(), *plain, false).detach_and_log_err(cx);
+            }
+        })
+        .detach();
     }
 
     list
