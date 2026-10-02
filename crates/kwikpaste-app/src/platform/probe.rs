@@ -318,6 +318,11 @@ pub fn follow_clipboard(cx: &mut gpui::App) {
     .detach();
 }
 
+/// 演练的交接已停输入、删托盘、释放单实例，2 秒后退出。
+pub fn handoff_rehearsed() {
+    write("handoff", "");
+}
+
 /// 进程即将退出。
 pub fn quitting() {
     write("quit", "");

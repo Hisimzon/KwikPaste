@@ -37,6 +37,7 @@ mod probe_view;
 mod settings;
 mod system;
 mod tray;
+mod updater;
 
 #[cfg(target_os = "macos")]
 #[path = "native_macos.rs"]
@@ -61,6 +62,7 @@ pub use panel::{Panel, PanelCommand, PanelEvent, Trigger, TriggerSource, rendere
 pub use settings::{CoreEvents, core_events};
 #[allow(unused_imports, reason = "UI 接线用的接口，见本模块文档")]
 pub use system::SystemSignals;
+pub use updater::exit_code;
 
 /// 判重通过后带进 GPUI 的启动状态。
 pub struct Launch {
@@ -163,6 +165,7 @@ pub fn start<V: Render>(
     settings::follow(cx);
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
+    updater::start(cx);
 
     Ok(())
 }

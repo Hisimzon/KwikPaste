@@ -39,7 +39,9 @@ pub fn serve(cx: &mut App, events: Receiver<CoreEvent>) {
     .detach();
 
     cx.on_app_quit(|cx| {
-        let core = core_host::core(cx).cloned();
+        let core = core_host::core(cx)
+            .filter(|_| !core_host::is_shut_down())
+            .cloned();
         async move {
             if let Some(core) = core
                 && let Err(err) = core.shutdown().await

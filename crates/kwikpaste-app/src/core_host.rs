@@ -5,6 +5,7 @@
 //! `com.fastthree.kwikpaste\prod`。只有打开 `production-identity` 的发布构建才用正式的目录。
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context as _;
 use async_channel::Receiver;
@@ -91,6 +92,17 @@ impl CoreHost {
     pub fn core(&self) -> &Core {
         &self.core
     }
+}
+
+/// 更新交接已经关停了 core（交接在退出前自己调用 `Core::shutdown`），退出时不再关一次。
+static SHUT_DOWN: AtomicBool = AtomicBool::new(false);
+
+pub fn mark_shut_down() {
+    SHUT_DOWN.store(true, Ordering::SeqCst);
+}
+
+pub fn is_shut_down() -> bool {
+    SHUT_DOWN.load(Ordering::SeqCst)
 }
 
 /// 当前的 core。平台层启动后一直存在；展示窗之类不经平台层启动的模式下为 `None`。

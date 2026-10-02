@@ -6,7 +6,7 @@ use kwikpaste_os::single_instance::{Invocation, PrimaryInstance};
 
 use super::editing::EditTrigger;
 use super::panel::{PanelCommand, Trigger, TriggerSource};
-use super::{paste, probe};
+use super::{paste, probe, updater};
 use crate::{core_host, selftest};
 
 /// 开机自启带的参数：第二实例带它时静默退出，主实例什么也不做（与 1.x 相同）。
@@ -27,9 +27,7 @@ pub fn serve(
 ) {
     cx.set_global(Instance { guard: Some(guard) });
     cx.on_app_quit(|cx| {
-        if cx.has_global::<Instance>() {
-            cx.global_mut::<Instance>().guard = None;
-        }
+        release(cx);
         async {}
     })
     .detach();
@@ -40,6 +38,14 @@ pub fn serve(
         }
     })
     .detach();
+}
+
+/// 释放单实例（关互斥体、销毁消息窗口）：退出前、更新交接拉起新进程之前调用。必须在主线程上：
+/// 消息窗口只能由创建它的线程销毁。
+pub fn release(cx: &mut App) {
+    if cx.has_global::<Instance>() {
+        cx.global_mut::<Instance>().guard = None;
+    }
 }
 
 async fn handle(invocation: &Invocation, commands: &Sender<PanelCommand>, cx: &mut AsyncApp) {
@@ -90,6 +96,9 @@ async fn handle_selftest(
             _ => {
                 if let Some(patch) = arg.strip_prefix(selftest::SETTINGS) {
                     update_settings(patch, cx).await;
+                } else if let Some(code) = arg.strip_prefix(selftest::HANDOFF) {
+                    let code = code.parse().unwrap_or(0);
+                    cx.update(|cx| updater::rehearse_handoff(cx, code));
                 } else if let Some(id) = arg.strip_prefix(selftest::COPY_ITEM) {
                     let copied = cx.update(|cx| paste::copy(cx, id.to_owned(), false, true));
                     if let Err(err) = copied.await {

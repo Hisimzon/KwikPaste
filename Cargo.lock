@@ -4237,6 +4237,7 @@ dependencies = [
  "kwikpaste-core",
  "kwikpaste-os",
  "kwikpaste-ui",
+ "kwikpaste-updater",
  "log",
  "raw-window-handle",
  "semver",

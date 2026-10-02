@@ -165,6 +165,23 @@ pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
     }
 }
 
+/// 注销全部热键（更新交接停输入时用）。
+pub fn unregister_all(cx: &mut App) {
+    if !cx.has_global::<Hotkeys>() {
+        return;
+    }
+    let hotkeys = cx.global_mut::<Hotkeys>();
+    let all: Vec<HotKey> = hotkeys
+        .toggle
+        .take()
+        .into_iter()
+        .chain(hotkeys.quick_paste.drain(..))
+        .collect();
+    for hotkey in all {
+        hotkeys.unregister(hotkey);
+    }
+}
+
 impl Hotkeys {
     fn register(&mut self, hotkey: HotKey, action: Action) -> bool {
         match self.manager.register(hotkey) {

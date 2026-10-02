@@ -38,6 +38,8 @@ pub const REAL_CLIPBOARD: &str = "--selftest-real-clipboard";
 pub const COPY_ITEM: &str = "--selftest-copy-item=";
 /// 手动读取一次当前剪贴板并入库（`Core::read_clipboard_now`）。
 pub const READ_NOW: &str = "--selftest-read-now";
+/// `--selftest-handoff=<code>`：演练更新交接的宿主步骤后以 `code` 退出（见 `platform::updater`）。
+pub const HANDOFF: &str = "--selftest-handoff=";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
 pub const GALLERY: &str = "--selftest-gallery";
 /// 列表跑分：1 万行合成数据，附录 D §3.7 的门槛与锚定场景（见 `clipboard::view::bench`）。
@@ -80,6 +82,7 @@ pub fn platform_probe() -> bool {
             COMMANDS.contains(&arg.as_str())
                 || arg.starts_with(SETTINGS)
                 || arg.starts_with(COPY_ITEM)
+                || arg.starts_with(HANDOFF)
         })
 }
 

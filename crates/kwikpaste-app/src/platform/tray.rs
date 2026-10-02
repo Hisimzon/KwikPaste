@@ -58,9 +58,7 @@ pub fn create(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()
 
     cx.set_global(Tray { icon: Some(icon) });
     cx.on_app_quit(|cx| {
-        if cx.has_global::<Tray>() {
-            cx.global_mut::<Tray>().icon = None;
-        }
+        remove(cx);
         async {}
     })
     .detach();
@@ -108,6 +106,13 @@ pub fn create(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()
     .detach();
 
     Ok(())
+}
+
+/// 删掉托盘图标：退出前、更新交接时调用，任务栏上不留残影。
+pub fn remove(cx: &mut App) {
+    if cx.has_global::<Tray>() {
+        cx.global_mut::<Tray>().icon = None;
+    }
 }
 
 /// 设置变了：按语言重建菜单，按 `general.trayIcon` 显隐。
