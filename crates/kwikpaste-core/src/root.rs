@@ -15,15 +15,16 @@ use crate::clipboard::{
     ClipboardPayload, ClipboardReader, FileIconStore, ImageStore, WritebackGuard,
 };
 use crate::db::items::UpsertResult;
-use crate::db::models::{
-    ClipboardApp, ClipboardGroup, ClipboardItem, ClipboardItemPage, ClipboardItemQuery,
-};
+use crate::db::models::{ClipboardApp, ClipboardGroup, ClipboardItem, ClipboardItemQuery};
 use crate::db::{self, DatabaseState};
 use crate::env::{AppInfo, CoreOptions};
 use crate::error::Result;
 use crate::events::{CoreEvent, EventSink};
 use crate::paths::CorePaths;
-use crate::presenter::{self, ClipboardPreviewPayload, FileIconResult, PreviewContentMetrics};
+use crate::presenter::{
+    self, ClipboardItemPage, ClipboardItemView, ClipboardPreviewPayload, FileIconResult,
+    PreviewContentMetrics,
+};
 use crate::runtime::hop;
 use crate::settings::{
     History, Language, Settings, SettingsDelta, SettingsLoadReport, SettingsStore,
@@ -252,21 +253,16 @@ impl Core {
 
     // ---- 记录查询 ----
 
-    /// 一页列表数据库原始行（文本记录不带 `content`，带来源应用名与图标文件名）。
-    ///
-    /// 还没有经过展示层：敏感内容未脱敏，缩略图路径、文件条目、可用动作等附加字段为空。
-    /// 正式界面要等展示层（presenter）接入，这里只供开发期接线与测试。
-    pub async fn query_items_raw(&self, query: ClipboardItemQuery) -> Result<ClipboardItemPage> {
+    /// 一页列表的数据库原始行与总数，没有经过展示层（敏感内容未脱敏）。只给测试用。
+    #[cfg(test)]
+    pub(crate) async fn query_items_raw(
+        &self,
+        query: ClipboardItemQuery,
+    ) -> Result<(Vec<ClipboardItem>, i64)> {
         let core = self.clone();
         self.hop(async move {
             let pool = core.0.db.pool().await;
-            let (list, total) = db::items::query_items_page(&pool, &query).await?;
-            let has_more = query.offset + (list.len() as i64) < total;
-            Ok(ClipboardItemPage {
-                list,
-                total,
-                has_more,
-            })
+            db::items::query_items_page(&pool, &query).await
         })
         .await
     }
@@ -277,11 +273,12 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let pool = core.0.db.pool().await;
-            let (mut list, total) = db::items::query_items_page(&pool, &query).await?;
+            let (rows, total) = db::items::query_items_page(&pool, &query).await?;
             let clipboard = core.0.settings.snapshot().clipboard;
             let ctx = core.list_context(&pool, &clipboard);
-            for item in &mut list {
-                presenter::present_list_item(&ctx, item).await?;
+            let mut list = Vec::with_capacity(rows.len());
+            for row in rows {
+                list.push(presenter::present_list_item(&ctx, row).await?);
             }
             let has_more = query.offset + (list.len() as i64) < total;
 
@@ -296,17 +293,18 @@ impl Core {
 
     /// 单条记录的列表视图，收到 [`CoreEvent::ClipboardUpserted`] 后按 id 刷新一张卡片用；
     /// 与列表同样裁剪和加工。记录不存在时返回 `None`。
-    pub async fn list_item(&self, id: &str) -> Result<Option<ClipboardItem>> {
+    pub async fn list_item(&self, id: &str) -> Result<Option<ClipboardItemView>> {
         let core = self.clone();
         let id = id.to_owned();
         self.hop(async move {
             let pool = core.0.db.pool().await;
-            let Some(mut item) = db::items::find_item_for_list_by_id(&pool, &id).await? else {
+            let Some(item) = db::items::find_item_for_list_by_id(&pool, &id).await? else {
                 return Ok(None);
             };
             let clipboard = core.0.settings.snapshot().clipboard;
-            presenter::present_list_item(&core.list_context(&pool, &clipboard), &mut item).await?;
-            Ok(Some(item))
+            let view =
+                presenter::present_list_item(&core.list_context(&pool, &clipboard), item).await?;
+            Ok(Some(view))
         })
         .await
     }
@@ -627,15 +625,27 @@ mod tests {
             .is_file());
         assert!(block_on(core.ensure_thumbnail("../escape.png")).is_err());
 
-        let page = block_on(core.query_items_raw(ClipboardItemQuery::default())).unwrap();
-        assert_eq!(page.total, 2);
-        assert!(!page.has_more);
+        let (rows, total) = block_on(core.query_items_raw(ClipboardItemQuery::default())).unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(rows.len(), 2);
         let listed = block_on(core.list_items(ClipboardItemQuery::default())).unwrap();
         assert_eq!(listed.total, 2);
         assert!(listed
             .list
             .iter()
             .all(|item| !item.available_actions.is_empty() && !item.display_created_at.is_empty()));
+        let image_view = listed
+            .list
+            .iter()
+            .find(|view| view.item.kind == ClipboardKind::Image)
+            .unwrap();
+        assert_eq!(
+            image_view.image_display_size,
+            Some(presenter::ImageDisplaySize {
+                width: 30,
+                height: 20
+            })
+        );
         assert!(block_on(core.list_item(&first.id)).unwrap().is_some());
         let preview = block_on(core.preview_payload(&first.id)).unwrap().unwrap();
         assert_eq!(preview.text.as_deref(), Some("https://example.com"));

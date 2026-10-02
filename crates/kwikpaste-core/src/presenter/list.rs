@@ -5,14 +5,14 @@ use chrono::{DateTime, Datelike, TimeZone};
 use sqlx::SqlitePool;
 
 use super::files::{is_image_path, resolve_file_icon_path};
+use super::image_display_size;
 use super::text::mask_sensitive_text;
+use super::view::{ClipboardAction, ClipboardItemView, FileEntry, FilesPreviewKind};
 use crate::clipboard::{
     quick_snippets, sanitize_css_color, validate_image_file_name, AppIconStore, FileIconStore,
     ImageStore,
 };
-use crate::db::models::{
-    ClipboardAction, ClipboardItem, ClipboardKind, ClipboardSubKind, FileEntry, FilesPreviewKind,
-};
+use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind};
 use crate::error::Result;
 use crate::settings::Clipboard;
 
@@ -24,6 +24,7 @@ pub(crate) struct ListContext<'a, Tz: TimeZone> {
     pub file_icons: &'a FileIconStore,
     pub now: DateTime<Tz>,
     pub file_entry_limit: usize,
+    pub image_max_height: u16,
     pub redact_sensitive: bool,
     pub quick_snippets: bool,
 }
@@ -45,6 +46,7 @@ impl<'a, Tz: TimeZone> ListContext<'a, Tz> {
             file_icons,
             now,
             file_entry_limit: clipboard.display.file_entry_limit(),
+            image_max_height: clipboard.display.image_max_height,
             redact_sensitive: clipboard.sensitive.redact_secrets,
             quick_snippets: clipboard.display.quick_snippets,
         }
@@ -55,38 +57,42 @@ impl<'a, Tz: TimeZone> ListContext<'a, Tz> {
 /// 再按设置脱敏，最后按脱敏后的状态算可用动作。
 pub(crate) async fn present_list_item<Tz: TimeZone>(
     ctx: &ListContext<'_, Tz>,
-    item: &mut ClipboardItem,
-) -> Result<()>
+    item: ClipboardItem,
+) -> Result<ClipboardItemView>
 where
     Tz::Offset: std::fmt::Display,
 {
-    attach_image_thumbnail_path(ctx.images, item);
-    attach_source_app_icon_path(ctx.app_icons, item);
-    attach_file_entries(ctx.pool, ctx.file_icons, item, ctx.file_entry_limit).await?;
-    attach_color_preview(item);
-    attach_display_created_at(item, &ctx.now);
-    attach_quick_snippets(item, ctx.quick_snippets, ctx.redact_sensitive);
-    redact_sensitive_list_item(item, ctx.redact_sensitive);
-    item.available_actions = compute_available_actions(item, ctx.redact_sensitive);
-    Ok(())
+    let mut view = ClipboardItemView::bare(item);
+
+    attach_image_thumbnail_path(ctx.images, &mut view);
+    attach_source_app_icon_path(ctx.app_icons, &mut view);
+    attach_file_entries(ctx.pool, ctx.file_icons, &mut view, ctx.file_entry_limit).await?;
+    attach_color_preview(&mut view);
+    attach_display_created_at(&mut view, &ctx.now);
+    attach_quick_snippets(&mut view, ctx.quick_snippets, ctx.redact_sensitive);
+    redact_sensitive_list_item(&mut view, ctx.redact_sensitive);
+    view.available_actions = compute_available_actions(&view.item, ctx.redact_sensitive);
+    attach_image_display_size(&mut view, ctx.image_max_height);
+    Ok(view)
 }
 
 /// 为 image 条目补齐**已存在**的缩略图绝对路径。
 /// 缩略图尚未生成时返回 `None`：界面先显示同尺寸占位，再按需生成；
 /// 不回退到原图路径，避免为一个几十像素高的卡片解码整张原图。
 /// 历史脏数据（非 `<hash>.png`）同样降级为 `None`，不影响列表返回。
-fn attach_image_thumbnail_path(store: &ImageStore, item: &mut ClipboardItem) {
+fn attach_image_thumbnail_path(store: &ImageStore, view: &mut ClipboardItemView) {
+    let item = &view.item;
     if item.kind != ClipboardKind::Image {
         return;
     }
 
     if validate_image_file_name(&item.content).is_err() {
-        item.image_thumbnail_path = None;
+        view.image_thumbnail_path = None;
         return;
     }
 
     let thumb_path = store.thumbnail_path(&item.content);
-    item.image_thumbnail_path = if thumb_path.exists() {
+    view.image_thumbnail_path = if thumb_path.exists() {
         thumb_path.to_str().map(str::to_owned)
     } else {
         None
@@ -94,34 +100,37 @@ fn attach_image_thumbnail_path(store: &ImageStore, item: &mut ClipboardItem) {
 }
 
 /// 把 `clipboard_apps.icon_file` 解析为磁盘绝对路径；utf-8 转换失败时置 `None`。
-fn attach_source_app_icon_path(store: &AppIconStore, item: &mut ClipboardItem) {
-    item.source_app_icon_path = item
+fn attach_source_app_icon_path(store: &AppIconStore, view: &mut ClipboardItemView) {
+    view.source_app_icon_path = view
+        .item
         .source_app_icon_file
         .as_deref()
         .and_then(|name| store.icon_path(name).to_str().map(str::to_owned));
 }
 
 /// 仅当 `sub_kind = Color` 时，把 `summary`（或 `content` 兜底）规范化为可信 CSS 颜色串。
-fn attach_color_preview(item: &mut ClipboardItem) {
+fn attach_color_preview(view: &mut ClipboardItemView) {
+    let item = &view.item;
     if item.sub_kind != Some(ClipboardSubKind::Color) {
         return;
     }
 
     let source = item.summary.as_deref().unwrap_or(&item.content);
-    item.color_preview = sanitize_css_color(source);
+    view.color_preview = sanitize_css_color(source);
 }
 
 /// 按设置为文本列表项提取快捷信息；脱敏展示的敏感条目不提取，片段会绕过遮罩露出凭据。
-fn attach_quick_snippets(item: &mut ClipboardItem, enabled: bool, redact_sensitive: bool) {
-    if !enabled || redact_sensitive && item.is_sensitive {
+fn attach_quick_snippets(view: &mut ClipboardItemView, enabled: bool, redact_sensitive: bool) {
+    if !enabled || redact_sensitive && view.item.is_sensitive {
         return;
     }
 
-    item.quick_snippets = quick_snippets(item);
+    view.quick_snippets = quick_snippets(&view.item);
 }
 
 /// 按当前设置对敏感文本列表项返回脱敏摘要，避免列表暴露完整凭据。
-fn redact_sensitive_list_item(item: &mut ClipboardItem, redact_sensitive: bool) {
+fn redact_sensitive_list_item(view: &mut ClipboardItemView, redact_sensitive: bool) {
+    let item = &mut view.item;
     if !redact_sensitive || !item.is_sensitive || item.kind != ClipboardKind::Text {
         return;
     }
@@ -129,16 +138,29 @@ fn redact_sensitive_list_item(item: &mut ClipboardItem, redact_sensitive: bool) 
     if let Some(summary) = item.summary.as_mut() {
         *summary = mask_sensitive_text(summary);
     }
-    item.color_preview = None;
+    view.color_preview = None;
+}
+
+/// 图片卡片的显示尺寸，见 [`image_display_size`]。
+fn attach_image_display_size(view: &mut ClipboardItemView, max_height: u16) {
+    if view.item.kind != ClipboardKind::Image {
+        return;
+    }
+
+    view.image_display_size = Some(image_display_size(
+        view.item.width,
+        view.item.height,
+        max_height,
+    ));
 }
 
 /// 把 `created_at`（UTC）按 `now` 所在时区做三档格式化：
 /// 今天 → `HH:mm`，今年内 → `MM-DD HH:mm`，跨年 → `YYYY-MM-DD HH:mm`。
-fn attach_display_created_at<Tz: TimeZone>(item: &mut ClipboardItem, now: &DateTime<Tz>)
+fn attach_display_created_at<Tz: TimeZone>(view: &mut ClipboardItemView, now: &DateTime<Tz>)
 where
     Tz::Offset: std::fmt::Display,
 {
-    item.display_created_at = display_created_at(&item.created_at, now);
+    view.display_created_at = display_created_at(&view.item.created_at, now);
 }
 
 /// 显示时间的三档格式化，见 [`attach_display_created_at`]。
@@ -215,9 +237,10 @@ pub(crate) fn compute_available_actions(
 async fn attach_file_entries(
     pool: &SqlitePool,
     store: &FileIconStore,
-    item: &mut ClipboardItem,
+    view: &mut ClipboardItemView,
     limit: usize,
 ) -> Result<()> {
+    let item = &view.item;
     if item.kind != ClipboardKind::Files {
         return Ok(());
     }
@@ -261,8 +284,8 @@ async fn attach_file_entries(
         });
     }
 
-    item.file_entries = Some(entries);
-    item.files_preview_kind = Some(match item.file_entries.as_deref() {
+    view.file_entries = Some(entries);
+    view.files_preview_kind = Some(match view.file_entries.as_deref() {
         Some([only]) if only.is_image && only.exists => FilesPreviewKind::ImagePreview,
         _ => FilesPreviewKind::List,
     });
@@ -275,6 +298,10 @@ mod tests {
 
     use super::*;
     use crate::presenter::tests::{image_item, text_item};
+
+    fn view(item: ClipboardItem) -> ClipboardItemView {
+        ClipboardItemView::bare(item)
+    }
 
     #[test]
     fn image_actions_include_save_image() {
@@ -308,6 +335,7 @@ mod tests {
     fn quick_snippets_respect_setting_and_redaction() {
         let mut item = text_item(None, true);
         item.summary = Some("订单 20260924 已发货".to_owned());
+        let mut item = view(item);
 
         attach_quick_snippets(&mut item, true, true);
         assert!(item.quick_snippets.is_empty());
@@ -323,21 +351,23 @@ mod tests {
     fn redact_sensitive_list_item_masks_summary_when_enabled() {
         let mut item = text_item(None, true);
         item.summary = Some("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890".to_owned());
+        let mut item = view(item);
 
         redact_sensitive_list_item(&mut item, true);
 
-        assert_eq!(item.summary.as_deref(), Some("sk-a********7890"));
+        assert_eq!(item.item.summary.as_deref(), Some("sk-a********7890"));
     }
 
     #[test]
     fn redact_sensitive_list_item_keeps_summary_when_disabled() {
         let mut item = text_item(None, true);
         item.summary = Some("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890".to_owned());
+        let mut item = view(item);
 
         redact_sensitive_list_item(&mut item, false);
 
         assert_eq!(
-            item.summary.as_deref(),
+            item.item.summary.as_deref(),
             Some("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890")
         );
     }
@@ -356,6 +386,7 @@ mod tests {
             .unwrap();
         let mut item = image_item();
         item.content = stored.file_name.clone();
+        let mut item = view(item);
 
         attach_image_thumbnail_path(&store, &mut item);
         assert_eq!(

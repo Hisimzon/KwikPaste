@@ -7,6 +7,7 @@ mod files;
 mod list;
 mod preview;
 mod text;
+mod view;
 
 pub use files::{is_image_path, FileIconResult};
 pub use list::display_created_at;
@@ -15,6 +16,9 @@ pub use preview::{
     PREVIEW_FILE_ENTRY_LIMIT,
 };
 pub use text::{mask_sensitive_line, mask_sensitive_text};
+pub use view::{
+    ClipboardAction, ClipboardItemPage, ClipboardItemView, FileEntry, FilesPreviewKind,
+};
 
 pub(crate) use files::resolve_file_icon_path;
 pub(crate) use list::{present_list_item, ListContext};
@@ -99,15 +103,6 @@ pub(crate) mod tests {
             origin_device_id: None,
             source_app_name: None,
             source_app_icon_file: None,
-            source_app_icon_path: None,
-            origin_device_name: None,
-            image_thumbnail_path: None,
-            file_entries: None,
-            files_preview_kind: None,
-            available_actions: Vec::new(),
-            color_preview: None,
-            display_created_at: String::new(),
-            quick_snippets: Vec::new(),
         }
     }
 

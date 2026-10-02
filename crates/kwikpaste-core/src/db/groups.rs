@@ -221,15 +221,6 @@ mod tests {
             origin_device_id: None,
             source_app_name: None,
             source_app_icon_file: None,
-            source_app_icon_path: None,
-            origin_device_name: None,
-            image_thumbnail_path: None,
-            file_entries: None,
-            files_preview_kind: None,
-            available_actions: Vec::new(),
-            color_preview: None,
-            display_created_at: String::new(),
-            quick_snippets: Vec::new(),
         };
         insert_item(&pool, &item).await.unwrap();
 

@@ -31,6 +31,8 @@ pub enum Platform {
     Windows,
 }
 
+/// 一条剪贴板记录的数据库行（含列表查询 JOIN 出的来源应用名与图标文件名）。
+/// 列表卡片要的附加字段在展示层的 `ClipboardItemView` 里。
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardItem {
@@ -76,91 +78,10 @@ pub struct ClipboardItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_app_name: Option<String>,
     /// 来源应用图标文件名（`<hash>.png`）。同 [`source_app_name`] 由 list 查询补齐，
-    /// 命令层据此解析为绝对路径写入 [`source_app_icon_path`]。
+    /// 展示层据此解析为绝对路径（`ClipboardItemView::source_app_icon_path`）。
     #[sqlx(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_app_icon_file: Option<String>,
-    /// 命令层用 `AppIconStore` 把 `icon_file` 解析后的磁盘绝对路径；
-    /// 前端可直接 `convertFileSrc` 渲染。来源不在 SQL，纯后置填充。
-    #[sqlx(default)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_app_icon_path: Option<String>,
-    /// 来源设备名称：命令层按 `origin_device_id` 从已配对设备里回填，前端直接显示「来自 xxx」。
-    #[sqlx(skip)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin_device_name: Option<String>,
-    /// Image 类型条目的缩略图绝对路径；命令层按需确保缩略图存在后回填，
-    /// 前端可直接 `convertFileSrc` 渲染，避免逐条再发取图命令。
-    #[sqlx(default)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_thumbnail_path: Option<String>,
-    /// Files 类型条目对应的预处理后的文件条目，数量由命令层按设置截断。
-    /// 前端 `FilesCard` 直接 map 渲染，无需再解析 `content` / `file_types`。
-    #[sqlx(skip)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file_entries: Option<Vec<FileEntry>>,
-    /// Files 卡片渲染模式：单文件且为图片走 `ImagePreview`，其它走 `List`。
-    /// 命令层在填充 `file_entries` 时一并计算，前端无需再判定。
-    #[sqlx(skip)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub files_preview_kind: Option<FilesPreviewKind>,
-    /// 当前条目右键菜单可用的动作列表（按 kind / sub_kind 计算），按建议展示顺序排列。
-    /// 前端只负责把动作映射成菜单项 + 文案 + 快捷键，不再判定「能否打开链接」等业务条件。
-    #[sqlx(skip)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub available_actions: Vec<ClipboardAction>,
-    /// `sub_kind = Color` 时的规范化 CSS 颜色串（命令层用 [`crate::clipboard::sanitize_css_color`] 校验后填充）。
-    /// 前端可直接塞 `style.background`，无需自行判断 `summary` 是否合法。
-    #[sqlx(skip)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color_preview: Option<String>,
-    /// 按本地时区对 `created_at` 做三档格式化，命令层填充供前端直接渲染：
-    /// 今天 → `HH:mm`，今年内 → `MM-DD HH:mm`，跨年 → `YYYY-MM-DD HH:mm`。
-    /// 前端不再需要引入 dayjs。
-    #[sqlx(skip)]
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub display_created_at: String,
-    /// 列表卡片下方的快捷信息（编号、数字、链接等），点击即单独粘贴；命令层按设置从摘要里提取。
-    #[sqlx(skip)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub quick_snippets: Vec<String>,
-}
-
-/// 右键菜单可执行的动作种类。
-/// 顺序约定见 [`crate::commands::clipboard::compute_available_actions`]。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ClipboardAction {
-    /// 普通粘贴（恒在）。
-    Paste,
-    /// 文本条目额外提供「粘贴为纯文本」。
-    PasteAsPlainText,
-    /// 文件条目额外提供「粘贴为路径」（写回纯文本路径列表）。
-    PasteAsPath,
-    /// 复制回剪贴板（恒在）。
-    Copy,
-    /// 将图片条目另存到本地文件（`kind = image`）。
-    SaveImage,
-    /// 打开拆词面板，按词挑选后粘贴或复制（`kind = text`）。
-    SplitWords,
-    /// 在浏览器打开链接（`sub_kind = url`）。
-    OpenLink,
-    /// 调起邮件客户端（`sub_kind = email`）。
-    SendEmail,
-    /// 在 Finder 中显示（macOS，`sub_kind = path` 或 `kind = files`）。
-    RevealInFinder,
-    /// 在资源管理器中显示（Windows，`sub_kind = path` 或 `kind = files`）。
-    RevealInExplorer,
-    /// 切换收藏（恒在；前端按 `is_favorite` 切「收藏 / 取消收藏」文案）。
-    ToggleFavorite,
-    /// 切换置顶（恒在；前端按 `is_pinned` 切「置顶 / 取消置顶」文案）。
-    TogglePinned,
-    /// 编辑备注（恒在）。
-    EditNote,
-    /// 进入列表多选并选中该条（恒在）。
-    Select,
-    /// 删除条目（恒在）。
-    Delete,
 }
 
 /// 列表多选用的轻量记录：只带 id 与决定能否删除的收藏 / 置顶标记。
@@ -170,30 +91,6 @@ pub struct ClipboardItemRef {
     pub id: String,
     pub is_favorite: bool,
     pub is_pinned: bool,
-}
-
-/// Files 类型条目里的单条文件/目录元信息，由命令层组装后返回前端。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileEntry {
-    pub path: String,
-    pub name: String,
-    pub is_dir: bool,
-    pub is_image: bool,
-    /// 命令层组装时实时检测：路径是否仍存在于磁盘，前端据此对失效条目划删除线并回退预览。
-    pub exists: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub icon_path: Option<String>,
-}
-
-/// Files 卡片的渲染模式（命令层计算后塞给前端）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum FilesPreviewKind {
-    /// 单文件且为图片，直接渲染图片预览。
-    ImagePreview,
-    /// 多文件或非图片，渲染图标 + 文件名列表。
-    List,
 }
 
 /// 剪贴板来源应用（macOS bundle id / Windows exe 路径作主键），
@@ -275,16 +172,4 @@ impl Default for ClipboardItemQuery {
             offset: 0,
         }
     }
-}
-
-/// 列表查询的一页结果：项 + 当前过滤下的总数 + 是否还有下一页。
-/// `total` 让 Footer 等 UI 无需再单独 IPC `count_clipboard_items`，
-/// `has_more` 由 Rust 用 `offset + list.len() < total` 精确计算，
-/// 避免前端用 `len == page_size` 近似（恰好整除时多一次空请求）。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClipboardItemPage {
-    pub list: Vec<ClipboardItem>,
-    pub total: i64,
-    pub has_more: bool,
 }

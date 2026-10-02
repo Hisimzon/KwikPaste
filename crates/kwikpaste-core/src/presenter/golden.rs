@@ -17,10 +17,11 @@ use super::{build_preview_payload, present_list_item, ListContext};
 use crate::clipboard::{AppIconStore, FileIconStore, ImageStore};
 use crate::db::items::{content_hash, find_item_by_id, find_item_for_list_by_id, insert_item};
 use crate::db::models::{
-    ClipboardApp, ClipboardGroup, ClipboardItem, ClipboardItemPage, ClipboardItemQuery,
-    ClipboardKind, ClipboardSubKind, Platform,
+    ClipboardApp, ClipboardGroup, ClipboardItem, ClipboardItemQuery, ClipboardKind,
+    ClipboardSubKind, Platform,
 };
 use crate::db::test_support::memory_pool;
+use crate::presenter::ClipboardItemPage;
 use crate::settings::Clipboard;
 
 struct Scene {
@@ -320,12 +321,13 @@ impl Scene {
             limit: 50,
             ..ClipboardItemQuery::default()
         };
-        let (mut items, total) = crate::db::items::query_items_page(&self.pool, &query)
+        let (rows, total) = crate::db::items::query_items_page(&self.pool, &query)
             .await
             .unwrap();
         let ctx = self.context(clipboard);
-        for item in &mut items {
-            present_list_item(&ctx, item).await.unwrap();
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            items.push(present_list_item(&ctx, row).await.unwrap());
         }
         let has_more = query.offset + (items.len() as i64) < total;
 
@@ -339,14 +341,14 @@ impl Scene {
 
     /// 与 1.4.0 `get_clipboard_item` 相同：按 id 取列表视图并加工。
     async fn list_item(&self, id: &str, clipboard: &Clipboard) -> Value {
-        let mut item = find_item_for_list_by_id(&self.pool, id)
+        let item = find_item_for_list_by_id(&self.pool, id)
             .await
             .unwrap()
             .unwrap();
-        present_list_item(&self.context(clipboard), &mut item)
+        let view = present_list_item(&self.context(clipboard), item)
             .await
             .unwrap();
-        serde_json::to_value(item).unwrap()
+        serde_json::to_value(view).unwrap()
     }
 
     /// 与 1.4.0 `get_clipboard_preview_payload` 相同，按 id 汇总成一个对象。
