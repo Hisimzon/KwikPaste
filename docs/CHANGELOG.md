@@ -2,6 +2,14 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 1.4.0 - 2026-10-02
+
+- Added Export to files in Preference › Data › Backup & Migration. It exports records to Excel or Markdown for reading, sorting and sharing. You can export only favorites or chosen groups, as one file or one file per group; sensitive records are left out by default. Exported files are not encrypted and cannot restore your data, so keep using Export Backup for full backups.
+- Added in-app announcements. When KwikPaste has important news, such as a new release, it shows a system dialog during the update check, at most once a day. Choose Don't remind me to hide that announcement for good. With Automatically Check for Updates turned off, KwikPaste no longer fetches announcements at launch.
+- New installs now start with Space Preview off and Text Preview Style set to Words. Existing settings stay as they are.
+- Fixed a single copy occasionally creating two identical records.
+- Fixed the clipboard window on Windows sometimes appearing behind other always-on-top windows.
+
 ## 1.3.8 - 2026-09-29
 
 - Added multi-select. Click Select multiple at the bottom of the clipboard window, or choose Select Multiple from a record's context menu, to pick several records and delete them at once. Click to select, hold Shift to select a range, and press Ctrl+A (⌘A on macOS) to select all. Favorite and pinned records still follow the delete protection settings.
