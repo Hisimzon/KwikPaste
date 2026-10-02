@@ -1,4 +1,5 @@
-//! 主窗口的剪贴板列表（附录 D §3.2 的 ListView）：`list(ListState)`、稀疏分页、置顶块、页脚。
+//! 主窗口的剪贴板列表（附录 D §3.2 的 ListView）：`list(ListState)`、稀疏分页、置顶块、页脚，
+//! 以及卡片上的悬停快捷动作、数字角标、多选（见 [`ops`]、[`selecting`]、[`parts`]）。
 //!
 //! 落实 r2-02 的硬约束：
 //! - L1 面板已设 `inactive_frame_interval: None`（平台层），这里不放常驻动画；
@@ -10,6 +11,10 @@
 //! - L6 图片行按载荷宽高预测显式尺寸；
 //! - L7 剪贴板图片一律经 [`KpImageCache`]。
 
+mod ops;
+mod parts;
+mod selecting;
+
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
@@ -20,38 +25,39 @@ use std::{
 
 use chrono::{DateTime, Local};
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, Context, DispatchPhase, Entity,
+    AnyElement, AnyWindowHandle, App, AppContext as _, ClickEvent, Context, DispatchPhase, Entity,
     EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, ListAlignment, ListOffset,
-    ListState, MouseButton, ParentElement as _, Pixels, Render, ScrollDelta, ScrollWheelEvent,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, div, list,
-    prelude::FluentBuilder as _, px,
+    ListState, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render, ScrollDelta,
+    ScrollWheelEvent, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window,
+    canvas, div, list, prelude::FluentBuilder as _, px,
 };
-use kwikpaste_ui::{
-    Icon, IconName, KpStyled as _, ListScrollbar,
-    theme::{self, TextSize},
+use kwikpaste_core::{
+    CoreEvent,
+    settings::{AutoPaste, MiddleClickAction, Settings},
 };
+use kwikpaste_ui::{ListScrollbar, TextAreaInput, close_dialog, theme};
 
 use super::{
-    Dismiss, PasteSelected, PasteSelectedPlain, SelectNext, SelectPrevious,
     bench::Bench,
     card::{self, CardEnv, CardState, Visual, dp},
+    editing::{self, EditTarget},
     frame::{FrameTimer, FrameTiming, ListFrame, PaintedCallback, Snapshot, WidthHint},
     image_cache::{ImageKey, ImageState, KpImageCache, path_of},
 };
-use kwikpaste_core::CoreEvent;
 
 use crate::{
     clipboard::{
         model::{
+            actions::{DeletePolicy, QuickAction, visible_actions},
             controller::{ListController, ListUpdate, Nav, NavOutcome, UpdateAction},
             item::ListItem,
             layout::LayoutSpec,
             list_model::{Applied, FetchRequest, ListModel},
+            selection::Selection,
         },
-        source::{ClipboardSource, ListQuery, core_source::item_kind},
+        source::{ClipboardSource, Group, ListQuery, core_source::item_kind},
     },
-    i18n::{t, t_count},
-    platform::{self, CoreEvents, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource},
+    platform::{CoreEvents, Panel, PanelEvent},
 };
 
 /// 列表上下各多排版的距离（px）。
@@ -66,10 +72,19 @@ const MAX_HEIGHT_SAMPLES: u64 = 5000;
 /// 缩略图路径缓存的上限（1.x `useImageThumbnail` 的 512）。
 const THUMBNAIL_PATHS_MAX: usize = 512;
 
-/// 列表发给外面的意图。粘贴要由 core 和平台层完成（U2 接线），这里只发事件。
+/// 列表发给外面的意图：宿主还没接上的动作只发事件（粘贴链路在平台线，拆词面板与快捷键列表在
+/// U2 第二部分）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListIntent {
     Paste { id: Arc<str>, plain: bool },
+    SplitWords { id: Arc<str> },
+    ShowShortcuts,
+}
+
+/// 正在编辑的备注。
+struct NoteEdit {
+    id: Arc<str>,
+    input: TextAreaInput,
 }
 
 /// 没有缩略图的图片记录：向数据源要缩略图的进度。
@@ -164,10 +179,33 @@ pub struct ClipboardList {
     now: DateTime<Local>,
     /// 自测时忽略系统的“减少动画”（`KP_FORCE_MOTION=1`）。
     force_motion: bool,
+    /// 快捷动作、删除保护、点击行为等用到的设置（core 设置变化时更新）。
+    settings: Settings,
+    /// 按设置算好的删除保护（每行都要看）。
+    delete_policy: DeletePolicy,
+    /// 自定义分组（空态文案取分组名）。
+    groups: Vec<Group>,
+    selection: Selection,
+    /// 指针所在的卡片：显示快捷动作、备注原文。
+    pub(super) hovered: Option<Arc<str>>,
+    /// 按住修饰键：显示数字角标。
+    pub(super) key_hints: bool,
+    /// 刚复制成功的快捷动作按钮，1 秒后复原。
+    copied: Option<(Arc<str>, QuickAction)>,
+    copied_reset: Option<Task<()>>,
+    /// 批量删除后第一页落地时再补拉视图范围。
+    refetch_view_after_first_page: bool,
+    note: Option<NoteEdit>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<ListIntent> for ClipboardList {}
+
+impl gpui::Focusable for ClipboardList {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
 
 impl ClipboardList {
     pub fn new(
@@ -187,6 +225,7 @@ impl ClipboardList {
             ));
         }
 
+        let settings = source.settings();
         let mut list = Self {
             source,
             model: ListModel::new(),
@@ -212,6 +251,16 @@ impl ClipboardList {
             now: Local::now(),
             force_motion: crate::selftest::active()
                 && std::env::var_os("KP_FORCE_MOTION").is_some_and(|value| value == "1"),
+            delete_policy: DeletePolicy::from_settings(&settings.clipboard.content),
+            settings,
+            groups: Vec::new(),
+            selection: Selection::default(),
+            hovered: None,
+            key_hints: false,
+            copied: None,
+            copied_reset: None,
+            refetch_view_after_first_page: false,
+            note: None,
             _subscriptions: subscriptions,
         };
         let request = list.model.reset_and_reload();
@@ -220,10 +269,14 @@ impl ClipboardList {
         list
     }
 
-    /// 跟随 core 的记录事件刷新（新记录、清理、导入备份或切换存储位置）。
+    /// 跟随 core 的记录事件刷新（新记录、清理、导入备份或切换存储位置）和设置变化。
     pub fn follow_core_events(&mut self, events: &Entity<CoreEvents>, cx: &mut Context<Self>) {
         let subscription = cx.subscribe(events, |list, _, event: &CoreEvent, cx| {
             let update = match event {
+                CoreEvent::SettingsUpdated { settings, .. } => {
+                    list.apply_settings((**settings).clone(), cx);
+                    return;
+                }
                 CoreEvent::ClipboardUpserted {
                     kind, deduplicated, ..
                 } => ListUpdate::Upserted {
@@ -262,6 +315,15 @@ impl ClipboardList {
             .controller
             .on_update(update, self.visible, self.at_top());
         log::debug!("list update {update:?} -> {action:?}");
+        let reset_selection = match action {
+            UpdateAction::ReloadNow { reset_selection }
+            | UpdateAction::Defer { reset_selection } => reset_selection,
+            UpdateAction::Ignore => false,
+        };
+        if reset_selection {
+            // 清理、导入之后不再勾着可能已经不存在的记录（1.x `resetChecked`）。
+            self.selection.reset();
+        }
         if let UpdateAction::ReloadNow { .. } = action {
             self.reload(cx);
         }
@@ -286,12 +348,30 @@ impl ClipboardList {
                 window.focus(&self.focus, cx);
                 cx.notify();
             }
-            PanelEvent::EditingEnded => window.focus(&self.focus, cx),
-            PanelEvent::EditingStarted | PanelEvent::EditingRefused => {}
+            PanelEvent::EditingEnded => {
+                if self.note.is_none() {
+                    window.focus(&self.focus, cx);
+                }
+            }
+            // 备注框要的编辑态：拿到前台后聚焦输入框；没拿到也聚焦，Esc 仍能关掉备注框。
+            PanelEvent::EditingStarted | PanelEvent::EditingRefused => {
+                if editing::target(cx) == Some(EditTarget::Note)
+                    && let Some(note) = &self.note
+                {
+                    note.input.focus(window, cx);
+                }
+            }
             PanelEvent::Hidden => {
                 self.visible = false;
                 self.motion.reveal = None;
                 self.motion.wheel = 0.;
+                self.hovered = None;
+                // 隐藏时退出多选（1.x `exitClipboardSelection`），收起备注框（当作取消）。
+                self.selection.exit();
+                if self.note.is_some() {
+                    close_dialog(window, cx);
+                    self.finish_note(false, window, cx);
+                }
                 // 隐藏即释放（附录 B §5.3）：缩略图位图全部还给图集，行缓存只留第一页。
                 self.images.update(cx, |images, cx| images.clear(None, cx));
                 self.model.release_rows();
@@ -309,6 +389,8 @@ impl ClipboardList {
         let future = self.source.list(ListQuery {
             offset: request.range.start,
             limit: request.range.len(),
+            filter: self.controller.filter().clone(),
+            sort: self.settings.clipboard.content.sort,
         });
 
         cx.spawn(async move |this, cx| {
@@ -329,6 +411,13 @@ impl ClipboardList {
             Ok(page) => {
                 if let Some(applied) = self.model.apply(&request, page) {
                     self.sync_rows(Some(&applied));
+                    if request.replace
+                        && request.range.start == 0
+                        && std::mem::take(&mut self.refetch_view_after_first_page)
+                        && let Some(request) = self.model.refetch_view()
+                    {
+                        self.fetch(request, cx);
+                    }
                 }
             }
             Err(err) => {
@@ -414,9 +503,30 @@ impl ClipboardList {
         self.fetch(request, cx);
     }
 
-    /// 删除一条后同步（单条删除、在收藏里取消收藏、移出当前分组）。U1 只有自测在用，U2 的删除命令接这里。
+    /// 查询条件变了：清空行表、回到顶部、显示加载态后拉第一页（1.x `resetAndReload`）。
+    fn reload_from_scratch(&mut self, cx: &mut Context<Self>) {
+        self.state.reset(0);
+        self.state.scroll_to(ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
+        self.rows = Rows::default();
+        self.motion.reveal = None;
+        self.motion.wheel = 0.;
+        self.hints.dirty = true;
+        self.heights.sampled.clear();
+        let request = self.model.reset_and_reload();
+        self.fetch(request, cx);
+        cx.notify();
+    }
+
+    /// 删除一条后同步（单条删除、在收藏里取消收藏、移出当前分组）。
     pub(super) fn remove_item(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
         self.controller.select_after_delete(&self.model, id);
+        self.selection.forget(id);
+        if self.hovered.as_deref() == Some(id) {
+            self.hovered = None;
+        }
         let Some(removed) = self.model.remove_by_id(id) else {
             return false;
         };
@@ -630,44 +740,94 @@ impl ClipboardList {
         cx.notify();
     }
 
-    fn select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
+    /// ↑ / ↓（主窗口的按键转来）。
+    pub fn select_previous(&mut self, cx: &mut Context<Self>) {
         self.navigate(Nav::Up, cx);
     }
 
-    fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn select_next(&mut self, cx: &mut Context<Self>) {
         self.navigate(Nav::Down, cx);
     }
 
-    fn paste_selected(&mut self, _: &PasteSelected, _: &mut Window, cx: &mut Context<Self>) {
-        self.request_paste(false, cx);
+    /// 指针进出卡片：进入时它成为当前项（1.x hover 与键盘共用选中），并显示快捷动作。
+    fn hover_card(&mut self, id: &Arc<str>, hovered: bool, cx: &mut Context<Self>) {
+        if hovered {
+            self.controller.hover(id);
+            self.hovered = Some(id.clone());
+        } else if self.hovered.as_ref() == Some(id) {
+            self.hovered = None;
+        }
+        cx.notify();
     }
 
-    fn paste_selected_plain(
+    /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选；否则左键选中并按
+    /// “单击粘贴 / 复制”设置执行，中键按中键设置执行。
+    fn press_card(
         &mut self,
-        _: &PasteSelectedPlain,
-        _: &mut Window,
+        item: Arc<ListItem>,
+        event: &MouseDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_paste(true, cx);
-    }
-
-    fn request_paste(&mut self, plain: bool, cx: &mut Context<Self>) {
-        let Some(item) = self.controller.active_item(&self.model) else {
+        window.focus(&self.focus, cx);
+        if self.selection.active() {
+            if event.button == MouseButton::Left {
+                self.controller.select(&item.id);
+                if event.modifiers.shift {
+                    self.check_range(item, window, cx);
+                } else {
+                    self.toggle_checked(&item, window, cx);
+                }
+            }
             return;
-        };
+        }
+
         let id = item.id.clone();
-        log::info!("paste requested for {id} (plain: {plain})");
-        cx.emit(ListIntent::Paste { id, plain });
+        match event.button {
+            MouseButton::Left => {
+                self.controller.select(&id);
+                match self.settings.clipboard.content.auto_paste {
+                    AutoPaste::SingleClickPaste => self.paste_item(id, false, cx),
+                    AutoPaste::SingleClickCopy => self.copy(id, false, None, window, cx),
+                    _ => {}
+                }
+            }
+            MouseButton::Middle => {
+                let action = self.settings.clipboard.content.middle_click;
+                if action != MiddleClickAction::Disabled {
+                    self.controller.select(&id);
+                }
+                match action {
+                    MiddleClickAction::SingleClickPaste => self.paste_item(id, false, cx),
+                    MiddleClickAction::SingleClickPastePlain => self.paste_item(id, true, cx),
+                    MiddleClickAction::SingleClickCopy => self.copy(id, false, None, window, cx),
+                    MiddleClickAction::SingleClickCopyPlain => {
+                        self.copy(id, true, None, window, cx)
+                    }
+                    MiddleClickAction::Disabled => {}
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
-    /// Esc：U1 只有最后一层“隐藏窗口”（预览、多选、分组、类别几层在 U2 加上）。
-    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        platform::request(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Ui)));
-    }
+    /// 双击卡片（1.x `handleCardDoubleClick`）：按“双击粘贴 / 复制”设置执行；多选时不响应。
+    fn double_click_card(
+        &mut self,
+        item: Arc<ListItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selection.active() {
+            return;
+        }
 
-    fn hover_item(&mut self, id: &Arc<str>, cx: &mut Context<Self>) {
-        if self.controller.hover(id) {
-            cx.notify();
+        let id = item.id.clone();
+        match self.settings.clipboard.content.auto_paste {
+            AutoPaste::DoubleClickPaste => self.paste_item(id, false, cx),
+            AutoPaste::DoubleClickCopy => self.copy(id, false, None, window, cx),
+            _ => {}
         }
     }
 
@@ -764,26 +924,63 @@ impl ClipboardList {
         };
         let image = self.visual(&item, window, cx);
         let active = self.controller.is_active(index, &item.id);
+        let selecting = self.selection.active();
+        let hovered = self.hovered.as_ref() == Some(&item.id);
+        let can_delete = self.can_delete(item.is_favorite, item.is_pinned);
+        let hint = self
+            .key_hints
+            .then(|| self.controller.hint_key(index, self.rows.pinned, selecting))
+            .flatten();
+        let actions = (hovered && !selecting)
+            .then(|| {
+                visible_actions(
+                    &self.settings.clipboard.content.item_actions,
+                    &item,
+                    can_delete,
+                )
+            })
+            .filter(|actions| !actions.is_empty())
+            .map(|actions| self.quick_actions(&item, actions, cx));
+        let checkbox = selecting.then(|| self.checkbox(&item, can_delete));
+        let state = CardState {
+            active,
+            image,
+            show_original: hovered && self.settings.clipboard.content.show_original_preview,
+            hint,
+            checked: selecting && self.selection.is_checked(&item.id),
+            actions,
+            checkbox,
+        };
         let id = item.id.clone();
-        let paste_id = item.id.clone();
+        let pressed = item.clone();
+        let clicked = item.clone();
+        let middle = self.settings.clipboard.content.middle_click != MiddleClickAction::Disabled
+            || selecting;
 
-        card::card(env, &item, index, CardState { active, image })
+        card::card(env, &item, index, state)
             .on_hover(cx.listener(move |list, hovered: &bool, _, cx| {
-                if *hovered {
-                    list.hover_item(&id, cx);
-                }
+                list.hover_card(&id, *hovered, cx);
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|list, _, window, cx| {
-                    window.focus(&list.focus.clone(), cx);
+                cx.listener({
+                    let pressed = pressed.clone();
+                    move |list, event: &MouseDownEvent, window, cx| {
+                        list.press_card(pressed.clone(), event, window, cx);
+                    }
                 }),
             )
-            .on_click(cx.listener(move |list, event: &gpui::ClickEvent, _, cx| {
-                // 1.x 默认 `autoPaste = doubleClickPaste`：单击只选中，双击粘贴。
+            .when(middle, |card| {
+                card.on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |list, event: &MouseDownEvent, window, cx| {
+                        list.press_card(pressed.clone(), event, window, cx);
+                    }),
+                )
+            })
+            .on_click(cx.listener(move |list, event: &ClickEvent, window, cx| {
                 if event.click_count() >= 2 {
-                    list.controller.hover(&paste_id);
-                    list.request_paste(false, cx);
+                    list.double_click_card(clicked.clone(), window, cx);
                 }
             }))
             .into_any_element()
@@ -816,46 +1013,6 @@ impl ClipboardList {
             timing.placeholders_rendered += u32::from(placeholder);
         }
         element
-    }
-
-    fn render_empty(&self, cx: &App) -> AnyElement {
-        let tokens = theme::tokens(cx);
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .items_center()
-            .justify_center()
-            .gap(dp(8.))
-            .child(
-                Icon::new(IconName::Inbox)
-                    .size(dp(40.))
-                    .color(tokens.quaternary),
-            )
-            .child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .text_color(tokens.description)
-                    .child(t("clipboard:empty.history")),
-            )
-            .into_any_element()
-    }
-
-    fn render_footer(&self, cx: &App) -> AnyElement {
-        let tokens = theme::tokens(cx);
-        let total = i64::try_from(self.model.total()).unwrap_or(i64::MAX);
-
-        div()
-            .flex()
-            .flex_none()
-            .h(dp(32.))
-            .items_center()
-            .px(dp(12.))
-            .kp_text(TextSize::Xs)
-            .text_color(tokens.tertiary)
-            .child(t_count("clipboard:footer.total", total, &[]))
-            .into_any_element()
     }
 }
 
@@ -963,13 +1120,7 @@ impl Render for ClipboardList {
 
         let root = div()
             .id("clipboard-list")
-            .key_context("ClipboardList")
             .track_focus(&self.focus)
-            .on_action(cx.listener(Self::select_previous))
-            .on_action(cx.listener(Self::select_next))
-            .on_action(cx.listener(Self::paste_selected))
-            .on_action(cx.listener(Self::paste_selected_plain))
-            .on_action(cx.listener(Self::dismiss))
             .flex()
             .flex_col()
             .size_full()

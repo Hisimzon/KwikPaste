@@ -1,9 +1,11 @@
 //! 列表的数据接口（适配层）。视图只认 [`ClipboardSource`]；数据来自哪里由这里的实现决定：
 //!
-//! - [`core_source::CoreSource`]：真正的 core（`Core::list_items` / `Core::ensure_thumbnail`），把展示层的
+//! - [`core_source::CoreSource`]：真正的 core（`Core::list_items`、CS2 的记录与分组操作），把展示层的
 //!   `ClipboardItemView` 转成列表的 `ListItem`；
-//! - [`FixtureSource`]：合成夹具（JSON 或生成器），不碰任何真实数据库，供自测、跑分和 core
-//!   接进入口之前的默认启动使用。
+//! - [`FixtureSource`]：合成夹具（JSON 或生成器），不碰任何真实数据库，供自测和跑分使用。
+//!
+//! core 的记录操作不发事件（附录 D §3.3）：调用方按返回值就地改列表。分组的增删改由 core 发
+//! `GroupsUpdated`，夹具没有事件，分组栏在操作成功后自己重读。
 
 pub mod core_source;
 mod fixture;
@@ -12,16 +14,38 @@ pub mod synthetic;
 use std::{path::PathBuf, sync::Arc};
 
 use futures::future::BoxFuture;
+use kwikpaste_core::{db::models::ClipboardItemSort, settings::Settings};
 
 pub use self::core_source::start_selftest_core;
 pub use self::fixture::{FixtureSource, FixtureStore};
-use super::model::list_model::Page;
+use super::model::{actions::OpenTarget, filter::ListFilter, item::ItemRef, list_model::Page};
 
-/// 一次列表查询。U1 只分页；分组栏、搜索、排序（U2）在这里加过滤字段，[`core_source::CoreSource`] 负责映射。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 一次列表查询：分页加上当前视图的筛选条件和排序（core `ClipboardItemQuery`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListQuery {
     pub offset: usize,
     pub limit: usize,
+    pub filter: ListFilter,
+    pub sort: ClipboardItemSort,
+}
+
+/// 一个自定义分组（core `ClipboardGroup`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Group {
+    pub id: Arc<str>,
+    pub name: Arc<str>,
+    /// 预设图标的类名（`i-lets-icons:folder`）或自定义 SVG 源码。
+    pub icon: Arc<str>,
+    pub is_hidden: bool,
+}
+
+/// 备注保存的结果（core `UpdateNoteResult`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoteSaved {
+    /// 归一化后的备注：去掉首尾空白，空串为 `None`。
+    pub note: Option<Arc<str>>,
+    /// 设置了“备注自动收藏”，这条顺带收藏了。
+    pub auto_favorited: bool,
 }
 
 /// 列表的数据来源。实现必须能在任意线程上被调用，返回的 future 在 UI 线程上 await。
@@ -32,4 +56,46 @@ pub trait ClipboardSource: Send + Sync + 'static {
     /// 确保图片记录的缩略图存在并返回路径（1.x `get_clipboard_image_path(fileName, thumbnail: true)`）。
     /// 列表载荷只带已生成的缩略图，没有时卡片先画骨架再调这里。
     fn thumbnail(&self, file_name: Arc<str>) -> BoxFuture<'static, anyhow::Result<PathBuf>>;
+
+    /// 当前设置（快捷动作、删除保护、点击行为、搜索框和打开窗口时的偏好）。之后的变化走 core 事件。
+    fn settings(&self) -> Settings;
+
+    /// 全部自定义分组，按排序。
+    fn groups(&self) -> BoxFuture<'static, anyhow::Result<Vec<Group>>>;
+
+    /// 当前视图全部记录的 id 与保护标记（多选全选、跨页连选）。
+    fn item_refs(&self, query: ListQuery) -> BoxFuture<'static, anyhow::Result<Vec<ItemRef>>>;
+
+    /// 写回剪贴板（不粘贴）。返回设置是否要求随后隐藏窗口。
+    fn copy(&self, id: Arc<str>, plain: bool) -> BoxFuture<'static, anyhow::Result<bool>>;
+
+    /// 翻转收藏，返回新状态。
+    fn toggle_favorite(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>>;
+
+    /// 翻转置顶，返回新状态。
+    fn toggle_pinned(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>>;
+
+    fn update_note(
+        &self,
+        id: Arc<str>,
+        note: Option<String>,
+    ) -> BoxFuture<'static, anyhow::Result<NoteSaved>>;
+
+    fn delete(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>>;
+
+    /// 批量删除，返回实际删除条数。
+    fn delete_many(&self, ids: Vec<Arc<str>>) -> BoxFuture<'static, anyhow::Result<u64>>;
+
+    /// “打开”的目标：链接、`mailto:` 地址或要在文件管理器里定位的路径；内容为空时为 `None`。
+    fn open_target(
+        &self,
+        id: Arc<str>,
+        target: OpenTarget,
+    ) -> BoxFuture<'static, anyhow::Result<Option<String>>>;
+
+    /// 在分组栏隐藏一个分组（名称、图标不变）。
+    fn hide_group(&self, group: Group) -> BoxFuture<'static, anyhow::Result<()>>;
+
+    /// 删除分组，组内记录回到未分组。
+    fn delete_group(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>>;
 }

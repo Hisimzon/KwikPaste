@@ -89,7 +89,10 @@ impl ListModel {
         self.loaded_initial
     }
 
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
+    #[allow(
+        dead_code,
+        reason = "1.x 的同名逻辑，加载态与预览接进来之前只有单测在用"
+    )]
     pub fn is_loading(&self) -> bool {
         !self.loading.is_empty()
     }
@@ -98,7 +101,10 @@ impl ListModel {
         self.items.len()
     }
 
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
+    #[allow(
+        dead_code,
+        reason = "1.x 的同名逻辑，加载态与预览接进来之前只有单测在用"
+    )]
     pub fn view(&self) -> Range<usize> {
         self.view.clone()
     }
@@ -161,7 +167,6 @@ impl ListModel {
         self.first_page()
     }
 
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
     /// 清空缓存后重拉视图 ± 预取范围（置顶切换、显示设置变化后，1.x `reloadCurrentRange`）。
     pub fn reload_current_range(&mut self) -> Option<FetchRequest> {
         self.bump_token();
@@ -176,7 +181,6 @@ impl ListModel {
         )
     }
 
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
     /// 批量删除后刷新的第一步：用第一页替换整份缓存（1.x `refreshAfterRemoval`）。
     /// 第一页落地后再调用 [`Self::refetch_view`] 补视图范围。
     pub fn refresh_after_removal(&mut self) -> FetchRequest {

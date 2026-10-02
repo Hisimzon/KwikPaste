@@ -1,7 +1,8 @@
-//! 夹具数据源：内存里的一份有序列表，按 core 的分页语义切页。
+//! 夹具数据源：内存里的一份有序列表和几个分组，按 core 的分页与筛选语义切页，记录操作就地改这份数据。
 //!
 //! 数据来自 JSON（`ClipboardItemPage` 形状，即 1.4.0 / core `list_items` 的输出）或合成生成器。
-//! 可选的延迟模拟 core 查询耗时：在独立线程上睡眠后返回，不阻塞 UI。
+//! 可选的延迟模拟 core 查询耗时：在独立线程上睡眠后返回，不阻塞 UI。排序只有夹具本身的顺序
+//! （相当于 core 的默认排序），查询里的排序字段不起作用。
 
 use std::{
     path::{Path, PathBuf},
@@ -13,8 +14,15 @@ use anyhow::Context as _;
 use futures::{FutureExt as _, future::BoxFuture};
 use serde::Deserialize;
 
-use super::{ClipboardSource, ListQuery, synthetic::AssetSet};
-use crate::clipboard::model::{item::ListItem, list_model::Page};
+use kwikpaste_core::settings::Settings;
+
+use super::{ClipboardSource, Group, ListQuery, NoteSaved, synthetic::AssetSet};
+use crate::clipboard::model::{
+    actions::OpenTarget,
+    filter::ListFilter,
+    item::{ItemRef, ListItem},
+    list_model::Page,
+};
 
 /// JSON 夹具里资源路径的占位前缀，加载时换成合成资源目录。
 pub const ASSETS_PLACEHOLDER: &str = "{assets}";
@@ -24,15 +32,32 @@ struct PageJson {
     list: Vec<ListItem>,
 }
 
-/// 夹具的“数据库”：一份按列表顺序排好的记录（置顶在前）。
+/// 夹具的“数据库”：一份按列表顺序排好的记录（置顶在前）和自定义分组。
 #[derive(Debug, Default)]
 pub struct FixtureStore {
     items: Vec<Arc<ListItem>>,
+    groups: Vec<Group>,
 }
 
 impl FixtureStore {
     pub fn new(items: Vec<Arc<ListItem>>) -> Self {
-        Self { items }
+        Self {
+            items,
+            groups: Vec::new(),
+        }
+    }
+
+    /// 加上自定义分组；`members` 是要放进各分组的记录下标（按夹具顺序）。
+    pub fn with_groups(mut self, groups: Vec<(Group, Vec<usize>)>) -> Self {
+        for (group, members) in groups {
+            for index in members {
+                if let Some(item) = self.items.get_mut(index) {
+                    Arc::make_mut(item).group_id = Some(group.id.clone());
+                }
+            }
+            self.groups.push(group);
+        }
+        self
     }
 
     /// 解析 `ClipboardItemPage` 形状的 JSON；字符串里的 `{assets}` 换成 `assets_dir`。
@@ -49,17 +74,47 @@ impl FixtureStore {
         self.items.len()
     }
 
-    pub fn page(&self, query: ListQuery) -> Page {
+    pub fn page(&self, query: &ListQuery) -> Page {
+        // 不筛选时直接切片：跑分的 1 万行每页都走这里。
+        if query.filter == ListFilter::default() {
+            return Page {
+                items: self
+                    .items
+                    .iter()
+                    .skip(query.offset)
+                    .take(query.limit)
+                    .cloned()
+                    .collect(),
+                total: self.items.len(),
+            };
+        }
+
+        let matching: Vec<&Arc<ListItem>> = self
+            .items
+            .iter()
+            .filter(|item| query.filter.matches(item))
+            .collect();
         Page {
-            items: self
-                .items
-                .iter()
+            total: matching.len(),
+            items: matching
+                .into_iter()
                 .skip(query.offset)
                 .take(query.limit)
                 .cloned()
                 .collect(),
-            total: self.items.len(),
         }
+    }
+
+    pub fn refs(&self, filter: &ListFilter) -> Vec<ItemRef> {
+        self.items
+            .iter()
+            .filter(|item| filter.matches(item))
+            .map(|item| ItemRef::of(item))
+            .collect()
+    }
+
+    pub fn groups(&self) -> Vec<Group> {
+        self.groups.clone()
     }
 
     #[cfg(test)]
@@ -82,7 +137,6 @@ impl FixtureStore {
         Some(self.items.remove(index))
     }
 
-    #[allow(dead_code, reason = "置顶命令（U2）接线前只有单测在用")]
     /// 切换置顶：置顶的移到置顶块末尾，取消置顶的放回置顶块之后。
     pub fn set_pinned(&mut self, id: &str, pinned: bool) -> bool {
         let Some(item) = self.remove(id) else {
@@ -101,6 +155,29 @@ impl FixtureStore {
         };
         patch(Arc::make_mut(item));
         true
+    }
+
+    fn find(&self, id: &str) -> Option<&Arc<ListItem>> {
+        self.items.iter().find(|item| &*item.id == id)
+    }
+
+    fn hide_group(&mut self, id: &str) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| &*group.id == id) else {
+            return false;
+        };
+        group.is_hidden = true;
+        true
+    }
+
+    fn delete_group(&mut self, id: &str) -> bool {
+        let before = self.groups.len();
+        self.groups.retain(|group| &*group.id != id);
+        for item in &mut self.items {
+            if item.group_id.as_deref() == Some(id) {
+                Arc::make_mut(item).group_id = None;
+            }
+        }
+        self.groups.len() != before
     }
 }
 
@@ -131,6 +208,21 @@ impl FixtureSource {
         self.store.clone()
     }
 
+    /// 锁住数据做一件事（在 [`Self::respond`] 的工作线程上调用）。
+    fn with_store<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&mut FixtureStore) -> anyhow::Result<T> + Send + 'static,
+    ) -> BoxFuture<'static, anyhow::Result<T>> {
+        let store = self.store.clone();
+
+        self.respond(move || {
+            let mut store = store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("fixture store is poisoned"))?;
+            work(&mut store)
+        })
+    }
+
     /// 在后台线程上等 `latency` 再算结果；没有延迟时就地算好。
     fn respond<T: Send + 'static>(
         &self,
@@ -151,16 +243,14 @@ impl FixtureSource {
     }
 }
 
+/// 夹具里找不到记录时的错误（与 core 的“记录不存在”相当）。
+fn missing(id: &str) -> anyhow::Error {
+    anyhow::anyhow!("clipboard item not found: {id}")
+}
+
 impl ClipboardSource for FixtureSource {
     fn list(&self, query: ListQuery) -> BoxFuture<'static, anyhow::Result<Page>> {
-        let store = self.store.clone();
-
-        self.respond(move || {
-            let store = store
-                .lock()
-                .map_err(|_| anyhow::anyhow!("fixture store is poisoned"))?;
-            Ok(store.page(query))
-        })
+        self.with_store(move |store| Ok(store.page(&query)))
     }
 
     /// 合成缩略图都已在资源目录里；文件名以 `missing-` 开头的模拟生成失败。
@@ -172,6 +262,117 @@ impl ClipboardSource for FixtureSource {
                 anyhow::bail!("no thumbnail for {file_name}");
             }
             Ok(path)
+        })
+    }
+
+    fn settings(&self) -> Settings {
+        Settings::default()
+    }
+
+    fn groups(&self) -> BoxFuture<'static, anyhow::Result<Vec<Group>>> {
+        self.with_store(|store| Ok(store.groups()))
+    }
+
+    fn item_refs(&self, query: ListQuery) -> BoxFuture<'static, anyhow::Result<Vec<ItemRef>>> {
+        self.with_store(move |store| Ok(store.refs(&query.filter)))
+    }
+
+    /// 夹具不碰系统剪贴板：只确认记录存在，按默认设置不隐藏窗口。
+    fn copy(&self, id: Arc<str>, _plain: bool) -> BoxFuture<'static, anyhow::Result<bool>> {
+        self.with_store(move |store| {
+            store.find(&id).ok_or_else(|| missing(&id))?;
+            Ok(false)
+        })
+    }
+
+    fn toggle_favorite(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        self.with_store(move |store| {
+            let mut favorite = false;
+            if !store.patch(&id, |item| {
+                item.is_favorite = !item.is_favorite;
+                favorite = item.is_favorite;
+            }) {
+                return Err(missing(&id));
+            }
+            Ok(favorite)
+        })
+    }
+
+    fn toggle_pinned(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        self.with_store(move |store| {
+            let pinned = !store.find(&id).ok_or_else(|| missing(&id))?.is_pinned;
+            store.set_pinned(&id, pinned);
+            Ok(pinned)
+        })
+    }
+
+    fn update_note(
+        &self,
+        id: Arc<str>,
+        note: Option<String>,
+    ) -> BoxFuture<'static, anyhow::Result<NoteSaved>> {
+        self.with_store(move |store| {
+            let note: Option<Arc<str>> = note
+                .as_deref()
+                .map(str::trim)
+                .filter(|note| !note.is_empty())
+                .map(Arc::from);
+            let saved = note.clone();
+            if !store.patch(&id, |item| item.note = saved) {
+                return Err(missing(&id));
+            }
+            Ok(NoteSaved {
+                note,
+                auto_favorited: false,
+            })
+        })
+    }
+
+    fn delete(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>> {
+        self.with_store(move |store| {
+            store.remove(&id).ok_or_else(|| missing(&id))?;
+            Ok(())
+        })
+    }
+
+    fn delete_many(&self, ids: Vec<Arc<str>>) -> BoxFuture<'static, anyhow::Result<u64>> {
+        self.with_store(move |store| {
+            let removed = ids.iter().filter(|id| store.remove(id).is_some()).count();
+            Ok(removed as u64)
+        })
+    }
+
+    /// 链接取摘要（夹具的文本类记录摘要就是全文），文件取第一个路径。
+    fn open_target(
+        &self,
+        id: Arc<str>,
+        target: OpenTarget,
+    ) -> BoxFuture<'static, anyhow::Result<Option<String>>> {
+        self.with_store(move |store| {
+            let item = store.find(&id).ok_or_else(|| missing(&id))?;
+            Ok(match target {
+                OpenTarget::Link => item.summary.as_deref().map(str::to_owned),
+                OpenTarget::Email => item.summary.as_deref().map(|mail| format!("mailto:{mail}")),
+                OpenTarget::Reveal => item.file_rows().first().map(|row| row.path.to_string()),
+            })
+        })
+    }
+
+    fn hide_group(&self, group: Group) -> BoxFuture<'static, anyhow::Result<()>> {
+        self.with_store(move |store| {
+            if !store.hide_group(&group.id) {
+                anyhow::bail!("group not found: {}", group.id);
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_group(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>> {
+        self.with_store(move |store| {
+            if !store.delete_group(&id) {
+                anyhow::bail!("group not found: {id}");
+            }
+            Ok(())
         })
     }
 }
@@ -188,9 +389,11 @@ mod tests {
             .expect("sample fixture parses");
         assert!(store.len() >= 12);
 
-        let page = store.page(ListQuery {
+        let page = store.page(&ListQuery {
             offset: 0,
             limit: 100,
+            filter: ListFilter::default(),
+            sort: Default::default(),
         });
         assert_eq!(page.total, store.len());
         let icon = page
@@ -277,11 +480,96 @@ mod tests {
         let page = futures::executor::block_on(source.list(ListQuery {
             offset: 2,
             limit: 3,
+            filter: ListFilter::default(),
+            sort: Default::default(),
         }))
         .expect("page");
         assert_eq!(page.items.len(), 3);
 
         let missing = futures::executor::block_on(source.thumbnail(Arc::from("missing-1.png")));
         assert!(missing.is_err());
+    }
+
+    #[test]
+    fn filters_and_mutations_follow_core_semantics() {
+        use crate::clipboard::model::{filter::Range, item::ItemKind};
+
+        let store = FixtureStore::from_page_json(SAMPLE, Path::new("/tmp"))
+            .expect("parses")
+            .with_groups(vec![(
+                Group {
+                    id: "g1".into(),
+                    name: "工作".into(),
+                    icon: "i-lets-icons:book".into(),
+                    is_hidden: false,
+                },
+                vec![0, 2],
+            )]);
+        let total = store.len();
+        let assets = AssetSet {
+            root: PathBuf::from("/tmp"),
+            images: Vec::new(),
+            originals: Vec::new(),
+            app_icons: Vec::new(),
+            file_icons: Vec::new(),
+        };
+        let source = FixtureSource::new(store, &assets);
+        let list = |filter: ListFilter| {
+            futures::executor::block_on(source.list(ListQuery {
+                offset: 0,
+                limit: 100,
+                filter,
+                sort: Default::default(),
+            }))
+            .expect("page")
+        };
+
+        let grouped = list(ListFilter {
+            group_id: Some("g1".into()),
+            ..ListFilter::default()
+        });
+        assert_eq!(grouped.total, 2);
+
+        let images = list(ListFilter {
+            category: Some(ItemKind::Image),
+            ..ListFilter::default()
+        });
+        assert!(images.items.iter().all(|item| item.kind == ItemKind::Image));
+        assert!(images.total > 0 && images.total < total);
+
+        let first = list(ListFilter::default())
+            .items
+            .first()
+            .map(|item| item.id.clone())
+            .expect("a record");
+        let before = list(ListFilter {
+            range: Range::Favorite,
+            ..ListFilter::default()
+        })
+        .total;
+        let favorite =
+            futures::executor::block_on(source.toggle_favorite(first.clone())).expect("toggles");
+        let after = list(ListFilter {
+            range: Range::Favorite,
+            ..ListFilter::default()
+        })
+        .total;
+        assert_eq!(after, if favorite { before + 1 } else { before - 1 });
+
+        let removed =
+            futures::executor::block_on(source.delete_many(vec![first.clone(), "nope".into()]))
+                .expect("deletes");
+        assert_eq!(removed, 1);
+        assert_eq!(list(ListFilter::default()).total, total - 1);
+
+        futures::executor::block_on(source.delete_group("g1".into())).expect("deletes the group");
+        assert_eq!(
+            list(ListFilter {
+                group_id: Some("g1".into()),
+                ..ListFilter::default()
+            })
+            .total,
+            0
+        );
     }
 }

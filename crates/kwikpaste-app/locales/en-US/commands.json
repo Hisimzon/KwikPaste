@@ -1,16 +1,38 @@
 {
+  "batchDeleteConfirm": {
+    "content": "The {{count}} selected records cannot be restored after deletion. Delete them?",
+    "title": "Delete selected records"
+  },
   "deleteConfirm": {
     "content": "This item cannot be restored after deletion. Delete it?",
     "title": "Delete item"
   },
   "error": "{{label}} failed: {{message}}",
   "labels": {
+    "cancelFavorite": "Unfavorite",
     "copy": "Copy",
-    "delete": "Delete"
+    "delete": "Delete",
+    "deleteClipboardGroup": "Delete group",
+    "openLink": "Open link",
+    "pinItem": "Pin item",
+    "reveal": "Reveal location",
+    "saveClipboardGroup": "Save group",
+    "saveNote": "Save note",
+    "selectClipboardItems": "Select records",
+    "toggleFavorite": "Favorite",
+    "unpinItem": "Unpin item"
   },
   "messages": {
+    "clipboardGroupDeleted": "Group deleted",
+    "clipboardGroupSaved": "Group saved",
     "copied": "Copied",
     "deleted": "Deleted",
-    "itemsDeleted": "Deleted {{count}} records"
+    "favoriteAdded": "Added to favorites",
+    "favoriteRemoved": "Removed from favorites",
+    "itemPinned": "Pinned to top",
+    "itemsDeleted": "Deleted {{count}} records",
+    "itemUnpinned": "Unpinned from top",
+    "noteSaved": "Saved",
+    "noteSavedAndFavorited": "Saved and favorited"
   }
 }

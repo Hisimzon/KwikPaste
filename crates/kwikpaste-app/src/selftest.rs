@@ -52,6 +52,8 @@ pub const LIST_BENCH: &str = "--selftest-list-bench";
 pub const LIST_DEMO: &str = "--selftest-list-demo";
 /// 列表数据改由临时目录里的真 core 提供（灌入合成记录），可与 `--selftest-list-demo` 合用。
 pub const CORE_LIST: &str = "--selftest-core-list";
+/// 主窗口交互自测：示例夹具上按脚本派发按键、检查状态（见 `clipboard::view::selftest`），退出码表示结果。
+pub const PANEL_UI: &str = "--selftest-panel-ui";
 
 const SMOKE_DURATION: Duration = Duration::from_secs(3);
 /// 平台探针最长运行时间：测量脚本中途出错时不留下进程。
@@ -80,6 +82,7 @@ pub fn kind() -> Option<&'static str> {
         (LIST_BENCH, "list-bench"),
         (LIST_DEMO, "list-demo"),
         (CORE_LIST, "core-list"),
+        (PANEL_UI, "panel-ui"),
     ];
 
     Some(
@@ -126,9 +129,9 @@ pub fn gallery_requested() -> bool {
     enabled(GALLERY)
 }
 
-/// 是否是列表自测（跑分或演示）。
+/// 是否是列表自测（跑分、演示或主窗口交互自测）。
 pub fn list_selftest() -> bool {
-    enabled(LIST_BENCH) || enabled(LIST_DEMO)
+    enabled(LIST_BENCH) || enabled(LIST_DEMO) || enabled(PANEL_UI)
 }
 
 fn env_enabled() -> bool {
@@ -190,7 +193,7 @@ pub fn schedule(cx: &mut App) {
         })
         .detach();
     }
-    if enabled(LIST_DEMO)
+    if (enabled(LIST_DEMO) || enabled(PANEL_UI))
         && let Some(panel) = cx.try_global::<Panel>()
     {
         panel.request(PanelCommand::Show(Trigger::now(TriggerSource::Selftest)));

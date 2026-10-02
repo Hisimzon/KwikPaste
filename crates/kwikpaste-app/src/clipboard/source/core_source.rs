@@ -1,4 +1,5 @@
-//! 接 core 的适配器：`Core::list_items` 的 `ClipboardItemView` 转成列表的 [`ListItem`]。
+//! 接 core 的适配器：`Core::list_items` 的 `ClipboardItemView` 转成列表的 [`ListItem`]，筛选条件转成
+//! `ClipboardItemQuery`，记录与分组操作直接调 core 的 CS2 接口。
 //!
 //! core 的公开 async 方法自己跳到 core runtime 上执行，这里的 future 可以直接在 GPUI 的执行器里 await。
 
@@ -8,16 +9,23 @@ use futures::{FutureExt as _, future::BoxFuture};
 use kwikpaste_core::{
     AppEnv, AppInfo, Core, CoreEvent, CoreOptions, CorePaths, CoreRuntime,
     clipboard::{ClipboardPayload, ImagePayload, MemoryClipboard, TextPayload},
-    db::models::{ClipboardItemQuery, ClipboardKind, ClipboardSubKind, Platform as CorePlatform},
+    db::models::{
+        ClipboardGroup, ClipboardItemQuery, ClipboardKind, ClipboardSubKind,
+        Platform as CorePlatform,
+    },
+    ops::ClipboardGroupInput,
     presenter::{ClipboardAction, ClipboardItemView, FileEntry, FilesPreviewKind},
+    settings::Settings,
 };
 
 use super::{
-    ClipboardSource, ListQuery,
+    ClipboardSource, Group, ListQuery, NoteSaved,
     synthetic::{self, AssetSet, GenerateOptions},
 };
 use crate::clipboard::model::{
-    item::{FileRow, FilesPreview, ItemAction, ItemKind, ListItem, Platform, SubKind},
+    actions::OpenTarget,
+    filter::ListFilter,
+    item::{FileRow, FilesPreview, ItemAction, ItemKind, ItemRef, ListItem, Platform, SubKind},
     layout::ImageBox,
     list_model::Page,
 };
@@ -46,18 +54,46 @@ impl CoreSource {
     }
 }
 
+/// 列表的筛选条件转成 core 的查询（1.x `itemQuery`：`favorite`、`groupId`、`keyword`、`kind`、`sort`）。
+pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
+    let ListFilter {
+        range: _,
+        category,
+        group_id,
+        keyword,
+    } = &query.filter;
+
+    ClipboardItemQuery {
+        kind: category.map(|kind| match kind {
+            ItemKind::Text => ClipboardKind::Text,
+            ItemKind::Image => ClipboardKind::Image,
+            ItemKind::Files => ClipboardKind::Files,
+        }),
+        group_id: group_id.as_deref().map(str::to_owned),
+        favorite: query.filter.favorites().then_some(true),
+        keyword: (!keyword.is_empty()).then(|| keyword.to_string()),
+        sort: query.sort,
+        limit: i64::try_from(query.limit).unwrap_or(i64::MAX),
+        offset: i64::try_from(query.offset).unwrap_or(i64::MAX),
+        ..ClipboardItemQuery::default()
+    }
+}
+
+fn group(group: ClipboardGroup) -> Group {
+    Group {
+        id: shared(group.id),
+        name: shared(group.name),
+        icon: shared(group.icon),
+        is_hidden: group.is_hidden,
+    }
+}
+
 impl ClipboardSource for CoreSource {
     fn list(&self, query: ListQuery) -> BoxFuture<'static, anyhow::Result<Page>> {
         let core = self.core.clone();
 
         async move {
-            let page = core
-                .list_items(ClipboardItemQuery {
-                    limit: i64::try_from(query.limit).unwrap_or(i64::MAX),
-                    offset: i64::try_from(query.offset).unwrap_or(i64::MAX),
-                    ..ClipboardItemQuery::default()
-                })
-                .await?;
+            let page = core.list_items(item_query(&query)).await?;
 
             Ok(Page {
                 items: page
@@ -75,6 +111,118 @@ impl ClipboardSource for CoreSource {
         let core = self.core.clone();
 
         async move { Ok(core.ensure_thumbnail(&file_name).await?) }.boxed()
+    }
+
+    fn settings(&self) -> Settings {
+        self.core.settings()
+    }
+
+    fn groups(&self) -> BoxFuture<'static, anyhow::Result<Vec<Group>>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.list_groups().await?.into_iter().map(group).collect()) }.boxed()
+    }
+
+    fn item_refs(&self, query: ListQuery) -> BoxFuture<'static, anyhow::Result<Vec<ItemRef>>> {
+        let core = self.core.clone();
+
+        async move {
+            let refs = core.list_item_refs(item_query(&query)).await?;
+            Ok(refs
+                .into_iter()
+                .map(|item| ItemRef {
+                    id: shared(item.id),
+                    is_favorite: item.is_favorite,
+                    is_pinned: item.is_pinned,
+                })
+                .collect())
+        }
+        .boxed()
+    }
+
+    fn copy(&self, id: Arc<str>, plain: bool) -> BoxFuture<'static, anyhow::Result<bool>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.copy_item(&id, plain).await?.hide_window) }.boxed()
+    }
+
+    fn toggle_favorite(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.toggle_favorite(&id).await?) }.boxed()
+    }
+
+    fn toggle_pinned(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.toggle_pinned(&id).await?) }.boxed()
+    }
+
+    fn update_note(
+        &self,
+        id: Arc<str>,
+        note: Option<String>,
+    ) -> BoxFuture<'static, anyhow::Result<NoteSaved>> {
+        let core = self.core.clone();
+
+        async move {
+            let result = core.update_note(&id, note).await?;
+            Ok(NoteSaved {
+                note: result.note.map(shared),
+                auto_favorited: result.auto_favorited,
+            })
+        }
+        .boxed()
+    }
+
+    fn delete(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.delete_item(&id).await?) }.boxed()
+    }
+
+    fn delete_many(&self, ids: Vec<Arc<str>>) -> BoxFuture<'static, anyhow::Result<u64>> {
+        let core = self.core.clone();
+        let ids = ids.iter().map(|id| id.to_string()).collect();
+
+        async move { Ok(core.delete_items(ids).await?) }.boxed()
+    }
+
+    fn open_target(
+        &self,
+        id: Arc<str>,
+        target: OpenTarget,
+    ) -> BoxFuture<'static, anyhow::Result<Option<String>>> {
+        let core = self.core.clone();
+
+        async move {
+            Ok(match target {
+                OpenTarget::Link => core.link_target(&id, false).await?,
+                OpenTarget::Email => core.link_target(&id, true).await?,
+                OpenTarget::Reveal => core.reveal_target(&id).await?,
+            })
+        }
+        .boxed()
+    }
+
+    fn hide_group(&self, group: Group) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+
+        async move {
+            let input = ClipboardGroupInput {
+                name: group.name.to_string(),
+                icon: group.icon.to_string(),
+                is_hidden: true,
+            };
+            Ok(core.update_group(&group.id, input).await?)
+        }
+        .boxed()
+    }
+
+    fn delete_group(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.delete_group(&id).await?) }.boxed()
     }
 }
 
@@ -317,6 +465,8 @@ mod tests {
         let page = futures::executor::block_on(source.list(ListQuery {
             offset: 0,
             limit: 100,
+            filter: ListFilter::default(),
+            sort: Default::default(),
         }))
         .expect("lists");
 
@@ -348,6 +498,66 @@ mod tests {
         let thumbnail = futures::executor::block_on(source.thumbnail(image.content.clone()))
             .expect("thumbnail generated");
         assert!(thumbnail.exists());
+
+        // CS2 的操作经适配器生效，筛选条件映射到 core 的查询。
+        let text = page
+            .items
+            .iter()
+            .find(|item| item.kind == ItemKind::Text)
+            .expect("a text record")
+            .id
+            .clone();
+        let favorite = futures::executor::block_on(source.toggle_favorite(text.clone()))
+            .expect("toggles favorite");
+        assert!(favorite);
+        let favorites = futures::executor::block_on(source.list(ListQuery {
+            offset: 0,
+            limit: 100,
+            filter: ListFilter {
+                range: crate::clipboard::model::filter::Range::Favorite,
+                ..ListFilter::default()
+            },
+            sort: Default::default(),
+        }))
+        .expect("lists favorites");
+        assert_eq!(favorites.total, 1);
+        assert_eq!(
+            favorites.items.first().map(|item| item.id.clone()),
+            Some(text.clone())
+        );
+
+        let saved =
+            futures::executor::block_on(source.update_note(text.clone(), Some("  备注 ".into())))
+                .expect("saves the note");
+        assert_eq!(saved.note.as_deref(), Some("备注"));
+
+        let images = futures::executor::block_on(source.item_refs(ListQuery {
+            offset: 0,
+            limit: 0,
+            filter: ListFilter {
+                category: Some(ItemKind::Image),
+                ..ListFilter::default()
+            },
+            sort: Default::default(),
+        }))
+        .expect("lists refs");
+        assert!(!images.is_empty());
+        assert!(images.len() < page.total);
+
+        futures::executor::block_on(source.delete(text.clone())).expect("deletes");
+        let after = futures::executor::block_on(source.list(ListQuery {
+            offset: 0,
+            limit: 100,
+            filter: ListFilter::default(),
+            sort: Default::default(),
+        }))
+        .expect("lists again");
+        assert_eq!(after.total, page.total - 1);
+        assert!(
+            futures::executor::block_on(source.groups())
+                .expect("groups")
+                .is_empty()
+        );
 
         drop(source);
         let _ = std::fs::remove_dir_all(&dir);

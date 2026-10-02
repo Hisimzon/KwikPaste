@@ -1,18 +1,86 @@
 {
   "empty": {
-    "history": "No clipboard history yet"
+    "categories": {
+      "files": "file",
+      "image": "image",
+      "text": "text"
+    },
+    "category": "No {{category}} records yet",
+    "favoriteCategory": "No favorite {{category}} records yet",
+    "favorites": "No favorites yet",
+    "group": "No matching records in \"{{group}}\"",
+    "groupCategory": "No {{category}} records in \"{{group}}\"",
+    "groupFallback": "this group",
+    "groupFavoriteCategory": "No favorite {{category}} records in \"{{group}}\"",
+    "groupFavorites": "No favorites in \"{{group}}\"",
+    "history": "No clipboard history yet",
+    "searchCategory": "No {{category}} records found for \"{{keyword}}\"",
+    "searchFavoriteCategory": "No favorite {{category}} records found for \"{{keyword}}\"",
+    "searchFavorites": "No favorites found for \"{{keyword}}\"",
+    "searchGroup": "No records in \"{{group}}\" match \"{{keyword}}\"",
+    "searchGroupCategory": "No {{category}} records in \"{{group}}\" match \"{{keyword}}\"",
+    "searchGroupFavoriteCategory": "No favorite {{category}} records in \"{{group}}\" match \"{{keyword}}\"",
+    "searchGroupFavorites": "No favorites in \"{{group}}\" match \"{{keyword}}\"",
+    "searchHistory": "No records found for \"{{keyword}}\""
   },
   "footer": {
+    "select": "Select multiple",
+    "shortcuts": "Shortcuts",
     "total": "{{count}} items"
   },
   "groups": {
-    "namePlaceholder": "Enter group name"
+    "add": "New group",
+    "all": "All",
+    "delete": "Delete group",
+    "deleteConfirmDescription": "After deleting \"{{group}}\", the group will be removed from the group bar. Existing clipboard records will be kept and moved back to an ungrouped state.",
+    "favorite": "Favorites",
+    "files": "Files",
+    "hide": "Hide group",
+    "image": "Image",
+    "manage": "Manage groups",
+    "more": "More groups",
+    "namePlaceholder": "Enter group name",
+    "text": "Text"
   },
   "header": {
-    "searchPlaceholder": "Search clipboard..."
+    "openPreference": "Preferences",
+    "pin": "Pin window",
+    "searchPlaceholder": "Search clipboard...",
+    "unpin": "Unpin"
+  },
+  "note": {
+    "placeholder": "Add a note for this item...",
+    "title": "Edit note"
   },
   "origin": {
     "fromDevice": "From {{name}}"
+  },
+  "quickActions": {
+    "copy": "Copy",
+    "copyPlain": "Copy as Plain Text",
+    "copySuccess": "Copied",
+    "delete": "Delete",
+    "note": "Note",
+    "openLink": "Open Link",
+    "paste": "Paste",
+    "pastePath": "Paste as Path",
+    "pastePlain": "Paste as Plain Text",
+    "pinItem": "Pin to Top",
+    "pinItemActive": "Unpin from Top",
+    "reveal": "Show in File Manager",
+    "sendEmail": "Send Email",
+    "splitWords": "Split Words",
+    "star": "Favorite",
+    "starActive": "Unfavorite"
+  },
+  "selection": {
+    "clear": "Deselect all",
+    "delete": "Delete",
+    "exit": "Cancel",
+    "hint": "Click to select, Shift-click for a range",
+    "protected": "Favorite and pinned records are protected from deletion. You can allow it in settings.",
+    "selectAll": "Select all",
+    "selected": "{{count}} selected"
   },
   "shortcuts": {
     "copySelected": "Copy selected item",

@@ -1,8 +1,8 @@
-//! 主窗口的剪贴板列表（UI 里程碑 U1）。
+//! 主窗口（UI 里程碑 U1、U2）：剪贴板列表、头部与搜索、分组栏、快捷动作、多选。
 //!
-//! - [`model`]：不依赖 GPUI 的分页缓存、控制器、排布与时间标签；
+//! - [`model`]：不依赖 GPUI 的分页缓存、控制器、筛选、空态、快捷动作、多选、排布与时间标签；
 //! - [`source`]：数据接口与适配器（core、合成夹具）；
-//! - [`view`]：`list(ListState)` 视图、卡片、`KpImageCache`、跑分。
+//! - [`view`]：主窗口、`list(ListState)` 视图、卡片、`KpImageCache`、跑分。
 //!
 //! 数据来源由 [`prepare_source`] 按启动参数选择：普通启动用平台层启动的 core（经
 //! [`source::core_source::CoreSource`]），并跟随 core 的记录事件刷新。合成夹具只在自测里用：
@@ -22,11 +22,11 @@ use gpui::{App, AppContext as _, Entity, TaskExt as _, Window};
 
 use self::{
     source::{
-        ClipboardSource, FixtureSource, FixtureStore,
+        ClipboardSource, FixtureSource, FixtureStore, Group,
         core_source::CoreSource,
         synthetic::{self, AssetSet},
     },
-    view::{ClipboardList, ListIntent},
+    view::{ClipboardPanel, ListIntent},
 };
 use crate::{core_host, platform, selftest};
 
@@ -49,9 +49,7 @@ pub fn prepare_source() -> PreparedSource {
         source: None,
         bench: None,
     };
-    let fixtures = selftest::enabled(selftest::LIST_BENCH)
-        || selftest::enabled(selftest::LIST_DEMO)
-        || selftest::enabled(selftest::CORE_LIST);
+    let fixtures = selftest::list_selftest() || selftest::enabled(selftest::CORE_LIST);
     if !fixtures {
         return core;
     }
@@ -93,22 +91,52 @@ pub fn prepare_source() -> PreparedSource {
         }
     }
 
-    let store = FixtureStore::from_page_json(SAMPLE, &assets.root).unwrap_or_else(|err| {
-        log::error!("the sample fixture is invalid: {err:#}");
-        FixtureStore::default()
-    });
+    let store = FixtureStore::from_page_json(SAMPLE, &assets.root)
+        .map(|store| store.with_groups(demo_groups()))
+        .unwrap_or_else(|err| {
+            log::error!("the sample fixture is invalid: {err:#}");
+            FixtureStore::default()
+        });
     PreparedSource {
         source: Some(Arc::new(FixtureSource::new(store, &assets))),
         bench: None,
     }
 }
 
-/// 建面板里的列表视图（传给 `platform::start`，这时 core 和面板事件都已就绪）。
+/// 示例夹具的自定义分组（截图与交互自测用）：两个预设图标的分组，各放几条记录。
+fn demo_groups() -> Vec<(Group, Vec<usize>)> {
+    let group = |id: &str, name: &str, icon: &str| Group {
+        id: id.into(),
+        name: name.into(),
+        icon: icon.into(),
+        is_hidden: false,
+    };
+
+    vec![
+        (
+            group("demo-work", "工作", "i-lets-icons:book"),
+            vec![0, 2, 5],
+        ),
+        (group("demo-code", "代码", "i-lets-icons:code"), vec![3]),
+        (
+            group("demo-hidden", "已隐藏", "i-lets-icons:box"),
+            Vec::new(),
+        ),
+    ]
+    .into_iter()
+    .map(|(mut group, members)| {
+        group.is_hidden = &*group.id == "demo-hidden";
+        (group, members)
+    })
+    .collect()
+}
+
+/// 建面板里的主窗口（传给 `platform::start`，这时 core 和面板事件都已就绪）。
 pub fn build_panel(
     prepared: &PreparedSource,
     window: &mut Window,
     cx: &mut App,
-) -> Entity<ClipboardList> {
+) -> Entity<ClipboardPanel> {
     let host_core = core_host::core(cx).cloned();
     let source: Arc<dyn ClipboardSource> = match (&prepared.source, &host_core) {
         (Some(source), _) => source.clone(),
@@ -128,28 +156,35 @@ pub fn build_panel(
         }
     };
 
-    let list = cx.new(|cx| ClipboardList::new(source, window, cx));
-    // 只有数据来自平台层的 core 时才跟随它的记录事件、接上粘贴链路；夹具和自测 core 不受本机开发数据
+    let panel = cx.new(|cx| ClipboardPanel::new(source, window, cx));
+    // 只有数据来自平台层的 core 时才跟随它的事件、接上粘贴链路；夹具和自测 core 不受本机开发数据
     // 影响，夹具里的记录也粘贴不了。
     if prepared.source.is_none() {
         if let Some(events) = platform::core_events(cx) {
-            list.update(cx, |list, cx| list.follow_core_events(&events, cx));
+            panel.update(cx, |panel, cx| panel.follow_core_events(&events, cx));
         }
-        cx.subscribe(&list, |_, intent: &ListIntent, cx| match intent {
-            ListIntent::Paste { id, plain } => {
+        let list = panel.read(cx).list().clone();
+        cx.subscribe(&list, |_, intent: &ListIntent, cx| {
+            if let ListIntent::Paste { id, plain } = intent {
                 platform::paste::paste(cx, id.to_string(), *plain, false).detach_and_log_err(cx);
             }
         })
         .detach();
     }
 
-    list
+    panel
 }
 
-/// 面板建好之后：跑分模式下开始跑分。
-pub fn attach(list: &Entity<ClipboardList>, prepared: PreparedSource, cx: &mut App) {
+/// 面板建好之后：跑分模式下开始跑分，交互自测开始跑脚本，演示模式按环境变量摆出要截图的状态。
+pub fn attach(panel: &Entity<ClipboardPanel>, prepared: PreparedSource, cx: &mut App) {
     if let Some((store, assets, rows)) = prepared.bench {
+        let list = panel.read(cx).list().clone();
         let window = list.read(cx).window_handle();
-        view::bench::start(list, store, assets, rows, window, cx);
+        view::bench::start(&list, store, assets, rows, window, cx);
+    }
+    if selftest::enabled(selftest::PANEL_UI) {
+        view::selftest::run(panel.clone(), cx);
+    } else if selftest::enabled(selftest::LIST_DEMO) {
+        view::selftest::stage_demo(panel.clone(), cx);
     }
 }

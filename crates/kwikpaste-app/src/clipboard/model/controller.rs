@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use super::{
+    filter::ListFilter,
     item::{ItemKind, ListItem},
     list_model::ListModel,
 };
@@ -28,29 +29,6 @@ pub enum NavOutcome {
     NeedsLoad { index: usize },
     /// 列表为空。
     Empty,
-}
-
-/// 列表当前的过滤条件，决定新记录要不要刷新（1.x `shouldRefreshCurrentGroup`）。U1 恒为“全部”。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ViewFilter {
-    pub favorites_only: bool,
-    pub category: Option<ItemKind>,
-    pub group_id: Option<Arc<str>>,
-}
-
-impl ViewFilter {
-    /// 一条新记录或被重新使用的记录可能出现在当前视图里吗。
-    pub fn may_include(&self, kind: Option<ItemKind>) -> bool {
-        if self.group_id.is_some() || self.favorites_only {
-            return false;
-        }
-
-        match (self.category, kind) {
-            (None, _) => true,
-            (Some(_), None) => false,
-            (Some(category), Some(kind)) => category == kind,
-        }
-    }
 }
 
 /// core 发来的列表变化（`CoreEvent` 中与列表有关的几种）。
@@ -79,8 +57,7 @@ pub enum UpdateAction {
 }
 
 /// 数字提示 1–9、0（Mod+数字粘贴第 N 个可见非置顶项）。
-#[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
-const HINT_KEYS: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+pub const HINT_KEYS: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 
 #[derive(Debug, Default)]
 pub struct ListController {
@@ -88,7 +65,7 @@ pub struct ListController {
     /// 第一个可见的非置顶项的模型下标（列表视口第一行 + 置顶行数）。
     first_visible: usize,
     pending_reload: bool,
-    filter: ViewFilter,
+    filter: ListFilter,
 }
 
 impl ListController {
@@ -96,14 +73,8 @@ impl ListController {
         Self::default()
     }
 
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
-    pub fn filter(&self) -> &ViewFilter {
+    pub fn filter(&self) -> &ListFilter {
         &self.filter
-    }
-
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
-    pub fn first_visible(&self) -> usize {
-        self.first_visible
     }
 
     pub fn set_first_visible(&mut self, index: usize) {
@@ -115,9 +86,13 @@ impl ListController {
         self.selected.as_ref()
     }
 
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
     pub fn clear_selection(&mut self) {
         self.selected = None;
+    }
+
+    /// 显式选中一条（点击卡片、快捷动作、右键菜单作用到它时）。
+    pub fn select(&mut self, id: &Arc<str>) {
+        self.selected = Some(id.clone());
     }
 
     /// 指针移进卡片：它成为当前项（1.x 的 hover 与键盘共用选中）。返回选中是否变了。
@@ -209,7 +184,6 @@ impl ListController {
             .map(|item| item.id.clone());
     }
 
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
     /// 第 `index` 行的数字提示：只标在前 10 个可见非置顶项上，多选时不显示。
     pub fn hint_key(&self, index: usize, pinned: usize, selecting: bool) -> Option<char> {
         if selecting || index < pinned {
@@ -218,6 +192,14 @@ impl ListController {
 
         let relative = index.checked_sub(self.first_visible)?;
         HINT_KEYS.get(relative).copied()
+    }
+
+    /// Mod+数字：数字键对应的模型下标（`1` 是第一个可见非置顶项，`0` 是第十个）。
+    pub fn hint_index(&self, key: char) -> Option<usize> {
+        HINT_KEYS
+            .iter()
+            .position(|hint| *hint == key)
+            .map(|slot| self.first_visible + slot)
     }
 
     /// 列表变化的处理决定（1.x `handleClipboardUpdated` + `requestReloadAtTop`）。
@@ -266,9 +248,8 @@ impl ListController {
         self.selected = None;
     }
 
-    #[allow(dead_code, reason = "1.x 的同名逻辑，U2 接线前只有单测在用")]
     /// 过滤条件变化：清掉选中和挂起的刷新（视图会整体重载）。
-    pub fn set_filter(&mut self, filter: ViewFilter) {
+    pub fn set_filter(&mut self, filter: ListFilter) {
         self.filter = filter;
         self.selected = None;
         self.pending_reload = false;
@@ -464,29 +445,14 @@ mod tests {
     }
 
     #[test]
-    fn view_filter_matches_should_refresh_current_group() {
-        let all = ViewFilter::default();
-        assert!(all.may_include(Some(ItemKind::Image)));
+    fn number_keys_map_to_visible_rows() {
+        let mut controller = ListController::new();
+        controller.set_first_visible(7);
 
-        let text = ViewFilter {
-            category: Some(ItemKind::Text),
-            ..ViewFilter::default()
-        };
-        assert!(text.may_include(Some(ItemKind::Text)));
-        assert!(!text.may_include(Some(ItemKind::Files)));
-        assert!(!text.may_include(None));
-
-        let favorites = ViewFilter {
-            favorites_only: true,
-            ..ViewFilter::default()
-        };
-        assert!(!favorites.may_include(Some(ItemKind::Text)));
-
-        let group = ViewFilter {
-            group_id: Some("g".into()),
-            ..ViewFilter::default()
-        };
-        assert!(!group.may_include(Some(ItemKind::Text)));
+        assert_eq!(controller.hint_index('1'), Some(7));
+        assert_eq!(controller.hint_index('9'), Some(15));
+        assert_eq!(controller.hint_index('0'), Some(16));
+        assert_eq!(controller.hint_index('x'), None);
     }
 
     #[test]
@@ -558,9 +524,9 @@ mod tests {
     #[test]
     fn irrelevant_updates_are_ignored() {
         let mut controller = ListController::new();
-        controller.set_filter(ViewFilter {
-            favorites_only: true,
-            ..ViewFilter::default()
+        controller.set_filter(ListFilter {
+            range: crate::clipboard::model::filter::Range::Favorite,
+            ..ListFilter::default()
         });
 
         let action = controller.on_update(

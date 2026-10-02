@@ -1,7 +1,8 @@
 //! 列表卡片与占位骨架，按 1.x `ClipboardCard.tsx` / `cards/*` 的样子画（卡片风格、标准密度为默认）。
 //!
 //! 尺寸全部来自 [`LayoutSpec`] 的设计 px，经 [`dp`] 换成 rem，随文本缩放；颜色全部取 `KpTokens`。
-//! 交互（悬停、点击）由列表视图挂在返回的元素上，这里只管长相。
+//! 交互（悬停、点击）由列表视图挂在返回的元素上；悬停快捷动作、多选复选框这类带回调的部件也由
+//! 列表画好后经 [`CardState`] 交进来，这里只管摆放。
 
 use std::{sync::Arc, time::Duration};
 
@@ -12,7 +13,7 @@ use gpui::{
     Styled, div, img, prelude::FluentBuilder as _, pulsating_between, relative, rems,
 };
 use kwikpaste_ui::{
-    Icon, IconName, KpStyled as _,
+    Icon, IconName, KeyHint, KpStyled as _,
     theme::{KpTokens, TextSize, css_color, radius},
 };
 
@@ -52,10 +53,21 @@ pub enum Visual {
 }
 
 /// 卡片的状态标记。
+#[derive(Default)]
 pub struct CardState {
     /// 当前项：画选中外环。
     pub active: bool,
     pub image: Option<Visual>,
+    /// 指针在卡片上：有备注且开了“悬停显示原文”时显示原文。
+    pub show_original: bool,
+    /// 按住修饰键时来源图标上的数字角标（1–9、0）。
+    pub hint: Option<char>,
+    /// 多选时已勾上：卡片铺一层淡主色。
+    pub checked: bool,
+    /// 悬停快捷动作（列表画好的按钮行）；有它时头部行不显示时间。
+    pub actions: Option<AnyElement>,
+    /// 多选的复选框。
+    pub checkbox: Option<AnyElement>,
 }
 
 /// 一行卡片（含外层间距）。返回的元素带 id，调用方再挂交互。
@@ -67,9 +79,12 @@ pub fn card(
 ) -> gpui::Stateful<Div> {
     let tokens = env.tokens;
     let layout = env.layout;
-    let body = content(env, item, index, state.image);
+    let body = content(env, item, index, state.image, state.show_original);
     let pinned = item.is_pinned;
     let sensitive = item.shows_sensitive_mark();
+    let hint = state.hint;
+    let actions = state.actions;
+    let checkbox = state.checkbox;
 
     let mut frame = div()
         .relative()
@@ -87,13 +102,15 @@ pub fn card(
         })
         .when(pinned && layout.seamless, |frame| {
             frame.bg(tokens.fill_quaternary)
-        });
+        })
+        // 写在置顶之后：无间风格的置顶底色和勾选底色冲突时，勾选的底色胜出（1.x 同）。
+        .when(state.checked, |frame| frame.bg(tokens.primary.opacity(0.1)));
 
     frame = if layout.header_row {
         frame
             .flex_col()
             .gap(dp(layout.body_gap))
-            .child(header(env, item))
+            .child(header(env, item, hint, actions, checkbox))
             .child(body)
             .children(snippets(
                 env,
@@ -113,7 +130,7 @@ pub fn card(
                     .flex_none()
                     .h(dp(20.))
                     .items_center()
-                    .child(app_icon(env, item)),
+                    .child(hinted_icon(env, item, hint)),
             )
             .child(
                 div()
@@ -127,6 +144,31 @@ pub fn card(
             )
             .when(pinned || sensitive, |frame| {
                 frame.child(status_marks(tokens, pinned, sensitive, true))
+            })
+            .when_some(checkbox, |frame, checkbox| {
+                frame.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .h(dp(20.))
+                        .items_center()
+                        .child(checkbox),
+                )
+            })
+            // 没有头部行时动作按钮浮在卡片右上角，不占行高（1.x `floating`）。
+            .when_some(actions, |frame, actions| {
+                frame.child(
+                    div()
+                        .absolute()
+                        .top(dp(4.))
+                        .right(dp(4.))
+                        .rounded(dp(6.))
+                        .border_1()
+                        .border_color(tokens.border_secondary)
+                        .bg(tokens.bg_elevated)
+                        .shadow(tokens.shadow_card.to_vec())
+                        .child(actions),
+                )
             })
     };
 
@@ -274,7 +316,13 @@ pub struct ImageTarget {
     pub display: ImageBox,
 }
 
-fn header(env: &CardEnv<'_>, item: &ListItem) -> Div {
+fn header(
+    env: &CardEnv<'_>,
+    item: &ListItem,
+    hint: Option<char>,
+    actions: Option<AnyElement>,
+    checkbox: Option<AnyElement>,
+) -> Div {
     let tokens = env.tokens;
     let origin = item
         .origin_device_name
@@ -296,7 +344,7 @@ fn header(env: &CardEnv<'_>, item: &ListItem) -> Div {
                 .items_center()
                 .gap(dp(4.))
                 .overflow_hidden()
-                .child(app_icon(env, item))
+                .child(hinted_icon(env, item, hint))
                 .child(div().truncate().child(type_label(item.type_key())))
                 .children(origin.map(|origin| {
                     div()
@@ -304,11 +352,51 @@ fn header(env: &CardEnv<'_>, item: &ListItem) -> Div {
                         .child(SharedString::from(format!("· {origin}")))
                 })),
         )
-        .child(
-            div()
+        .child(match (actions, checkbox) {
+            // 滚动时绝大多数卡片走这里：只有时间，不多套一层容器。
+            (None, None) => div()
                 .flex_none()
                 .child(SharedString::from(time_label(item.created_at, &env.now))),
+            // 悬停时时间换成快捷动作（1.x 两者叠在同一格里交替淡入淡出）；多选时时间后面跟复选框。
+            (actions, checkbox) => div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(dp(6.))
+                .child(match actions {
+                    Some(actions) => actions,
+                    None => {
+                        SharedString::from(time_label(item.created_at, &env.now)).into_any_element()
+                    }
+                })
+                .children(checkbox),
+        })
+}
+
+/// 来源图标；按住修饰键时叠一个数字角标，图标本身隐去（1.x `KeyHint` 包着来源图标）。
+fn hinted_icon(env: &CardEnv<'_>, item: &ListItem, hint: Option<char>) -> AnyElement {
+    let icon = app_icon(env, item);
+    let Some(key) = hint else {
+        return icon;
+    };
+
+    div()
+        .relative()
+        .flex()
+        .flex_none()
+        .child(div().flex().opacity(0.).child(icon))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(KeyHint::new(SharedString::from(key.to_string()))),
         )
+        .into_any_element()
 }
 
 fn type_label(key: TypeKey) -> SharedString {
@@ -354,7 +442,7 @@ fn app_icon(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
 }
 
 /// 快贴图标（1.x `public/logo.png`，macOS 用 `logo-mac.png`）。
-fn logo() -> Arc<Image> {
+pub fn logo() -> Arc<Image> {
     use std::sync::LazyLock;
 
     static LOGO: LazyLock<Arc<Image>> = LazyLock::new(|| {
@@ -369,8 +457,17 @@ fn logo() -> Arc<Image> {
     LOGO.clone()
 }
 
-fn content(env: &CardEnv<'_>, item: &ListItem, index: usize, image: Option<Visual>) -> AnyElement {
-    if let Some(note) = &item.note {
+fn content(
+    env: &CardEnv<'_>,
+    item: &ListItem,
+    index: usize,
+    image: Option<Visual>,
+    show_original: bool,
+) -> AnyElement {
+    // 有备注时显示备注；悬停且开了“显示原文”时换回原内容（1.x `NoteContentSwitcher`）。
+    if let Some(note) = &item.note
+        && !show_original
+    {
         return note_annotation(env, note);
     }
 

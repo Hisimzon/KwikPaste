@@ -1,0 +1,634 @@
+//! 主窗口（附录 D §3）：头部、分组栏、列表与页脚，以及整窗的按键。
+//!
+//! 按键都绑在 [`KEY_CONTEXT`] 上，焦点在列表或搜索框里都会命中；搜索框聚焦时由
+//! [`super::SEARCH_CONTEXT`] 的绑定把 ↑/↓/Enter/Esc/Tab 交给列表。
+
+use std::sync::Arc;
+
+use gpui::{
+    AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _,
+    IntoElement, ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription,
+    Window, div,
+};
+use kwikpaste_core::{
+    CoreEvent,
+    settings::{
+        WINDOW_OPEN_GROUP_PREFIX, WINDOW_OPEN_SELECTION_ALL, WindowOpenCategorySelection,
+        WindowOpenRangeSelection,
+    },
+};
+use kwikpaste_ui::{
+    ConfirmSpec, confirm, theme,
+    toast::{self, Toast},
+};
+
+use super::{
+    CopySelected, DeleteSelected, Dismiss, EditNote, EndSearch, FocusSearch, KEY_CONTEXT, NewGroup,
+    NextCategory, NextGroup, OpenPreferences, OpenSelected, PasteSelected, PasteSelectedPlain,
+    PinWindow, PreviousCategory, PreviousGroup, QuickPaste, SelectAll, SelectNext, SelectPrevious,
+    ShowShortcuts, SplitSelected, ToggleFavorite, TogglePinned, ToggleRange,
+    editing::{self, EditTarget},
+    group_bar::{GroupBar, GroupBarEvent},
+    header::{Header, HeaderEvent},
+    list::{ClipboardList, ListIntent},
+    request_panel,
+};
+use crate::{
+    clipboard::{
+        model::{
+            filter::{ListFilter, Range, adjacent_group},
+            item::{ItemKind, ListItem},
+        },
+        source::{ClipboardSource, Group},
+    },
+    i18n::{t, t_args},
+    platform::{CoreEvents, EditTrigger, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource},
+};
+
+/// 主窗口发给宿主的意图：宿主一侧还没有的能力（固定窗口、偏好设置窗口、分组弹框）先只发事件。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PanelIntent {
+    PinWindow(bool),
+    OpenPreferences,
+    NewGroup,
+    ManageGroups,
+}
+
+pub struct ClipboardPanel {
+    source: Arc<dyn ClipboardSource>,
+    list: Entity<ClipboardList>,
+    header: Entity<Header>,
+    groups: Entity<GroupBar>,
+    group_list: Vec<Group>,
+    key_hints: bool,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl EventEmitter<PanelIntent> for ClipboardPanel {}
+
+impl ClipboardPanel {
+    pub fn new(
+        source: Arc<dyn ClipboardSource>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // 列表先建：面板事件按订阅顺序送达，列表先处理 Shown（回到顶部、拿焦点），主窗口再按设置
+        // 调整筛选条件。
+        let list = cx.new(|cx| ClipboardList::new(source.clone(), window, cx));
+        let header = cx.new(|cx| Header::new(window, cx));
+        let groups = cx.new(|_| GroupBar::new());
+
+        let mut subscriptions = vec![
+            cx.subscribe_in(&header, window, Self::on_header_event),
+            cx.subscribe_in(&groups, window, Self::on_group_event),
+            cx.subscribe(&list, |_, _, intent: &ListIntent, _| {
+                log::debug!("list intent: {intent:?}");
+            }),
+        ];
+        if let Some(panel) = cx.try_global::<Panel>() {
+            let events = panel.events().clone();
+            subscriptions.push(cx.subscribe_in(
+                &events,
+                window,
+                |panel, _, event: &PanelEvent, window, cx| {
+                    panel.on_panel_event(*event, window, cx);
+                },
+            ));
+        }
+
+        let mut panel = Self {
+            source,
+            list,
+            header,
+            groups,
+            group_list: Vec::new(),
+            key_hints: false,
+            _subscriptions: subscriptions,
+        };
+        panel.reload_groups(cx);
+        panel
+    }
+
+    pub fn list(&self) -> &Entity<ClipboardList> {
+        &self.list
+    }
+
+    pub fn header(&self) -> &Entity<Header> {
+        &self.header
+    }
+
+    /// 跟随 core 的事件：记录变化、设置变化交给列表，分组变化重读分组。
+    pub fn follow_core_events(&mut self, events: &Entity<CoreEvents>, cx: &mut Context<Self>) {
+        self.list
+            .update(cx, |list, cx| list.follow_core_events(events, cx));
+        self._subscriptions
+            .push(cx.subscribe(events, |panel, _, event: &CoreEvent, cx| {
+                if matches!(event, CoreEvent::GroupsUpdated) {
+                    panel.reload_groups(cx);
+                }
+            }));
+    }
+
+    // ------------------------------------------------------------ 分组
+
+    /// 重读自定义分组；选中的分组已不存在时回到全部（1.x `ensureSelectedGroupStillExists`）。
+    pub fn reload_groups(&mut self, cx: &mut Context<Self>) {
+        let future = self.source.groups();
+
+        cx.spawn(async move |panel, cx| {
+            let result = future.await;
+            panel
+                .update(cx, |panel, cx| match result {
+                    Ok(groups) => panel.apply_groups(groups, cx),
+                    Err(err) => log::warn!("clipboard groups could not be loaded: {err:#}"),
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    fn apply_groups(&mut self, groups: Vec<Group>, cx: &mut Context<Self>) {
+        let selected = self.list.read(cx).filter().group_id.clone();
+        if let Some(selected) = selected
+            && !groups.iter().any(|group| group.id == selected)
+        {
+            self.update_filter(|filter| filter.group_id = None, cx);
+        }
+
+        self.group_list = groups.clone();
+        self.groups
+            .update(cx, |bar, cx| bar.set_groups(groups.clone(), cx));
+        self.list.update(cx, |list, cx| list.set_groups(groups, cx));
+    }
+
+    /// 改筛选条件：列表重载，分组栏跟着高亮。
+    fn update_filter(&mut self, change: impl FnOnce(&mut ListFilter), cx: &mut Context<Self>) {
+        let mut filter = self.list.read(cx).filter().clone();
+        change(&mut filter);
+        self.groups
+            .update(cx, |bar, cx| bar.set_filter(&filter, cx));
+        self.list.update(cx, |list, cx| list.set_filter(filter, cx));
+    }
+
+    fn toggle_group(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
+        self.update_filter(
+            |filter| {
+                filter.group_id = if filter.group_id.as_ref() == Some(&id) {
+                    None
+                } else {
+                    Some(id)
+                };
+            },
+            cx,
+        );
+    }
+
+    fn toggle_category(&mut self, kind: ItemKind, cx: &mut Context<Self>) {
+        self.update_filter(
+            |filter| {
+                filter.category = if filter.category == Some(kind) {
+                    None
+                } else {
+                    Some(kind)
+                };
+            },
+            cx,
+        );
+    }
+
+    fn on_group_event(
+        &mut self,
+        _: &Entity<GroupBar>,
+        event: &GroupBarEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            GroupBarEvent::SelectRange(range) => {
+                let range = *range;
+                self.update_filter(|filter| filter.range = range, cx);
+            }
+            GroupBarEvent::ToggleCategory(kind) => self.toggle_category(*kind, cx),
+            GroupBarEvent::ToggleGroup(id) => self.toggle_group(id.clone(), cx),
+            GroupBarEvent::HideGroup(group) => self.hide_group(group.clone(), window, cx),
+            GroupBarEvent::DeleteGroup(group) => self.delete_group(group.clone(), window, cx),
+            GroupBarEvent::NewGroup => self.emit_intent(PanelIntent::NewGroup, cx),
+            GroupBarEvent::ManageGroups => self.emit_intent(PanelIntent::ManageGroups, cx),
+        }
+    }
+
+    /// 隐藏分组（1.x 右键菜单“隐藏分组”）：名称和图标不变，只改显隐。
+    fn hide_group(&mut self, group: Group, window: &mut Window, cx: &mut Context<Self>) {
+        let future = self.source.hide_group(group);
+
+        cx.spawn_in(window, async move |panel, cx| {
+            let result = future.await;
+            panel
+                .update_in(cx, |panel, window, cx| {
+                    match result {
+                        Ok(()) => toast::show(
+                            Toast::success(t("commands:messages.clipboardGroupSaved")),
+                            window,
+                            cx,
+                        ),
+                        Err(err) => Self::toast_error(
+                            "commands:labels.saveClipboardGroup",
+                            &err,
+                            window,
+                            cx,
+                        ),
+                    }
+                    panel.reload_groups(cx);
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    /// 删除分组：先确认，组内记录回到未分组；删的是选中的分组时回到全部。
+    fn delete_group(&mut self, group: Group, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = confirm(
+            ConfirmSpec::new(t("clipboard:groups.delete"))
+                .content(t_args(
+                    "clipboard:groups.deleteConfirmDescription",
+                    &[("group", &group.name)],
+                ))
+                .ok_text(t("common:actions.delete"))
+                .cancel_text(t("common:actions.cancel"))
+                .danger(),
+            window,
+            cx,
+        );
+        let source = self.source.clone();
+
+        cx.spawn_in(window, async move |panel, cx| {
+            if !answer.await.unwrap_or(false) {
+                return;
+            }
+            let result = source.delete_group(group.id.clone()).await;
+            panel
+                .update_in(cx, |panel, window, cx| {
+                    match result {
+                        Ok(()) => {
+                            toast::show(
+                                Toast::success(t("commands:messages.clipboardGroupDeleted")),
+                                window,
+                                cx,
+                            );
+                            if panel.list.read(cx).filter().group_id.as_ref() == Some(&group.id) {
+                                panel.update_filter(|filter| filter.group_id = None, cx);
+                            }
+                        }
+                        Err(err) => Self::toast_error(
+                            "commands:labels.deleteClipboardGroup",
+                            &err,
+                            window,
+                            cx,
+                        ),
+                    }
+                    panel.reload_groups(cx);
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    fn toast_error(label: &str, err: &anyhow::Error, window: &mut Window, cx: &mut Context<Self>) {
+        log::warn!("{label} failed: {err:#}");
+        let message = t_args(
+            "commands:error",
+            &[("label", &t(label)), ("message", &err.to_string())],
+        );
+        toast::show(Toast::error(message), window, cx);
+    }
+
+    fn emit_intent(&mut self, intent: PanelIntent, cx: &mut Context<Self>) {
+        log::info!("panel intent: {intent:?}");
+        cx.emit(intent);
+    }
+
+    // ------------------------------------------------------------ 头部与编辑态
+
+    fn on_header_event(
+        &mut self,
+        _: &Entity<Header>,
+        event: &HeaderEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            HeaderEvent::Keyword(keyword) => {
+                let keyword = keyword.clone();
+                self.update_filter(|filter| filter.keyword = keyword, cx);
+            }
+            HeaderEvent::RequestEditing(trigger) => {
+                editing::begin(EditTarget::Search, *trigger, cx);
+            }
+            HeaderEvent::TogglePin => self.toggle_pin(cx),
+            HeaderEvent::OpenPreferences => self.emit_intent(PanelIntent::OpenPreferences, cx),
+        }
+    }
+
+    fn focus_list(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let focus = self.list.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+    }
+
+    fn toggle_pin(&mut self, cx: &mut Context<Self>) {
+        let pinned = !self.header.read(cx).pinned();
+        self.header
+            .update(cx, |header, cx| header.set_pinned(pinned, cx));
+        self.emit_intent(PanelIntent::PinWindow(pinned), cx);
+    }
+
+    /// 面板事件：显示时按设置重置筛选与搜索框，编辑态的进出交给对应的输入框。
+    fn on_panel_event(&mut self, event: PanelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            PanelEvent::Shown => self.on_shown(window, cx),
+            PanelEvent::Hidden => {
+                self.header
+                    .update(cx, |header, cx| header.set_editing(false, cx));
+                if self.list.read(cx).settings().clipboard.search.clear_on_hide {
+                    self.clear_search(window, cx);
+                }
+                self.set_key_hints(false, cx);
+            }
+            PanelEvent::EditingStarted => {
+                if editing::target(cx) == Some(EditTarget::Search) {
+                    self.header.update(cx, |header, cx| {
+                        header.set_editing(true, cx);
+                        header.focus_input(window, cx);
+                    });
+                }
+            }
+            PanelEvent::EditingRefused => {
+                if editing::target(cx) == Some(EditTarget::Search) {
+                    editing::clear(cx);
+                    self.focus_list(window, cx);
+                }
+            }
+            PanelEvent::EditingEnded => {
+                self.header
+                    .update(cx, |header, cx| header.set_editing(false, cx));
+                editing::clear(cx);
+            }
+        }
+    }
+
+    /// 显示时（1.x `handleWindowVisibility`）：清空搜索词，按“打开窗口时选中”的设置切换范围、
+    /// 分类、分组；设置了默认聚焦搜索框时请求编辑态。
+    fn on_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let settings = self.list.read(cx).settings().clipboard.clone();
+        let window_settings = settings.window;
+        let clear = settings.search.clear_on_hide;
+
+        if clear {
+            self.header
+                .update(cx, |header, cx| header.clear(window, cx));
+        }
+        self.update_filter(
+            |filter| {
+                if clear {
+                    filter.keyword = Arc::from("");
+                }
+                match window_settings.select_range_on_open {
+                    WindowOpenRangeSelection::Preserve => {}
+                    WindowOpenRangeSelection::All => filter.range = Range::All,
+                    WindowOpenRangeSelection::Favorite => filter.range = Range::Favorite,
+                }
+                match window_settings.select_category_on_open {
+                    WindowOpenCategorySelection::Preserve => {}
+                    WindowOpenCategorySelection::All => filter.category = None,
+                    WindowOpenCategorySelection::Text => filter.category = Some(ItemKind::Text),
+                    WindowOpenCategorySelection::Image => filter.category = Some(ItemKind::Image),
+                    WindowOpenCategorySelection::Files => filter.category = Some(ItemKind::Files),
+                }
+                let group = window_settings.select_group_on_open.as_str();
+                if group == WINDOW_OPEN_SELECTION_ALL {
+                    filter.group_id = None;
+                } else if let Some(id) = group.strip_prefix(WINDOW_OPEN_GROUP_PREFIX) {
+                    filter.group_id = Some(Arc::from(id));
+                }
+            },
+            cx,
+        );
+
+        if settings.search.default_focus {
+            editing::begin(EditTarget::Search, EditTrigger::Keyboard, cx);
+        }
+    }
+
+    fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.header
+            .update(cx, |header, cx| header.clear(window, cx));
+        self.update_filter(|filter| filter.keyword = Arc::from(""), cx);
+    }
+
+    fn set_key_hints(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.key_hints == on {
+            return;
+        }
+
+        self.key_hints = on;
+        self.header
+            .update(cx, |header, cx| header.set_hints(on, cx));
+        self.groups.update(cx, |bar, cx| bar.set_hints(on, cx));
+        self.list.update(cx, |list, cx| list.set_key_hints(on, cx));
+    }
+
+    // ------------------------------------------------------------ 按键
+
+    /// Esc 按多选、分组、分类、窗口的顺序逐层退出（1.x `closeTopEscapeLayer`；预览在第二部分）。
+    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if self.list.read(cx).selecting() {
+            self.list.update(cx, |list, cx| list.exit_selection(cx));
+            return;
+        }
+
+        let filter = self.list.read(cx).filter().clone();
+        if filter.group_id.is_some() {
+            self.update_filter(|filter| filter.group_id = None, cx);
+            return;
+        }
+        if filter.category.is_some() {
+            self.update_filter(|filter| filter.category = None, cx);
+            return;
+        }
+
+        request_panel(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Ui)));
+    }
+
+    fn end_search(&mut self, _: &EndSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if editing::target(cx) == Some(EditTarget::Search) {
+            editing::end(cx);
+        } else {
+            self.focus_list(window, cx);
+        }
+    }
+
+    fn focus_search(&mut self, _: &FocusSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if self.header.read(cx).editing() {
+            self.header
+                .update(cx, |header, cx| header.focus_input(window, cx));
+            return;
+        }
+
+        editing::begin(EditTarget::Search, EditTrigger::Keyboard, cx);
+    }
+
+    /// 作用于当前项的快捷键；多选时不响应（1.x `handleSelectionKeyDown` 吞掉其余修饰键组合）。
+    fn with_active(
+        &mut self,
+        cx: &mut Context<Self>,
+        act: impl FnOnce(&mut ClipboardList, Arc<ListItem>, &mut Context<ClipboardList>),
+    ) {
+        self.list.update(cx, |list, cx| {
+            if list.selecting() {
+                return;
+            }
+            if let Some(item) = list.active_item() {
+                act(list, item, cx);
+            }
+        });
+    }
+}
+
+impl Render for ClipboardPanel {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::tokens(cx);
+
+        div()
+            .id("clipboard-panel")
+            .key_context(KEY_CONTEXT)
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(tokens.bg_container)
+            .text_color(tokens.text)
+            .on_modifiers_changed(cx.listener(|panel, event: &ModifiersChangedEvent, _, cx| {
+                panel.set_key_hints(event.modifiers.secondary(), cx);
+            }))
+            .on_action(cx.listener(|panel, _: &SelectPrevious, _, cx| {
+                panel.list.update(cx, |list, cx| list.select_previous(cx));
+            }))
+            .on_action(cx.listener(|panel, _: &SelectNext, _, cx| {
+                panel.list.update(cx, |list, cx| list.select_next(cx));
+            }))
+            .on_action(cx.listener(|panel, _: &PasteSelected, window, cx| {
+                panel.list.update(cx, |list, cx| {
+                    if !list.selecting() {
+                        list.paste_active(false, cx);
+                    } else if let Some(item) = list.active_item() {
+                        // 多选时 Enter 勾选 / 取消当前项（1.x `handleSelectionKeyDown`）。
+                        list.toggle_checked(&item, window, cx);
+                    }
+                });
+            }))
+            .on_action(cx.listener(|panel, _: &PasteSelectedPlain, _, cx| {
+                panel.list.update(cx, |list, cx| {
+                    if !list.selecting() {
+                        list.paste_active(true, cx);
+                    }
+                });
+            }))
+            .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(Self::end_search))
+            .on_action(cx.listener(Self::focus_search))
+            .on_action(cx.listener(|panel, _: &ToggleRange, _, cx| {
+                panel.update_filter(|filter| filter.range = filter.range.toggled(), cx);
+            }))
+            .on_action(cx.listener(|panel, _: &PreviousCategory, _, cx| {
+                let kind = panel.list.read(cx).filter().adjacent_category(false);
+                panel.update_filter(|filter| filter.category = Some(kind), cx);
+            }))
+            .on_action(cx.listener(|panel, _: &NextCategory, _, cx| {
+                let kind = panel.list.read(cx).filter().adjacent_category(true);
+                panel.update_filter(|filter| filter.category = Some(kind), cx);
+            }))
+            .on_action(cx.listener(|panel, _: &NextGroup, _, cx| {
+                panel.cycle_group(false, cx);
+            }))
+            .on_action(cx.listener(|panel, _: &PreviousGroup, _, cx| {
+                panel.cycle_group(true, cx);
+            }))
+            .on_action(cx.listener(|panel, _: &CopySelected, window, cx| {
+                panel.with_active(cx, |list, item, cx| {
+                    list.copy(item.id.clone(), false, None, window, cx)
+                });
+            }))
+            .on_action(cx.listener(|panel, _: &ToggleFavorite, window, cx| {
+                panel.with_active(cx, |list, item, cx| {
+                    list.toggle_favorite(item.id.clone(), window, cx)
+                });
+            }))
+            .on_action(cx.listener(|panel, _: &TogglePinned, window, cx| {
+                panel.with_active(cx, |list, item, cx| {
+                    list.toggle_pinned(item.id.clone(), window, cx)
+                });
+            }))
+            .on_action(cx.listener(|panel, _: &EditNote, window, cx| {
+                panel.with_active(cx, |list, item, cx| {
+                    list.edit_note(item.id.clone(), window, cx)
+                });
+            }))
+            .on_action(cx.listener(|panel, _: &OpenSelected, window, cx| {
+                panel.with_active(cx, |list, _, cx| list.open_active(window, cx));
+            }))
+            .on_action(cx.listener(|panel, _: &SplitSelected, _, cx| {
+                panel.with_active(cx, |list, item, cx| list.split(&item, cx));
+            }))
+            .on_action(cx.listener(|panel, _: &DeleteSelected, window, cx| {
+                panel.list.update(cx, |list, cx| {
+                    if list.selecting() {
+                        list.delete_checked(window, cx);
+                    } else if let Some(item) = list.active_item() {
+                        list.delete(item.id.clone(), window, cx);
+                    }
+                });
+            }))
+            .on_action(cx.listener(|panel, _: &SelectAll, window, cx| {
+                panel.list.update(cx, |list, cx| {
+                    if list.total() > 0 {
+                        list.toggle_all(window, cx);
+                    }
+                });
+            }))
+            .on_action(cx.listener(|panel, action: &QuickPaste, _, cx| {
+                let key = action.key;
+                panel.list.update(cx, |list, cx| list.quick_paste(key, cx));
+            }))
+            .on_action(cx.listener(|panel, _: &PinWindow, _, cx| panel.toggle_pin(cx)))
+            .on_action(cx.listener(|panel, _: &OpenPreferences, _, cx| {
+                panel.emit_intent(PanelIntent::OpenPreferences, cx);
+            }))
+            .on_action(cx.listener(|panel, _: &ShowShortcuts, _, cx| {
+                panel
+                    .list
+                    .update(cx, |_, cx| cx.emit(ListIntent::ShowShortcuts));
+            }))
+            .on_action(cx.listener(|panel, _: &NewGroup, _, cx| {
+                panel.emit_intent(PanelIntent::NewGroup, cx);
+            }))
+            .child(self.header.clone())
+            .child(self.groups.clone())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.list.clone()),
+            )
+    }
+}
+
+impl ClipboardPanel {
+    /// Tab / Shift+Tab：在可见的自定义分组间循环，落到当前分组上时取消（1.x `toggleCustomGroup`）。
+    fn cycle_group(&mut self, reverse: bool, cx: &mut Context<Self>) {
+        let visible = self.groups.read(cx).visible_ids();
+        let current = self.list.read(cx).filter().group_id.clone();
+        if let Some(next) = adjacent_group(&visible, current.as_deref(), reverse) {
+            self.toggle_group(next, cx);
+        }
+    }
+}

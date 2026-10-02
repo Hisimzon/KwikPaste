@@ -188,6 +188,24 @@ impl ListItem {
     }
 }
 
+/// 一条记录的 id 与删除保护要看的标记（core `ClipboardItemRef`），多选全选、连选用。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemRef {
+    pub id: Arc<str>,
+    pub is_favorite: bool,
+    pub is_pinned: bool,
+}
+
+impl ItemRef {
+    pub fn of(item: &ListItem) -> Self {
+        Self {
+            id: item.id.clone(),
+            is_favorite: item.is_favorite,
+            is_pinned: item.is_pinned,
+        }
+    }
+}
+
 /// 卡片头部的类型标签，对应 1.x `clipboard:types.*`。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeKey {

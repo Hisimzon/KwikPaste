@@ -416,8 +416,19 @@ mod tests {
     fn literal_keys_exist() {
         let mut literals = string_literals(include_str!("gallery.rs"));
         literals.extend(translated_literals(include_str!("i18n.rs")));
-        literals.extend(string_literals(include_str!("clipboard/view/card.rs")));
-        literals.extend(string_literals(include_str!("clipboard/view/list.rs")));
+        for source in [
+            include_str!("clipboard/view/card.rs"),
+            include_str!("clipboard/view/list.rs"),
+            include_str!("clipboard/view/list/ops.rs"),
+            include_str!("clipboard/view/list/parts.rs"),
+            include_str!("clipboard/view/list/selecting.rs"),
+            include_str!("clipboard/view/header.rs"),
+            include_str!("clipboard/view/group_bar.rs"),
+            include_str!("clipboard/view/panel.rs"),
+            include_str!("clipboard/model/empty_state.rs"),
+        ] {
+            literals.extend(string_literals(source));
+        }
 
         let mut checked = 0;
         for key in literals {
