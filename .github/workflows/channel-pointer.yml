@@ -21,6 +21,8 @@ name: Publish Update Channels
 #                它发布瞬间也会触发一次 published 事件，那次因产物还没上传会自动跳过。
 #   手动补跑     workflow_dispatch，传入 tag。
 #
+# 只处理 1.x：主版本 ≥2 的 tag 直接跳过，老通道永远只有 1.x（2.x 由 channel-pointer-v2.yml 发布到 v2 路径）。
+#
 # 注意 GitHub 的规则：用 github.token 发布的 release 不会再触发别的 workflow，
 # 所以 nightly.yml 那条路径依赖显式的 workflow_call，而不是 published 事件。
 
@@ -77,6 +79,16 @@ jobs:
             echo "::error::No release tag to work with."
             exit 1
           fi
+
+          # >>> v2-guard
+          major="${tag_name#v}"
+          major="${major%%.*}"
+          if [[ "${tag_name}" == v* && "${major}" =~ ^[0-9]+$ ]] && (( 10#${major} >= 2 )); then
+            echo "跳过：${tag_name} 是 2.x，老通道只放 1.x；2.x 由 channel-pointer-v2.yml 发布。"
+            echo "proceed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # <<< v2-guard
 
           case "${tag_name}" in
             channel-*)

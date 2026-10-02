@@ -29,6 +29,12 @@ name: Native CI
       - "src-tauri/tauri.windows.conf.json"
       - "src-tauri/Info.plist"
       - "packaging/**"
+      - "scripts/release/**"
+      - "scripts/package-portable.ps1"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/channel-pointer.yml"
+      - ".github/workflows/channel-pointer-v2.yml"
+      - ".github/workflows/native-release.yml"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rustfmt.toml"
@@ -48,6 +54,12 @@ name: Native CI
       - "src-tauri/tauri.windows.conf.json"
       - "src-tauri/Info.plist"
       - "packaging/**"
+      - "scripts/release/**"
+      - "scripts/package-portable.ps1"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/channel-pointer.yml"
+      - ".github/workflows/channel-pointer-v2.yml"
+      - ".github/workflows/native-release.yml"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rustfmt.toml"
@@ -96,6 +108,11 @@ jobs:
       - name: Bundle config keeps the 1.x identity
         shell: bash
         run: node scripts/ci/check-release-config.mjs
+
+      # 老通道永远没有 2.x：release.yml / channel-pointer.yml 对 v2+ 不动作，2.x 不发 latest.json（实际执行工作流里的那几段）。
+      - name: 1.x channels never see 2.x
+        shell: bash
+        run: node scripts/ci/check-release-guards.mjs
 
       # kwikpaste-updater 的测试解析这份样本；它必须与发布流水线生成清单的脚本一致。
       - name: Update manifest sample matches the generator

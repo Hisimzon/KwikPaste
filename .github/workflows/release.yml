@@ -1,9 +1,15 @@
 name: Release CI
 
+# 只发 1.x（Tauri 版）。2.x 由 native-release.yml 发布：v2 及以上的标签既不触发这里，手动指定也会被拒绝，
+# 老通道（latest.json、GitHub latest、七牛 stable/beta/nightly）永远只有 1.x。
+# scripts/ci/check-release-guards.mjs 按 GitHub 的匹配规则核对下面的标签过滤，并实际执行 v2-guard 那一段。
+
 "on":
   push:
     tags:
       - "v*"
+      - "!v[2-9].*"
+      - "!v[1-9][0-9]*"
   workflow_dispatch:
     inputs:
       tag_name:
@@ -50,6 +56,15 @@ jobs:
             echo "::error::Release tag must start with v followed by a version, got '${tag_name}'."
             exit 1
           fi
+
+          # >>> v2-guard
+          major="${tag_name#v}"
+          major="${major%%.*}"
+          if [[ ! "${major}" =~ ^[0-9]+$ ]] || (( 10#${major} >= 2 )); then
+            echo "::error::${tag_name} is not a 1.x tag. release.yml only builds the Tauri 1.x app; 2.x is released by native-release.yml."
+            exit 1
+          fi
+          # <<< v2-guard
 
           git fetch --force --tags
           if ! git rev-parse --verify --quiet "refs/tags/${tag_name}" >/dev/null; then
