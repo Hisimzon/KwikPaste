@@ -1,0 +1,21 @@
+{
+  "bundle": {
+    "fileAssociations": [
+      {
+        "description": "KwikPaste bundle test file",
+        "exportedType": {
+          "conformsTo": ["public.data"],
+          "identifier": "com.fastthree.kwikpaste.bundletest.file"
+        },
+        "ext": ["kwikpastebundletest"],
+        "mimeType": "application/vnd.kwikpaste.bundletest",
+        "name": "KwikPasteBundleTestFile",
+        "role": "Editor"
+      }
+    ],
+    "publisher": "fastthree-bundletest"
+  },
+  "identifier": "com.fastthree.kwikpaste.bundletest",
+  "mainBinaryName": "KwikPasteBundleTest",
+  "productName": "KwikPasteBundleTest"
+}

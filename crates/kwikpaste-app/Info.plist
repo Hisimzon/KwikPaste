@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>快贴通过本地网络发现并连接你的其他设备，用于局域网同步剪贴板。KwikPaste uses the local network to find and connect to your other devices for LAN clipboard sync.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_kwikpaste._tcp</string>
+  </array>
+</dict>
+</plist>

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "copyright": "Copyright 2026 FastThree",
+    "createUpdaterArtifacts": true,
+    "fileAssociations": [
+      {
+        "description": "快贴历史备份",
+        "exportedType": {
+          "conformsTo": ["public.data"],
+          "identifier": "com.fastthree.kwikpaste.backup"
+        },
+        "ext": ["kwikpastebak"],
+        "mimeType": "application/vnd.kwikpaste.backup",
+        "name": "快贴备份",
+        "role": "Editor"
+      }
+    ],
+    "icon": ["assets/icons/icon.ico", "assets/icons/icon.icns"],
+    "license": "Apache-2.0",
+    "licenseFile": "../../LICENSE",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "shortDescription": "快贴 - 本地优先剪贴板管理器",
+    "targets": ["nsis", "app", "dmg"],
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "nsis": {
+        "displayLanguageSelector": true,
+        "installerHooks": "../../packaging/windows/installer-hooks.nsh",
+        "installMode": "both",
+        "languages": ["English", "SimpChinese"]
+      },
+      "webviewInstallMode": {
+        "type": "skip"
+      }
+    }
+  },
+  "identifier": "com.fastthree.kwikpaste",
+  "mainBinaryName": "KwikPaste",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM5RjRDMDE3RDE1REI3OUYKUldTZnQxM1JGOEQwT2Z1eTcvcmEzMHp5Y01WM0U1MDlsNzd4cSsvbnRaa3c2NVJFc2NXRHJZR2gK"
+    }
+  },
+  "productName": "KwikPaste"
+}

@@ -1,0 +1,62 @@
+{
+  "keys": [
+    "CFBundleDevelopmentRegion",
+    "CFBundleDisplayName",
+    "CFBundleDocumentTypes",
+    "CFBundleExecutable",
+    "CFBundleIconFile",
+    "CFBundleIdentifier",
+    "CFBundleInfoDictionaryVersion",
+    "CFBundleName",
+    "CFBundlePackageType",
+    "CFBundleShortVersionString",
+    "CFBundleVersion",
+    "CSResourcesFileMapped",
+    "LSMinimumSystemVersion",
+    "LSRequiresCarbon",
+    "NSBonjourServices",
+    "NSHighResolutionCapable",
+    "NSHumanReadableCopyright",
+    "NSLocalNetworkUsageDescription",
+    "UTExportedTypeDeclarations"
+  ],
+  "source": "KwikPaste 1.4.0 .app.tar.gz (aarch64 and x64 are identical); LSMinimumSystemVersion raised to 10.15 for 2.x",
+  "values": {
+    "CFBundleDevelopmentRegion": "English",
+    "CFBundleDisplayName": "KwikPaste",
+    "CFBundleDocumentTypes": [
+      {
+        "CFBundleTypeExtensions": ["kwikpastebak"],
+        "CFBundleTypeName": "快贴备份",
+        "CFBundleTypeRole": "Editor",
+        "LSHandlerRank": "Default",
+        "LSItemContentTypes": ["com.fastthree.kwikpaste.backup"]
+      }
+    ],
+    "CFBundleExecutable": "KwikPaste",
+    "CFBundleIconFile": "icon.icns",
+    "CFBundleIdentifier": "com.fastthree.kwikpaste",
+    "CFBundleInfoDictionaryVersion": "6.0",
+    "CFBundleName": "KwikPaste",
+    "CFBundlePackageType": "APPL",
+    "CSResourcesFileMapped": true,
+    "LSMinimumSystemVersion": "10.15",
+    "LSRequiresCarbon": true,
+    "NSBonjourServices": ["_kwikpaste._tcp"],
+    "NSHighResolutionCapable": true,
+    "NSHumanReadableCopyright": "Copyright 2026 FastThree",
+    "NSLocalNetworkUsageDescription": "快贴通过本地网络发现并连接你的其他设备，用于局域网同步剪贴板。KwikPaste uses the local network to find and connect to your other devices for LAN clipboard sync.",
+    "UTExportedTypeDeclarations": [
+      {
+        "UTTypeConformsTo": ["public.data"],
+        "UTTypeDescription": "快贴历史备份",
+        "UTTypeIdentifier": "com.fastthree.kwikpaste.backup",
+        "UTTypeTagSpecification": {
+          "public.filename-extension": ["kwikpastebak"],
+          "public.mime-type": "application/vnd.kwikpaste.backup"
+        }
+      }
+    ]
+  },
+  "versionKeys": ["CFBundleShortVersionString", "CFBundleVersion"]
+}

@@ -59,17 +59,19 @@ export const parseHeaders = (buf) => {
   for (let index = 0; index < sectionCount; index += 1) {
     const at = optional + optionalSize + index * 40;
     sections.push({
+      rawPointer: buf.readUInt32LE(at + 20),
+      rawSize: buf.readUInt32LE(at + 16),
       virtualAddress: buf.readUInt32LE(at + 12),
       virtualSize: buf.readUInt32LE(at + 8),
-      rawSize: buf.readUInt32LE(at + 16),
-      rawPointer: buf.readUInt32LE(at + 20),
     });
   }
 
   const offsetOf = (rva) => {
     const section = sections.find((candidate) => {
       const span = Math.max(candidate.virtualSize, candidate.rawSize);
-      return rva >= candidate.virtualAddress && rva < candidate.virtualAddress + span;
+      return (
+        rva >= candidate.virtualAddress && rva < candidate.virtualAddress + span
+      );
     });
     if (!section) {
       throw new Error(`RVA 0x${rva.toString(16)} is outside every section`);
@@ -78,7 +80,7 @@ export const parseHeaders = (buf) => {
     return rva - section.virtualAddress + section.rawPointer;
   };
 
-  return { machine, directory, offsetOf };
+  return { directory, machine, offsetOf };
 };
 
 const readAscii = (buf, offset) => {
@@ -142,7 +144,11 @@ export const resources = (buf, headers) => {
         const length = buf.readUInt16LE(nameAt);
         name = buf.toString("utf16le", nameAt + 2, nameAt + 2 + length * 2);
       }
-      list.push({ name, directory: (rawData & 0x80000000) !== 0, offset: base + (rawData & 0x7fffffff) });
+      list.push({
+        directory: (rawData & 0x80000000) !== 0,
+        name,
+        offset: base + (rawData & 0x7fffffff),
+      });
     }
 
     return list;
@@ -154,7 +160,11 @@ export const resources = (buf, headers) => {
       for (const language of entries(item.offset)) {
         const rva = buf.readUInt32LE(language.offset);
         const size = buf.readUInt32LE(language.offset + 4);
-        result[type.name].push({ id: item.name, size, offset: headers.offsetOf(rva) });
+        result[type.name].push({
+          id: item.name,
+          offset: headers.offsetOf(rva),
+          size,
+        });
       }
     }
   }
@@ -199,7 +209,7 @@ const versionBlock = (data, offset) => {
     at = align4(at + child.length);
   }
 
-  return { length, key, type, value, children };
+  return { children, key, length, type, value };
 };
 
 /**
@@ -207,7 +217,10 @@ const versionBlock = (data, offset) => {
  */
 export const versionInfo = (data) => {
   const root = versionBlock(data, 0);
-  if (root.key !== "VS_VERSION_INFO" || root.value.readUInt32LE(0) !== 0xfeef04bd) {
+  if (
+    root.key !== "VS_VERSION_INFO" ||
+    root.value.readUInt32LE(0) !== 0xfeef04bd
+  ) {
     throw new Error("VERSIONINFO is malformed");
   }
   const word = (offset) => {
@@ -222,7 +235,9 @@ export const versionInfo = (data) => {
   });
   for (const table of fileInfo?.children ?? []) {
     for (const entry of table.children) {
-      strings[entry.key] = entry.value.toString("utf16le").replace(/\0.*$/s, "");
+      strings[entry.key] = entry.value
+        .toString("utf16le")
+        .replace(/\0.*$/s, "");
     }
   }
 
@@ -240,7 +255,9 @@ export const checkExe = (path, { version, production }) => {
 
   const groups = table[RT_GROUP_ICON] ?? [];
   if (!groups.some((group) => group.id === 1)) {
-    problems.push(`RT_GROUP_ICON has no ID 1 (found ${JSON.stringify(groups.map((group) => group.id))})`);
+    problems.push(
+      `RT_GROUP_ICON has no ID 1 (found ${JSON.stringify(groups.map((group) => group.id))})`,
+    );
   }
   if ((table[RT_ICON] ?? []).length === 0) {
     problems.push("no RT_ICON images");
@@ -248,7 +265,9 @@ export const checkExe = (path, { version, production }) => {
 
   const manifests = table[RT_MANIFEST] ?? [];
   if (manifests.length !== 1) {
-    problems.push(`expected exactly one RT_MANIFEST, found ${manifests.length}`);
+    problems.push(
+      `expected exactly one RT_MANIFEST, found ${manifests.length}`,
+    );
   }
 
   const versions = table[RT_VERSION] ?? [];
@@ -268,11 +287,15 @@ export const checkExe = (path, { version, production }) => {
     };
     for (const [key, value] of Object.entries(expected)) {
       if (info.strings[key] !== value) {
-        problems.push(`VERSIONINFO ${key} is ${JSON.stringify(info.strings[key])}, expected ${JSON.stringify(value)}`);
+        problems.push(
+          `VERSIONINFO ${key} is ${JSON.stringify(info.strings[key])}, expected ${JSON.stringify(value)}`,
+        );
       }
     }
     if (info.fileVersion !== numeric || info.productVersion !== numeric) {
-      problems.push(`VERSIONINFO numeric versions are ${info.fileVersion} / ${info.productVersion}, expected ${numeric}`);
+      problems.push(
+        `VERSIONINFO numeric versions are ${info.fileVersion} / ${info.productVersion}, expected ${numeric}`,
+      );
     }
   }
 
@@ -281,10 +304,12 @@ export const checkExe = (path, { version, production }) => {
     return /^(vcruntime\d+|msvcp\d+|ucrtbase|api-ms-win-crt-)/i.test(dll);
   });
   if (runtime.length > 0) {
-    problems.push(`imports the C runtime (${runtime.join(", ")}): +crt-static is missing`);
+    problems.push(
+      `imports the C runtime (${runtime.join(", ")}): +crt-static is missing`,
+    );
   }
 
-  return { problems, dlls };
+  return { dlls, problems };
 };
 
 const main = () => {
@@ -295,11 +320,16 @@ const main = () => {
   const versionIndex = args.indexOf("--version");
   const version = versionIndex >= 0 ? args[versionIndex + 1] : undefined;
   if (!path || !version) {
-    say("Usage: node scripts/ci/check-pe.mjs <KwikPaste.exe> --version <semver> [--production]");
+    say(
+      "Usage: node scripts/ci/check-pe.mjs <KwikPaste.exe> --version <semver> [--production]",
+    );
     process.exit(2);
   }
 
-  const { problems, dlls } = checkExe(path, { version, production: args.includes("--production") });
+  const { problems, dlls } = checkExe(path, {
+    production: args.includes("--production"),
+    version,
+  });
   say(`imports: ${dlls.join(", ")}`);
   if (problems.length > 0) {
     for (const problem of problems) {
@@ -307,7 +337,9 @@ const main = () => {
     }
     process.exit(1);
   }
-  say(`ok  ${path}: icon group 1, VERSIONINFO ${version}, one manifest, no C runtime import`);
+  say(
+    `ok  ${path}: icon group 1, VERSIONINFO ${version}, one manifest, no C runtime import`,
+  );
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

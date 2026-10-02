@@ -25,6 +25,10 @@ name: Native CI
       - "scripts/ci/**"
       - "tools/platform-probes/**"
       - "src-tauri/migrations/**"
+      - "src-tauri/tauri.conf.json"
+      - "src-tauri/tauri.windows.conf.json"
+      - "src-tauri/Info.plist"
+      - "packaging/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rustfmt.toml"
@@ -40,6 +44,10 @@ name: Native CI
       - "scripts/ci/**"
       - "tools/platform-probes/**"
       - "src-tauri/migrations/**"
+      - "src-tauri/tauri.conf.json"
+      - "src-tauri/tauri.windows.conf.json"
+      - "src-tauri/Info.plist"
+      - "packaging/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rustfmt.toml"
@@ -83,6 +91,11 @@ jobs:
       - name: UI layering and color tokens
         shell: bash
         run: node scripts/ci/check-ui-boundaries.mjs
+
+      # 2.x 覆盖安装 1.x：identifier、产品名、主程序名、文件关联、安装方式、更新公钥、Info.plist 补充键与 1.x 一致，Tauri CLI 精确 2.11.4。
+      - name: Bundle config keeps the 1.x identity
+        shell: bash
+        run: node scripts/ci/check-release-config.mjs
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.96.0
