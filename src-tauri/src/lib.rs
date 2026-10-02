@@ -13,6 +13,7 @@ mod keystroke;
 mod menu;
 #[cfg(target_os = "windows")]
 mod mouse;
+mod readable_export;
 mod settings;
 mod shortcut;
 mod tray;
@@ -178,6 +179,8 @@ pub fn run() {
             commands::update_settings,
             commands::reset_settings,
             commands::export_history_backup,
+            commands::preview_readable_export,
+            commands::export_readable_data,
             commands::inspect_history_backup,
             commands::take_pending_backup,
             commands::import_history_backup,

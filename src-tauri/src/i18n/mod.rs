@@ -6,6 +6,7 @@ pub mod clipboard_menu;
 pub mod commands;
 mod en_us;
 mod keys;
+pub mod readable_export;
 #[cfg(target_os = "windows")]
 pub mod startup;
 pub mod tray;

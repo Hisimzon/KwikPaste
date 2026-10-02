@@ -28,6 +28,11 @@ import type {
   WordSplit,
 } from "@/types/clipboard";
 import type {
+  ReadableExportOptions,
+  ReadableExportPreview,
+  ReadableExportResult,
+} from "@/types/readableExport";
+import type {
   History,
   Settings,
   SettingsPatch,
@@ -1748,4 +1753,37 @@ export const hideContextMenus = async () => {
   } catch (error) {
     log.error("hide context menus failed", toAppError(error));
   }
+};
+
+/**
+ * 预览可读格式导出的数量，不传输记录正文。
+ */
+export const previewReadableExport = (options: ReadableExportOptions) => {
+  return call<ReadableExportPreview>(
+    TAURI_COMMAND.PREVIEW_READABLE_EXPORT,
+    "commands:labels.previewReadableExport",
+    { options },
+  );
+};
+
+/**
+ * 通过预览指纹校验后导出 Excel 或 Markdown。
+ */
+export const exportReadableData = async (
+  targetPath: string,
+  options: ReadableExportOptions,
+  fingerprint: string,
+) => {
+  const result = await call<ReadableExportResult>(
+    TAURI_COMMAND.EXPORT_READABLE_DATA,
+    "commands:labels.exportReadableData",
+    { fingerprint, options, targetPath },
+  );
+  getMessageApi().success(
+    i18n.t("commands:messages.readableExported", {
+      count: result.itemCount,
+      files: result.fileCount,
+    }),
+  );
+  return result;
 };

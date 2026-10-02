@@ -178,6 +178,35 @@
       "tooltip": "{{date}} · {{value}} records"
     }
   },
+  "readableExport": {
+    "allGroups": "All groups",
+    "allRecords": "All records",
+    "confirmSensitive": "I confirm exporting sensitive content to unencrypted files",
+    "empty": "No records to export in the selected scope",
+    "excluded": "Excluded {{count}} sensitive records; empty groups produce no files",
+    "export": "Choose location and export",
+    "favorites": "Favorites only",
+    "format": "File format",
+    "groups": "Group scope",
+    "includeSensitive": "Include sensitive content (excluded by default)",
+    "merged": "Merge into one file",
+    "newFolder": "A new export folder will be created inside the selected folder. Existing files will not be overwritten.",
+    "noGroups": "Choose at least one group or include ungrouped records",
+    "notBackup": "For reading, organizing and sharing, not full restoration. Settings are not included. HTML / RTF retain original markup; images and files contain references only, not resources.",
+    "output": "Output layout",
+    "pickDirectory": "Choose where to save the export folder",
+    "plainWarning": "Exports are unencrypted. Anyone with the files can read their contents.",
+    "preview": "Preview export",
+    "range": "Content scope",
+    "references": "{{count}} image or file records contain references only and may be unavailable on another computer",
+    "retryPreview": "Check the options and preview again before exporting",
+    "selectedGroups": "Selected groups",
+    "selectGroups": "Choose groups to export",
+    "split": "Split by group",
+    "summary": "Export {{groups}} groups and {{items}} records to {{files}} files",
+    "title": "Export to files",
+    "ungrouped": "Include ungrouped records"
+  },
   "retentionRules": {
     "add": "Add Rule",
     "addCustom": "Custom rule…",
@@ -471,6 +500,11 @@
           "controlLabel": "Export",
           "description": "Export a .kwikpastebak backup, encrypted with a password by default.",
           "title": "Export Backup"
+        },
+        "exportReadable": {
+          "controlLabel": "Export to files",
+          "description": "Export Excel or Markdown with favorites, group and split options.",
+          "title": "Export to files"
         },
         "importHistory": {
           "controlLabel": "Import",

@@ -178,6 +178,35 @@
       "tooltip": "{{date}} · {{value}} 条"
     }
   },
+  "readableExport": {
+    "allGroups": "全部分组",
+    "allRecords": "全部记录",
+    "confirmSensitive": "我确认将敏感内容导出到未加密文件中",
+    "empty": "所选范围没有可导出的记录",
+    "excluded": "已排除 {{count}} 条敏感记录；空分组不会生成文件",
+    "export": "选择位置并导出",
+    "favorites": "仅收藏",
+    "format": "文件格式",
+    "groups": "分组范围",
+    "includeSensitive": "包含敏感内容（默认排除）",
+    "merged": "合并为一个文件",
+    "newFolder": "将在所选目录中新建独立导出文件夹，不覆盖已有文件。",
+    "noGroups": "请选择至少一个分组或包含未分组记录",
+    "notBackup": "用于阅读、整理和分享，不包含设置，不能用于完整恢复。HTML / RTF 保留原始标记；图片和文件仅导出原始引用，不包含实际资源。",
+    "output": "输出方式",
+    "pickDirectory": "选择导出文件夹的保存位置",
+    "plainWarning": "导出文件不加密，拿到文件的人可以直接读取内容",
+    "preview": "预览导出结果",
+    "range": "内容范围",
+    "references": "其中 {{count}} 条图片或文件记录仅包含引用，换电脑后可能无法访问",
+    "retryPreview": "请检查选项后重新预览，确认成功后再导出",
+    "selectedGroups": "指定分组",
+    "selectGroups": "选择要导出的分组",
+    "split": "按分组拆分",
+    "summary": "将导出 {{groups}} 个分组、{{items}} 条记录，生成 {{files}} 个文件",
+    "title": "导出为文件",
+    "ungrouped": "包含未分组记录"
+  },
   "retentionRules": {
     "add": "添加规则",
     "addCustom": "自定义规则…",
@@ -466,6 +495,11 @@
           "controlLabel": "导出",
           "description": "导出 .kwikpastebak 备份包，默认使用密码加密。",
           "title": "导出备份"
+        },
+        "exportReadable": {
+          "controlLabel": "导出为文件",
+          "description": "导出 Excel 或 Markdown，可选收藏、分组与拆分方式。",
+          "title": "导出为文件"
         },
         "importHistory": {
           "controlLabel": "导入",

@@ -1052,6 +1052,18 @@ export const preferenceTabs: PreferenceTab[] = [
           },
           {
             control: { type: "action" },
+            id: "backup.exportReadable",
+            keywords: [
+              "export",
+              "excel",
+              "xlsx",
+              "markdown",
+              "groups",
+              "favorites",
+            ],
+          },
+          {
+            control: { type: "action" },
             id: "backup.importHistory",
             keywords: ["import", "backup", "history"],
           },

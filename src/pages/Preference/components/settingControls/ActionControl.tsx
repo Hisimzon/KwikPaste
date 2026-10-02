@@ -32,13 +32,15 @@ import { REPOSITORY_URL, WEBSITE_URL } from "@/constants/urls";
 import { WINDOW_LABEL } from "@/constants/windows";
 import { resetSettings } from "@/stores/settings";
 import type { ClipboardGroupRecord } from "@/types/clipboard";
-import { getModalApi } from "@/utils/feedback";
+import type { ReadableExportResult } from "@/types/readableExport";
+import { getMessageApi, getModalApi } from "@/utils/feedback";
 import { isPortable } from "@/utils/is";
 import { log } from "@/utils/log";
 import type { PreferenceSetting } from "../../types/preferences";
 import { translatePreferenceControlLabel } from "../../utils/preferenceI18n";
 import BackupExportModal from "../BackupExportModal";
 import ClipboardGroupManagerModal from "../ClipboardGroupManagerModal";
+import ReadableExportModal from "../ReadableExportModal";
 import ControlFrame from "./ControlFrame";
 
 const BACKUP_EXTENSION = "kwikpastebak";
@@ -50,6 +52,7 @@ const CLEAR_HISTORY_SETTING_ID = "localData.clearHistory";
 const CUSTOM_GROUPS_SETTING_ID = "organizing.customGroups";
 const DATA_DIRECTORY_SETTING_ID = "localData.dataDirectory";
 const EXPORT_BACKUP_SETTING_ID = "backup.exportHistory";
+const EXPORT_READABLE_SETTING_ID = "backup.exportReadable";
 const IMPORT_BACKUP_SETTING_ID = "backup.importHistory";
 const LOG_DIRECTORY_SETTING_ID = "localData.logDirectory";
 const REOPEN_ONBOARDING_SETTING_ID = "control.reopenOnboarding";
@@ -106,6 +109,7 @@ const ActionControl: FC<ActionControlProps> = (props) => {
   const { disabled, setting, storageLocation, onActionComplete } = props;
   const [loading, setLoading] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [readableExportOpen, setReadableExportOpen] = useState(false);
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const [groupManagerGroups, setGroupManagerGroups] = useState<
     ClipboardGroupRecord[]
@@ -313,6 +317,16 @@ const ActionControl: FC<ActionControlProps> = (props) => {
     setExportModalOpen(false);
   };
 
+  const closeReadableExport = () => {
+    setReadableExportOpen(false);
+  };
+
+  const handleReadableExported = (result: ReadableExportResult) => {
+    setReadableExportOpen(false);
+    getMessageApi().info(result.path, 8);
+    markActionComplete();
+  };
+
   const closeGroupManager = () => {
     setGroupManagerOpen(false);
   };
@@ -356,6 +370,11 @@ const ActionControl: FC<ActionControlProps> = (props) => {
 
     if (setting.id === EXPORT_BACKUP_SETTING_ID) {
       openExportModal();
+      return;
+    }
+
+    if (setting.id === EXPORT_READABLE_SETTING_ID) {
+      setReadableExportOpen(true);
       return;
     }
 
@@ -487,6 +506,13 @@ const ActionControl: FC<ActionControlProps> = (props) => {
           onCancel={closeExportModal}
           onExported={handleBackupExported}
           open={exportModalOpen}
+        />
+      ) : null}
+
+      {setting.id === EXPORT_READABLE_SETTING_ID && readableExportOpen ? (
+        <ReadableExportModal
+          onCancel={closeReadableExport}
+          onExported={handleReadableExported}
         />
       ) : null}
 

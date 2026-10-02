@@ -23,6 +23,12 @@ pub enum ClipboardMenuKey {
 
 #[derive(Debug, Clone, Copy)]
 pub enum CommandKey {
+    ExportNoGroups,
+    ExportPreviewChanged,
+    ExportEmpty,
+    ExportInvalidTarget,
+    ExportExcelLimit,
+
     DragSourceFilesMissing,
     DragImageMissing,
     DragTextEmpty,
