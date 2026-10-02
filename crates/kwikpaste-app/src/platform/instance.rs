@@ -89,6 +89,7 @@ async fn handle_selftest(
             selftest::IME_STATE => probe::ime_state(),
             selftest::IME_NATIVE => probe::set_ime_native_mode(),
             selftest::READ_NOW => read_now(cx).await,
+            selftest::COUNT => count(cx).await,
             selftest::QUIT => {
                 probe::quitting();
                 cx.update(|cx| cx.quit());
@@ -121,6 +122,21 @@ async fn read_now(cx: &mut AsyncApp) {
         return;
     };
     probe::read_now(&core.read_clipboard_now().await);
+}
+
+/// `--selftest-count`：历史记录总数写进探针日志。
+async fn count(cx: &mut AsyncApp) {
+    let Some(core) = cx.update(|cx| core_host::core(cx).cloned()) else {
+        return;
+    };
+    let query = kwikpaste_core::db::models::ClipboardItemQuery {
+        limit: 1,
+        ..Default::default()
+    };
+    match core.list_items(query).await {
+        Ok(page) => probe::count(page.total),
+        Err(err) => log::error!("selftest count failed: {err}"),
+    }
 }
 
 /// `--selftest-settings=<JSON patch>`：经 core 更新设置，走与偏好页相同的 `SettingsUpdated` 路径。

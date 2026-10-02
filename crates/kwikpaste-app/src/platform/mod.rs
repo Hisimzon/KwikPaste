@@ -144,7 +144,7 @@ pub fn start<V: Render>(
         window_state::migrate_legacy(core);
     }
 
-    if selftest::enabled(selftest::PLATFORM) {
+    if selftest::enabled(selftest::PLATFORM) && !selftest::enabled(selftest::UI_PANEL) {
         panel::open(cx, text_scale, |window, cx| {
             cx.new(|cx| probe_view::ProbeView::new(window, cx))
         })?;

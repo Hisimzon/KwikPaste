@@ -40,6 +40,10 @@ pub const COPY_ITEM: &str = "--selftest-copy-item=";
 pub const READ_NOW: &str = "--selftest-read-now";
 /// `--selftest-handoff=<code>`：演练更新交接的宿主步骤后以 `code` 退出（见 `platform::updater`）。
 pub const HANDOFF: &str = "--selftest-handoff=";
+/// 把历史记录总数写进探针日志。
+pub const COUNT: &str = "--selftest-count";
+/// 平台探针的面板放正式的列表（UI 的 `build_panel`），不放平台自测视图；验证列表的粘贴意图用。
+pub const UI_PANEL: &str = "--selftest-ui-panel";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
 pub const GALLERY: &str = "--selftest-gallery";
 /// 列表跑分：1 万行合成数据，附录 D §3.7 的门槛与锚定场景（见 `clipboard::view::bench`）。
@@ -88,7 +92,8 @@ pub fn kind() -> Option<&'static str> {
 
 /// 本进程是平台探针本身（`--selftest-platform`）或者给它转交命令的后启动实例。
 fn platform_probe() -> bool {
-    const COMMANDS: [&str; 11] = [
+    const COMMANDS: [&str; 12] = [
+        COUNT,
         PLATFORM,
         SHOW,
         HIDE,

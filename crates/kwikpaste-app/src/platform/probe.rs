@@ -318,6 +318,11 @@ pub fn follow_clipboard(cx: &mut gpui::App) {
     .detach();
 }
 
+/// 历史记录总数。
+pub fn count(total: i64) {
+    write("count", &format!(r#","total":{total}"#));
+}
+
 /// 演练的交接已停输入、删托盘、释放单实例，2 秒后退出。
 pub fn handoff_rehearsed() {
     write("handoff", "");
