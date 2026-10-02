@@ -22,6 +22,14 @@ pub const SHOW: &str = "--selftest-show";
 pub const HIDE: &str = "--selftest-hide";
 pub const TOGGLE: &str = "--selftest-toggle";
 pub const QUIT: &str = "--selftest-quit";
+/// 以键盘触发的方式进入编辑态（走吞 Alt 取前台）、退出编辑态。
+pub const EDIT: &str = "--selftest-edit";
+pub const END_EDIT: &str = "--selftest-end-edit";
+/// 把面板输入上下文的状态写进探针日志；把面板的输入法切到中文模式。
+pub const IME_STATE: &str = "--selftest-ime-state";
+pub const IME_NATIVE: &str = "--selftest-ime-native";
+/// `--selftest-settings=<JSON patch>`：经 core 更新设置。
+pub const SETTINGS: &str = "--selftest-settings=";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
 pub const GALLERY: &str = "--selftest-gallery";
 
@@ -113,11 +121,11 @@ fn smoke(cx: &mut App) {
         log::error!("smoke selftest: the panel was not created");
         std::process::exit(1);
     };
-    let root = panel.root().clone();
+    let events = panel.events().clone();
     panel.request(PanelCommand::Show(Trigger::now(TriggerSource::Selftest)));
 
     let shown = Rc::new(Cell::new(false));
-    let subscription = cx.subscribe(&root, {
+    let subscription = cx.subscribe(&events, {
         let shown = shown.clone();
         move |_, event: &PanelEvent, _| {
             if *event == PanelEvent::Shown {

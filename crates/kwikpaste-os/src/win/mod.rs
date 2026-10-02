@@ -1,17 +1,36 @@
 //! Windows 集成。
 
+pub mod apps;
+pub mod ime;
+pub mod keyboard;
 pub mod monitor;
+pub mod mouse;
 pub mod panel;
 pub mod single_instance;
+pub mod system;
 
-use windows::Win32::Foundation::{POINT, RECT};
-use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+use std::ffi::c_void;
+
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, SetForegroundWindow};
 
 use crate::geometry::{Point, Rect};
 
-/// 当前前台窗口的句柄（没有时为 0），日志和自测用。
+/// 当前前台窗口的句柄（没有时为 0）。
 pub fn foreground_window() -> isize {
     unsafe { GetForegroundWindow() }.0 as isize
+}
+
+/// 把 `hwnd` 设为前台窗口，返回之后它是否真的是前台。系统的前台锁可能拒绝，调用方要处理失败。
+pub fn set_foreground(hwnd: isize) -> bool {
+    let window = HWND(hwnd as *mut c_void);
+    let accepted = unsafe { SetForegroundWindow(window) }.as_bool();
+    accepted && foreground_window() == hwnd
+}
+
+/// 句柄是否仍是一个存在的窗口。
+pub fn is_window(hwnd: isize) -> bool {
+    hwnd != 0 && unsafe { IsWindow(Some(HWND(hwnd as *mut c_void))) }.as_bool()
 }
 
 fn rect_from_win32(rect: RECT) -> Rect {

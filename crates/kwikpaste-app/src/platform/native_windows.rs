@@ -1,15 +1,21 @@
 //! Windows 面板胶水：从 GPUI 窗口取 HWND，几何计算和原生调用交给 `kwikpaste_os::win`。
 
 use std::cell::Cell;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, anyhow, bail};
 use gpui::Window;
 use kwikpaste_os::geometry::{Rect, follow_cursor, scale_size};
 use kwikpaste_os::win::monitor::{self, BASE_DPI, MonitorInfo};
 use kwikpaste_os::win::panel::{self as win_panel, PanelOptions};
+use kwikpaste_os::win::{self as os, keyboard, mouse};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+use super::editing::{EditReport, EditTrigger};
 use super::panel::PANEL_SIZE;
+
+/// 钩子确认吞掉带标记的 Alt 的最长等待（实测约 1.5 ms）。
+const MARKED_ALT_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// 一次显示算出并写入的几何。
 pub struct Placement {
@@ -22,10 +28,14 @@ pub struct NativePanel {
     panel: win_panel::Panel,
     /// 上次隐藏时的内容区尺寸（逻辑像素，已含文本缩放），用户拉伸过就沿用。
     logical_size: Cell<Option<(f64, f64)>>,
+    /// 系统「文本大小」系数。
+    text_scale: Cell<f64>,
+    /// 编辑态：进入前的前台窗口；`None` 表示不在编辑态。
+    editing: Cell<Option<isize>>,
 }
 
 impl NativePanel {
-    pub fn attach(window: &Window) -> anyhow::Result<Self> {
+    pub fn attach(window: &Window, text_scale: f64) -> anyhow::Result<Self> {
         let handle = HasWindowHandle::window_handle(window)
             .map_err(|err| anyhow!("panel window handle: {err:?}"))?;
         let RawWindowHandle::Win32(handle) = handle.as_raw() else {
@@ -36,18 +46,31 @@ impl NativePanel {
             // GPUI 在主线程创建窗口，面板永不销毁。
             panel: unsafe { win_panel::Panel::from_raw(handle.hwnd.get()) },
             logical_size: Cell::new(None),
+            text_scale: Cell::new(text_scale),
+            editing: Cell::new(None),
         })
     }
 
     pub fn install(&self) -> anyhow::Result<()> {
         self.panel.install(PanelOptions {
             min_logical_size: PANEL_SIZE,
+            text_scale: self.text_scale.get(),
         })?;
         Ok(())
     }
 
     pub fn is_visible(&self) -> bool {
         self.panel.is_visible()
+    }
+
+    pub fn raw_handle(&self) -> isize {
+        self.panel.raw()
+    }
+
+    /// 文本大小变了：最小尺寸立即按新系数算，默认尺寸下次显示时补偿。
+    pub fn set_text_scale(&self, text_scale: f64) {
+        self.text_scale.set(text_scale);
+        self.panel.set_text_scale(text_scale);
     }
 
     /// 光标所在显示器、光标附近；取不到光标时放到主显示器中央。
@@ -68,10 +91,12 @@ impl NativePanel {
         })
     }
 
+    /// 默认尺寸是 360×600 × 文本缩放；用户拉大过就沿用，但不小于当前文本缩放下的默认尺寸。
     fn target_client_rect(&self, monitor: &MonitorInfo) -> Rect {
-        let logical = self.logical_size.get().unwrap_or_else(|| {
-            let text_scale = monitor::text_scale_factor();
-            (PANEL_SIZE.0 * text_scale, PANEL_SIZE.1 * text_scale)
+        let text_scale = self.text_scale.get();
+        let default = (PANEL_SIZE.0 * text_scale, PANEL_SIZE.1 * text_scale);
+        let logical = self.logical_size.get().map_or(default, |(width, height)| {
+            (width.max(default.0), height.max(default.1))
         });
         let size = scale_size(logical, monitor.scale());
 
@@ -80,6 +105,21 @@ impl NativePanel {
 
     pub fn show(&self) {
         self.panel.show_without_activating();
+    }
+
+    /// 面板显示后装上键盘、鼠标钩子：非编辑态的按键、窗外点击隐藏。
+    pub fn start_hooks(&self) {
+        if let Err(err) = keyboard::start() {
+            log::error!("keyboard hook is unavailable: {err}");
+        }
+        if let Err(err) = mouse::start_outside_click() {
+            log::error!("mouse hook is unavailable: {err}");
+        }
+    }
+
+    pub fn stop_hooks(&self) {
+        keyboard::stop();
+        mouse::stop_outside_click();
     }
 
     /// 显示后外框必须等于写入的矩形；不等（例如 DPI 变化改了尺寸）就记错误并重放一次。
@@ -116,15 +156,81 @@ impl NativePanel {
         self.panel.hide();
     }
 
+    pub fn is_editing(&self) -> bool {
+        self.editing.get().is_some()
+    }
+
+    /// 进入编辑态，见 [`super::editing`]。失败时已回滚到非编辑态。
+    pub fn begin_editing(&self, trigger: EditTrigger) -> anyhow::Result<EditReport> {
+        let started = Instant::now();
+        let hwnd = self.panel.raw();
+        let previous = os::foreground_window();
+
+        keyboard::set_navigation(false);
+        self.panel.set_activatable(true);
+
+        let marked_alt_swallowed = match trigger {
+            EditTrigger::Mouse => false,
+            EditTrigger::Keyboard => {
+                if !keyboard::swallow_marked_alt(MARKED_ALT_TIMEOUT) {
+                    self.roll_back_editing();
+                    bail!("the keyboard hook did not confirm the marked Alt");
+                }
+                true
+            }
+        };
+        if !os::set_foreground(hwnd) {
+            self.roll_back_editing();
+            bail!(
+                "Windows refused to make the panel the foreground window (foreground is 0x{:X})",
+                os::foreground_window()
+            );
+        }
+
+        self.editing
+            .set(Some(if previous == hwnd { 0 } else { previous }));
+        Ok(EditReport {
+            previous_foreground: previous,
+            marked_alt_swallowed,
+            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+        })
+    }
+
+    fn roll_back_editing(&self) {
+        self.panel.set_activatable(false);
+        keyboard::set_navigation(true);
+    }
+
+    /// 退出编辑态。`restore_foreground` 为真且面板仍是前台时，把前台还给进入前的窗口。
+    pub fn end_editing(&self, restore_foreground: bool) {
+        let Some(previous) = self.editing.take() else {
+            return;
+        };
+        let foreground_is_panel = os::foreground_window() == self.panel.raw();
+
+        self.panel.set_activatable(false);
+        keyboard::set_navigation(true);
+        if restore_foreground
+            && foreground_is_panel
+            && os::is_window(previous)
+            && !os::set_foreground(previous)
+        {
+            log::debug!("Windows refused to give the foreground back to 0x{previous:X}");
+        }
+    }
+
     /// 自测探针用的原生状态（JSON 对象的字段片段，以逗号开头）。
     pub fn probe_fields(&self, placement: Option<&Placement>) -> String {
         let counters = win_panel::counters();
         let mut fields = format!(
-            r#","hwnd":{},"visible":{},"foreground":{},"dpi":{},"phantom_activations":{},"mouse_activate_replies":{:?},"mouse_activate_overrides":{}"#,
+            r#","hwnd":{},"visible":{},"foreground":{},"editing":{},"non_activating":{},"dpi":{},"text_scale":{},"phantom_activations":{},"mouse_activate_replies":{:?},"mouse_activate_overrides":{}"#,
             self.panel.raw(),
             self.panel.is_visible(),
-            kwikpaste_os::win::foreground_window(),
+            os::foreground_window(),
+            self.is_editing(),
+            self.panel.is_non_activating(),
             self.panel.dpi(),
+            self.text_scale.get(),
             counters.phantom_activations,
             counters.mouse_activate_replies,
             counters.mouse_activate_overrides,

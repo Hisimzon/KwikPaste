@@ -1,8 +1,8 @@
 //! 剪贴板面板：启动时以隐藏状态预创建、永不销毁；显示、隐藏、定位只走原生调用，从不激活。
 //!
-//! 热键、托盘、第二实例和 UI 自己的请求都送进同一个 channel，由一个 `cx.spawn` 循环按顺序执行。
-//! 原生调用都在 `cx.update` 之外：GPUI 的窗口过程因此能同步拿到 `App`，`ShowWindow` 发出的
-//! `WM_SHOWWINDOW` 会当场画出首帧，改位置、改尺寸的回调也不会因为借用冲突被丢掉。
+//! 热键、托盘、第二实例、钩子和 UI 自己的请求都送进同一个 channel，由一个 `cx.spawn` 循环按顺序
+//! 执行。原生调用都在 `cx.update` 之外：GPUI 的窗口过程因此能同步拿到 `App`，`ShowWindow` 发出的
+//! `WM_SHOWWINDOW` 会当场画出首帧，改位置、改尺寸、激活的回调也不会因为借用冲突被丢掉。
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,13 +10,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::Context as _;
 use async_channel::{Receiver, Sender};
 use gpui::{
-    AnyView, AnyWindowHandle, App, AppContext as _, AsyncApp, Bounds, Context, Entity,
-    EventEmitter, FocusHandle, Global, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, Styled as _, Window, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, div, point, px, size,
+    AnyView, AnyWindowHandle, App, AppContext as _, AsyncApp, Bounds, Capslock, Context, Entity,
+    EventEmitter, FocusHandle, Global, InteractiveElement as _, IntoElement, Modifiers,
+    ModifiersChangedEvent, ParentElement as _, PlatformInput, Render, Styled as _, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, px, size,
 };
 use kwikpaste_os::clock;
 
+use super::editing::EditTrigger;
 use super::native::NativePanel;
 use super::probe;
 
@@ -29,6 +30,12 @@ pub enum TriggerSource {
     Hotkey,
     Tray,
     SecondInstance,
+    #[cfg_attr(
+        target_os = "macos",
+        expect(dead_code, reason = "macOS 的点外部隐藏还没做")
+    )]
+    OutsideClick,
+    Ui,
     Selftest,
 }
 
@@ -38,6 +45,8 @@ impl TriggerSource {
             Self::Hotkey => "hotkey",
             Self::Tray => "tray",
             Self::SecondInstance => "second-instance",
+            Self::OutsideClick => "outside-click",
+            Self::Ui => "ui",
             Self::Selftest => "selftest",
         }
     }
@@ -65,9 +74,19 @@ pub enum PanelCommand {
     Toggle(Trigger),
     Show(Trigger),
     Hide(Trigger),
+    /// 进入编辑态；结果以 [`PanelEvent::EditingStarted`] 或 [`PanelEvent::EditingRefused`] 送回。
+    BeginEditing(EditTrigger),
+    /// 退出编辑态，前台还给进入前的窗口；完成后发 [`PanelEvent::EditingEnded`]。
+    EndEditing,
+    /// 系统「文本大小」变了，面板的最小、默认尺寸跟着补偿。
+    #[cfg_attr(
+        target_os = "macos",
+        expect(dead_code, reason = "macOS 没有单独的文本大小设置")
+    )]
+    SetTextScale(f64),
 }
 
-/// 面板可见性变化，从 [`PanelRoot`] 发出。
+/// 面板状态变化，从 [`Panel::events`] 发出。
 ///
 /// `Shown` 在原生显示之前、与重置焦点同一次 update 里发出，订阅者在这里重置的视图状态会进首帧；
 /// `Hidden` 在原生隐藏之后发出，订阅者据此停止刷新、释放缓存。
@@ -75,15 +94,24 @@ pub enum PanelCommand {
 pub enum PanelEvent {
     Shown,
     Hidden,
+    /// 面板已是前台窗口，可以聚焦输入框。
+    EditingStarted,
+    /// 没能进入编辑态（面板不可见、没拿到前台），焦点留在原处。
+    EditingRefused,
+    /// 已退出编辑态（包括随面板隐藏退出），焦点应还给列表。
+    EditingEnded,
 }
+
+/// 发出 [`PanelEvent`] 的实体。面板窗口打开之前就已建好，UI 在构造自己的视图时即可订阅。
+pub struct PanelEvents;
+
+impl EventEmitter<PanelEvent> for PanelEvents {}
 
 /// 面板窗口的根视图：包一层 UI 的视图，提供兜底焦点和首帧计时。
 pub struct PanelRoot {
     content: AnyView,
     focus: FocusHandle,
 }
-
-impl EventEmitter<PanelEvent> for PanelRoot {}
 
 impl Render for PanelRoot {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -96,9 +124,10 @@ impl Render for PanelRoot {
     }
 }
 
-/// 面板的全局句柄。
+/// 面板的全局句柄。面板窗口打开之前就挂上（只是还没有窗口），UI 的视图构造时就能订阅事件、发命令。
 pub struct Panel {
-    root: Entity<PanelRoot>,
+    events: Entity<PanelEvents>,
+    window: Option<AnyWindowHandle>,
     commands: Sender<PanelCommand>,
 }
 
@@ -109,16 +138,22 @@ impl Panel {
         self.commands.clone()
     }
 
-    /// 请求显示、隐藏或切换面板，在下一轮主循环里执行。
+    /// 发一条命令，在下一轮主循环里执行。
     pub fn request(&self, command: PanelCommand) {
         if self.commands.try_send(command).is_err() {
             log::warn!("panel command loop has stopped; dropped {command:?}");
         }
     }
 
-    /// 面板根视图，订阅 [`PanelEvent`] 用。
-    pub fn root(&self) -> &Entity<PanelRoot> {
-        &self.root
+    /// 订阅 [`PanelEvent`] 用。
+    pub fn events(&self) -> &Entity<PanelEvents> {
+        &self.events
+    }
+
+    /// 面板窗口，钩子按键派发用；窗口打开之前为 `None`。
+    #[cfg_attr(target_os = "macos", expect(dead_code, reason = "macOS 不用键盘钩子"))]
+    pub fn window(&self) -> Option<AnyWindowHandle> {
+        self.window
     }
 }
 
@@ -174,12 +209,21 @@ fn window_options() -> WindowOptions {
 /// 以隐藏状态创建面板，挂上全局句柄并启动命令循环；返回 UI 的视图。
 pub fn open<V: Render>(
     cx: &mut App,
+    text_scale: f64,
     build: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
 ) -> anyhow::Result<Entity<V>> {
+    let events = cx.new(|_| PanelEvents);
+    let (commands, receiver) = async_channel::unbounded();
+    cx.set_global(Panel {
+        events: events.clone(),
+        window: None,
+        commands,
+    });
+
     let mut native = None;
     let mut content = None;
     let (window, root) = kwikpaste_ui::open_window(window_options(), cx, |window, cx| {
-        native = Some(NativePanel::attach(window));
+        native = Some(NativePanel::attach(window, text_scale));
         let view = build(window, cx);
         content = Some(view.clone());
         let focus = cx.focus_handle();
@@ -191,63 +235,80 @@ pub fn open<V: Render>(
     let native = native.context("the panel window was not built")??;
     let content = content.context("the panel window was not built")?;
 
-    let (commands, receiver) = async_channel::unbounded();
-    cx.set_global(Panel {
-        root: root.clone(),
-        commands,
-    });
-    cx.spawn(async move |cx| run(native, window, root, receiver, cx).await)
+    cx.global_mut::<Panel>().window = Some(window);
+    let parts = Parts {
+        native,
+        window,
+        root,
+        events,
+    };
+    cx.spawn(async move |cx| run(parts, receiver, cx).await)
         .detach();
 
     Ok(content)
 }
 
-async fn run(
+/// 命令循环持有的面板部件。
+struct Parts {
     native: NativePanel,
     window: AnyWindowHandle,
     root: Entity<PanelRoot>,
-    commands: Receiver<PanelCommand>,
-    cx: &mut AsyncApp,
-) {
-    if let Err(err) = native.install() {
+    events: Entity<PanelEvents>,
+}
+
+impl Parts {
+    fn emit(&self, event: PanelEvent, cx: &mut AsyncApp) {
+        cx.update(|cx| self.events.update(cx, |_, cx| cx.emit(event)));
+    }
+}
+
+async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) {
+    if let Err(err) = parts.native.install() {
         log::error!("panel native setup failed: {err:#}");
     }
-    probe::ready(&native);
+    probe::ready(&parts.native);
 
     while let Ok(command) = commands.recv().await {
-        let visible = native.is_visible();
+        let visible = parts.native.is_visible();
         let (want_visible, trigger) = match command {
             PanelCommand::Toggle(trigger) => (!visible, trigger),
             PanelCommand::Show(trigger) => (true, trigger),
             PanelCommand::Hide(trigger) => (false, trigger),
+            PanelCommand::BeginEditing(trigger) => {
+                begin_editing(&parts, trigger, cx);
+                continue;
+            }
+            PanelCommand::EndEditing => {
+                end_editing(&parts, cx);
+                continue;
+            }
+            PanelCommand::SetTextScale(text_scale) => {
+                parts.native.set_text_scale(text_scale);
+                continue;
+            }
         };
 
         match (want_visible, visible) {
-            (true, false) => show(&native, window, &root, trigger, cx),
-            (true, true) => native.raise(),
-            (false, true) => hide(&native, &root, trigger, cx),
+            (true, false) => show(&parts, trigger, cx),
+            (true, true) => parts.native.raise(),
+            (false, true) => hide(&parts, trigger, cx),
             (false, false) => {}
         }
     }
 }
 
-fn show(
-    native: &NativePanel,
-    window: AnyWindowHandle,
-    root: &Entity<PanelRoot>,
-    trigger: Trigger,
-    cx: &mut AsyncApp,
-) {
+fn show(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
+    let native = &parts.native;
     let placement = native
         .place_near_cursor()
         .inspect_err(|err| log::error!("panel placement failed, showing in place: {err:#}"))
         .ok();
 
     let prepared = cx.update(|cx| {
-        window.update(cx, |_, window, cx| {
-            root.update(cx, |_, cx| cx.emit(PanelEvent::Shown));
+        parts.events.update(cx, |_, cx| cx.emit(PanelEvent::Shown));
+        parts.window.update(cx, |_, window, cx| {
             if window.focused(cx).is_none() {
-                let focus = root.read(cx).focus.clone();
+                let focus = parts.root.read(cx).focus.clone();
                 window.focus(&focus, cx);
             }
             window.refresh();
@@ -261,6 +322,7 @@ fn show(
     let show_started = clock::now_ticks();
     native.show();
     let show_returned = clock::now_ticks();
+    native.start_hooks();
     if let Some(placement) = &placement {
         native.verify(placement);
     }
@@ -280,12 +342,90 @@ fn show(
         .detach();
 }
 
-fn hide(native: &NativePanel, root: &Entity<PanelRoot>, trigger: Trigger, cx: &mut AsyncApp) {
+fn hide(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
+    let native = &parts.native;
+    let was_editing = native.is_editing();
+    // 编辑中隐藏：系统自己把前台交还给原窗口，不再去抢。
+    native.end_editing(false);
+    native.stop_hooks();
     native.hide();
-    cx.update(|cx| root.update(cx, |_, cx| cx.emit(PanelEvent::Hidden)));
+
+    cx.update(|cx| {
+        // 钩子停了，之后真实的 Ctrl 松开收不到，先把修饰键状态复位，免得快捷键提示残留。
+        let _ = parts.window.update(cx, |_, window, cx| {
+            window.dispatch_event(
+                PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                    modifiers: Modifiers::default(),
+                    capslock: Capslock::default(),
+                }),
+                cx,
+            );
+        });
+        parts.events.update(cx, |_, cx| {
+            if was_editing {
+                cx.emit(PanelEvent::EditingEnded);
+            }
+            cx.emit(PanelEvent::Hidden);
+        });
+    });
 
     if probe::enabled() {
+        if was_editing {
+            probe::editing_ended(&native.probe_fields(None));
+        }
         probe::hidden(trigger, &native.probe_fields(None));
+    }
+}
+
+fn begin_editing(parts: &Parts, trigger: EditTrigger, cx: &mut AsyncApp) {
+    let native = &parts.native;
+    if native.is_editing() {
+        parts.emit(PanelEvent::EditingStarted, cx);
+        return;
+    }
+
+    let result = if native.is_visible() {
+        native.begin_editing(trigger)
+    } else {
+        Err(anyhow::anyhow!("the panel is hidden"))
+    };
+    let event = match &result {
+        Ok(report) => {
+            log::debug!(
+                "editing started by {} in {:.1} ms (marked Alt swallowed: {})",
+                trigger.name(),
+                report.elapsed_ms,
+                report.marked_alt_swallowed
+            );
+            PanelEvent::EditingStarted
+        }
+        Err(err) => {
+            log::warn!("editing refused ({}): {err:#}", trigger.name());
+            PanelEvent::EditingRefused
+        }
+    };
+    parts.emit(event, cx);
+
+    if probe::enabled() {
+        probe::editing(
+            trigger,
+            result.as_ref().ok().copied().unwrap_or_default(),
+            result.as_ref().err().map(|err| format!("{err:#}")),
+            &native.probe_fields(None),
+        );
+    }
+}
+
+fn end_editing(parts: &Parts, cx: &mut AsyncApp) {
+    if !parts.native.is_editing() {
+        return;
+    }
+
+    parts.native.end_editing(true);
+    parts.emit(PanelEvent::EditingEnded, cx);
+
+    if probe::enabled() {
+        probe::editing_ended(&parts.native.probe_fields(None));
     }
 }
 

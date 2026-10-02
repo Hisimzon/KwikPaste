@@ -63,6 +63,8 @@ raw-window-handle = "0.6"
 tray-icon = { version = "0.24", default-features = false }
 windows = "0.62"
 windows-registry = "0.6"
+# kwikpaste-os 读 macOS 应用包的 Info.plist，与 src-tauri 相同。
+plist = { version = "1", default-features = false }
 
 # kwikpaste-core 的历史备份（.kwikpastebak 与 1.x 格式相同），版本与 src-tauri 一致。
 argon2 = { version = "0.5", features = ["std"] }

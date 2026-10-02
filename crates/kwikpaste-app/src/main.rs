@@ -1,6 +1,7 @@
 //! 快贴原生版（GPUI）入口。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod core_host;
 mod gallery;
 mod i18n;
 mod identity;

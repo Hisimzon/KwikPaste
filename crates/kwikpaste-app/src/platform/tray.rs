@@ -1,25 +1,26 @@
 //! 托盘：tray-icon + muda（1.x 经 Tauri 用的同一系 crate），在主线程创建，由 GPUI 的消息循环派发。
 //!
-//! 事件经专用线程阻塞 `recv()` 转进 `async_channel`，线程里只转发、不碰 GPUI。
+//! 与 1.x 相同：菜单是「偏好设置」「退出应用」，文案取 `kwikpaste_core::i18n::tray`，跟随
+//! `appearance.language`；显隐跟随 `general.trayIcon`；Windows 左键单击按 `general.trayClick`
+//! 打开窗口，macOS 左键弹菜单。事件经专用线程阻塞 `recv()` 转进 `async_channel`，
+//! 线程里只转发、不碰 GPUI。
+//!
+//! TODO：偏好窗建好之前，「偏好设置」和 `trayClick = preference` 先唤起面板。
 
 use async_channel::Sender;
 use gpui::{App, AsyncApp, Global};
+use kwikpaste_core::i18n::tray::{self as tray_i18n, Key};
+use kwikpaste_core::settings::{Settings, TrayClick};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use super::panel::{PanelCommand, Trigger, TriggerSource};
+use crate::core_host;
 
 const TRAY_ID: &str = "app-tray";
-const MENU_SHOW: &str = "tray::show";
-const MENU_QUIT: &str = "tray::quit";
+const MENU_PREFERENCE: &str = "tray::preference";
+const MENU_EXIT: &str = "tray::exit";
 const ICON: &[u8] = include_bytes!("../../assets/tray.ico");
-
-/// 托盘菜单文案，`[zh-CN, en-US]`。
-///
-/// TODO：接入 settings 的 `appearance.language` 和 Rust 侧 i18n 模块；之前固定用默认语言 zh-CN。
-const SHOW_LABEL: [&str; 2] = ["显示面板", "Show panel"];
-const QUIT_LABEL: [&str; 2] = ["退出", "Quit"];
-const LANGUAGE: usize = 0;
 
 /// 持有托盘图标：退出前丢弃，任务栏上不留残影。
 struct Tray {
@@ -28,26 +29,32 @@ struct Tray {
 
 impl Global for Tray {}
 
-enum MenuAction {
-    Show,
-    Quit,
+enum TrayAction {
+    #[cfg_attr(
+        target_os = "macos",
+        expect(dead_code, reason = "macOS 左键弹菜单，不单独处理左键")
+    )]
+    LeftClick,
+    Preference,
+    Exit,
 }
 
-/// 创建托盘图标和菜单（显示面板、退出），并启动事件桥。
+/// 创建托盘图标和菜单，并启动事件桥。
 pub fn create(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()> {
-    let menu = Menu::new();
-    menu.append_items(&[
-        &MenuItem::with_id(MENU_SHOW, SHOW_LABEL[LANGUAGE], true, None),
-        &MenuItem::with_id(MENU_QUIT, QUIT_LABEL[LANGUAGE], true, None),
-    ])?;
+    let settings = core_host::core(cx)
+        .map(|core| core.settings())
+        .unwrap_or_default();
     let icon = TrayIconBuilder::new()
         .with_id(TRAY_ID)
         .with_icon(load_icon()?)
         .with_icon_as_template(cfg!(target_os = "macos"))
         .with_menu_on_left_click(cfg!(target_os = "macos"))
         .with_tooltip(crate::identity::display_name())
-        .with_menu(Box::new(menu))
+        .with_menu(Box::new(build_menu(&settings)?))
         .build()?;
+    if let Err(err) = icon.set_visible(settings.general.tray_icon) {
+        log::warn!("tray icon visibility could not be set: {err}");
+    }
 
     cx.set_global(Tray { icon: Some(icon) });
     cx.on_app_quit(|cx| {
@@ -58,18 +65,17 @@ pub fn create(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()
     })
     .detach();
 
-    #[cfg(target_os = "windows")]
-    bridge_left_click(commands.clone())?;
-
     let (actions, receiver) = async_channel::unbounded();
+    #[cfg(target_os = "windows")]
+    bridge_left_click(actions.clone())?;
     std::thread::Builder::new()
         .name("tray-menu-bridge".to_owned())
         .spawn(move || {
             let events = MenuEvent::receiver();
             while let Ok(event) = events.recv() {
                 let action = match event.id.as_ref() {
-                    MENU_SHOW => MenuAction::Show,
-                    MENU_QUIT => MenuAction::Quit,
+                    MENU_PREFERENCE => TrayAction::Preference,
+                    MENU_EXIT => TrayAction::Exit,
                     _ => continue,
                 };
                 if actions.send_blocking(action).is_err() {
@@ -77,14 +83,25 @@ pub fn create(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()
                 }
             }
         })?;
+
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Ok(action) = receiver.recv().await {
             match action {
-                MenuAction::Show => {
+                TrayAction::Exit => cx.update(|cx| cx.quit()),
+                TrayAction::Preference | TrayAction::LeftClick => {
+                    if matches!(action, TrayAction::LeftClick) {
+                        let click = cx.update(|cx| {
+                            core_host::core(cx).map(|core| core.settings().general.tray_click)
+                        });
+                        if click == Some(TrayClick::Preference) {
+                            log::debug!(
+                                "trayClick = preference; the preference window is not built yet"
+                            );
+                        }
+                    }
                     let trigger = Trigger::now(TriggerSource::Tray);
                     let _ = commands.send(PanelCommand::Show(trigger)).await;
                 }
-                MenuAction::Quit => cx.update(|cx| cx.quit()),
             }
         }
     })
@@ -93,9 +110,39 @@ pub fn create(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()
     Ok(())
 }
 
-/// Windows 左键单击托盘显示面板（1.x `general.trayClick` 的默认行为）；macOS 左键弹菜单，不走这里。
+/// 设置变了：按语言重建菜单，按 `general.trayIcon` 显隐。
+pub fn apply(settings: &Settings, cx: &mut App) {
+    let Some(icon) = cx.try_global::<Tray>().and_then(|tray| tray.icon.as_ref()) else {
+        return;
+    };
+    match build_menu(settings) {
+        Ok(menu) => icon.set_menu(Some(Box::new(menu))),
+        Err(err) => log::warn!("tray menu could not be rebuilt: {err}"),
+    }
+    if let Err(err) = icon.set_visible(settings.general.tray_icon) {
+        log::warn!("tray icon visibility could not be set: {err}");
+    }
+}
+
+fn build_menu(settings: &Settings) -> anyhow::Result<Menu> {
+    let language = settings.appearance.language;
+    let menu = Menu::new();
+    menu.append_items(&[
+        &MenuItem::with_id(
+            MENU_PREFERENCE,
+            tray_i18n::label(language, Key::Preference),
+            true,
+            None,
+        ),
+        &MenuItem::with_id(MENU_EXIT, tray_i18n::label(language, Key::Exit), true, None),
+    ])?;
+
+    Ok(menu)
+}
+
+/// Windows 左键单击托盘（松开）；macOS 左键弹菜单，不走这里。
 #[cfg(target_os = "windows")]
-fn bridge_left_click(commands: Sender<PanelCommand>) -> std::io::Result<()> {
+fn bridge_left_click(actions: Sender<TrayAction>) -> std::io::Result<()> {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
     std::thread::Builder::new()
@@ -111,8 +158,7 @@ fn bridge_left_click(commands: Sender<PanelCommand>) -> std::io::Result<()> {
                 else {
                     continue;
                 };
-                let trigger = Trigger::now(TriggerSource::Tray);
-                if commands.send_blocking(PanelCommand::Show(trigger)).is_err() {
+                if actions.send_blocking(TrayAction::LeftClick).is_err() {
                     break;
                 }
             }

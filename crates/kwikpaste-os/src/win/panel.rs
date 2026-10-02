@@ -19,29 +19,36 @@ use std::ffi::c_void;
 use std::io;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture};
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-    GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP,
-    HTTOPLEFT, HTTOPRIGHT, HWND_TOPMOST, IsWindowVisible, MA_NOACTIVATE, MA_NOACTIVATEANDEAT,
-    MINMAXINFO, SC_MAXIMIZE, SC_MOVE, SC_SIZE, SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, WA_INACTIVE, WM_ACTIVATE, WM_CAPTURECHANGED, WM_DPICHANGED,
-    WM_GETMINMAXINFO, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY,
-    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCMOUSEMOVE, WM_SYSCOMMAND, WS_EX_APPWINDOW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetCursorPos, GetForegroundWindow, GetPropW,
+    GetWindowLongPtrW, GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT,
+    HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_TOPMOST, IsWindowVisible, MA_NOACTIVATE,
+    MA_NOACTIVATEANDEAT, MINMAXINFO, RemovePropW, SC_MAXIMIZE, SC_MOVE, SC_SIZE, SW_HIDE,
+    SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SendMessageW, SetPropW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE, WM_ACTIVATE,
+    WM_CAPTURECHANGED, WM_DPICHANGED, WM_GETMINMAXINFO, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+    WM_MOUSEMOVE, WM_NCDESTROY, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCMOUSEMOVE,
+    WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WM_SYSCOMMAND, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
+use windows::core::{PCWSTR, w};
 
-use super::monitor::{BASE_DPI, text_scale_factor};
+use super::monitor::BASE_DPI;
 use super::rect_from_win32;
+use super::system;
 use crate::geometry::Rect;
 
 /// 子类 id，ASCII "KPNL"。
 const SUBCLASS_ID: usize = 0x4B50_4E4C;
+/// 保存子类状态指针的窗口属性名。
+const STATE_PROPERTY: PCWSTR = w!("KwikPastePanelState");
 
 static PHANTOM_ACTIVATIONS: AtomicU32 = AtomicU32::new(0);
 static MOUSE_ACTIVATE_REPLIES: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
@@ -52,6 +59,8 @@ static MOUSE_ACTIVATE_OVERRIDES: AtomicU32 = AtomicU32::new(0);
 pub struct PanelOptions {
     /// 最小内容区尺寸（逻辑像素，未乘文本缩放）。
     pub min_logical_size: (f64, f64),
+    /// 系统「文本大小」系数，最小尺寸按它放大。
+    pub text_scale: f64,
 }
 
 /// 子类过程记下的计数，自测和日志用。
@@ -123,6 +132,7 @@ impl Panel {
 
         let state = Box::into_raw(Box::new(SubclassState {
             min_logical_size: options.min_logical_size,
+            text_scale: Cell::new(options.text_scale),
             drag: Cell::new(None),
         }));
         let installed =
@@ -131,12 +141,47 @@ impl Panel {
             drop(unsafe { Box::from_raw(state) });
             return Err(io::Error::last_os_error());
         }
+        if let Err(err) = unsafe { SetPropW(hwnd, STATE_PROPERTY, Some(HANDLE(state.cast()))) } {
+            log::warn!("panel state property could not be set: {err}");
+        }
 
         Ok(())
     }
 
     pub fn is_visible(&self) -> bool {
         unsafe { IsWindowVisible(self.hwnd) }.as_bool()
+    }
+
+    /// 系统「文本大小」变化后更新最小尺寸用的系数（下一次拖动、显示即生效）。
+    pub fn set_text_scale(&self, text_scale: f64) {
+        // 状态指针另存一份在窗口属性里：GetWindowSubclass 只有 comctl32 v6 按名字导出，
+        // 没带清单的进程（单测）加载时会找不到入口。
+        let data = unsafe { GetPropW(self.hwnd, STATE_PROPERTY) };
+        if !data.is_invalid() {
+            let state = unsafe { &*(data.0 as *const SubclassState) };
+            state.text_scale.set(text_scale);
+        }
+    }
+
+    /// 编辑态去掉 `WS_EX_NOACTIVATE`（窗口能被激活、拿到键盘和输入法），退出时加回。
+    /// 加回后 GPUI（补丁 W0002）对点击重新回 `MA_NOACTIVATE`。
+    pub fn set_activatable(&self, activatable: bool) {
+        let ex_style = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
+        let flag = WS_EX_NOACTIVATE.0 as isize;
+        let next = if activatable {
+            ex_style & !flag
+        } else {
+            ex_style | flag
+        };
+        if next != ex_style {
+            unsafe { SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, next) };
+        }
+    }
+
+    /// 窗口是否带 `WS_EX_NOACTIVATE`。
+    pub fn is_non_activating(&self) -> bool {
+        let ex_style = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
+        ex_style & WS_EX_NOACTIVATE.0 as isize != 0
     }
 
     /// 窗口当前所在显示器的 DPI。
@@ -230,6 +275,8 @@ impl Panel {
 /// 子类过程的私有状态，指针存在子类的 `dwRefData` 里，`WM_NCDESTROY` 时释放。
 struct SubclassState {
     min_logical_size: (f64, f64),
+    /// 系统「文本大小」系数，由宿主经 [`Panel::set_text_scale`] 更新。
+    text_scale: Cell<f64>,
     drag: Cell<Option<Drag>>,
 }
 
@@ -295,7 +342,9 @@ unsafe extern "system" fn subclass_proc(
             }
             return result;
         }
+        WM_SETTINGCHANGE | WM_SYSCOLORCHANGE => system::notify_changed(),
         WM_NCDESTROY => {
+            let _ = unsafe { RemovePropW(hwnd, STATE_PROPERTY) };
             let _ = unsafe { RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID) };
             drop(unsafe { Box::from_raw(data as *mut SubclassState) });
         }
@@ -433,13 +482,33 @@ fn apply_min_size(hwnd: HWND, state: &SubclassState, lparam: LPARAM) {
     };
     let insets = client.insets_within(outer);
     let scale = f64::from(unsafe { GetDpiForWindow(hwnd) }.max(1)) / f64::from(BASE_DPI)
-        * text_scale_factor();
-    let width = (state.min_logical_size.0 * scale).round() as i32;
-    let height = (state.min_logical_size.1 * scale).round() as i32;
+        * state.text_scale.get();
+    let mut width = (state.min_logical_size.0 * scale).round() as i32;
+    let mut height = (state.min_logical_size.1 * scale).round() as i32;
+    // 文本放得很大、屏幕又小时，最小尺寸不能超过所在显示器的工作区，否则窗口放不下。
+    if let Some(work_area) = work_area_of(hwnd) {
+        width = width
+            .min(work_area.width() - insets.left - insets.right)
+            .max(1);
+        height = height
+            .min(work_area.height() - insets.top - insets.bottom)
+            .max(1);
+    }
 
     let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
     info.ptMinTrackSize.x = width + insets.left + insets.right;
     info.ptMinTrackSize.y = height + insets.top + insets.bottom;
+}
+
+fn work_area_of(hwnd: HWND) -> Option<Rect> {
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetMonitorInfoW(monitor, &mut info) }
+        .as_bool()
+        .then(|| rect_from_win32(info.rcWork))
 }
 
 fn window_rect_of(hwnd: HWND) -> io::Result<Rect> {
@@ -475,7 +544,7 @@ mod tests {
     use windows::core::w;
 
     use super::*;
-    use crate::geometry::{Point, Size};
+    use crate::geometry::Point;
 
     const START: Rect = Rect {
         left: 100,
@@ -486,6 +555,7 @@ mod tests {
     const MIN: (i32, i32) = (562, 911);
     const OPTIONS: PanelOptions = PanelOptions {
         min_logical_size: (360.0, 600.0),
+        text_scale: 1.0,
     };
 
     unsafe extern "system" fn plain_proc(
@@ -636,16 +706,62 @@ mod tests {
             .client_rect()
             .expect("client")
             .insets_within(panel.window_rect().expect("window"));
-        let scale = f64::from(panel.dpi()) / f64::from(BASE_DPI) * text_scale_factor();
-        assert_eq!(
-            info.ptMinTrackSize.x,
-            (360.0 * scale).round() as i32 + insets.left + insets.right
-        );
-        assert_eq!(
-            info.ptMinTrackSize.y,
-            (600.0 * scale).round() as i32 + insets.top + insets.bottom
-        );
+        let scale = f64::from(panel.dpi()) / f64::from(BASE_DPI);
+        let work_area = work_area_of(panel.hwnd).expect("work area");
+        let width =
+            ((360.0 * scale).round() as i32).min(work_area.width() - insets.left - insets.right);
+        let height =
+            ((600.0 * scale).round() as i32).min(work_area.height() - insets.top - insets.bottom);
+        assert_eq!(info.ptMinTrackSize.x, width + insets.left + insets.right);
+        assert_eq!(info.ptMinTrackSize.y, height + insets.top + insets.bottom);
 
+        destroy(panel);
+    }
+
+    #[test]
+    fn min_track_size_follows_the_text_scale_and_stays_inside_the_work_area() {
+        let panel = hidden_popup();
+        panel.install(OPTIONS).expect("install");
+        let min_track = || {
+            let mut info = MINMAXINFO::default();
+            unsafe {
+                SendMessageW(
+                    panel.hwnd,
+                    WM_GETMINMAXINFO,
+                    None,
+                    Some(LPARAM(&mut info as *mut MINMAXINFO as isize)),
+                )
+            };
+            (info.ptMinTrackSize.x, info.ptMinTrackSize.y)
+        };
+
+        let normal = min_track();
+        panel.set_text_scale(1.5);
+        let larger = min_track();
+        panel.set_text_scale(100.0);
+        let huge = min_track();
+
+        assert!(larger.0 > normal.0 && larger.1 > normal.1);
+        let work_area = work_area_of(panel.hwnd).expect("work area");
+        assert!(huge.0 <= work_area.width() && huge.1 <= work_area.height());
+        destroy(panel);
+    }
+
+    #[test]
+    fn activatable_toggles_only_the_no_activate_bit() {
+        let panel = hidden_popup();
+        panel.install(OPTIONS).expect("install");
+        let others =
+            unsafe { GetWindowLongPtrW(panel.hwnd, GWL_EXSTYLE) } & !(WS_EX_NOACTIVATE.0 as isize);
+
+        panel.set_activatable(true);
+        assert!(!panel.is_non_activating());
+        panel.set_activatable(false);
+        assert!(panel.is_non_activating());
+        assert_eq!(
+            unsafe { GetWindowLongPtrW(panel.hwnd, GWL_EXSTYLE) } & !(WS_EX_NOACTIVATE.0 as isize),
+            others
+        );
         destroy(panel);
     }
 
@@ -653,13 +769,31 @@ mod tests {
     fn place_puts_the_client_area_exactly_on_the_target() {
         let panel = hidden_popup();
         panel.install(OPTIONS).expect("install");
-        let target = Rect::from_origin_size(
-            Point { x: 120, y: 80 },
-            Size {
-                width: 540,
-                height: 900,
-            },
+        // 最小内容区（360×600 × 当前 DPI），放在测试窗所在显示器的工作区里：系统会把超过屏幕的
+        // 窗口压到默认的最大跟踪尺寸（CI 的 1024×768 屏放不下 900 高的内容区）。
+        let size = crate::geometry::scale_size(
+            OPTIONS.min_logical_size,
+            f64::from(panel.dpi()) / f64::from(BASE_DPI),
         );
+        let work_area = work_area_of(panel.hwnd).expect("work area");
+        let insets = panel
+            .client_rect()
+            .expect("client")
+            .insets_within(panel.window_rect().expect("window"));
+        let origin = Point {
+            x: work_area.left + insets.left + 20,
+            y: work_area.top + insets.top + 20,
+        };
+        let target = Rect::from_origin_size(origin, size);
+        if target.outset(insets).right > work_area.right
+            || target.outset(insets).bottom > work_area.bottom
+        {
+            eprintln!(
+                "skipped: a {size:?} panel does not fit the work area {work_area:?} of this screen"
+            );
+            destroy(panel);
+            return;
+        }
 
         let outer = panel.place(target, panel.dpi()).expect("place");
 

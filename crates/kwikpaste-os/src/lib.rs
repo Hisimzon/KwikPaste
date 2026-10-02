@@ -5,7 +5,11 @@
 
 pub mod clock;
 pub mod geometry;
+pub mod hook_keys;
+pub mod locale;
+pub mod services;
 pub mod single_instance;
+mod sound;
 
 #[cfg(target_os = "macos")]
 pub mod mac;
