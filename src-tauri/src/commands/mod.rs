@@ -12,6 +12,7 @@ mod onboarding;
 mod readable_export;
 mod settings;
 mod storage;
+mod sync;
 pub mod update;
 mod window;
 
@@ -29,5 +30,6 @@ pub use onboarding::*;
 pub use readable_export::*;
 pub use settings::*;
 pub use storage::*;
+pub use sync::*;
 pub use update::*;
 pub use window::*;

@@ -6,6 +6,10 @@ pub enum AppError {
     #[error("{0}")]
     Clipboard(String),
 
+    /// 局域网同步给用户看的根因（配对码错误、连不上对方等）。
+    #[error("{0}")]
+    Sync(String),
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -14,6 +18,7 @@ impl AppError {
     fn kind(&self) -> &'static str {
         match self {
             AppError::Clipboard(_) => "Clipboard",
+            AppError::Sync(_) => "Sync",
             AppError::Other(_) => "Other",
         }
     }

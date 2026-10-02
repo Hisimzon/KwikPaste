@@ -67,6 +67,9 @@
     "placeholder": "为这条记录添加备注...",
     "title": "编辑备注"
   },
+  "origin": {
+    "fromDevice": "来自 {{name}}"
+  },
   "quickActions": {
     "copy": "复制",
     "copyPlain": "复制为纯文本",

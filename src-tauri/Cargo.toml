@@ -38,7 +38,7 @@ clipboard-rs = "0.3"
 uuid = { version = "1", features = ["v4"] }
 regex = "1"
 unicode-segmentation = "1"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "net", "io-util", "macros"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
@@ -66,6 +66,12 @@ rand = "0.8"
 zeroize = "1"
 url = "2"
 rust_xlsxwriter = "0.99"
+# 局域网同步：mDNS 发现 + Noise 加密通道 + SPAKE2 配对码握手。
+# snow 不开 std：它的 std 特性会连带打开 ring，把 ring 重新编进安装包。
+mdns-sd = { version = "0.21", default-features = false, features = ["logging"] }
+snow = { version = "0.10", default-features = false, features = ["use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+spake2 = "0.4"
+if-addrs = "0.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"

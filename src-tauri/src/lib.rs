@@ -16,6 +16,7 @@ mod mouse;
 mod readable_export;
 mod settings;
 mod shortcut;
+mod sync;
 mod tray;
 mod update;
 mod window;
@@ -53,6 +54,8 @@ pub fn run() {
             log::LevelFilter::Info
         })
         .targets(log_targets)
+        // mdns-sd 每收发一个组播包都打一行 debug，局域网里设备一多几秒就把日志文件滚没了。
+        .level_for("mdns_sd", log::LevelFilter::Info)
         .build();
 
     let builder = tauri::Builder::default()
@@ -202,6 +205,10 @@ pub fn run() {
             commands::download_update,
             commands::install_update,
             commands::skip_update_version,
+            commands::get_lan_sync_state,
+            commands::refresh_lan_pairing_code,
+            commands::pair_lan_device,
+            commands::remove_lan_device,
             menu::clipboard_item::popup_clipboard_item_menu,
         ])
         .on_menu_event(|app, event| {
@@ -238,6 +245,7 @@ pub fn run() {
                 })?;
                 handle_db.manage(db::DatabaseState::new(pool));
                 clipboard::init(&handle_db)?;
+                sync::init(&handle_db)?;
                 Ok::<_, anyhow::Error>(())
             })?;
 

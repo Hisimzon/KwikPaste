@@ -27,7 +27,8 @@ pub async fn resume_global_shortcuts(app: AppHandle) -> Result<()> {
 /// 用 JSON patch 深度合并到现设置。返回合并后的完整快照。
 /// 若 `shortcuts` 段被改动，会顺带重注册全局快捷键；
 /// 若 `general.trayIcon` 或 `appearance.language` 被改动，重建托盘菜单/显隐；
-/// 若 `clipboard.history` 被改动，按新的清理设置尽快清理一次。
+/// 若 `clipboard.history` 被改动，按新的清理设置尽快清理一次；
+/// 若 `sync` 被改动，启动 / 停止 / 更新局域网同步。
 #[tauri::command]
 pub async fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result<Settings> {
     let patch_obj = patch.as_object();
@@ -65,6 +66,7 @@ pub async fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result
                 .is_some_and(|c| c.contains_key("history"))
         })
         .unwrap_or(false);
+    let touches_sync = patch_obj.is_some_and(|m| m.contains_key("sync"));
 
     let next = app.state::<SettingsStore>().update(patch)?;
 
@@ -90,6 +92,10 @@ pub async fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result
 
     if touches_history {
         crate::clipboard::request_cleanup(&app);
+    }
+
+    if touches_sync {
+        crate::sync::apply_settings(&app);
     }
 
     emit_settings_updated(&app, &next);
@@ -132,6 +138,8 @@ pub(crate) fn apply_settings_side_effects(app: &AppHandle, settings: &Settings) 
     admin::sync_scheduled_task(settings.general.run_as_admin);
 
     crate::clipboard::request_cleanup(app);
+
+    crate::sync::apply_settings(app);
 }
 
 /// 广播最新设置快照给所有前端窗口。

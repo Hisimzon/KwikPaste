@@ -15,8 +15,9 @@ use tauri::AppHandle;
 use crate::core::{AppError, Result};
 
 use super::model::{
-    Language, RetentionRule, Settings, MAX_RETENTION_RULES, WINDOW_OPEN_GROUP_PREFIX,
-    WINDOW_OPEN_SELECTION_ALL, WINDOW_OPEN_SELECTION_PRESERVE,
+    LanSync, Language, RetentionRule, Settings, LAN_SYNC_DEVICE_NAME_MAX_CHARS,
+    LAN_SYNC_MAX_IMAGE_MB_MAX, LAN_SYNC_MAX_IMAGE_MB_MIN, MAX_RETENTION_RULES,
+    WINDOW_OPEN_GROUP_PREFIX, WINDOW_OPEN_SELECTION_ALL, WINDOW_OPEN_SELECTION_PRESERVE,
 };
 
 const FILENAME: &str = "settings.json";
@@ -185,6 +186,7 @@ fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
 fn validate_settings(settings: &Settings) -> Result<()> {
     validate_window_open_group(&settings.clipboard.window.select_group_on_open)?;
     validate_retention_rules(&settings.clipboard.history.rules)?;
+    validate_lan_sync(&settings.sync.lan)?;
 
     let open_clipboard = normalize_shortcut_value(&settings.shortcuts.open_clipboard);
     let open_preference = normalize_shortcut_value(&settings.shortcuts.open_preference);
@@ -238,6 +240,23 @@ fn validate_retention_rules(rules: &[RetentionRule]) -> Result<()> {
                 "cleanup rule ids must be unique and non-empty"
             )));
         }
+    }
+
+    Ok(())
+}
+
+/// 校验局域网同步：设备名会进 mDNS 广播和对端界面，限制长度；图片上限限定在可控范围。
+fn validate_lan_sync(lan: &LanSync) -> Result<()> {
+    if lan.device_name.chars().count() > LAN_SYNC_DEVICE_NAME_MAX_CHARS {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "device name must be at most {LAN_SYNC_DEVICE_NAME_MAX_CHARS} characters"
+        )));
+    }
+
+    if !(LAN_SYNC_MAX_IMAGE_MB_MIN..=LAN_SYNC_MAX_IMAGE_MB_MAX).contains(&lan.max_image_mb) {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "image size limit must be between {LAN_SYNC_MAX_IMAGE_MB_MIN} and {LAN_SYNC_MAX_IMAGE_MB_MAX} MB"
+        )));
     }
 
     Ok(())

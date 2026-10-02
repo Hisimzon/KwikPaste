@@ -117,6 +117,9 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   } = props;
   const {
     kind,
+    originDeviceId,
+    originDeviceName,
+    platform,
     quickSnippets = [],
     sourceAppId,
     subKind,
@@ -141,11 +144,25 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   const showStatusIndicators = item.isPinned || showSensitiveIndicator;
   const indicatorCount = Number(item.isPinned) + Number(showSensitiveIndicator);
   const checkedInSelection = selecting && checked;
+  const originLabel = originDeviceName
+    ? t("origin.fromDevice", { name: originDeviceName })
+    : void 0;
+  // 局域网同步收到的记录没有本机来源应用，用来源设备的平台图标代替应用图标。
   const appIcon = sourceAppId ? (
     <AssetImage
       alt={sourceAppName}
       className="size-4"
       src={sourceAppIconPath}
+    />
+  ) : originDeviceId ? (
+    <i
+      aria-label={originLabel}
+      className={cn("size-4 shrink-0 text-ant-secondary", {
+        "i-lucide:laptop": platform === "macos",
+        "i-lucide:monitor": platform === "windows",
+      })}
+      role="img"
+      title={originLabel}
     />
   ) : (
     <img
@@ -304,6 +321,9 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
               {sourceAppIcon}
 
               <span className="truncate">{typeLabel}</span>
+              {originLabel ? (
+                <span className="truncate">· {originLabel}</span>
+              ) : null}
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">

@@ -11,7 +11,7 @@ use crate::db::models::{
 
 const SELECT_ITEM: &str = "SELECT id, kind, sub_kind, group_id, source_app_id, content, \
      content_hash, search_text, summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
-     is_sensitive, platform, note, created_at, updated_at FROM clipboard_items";
+     is_sensitive, platform, note, created_at, updated_at, origin_device_id FROM clipboard_items";
 
 /// 列表/单条刷新场景的精简 SELECT：text 类型条目的 `content` 与 `search_text` 一律置空，
 /// 由前端用 `summary` 渲染。HTML/RTF/长纯文本可能很大（用户复制整段文档），
@@ -30,7 +30,7 @@ const LIST_SELECT_ITEM: &str = "SELECT clipboard_items.id, clipboard_items.kind,
      clipboard_items.is_favorite, clipboard_items.is_pinned, \
      clipboard_items.is_sensitive, \
      clipboard_items.platform, clipboard_items.note, \
-     clipboard_items.created_at, clipboard_items.updated_at, \
+     clipboard_items.created_at, clipboard_items.updated_at, clipboard_items.origin_device_id, \
      clipboard_apps.name AS source_app_name, \
      clipboard_apps.icon_file AS source_app_icon_file \
      FROM clipboard_items \
@@ -101,8 +101,8 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
         "INSERT INTO clipboard_items \
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
           summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-          created_at, updated_at, last_used_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          created_at, updated_at, last_used_at, origin_device_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(item.id.as_str())
     .bind(item.kind)
@@ -126,10 +126,35 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     .bind(item.created_at)
     .bind(item.updated_at)
     .bind(item.updated_at)
+    .bind(item.origin_device_id.as_deref())
     .execute(pool)
     .await
     .context("failed to insert clipboard item")?;
     Ok(())
+}
+
+/// 局域网同步补齐：本机采集、非敏感、非文件的记录中 `updated_at` 晚于 `since` 的最近 `limit` 条，
+/// 按时间从旧到新返回，对端按这个顺序入库后列表顺序与本机一致。
+pub async fn list_local_items_updated_since(
+    pool: &SqlitePool,
+    since: chrono::DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<ClipboardItem>> {
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(SELECT_ITEM);
+    qb.push(
+        " WHERE origin_device_id IS NULL AND is_sensitive = 0 AND kind <> 'files' \
+         AND updated_at > ",
+    );
+    qb.push_bind(since);
+    qb.push(" ORDER BY updated_at DESC LIMIT ");
+    qb.push_bind(limit);
+    let mut items = qb
+        .build_query_as::<ClipboardItem>()
+        .fetch_all(pool)
+        .await
+        .context("failed to list local clipboard items for sync catch-up")?;
+    items.reverse();
+    Ok(items)
 }
 
 /// 仅返回项的轻量查询：生产路径走 [`query_items_page`]（顺带返回 total），
@@ -656,9 +681,11 @@ mod tests {
             note: None,
             created_at: ts,
             updated_at: ts,
+            origin_device_id: None,
             source_app_name: None,
             source_app_icon_file: None,
             source_app_icon_path: None,
+            origin_device_name: None,
             image_thumbnail_path: None,
             file_entries: None,
             files_preview_kind: None,
@@ -1547,6 +1574,30 @@ mod tests {
         }
     }
 
+    /// 升级前的旧表还没有后来新增的列，列表查询跑不了；直接用 FTS 表按同样的表达式核对。
+    async fn assert_legacy_fts_state(
+        pool: &SqlitePool,
+        step: &str,
+        expected: &std::collections::BTreeMap<&str, Vec<&str>>,
+    ) {
+        if let Err(err) = fts_integrity_check(pool).await {
+            panic!("{step}: FTS integrity-check failed: {err}");
+        }
+        for (&keyword, want) in expected {
+            let expr = build_fts_expr(keyword).unwrap();
+            let mut got: Vec<String> = sqlx::query_scalar(
+                "SELECT id FROM clipboard_items WHERE rowid IN \
+                 (SELECT rowid FROM clipboard_items_fts WHERE clipboard_items_fts MATCH ?)",
+            )
+            .bind(expr)
+            .fetch_all(pool)
+            .await
+            .unwrap();
+            got.sort_unstable();
+            assert_eq!(&got, want, "{step}: keyword {keyword}");
+        }
+    }
+
     #[tokio::test]
     async fn non_text_updates_do_not_rewrite_fts_index() {
         let pool = memory_pool().await;
@@ -1759,7 +1810,7 @@ mod tests {
             ("amber", vec!["b"]),
             ("zircon", vec![]),
         ]);
-        assert_fts_state(&pool, "before upgrade", &expected).await;
+        assert_legacy_fts_state(&pool, "before upgrade", &expected).await;
 
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         let trigger: String = sqlx::query_scalar(

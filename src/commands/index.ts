@@ -38,6 +38,7 @@ import type {
   SettingsPatch,
   WindowMaterialSupport,
 } from "@/types/settings";
+import type { LanPairTarget, LanSyncState } from "@/types/sync";
 import { getMessageApi, getModalApi } from "@/utils/feedback";
 import { log } from "@/utils/log";
 import { confirmClearClipboardItems } from "./confirmClearClipboardItems";
@@ -636,6 +637,58 @@ export const getStorageOverview = () => {
   return call<StorageOverview>(
     TAURI_COMMAND.GET_STORAGE_OVERVIEW,
     "commands:labels.loadStorageOverview",
+  );
+};
+
+/**
+ * 读取局域网同步状态：本机地址、配对码、已配对与附近设备；之后的变化走 `sync://lan-state`。
+ */
+export const getLanSyncState = () => {
+  return call<LanSyncState>(
+    TAURI_COMMAND.GET_LAN_SYNC_STATE,
+    "commands:labels.loadLanSync",
+  );
+};
+
+/**
+ * 换一个新的配对码，剩余尝试次数同时重置。
+ */
+export const refreshLanPairingCode = () => {
+  return call<LanSyncState>(
+    TAURI_COMMAND.REFRESH_LAN_PAIRING_CODE,
+    "commands:labels.refreshLanPairingCode",
+  );
+};
+
+/**
+ * 用对方设备上显示的配对码配对；成功后提示并返回对方设备名。
+ */
+export const pairLanDevice = async (target: LanPairTarget, code: string) => {
+  const name = await call<string>(
+    TAURI_COMMAND.PAIR_LAN_DEVICE,
+    "commands:labels.pairLanDevice",
+    { ...target, code },
+  );
+
+  getMessageApi().success(
+    i18n.t("commands:messages.lanDevicePaired", { name }),
+  );
+
+  return name;
+};
+
+/**
+ * 取消与一台设备的配对；对方在线时一并通知它。
+ */
+export const removeLanDevice = async (deviceId: string, name: string) => {
+  await call<void>(
+    TAURI_COMMAND.REMOVE_LAN_DEVICE,
+    "commands:labels.removeLanDevice",
+    { deviceId },
+  );
+
+  getMessageApi().success(
+    i18n.t("commands:messages.lanDeviceRemoved", { name }),
   );
 };
 

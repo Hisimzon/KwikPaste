@@ -80,6 +80,9 @@ export interface ClipboardItem {
   sourceAppName?: string;
   sourceAppIconFile?: string;
   sourceAppIconPath?: string;
+  /** 局域网同步收到的记录：来源设备 id 与 Rust 回填的设备名；本机采集的记录缺省。 */
+  originDeviceId?: string;
+  originDeviceName?: string;
   /** image 条目的缩略图绝对路径（后端预处理返回）。 */
   imageThumbnailPath?: string;
   /** files 条目的预处理条目（与 content 中路径顺序一致，数量由 Rust 按设置截断）。 */

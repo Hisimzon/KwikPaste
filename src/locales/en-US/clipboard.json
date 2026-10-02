@@ -67,6 +67,9 @@
     "placeholder": "Add a note for this item...",
     "title": "Edit note"
   },
+  "origin": {
+    "fromDevice": "From {{name}}"
+  },
   "quickActions": {
     "copy": "Copy",
     "copyPlain": "Copy as Plain Text",

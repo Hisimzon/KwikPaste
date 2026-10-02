@@ -146,13 +146,14 @@ pub async fn persist_and_notify(
 }
 
 /// 去重入库 + 通知清理 + emit「剪贴板更新」，不放提示音。
+/// 局域网同步收到的记录也走这里，与本机复制的入库语义一致。
 pub async fn store_and_emit(
     app: &AppHandle,
     pool: &SqlitePool,
     item: &ClipboardItem,
 ) -> crate::core::Result<UpsertResult> {
-    // 去重是「先查再插」：一次复制会触发好几个剪贴板事件，并发的两次入库可能都查不到对方，
-    // 插出两行同样的内容，所以这一段串行执行。
+    // 去重是「先查再插」：一次复制触发的多个剪贴板事件、同步收到的记录和本机复制撞上时，
+    // 并发的两次入库可能都查不到而插出两行同样的内容，所以这一段串行执行。
     static UPSERT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let result = {
         let _serial = UPSERT_LOCK.lock().await;
@@ -357,8 +358,9 @@ impl ClipboardHandler for ClipboardChangeHandler {
         let app = self.app.clone();
         tauri::async_runtime::spawn(async move {
             let pool = app.state::<crate::db::DatabaseState>().pool().await;
-            if let Err(err) = persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
-                log::error!("clipboard watcher: persist failed: {err}");
+            match persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
+                Ok(_) => crate::sync::on_local_capture(&app, &item),
+                Err(err) => log::error!("clipboard watcher: persist failed: {err}"),
             }
         });
     }

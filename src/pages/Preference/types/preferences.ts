@@ -8,6 +8,7 @@ export type PreferenceTabId =
   | "window"
   | "paste"
   | "items"
+  | "sync"
   | "overview"
   | "data"
   | "about";
@@ -81,7 +82,8 @@ export type PreferenceControl =
   | { type: "action"; danger?: boolean }
   | { type: "status" }
   | { type: "shortcutTags"; shortcuts: PreferenceShortcutTag[] }
-  | { type: "storageOverview" };
+  | { type: "storageOverview" }
+  | { type: "lanSync" };
 
 export interface PreferenceSetting {
   control: PreferenceControl;

@@ -118,6 +118,7 @@ pub async fn read_clipboard(
 
     let pool = db.pool().await;
     let result = persist_and_notify(&app, &pool, &item, source_app.as_ref()).await?;
+    crate::sync::on_local_capture(&app, &item);
     Ok(Some(ReadClipboardResult {
         item,
         deduplicated: result.deduplicated,
@@ -792,6 +793,7 @@ pub async fn list_clipboard_items(
     for item in &mut items {
         attach_image_thumbnail_path(&image_store, item).await?;
         attach_source_app_icon_path(&app_icon_store, item);
+        attach_origin_device_name(&app, item);
         attach_file_entries(&pool, &file_icon_store, item, file_entry_limit).await?;
         attach_color_preview(item);
         attach_display_created_at(item, &now);
@@ -829,6 +831,7 @@ pub async fn get_clipboard_item(
         let redact_sensitive = settings.clipboard.sensitive.redact_secrets;
         attach_image_thumbnail_path(&image_store, item).await?;
         attach_source_app_icon_path(&app_icon_store, item);
+        attach_origin_device_name(&app, item);
         attach_file_entries(&pool, &file_icon_store, item, file_entry_limit).await?;
         attach_color_preview(item);
         attach_display_created_at(item, &Local::now());
@@ -865,6 +868,14 @@ async fn attach_image_thumbnail_path(store: &ImageStore, item: &mut ClipboardIte
     };
 
     Ok(())
+}
+
+/// 局域网同步收到的记录：按来源设备 id 回填设备名，前端显示「来自 xxx」。
+fn attach_origin_device_name(app: &AppHandle, item: &mut ClipboardItem) {
+    item.origin_device_name = item
+        .origin_device_id
+        .as_deref()
+        .and_then(|id| crate::sync::device_display_name(app, id));
 }
 
 /// 把 `clipboard_apps.icon_file` 解析为磁盘绝对路径写回 [`ClipboardItem::source_app_icon_path`]，
@@ -1874,9 +1885,11 @@ mod tests {
             note: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            origin_device_id: None,
             source_app_name: None,
             source_app_icon_file: None,
             source_app_icon_path: None,
+            origin_device_name: None,
             image_thumbnail_path: None,
             file_entries: None,
             files_preview_kind: None,

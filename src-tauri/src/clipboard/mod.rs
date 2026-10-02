@@ -37,14 +37,13 @@ pub use icon::{get_icon_cache_key, icon_png, DIR_CACHE_KEY};
 #[cfg(test)]
 pub use ingest::build_item;
 pub use ingest::build_item_with_settings;
-#[cfg(test)]
-pub use payload::ImagePayload;
+pub use payload::{ClipboardPayload, ImagePayload, TextPayload};
 pub use quick_paste::quick_paste;
-pub use read::ClipboardReader;
+pub use read::{png_dimensions, ClipboardReader};
 pub use sound::play_copy_sound;
 pub use source::detect_frontmost;
 pub use storage::ImageStore;
-pub use watcher::{init, materialize_source, persist_and_notify, WatcherPause};
+pub use watcher::{init, materialize_source, persist_and_notify, store_and_emit, WatcherPause};
 pub use write::{write_text_fragment, write_to_clipboard};
 
 #[cfg(test)]

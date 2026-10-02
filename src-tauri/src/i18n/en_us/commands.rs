@@ -23,5 +23,20 @@ pub fn label(key: Key) -> &'static str {
         Key::PortableStorageFixed => {
             "KwikPaste Portable always keeps its data in the data folder next to the app"
         }
+        Key::SyncNotRunning => "Turn on LAN sync first",
+        Key::SyncInvalidCode => "The pairing code is 6 digits",
+        Key::SyncWrongCode => "The pairing code is incorrect",
+        Key::SyncPairingUnavailable => {
+            "The pairing code has expired. Refresh it on the other device"
+        }
+        Key::SyncUnreachable => {
+            "Can't reach this device. Make sure both are on the same network and LAN sync is on"
+        }
+        Key::SyncInvalidAddress => "Enter an address like 192.168.1.8:41573",
+        Key::SyncIncompatible => {
+            "The other device runs an incompatible KwikPaste version. Update both to the latest"
+        }
+        Key::SyncDeviceNotFound => "This device is no longer in the nearby list",
+        Key::SyncSelfPairing => "You can't pair this device with itself",
     }
 }

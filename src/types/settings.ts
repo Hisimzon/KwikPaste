@@ -274,11 +274,28 @@ export interface Update {
   skippedVersion: string | null;
 }
 
+/** 局域网同步；设备身份和已配对设备不在设置里（不进备份包）。 */
+export interface LanSync {
+  enabled: boolean;
+  /** 在其他设备上显示的名称；空串表示用系统电脑名。 */
+  deviceName: string;
+  /** 收到其他设备的复制后同时写入本机剪贴板。 */
+  writeClipboard: boolean;
+  text: boolean;
+  image: boolean;
+  maxImageMb: number;
+}
+
+export interface SyncSettings {
+  lan: LanSync;
+}
+
 export interface Settings {
   general: General;
   appearance: Appearance;
   shortcuts: Shortcuts;
   clipboard: Clipboard;
+  sync: SyncSettings;
   onboarding: Onboarding;
   update: Update;
 }

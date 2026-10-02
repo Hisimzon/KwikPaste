@@ -239,7 +239,8 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
     case "shortcutTags":
       return <ShortcutTagsControl setting={setting} />;
     case "storageOverview":
-      // 数据概览占满整个分组，由 PreferenceSection 直接渲染，不走设置行。
+    case "lanSync":
+      // 数据概览和同步设备区占满整个分组，由 PreferenceSection 直接渲染，不走设置行。
       return null;
   }
 };

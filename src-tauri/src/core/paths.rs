@@ -31,6 +31,8 @@ const RESOURCES_DIR: &str = "resources";
 const CONFIG_DIR: &str = "config";
 /// 本机运行状态目录名，挂在 [`app_data_dir`] 下。
 const STATE_DIR: &str = "state";
+/// 局域网同步身份目录名，挂在 [`bootstrap_dir`] 下。
+const SYNC_DIR: &str = "sync";
 /// 固定留在 `<app_local_data>/<env>` 的 bootstrap manifest 文件名。
 const STORAGE_MANIFEST_FILENAME: &str = "storage.json";
 /// 写入真实数据根的 identity manifest 文件名，用于识别 KwikPaste 数据目录。
@@ -278,6 +280,14 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf> {
 /// `<app_data_dir>/state`：窗口位置等本机运行状态目录。
 pub fn state_dir(app: &AppHandle) -> Result<PathBuf> {
     Ok(app_data_dir(app)?.join(STATE_DIR))
+}
+
+/// `<bootstrap>/sync`：局域网同步的设备密钥与已配对设备。
+///
+/// 放在启动锚点而不是数据根：不随自定义数据目录搬走，也不进备份包——
+/// 这些是这台电脑自己的身份，导入到别的电脑就成了冒充。
+pub fn sync_dir(app: &AppHandle) -> Result<PathBuf> {
+    Ok(bootstrap_dir(app)?.join(SYNC_DIR))
 }
 
 fn storage_manifest_path(bootstrap: &Path) -> PathBuf {

@@ -37,6 +37,15 @@ pub enum CommandKey {
     SplitTextOnly,
     SplitSensitiveRedacted,
     PortableStorageFixed,
+    SyncNotRunning,
+    SyncInvalidCode,
+    SyncWrongCode,
+    SyncPairingUnavailable,
+    SyncUnreachable,
+    SyncInvalidAddress,
+    SyncIncompatible,
+    SyncDeviceNotFound,
+    SyncSelfPairing,
 }
 
 #[cfg(target_os = "windows")]

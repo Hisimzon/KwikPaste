@@ -66,6 +66,51 @@
   "controls": {
     "saving": "Saving…"
   },
+  "lanSync": {
+    "devices": {
+      "empty": "No paired devices yet",
+      "lastSeen": "Last online {{time}}",
+      "offline": "Offline",
+      "online": "Online",
+      "remove": "Unpair",
+      "removeConfirmContent": "The two devices stop syncing. Records already received are kept.",
+      "removeConfirmTitle": "Unpair from {{name}}?",
+      "title": "Paired Devices"
+    },
+    "firewallHint": "If other devices can't find or reach this computer, allow KwikPaste through Windows Firewall. Check Public networks too if your home Wi-Fi is set as public.",
+    "nearby": {
+      "empty": "Looking for devices on this network with LAN sync on",
+      "manual": "Add manually",
+      "pair": "Pair",
+      "title": "Nearby Devices"
+    },
+    "off": "Turn on LAN sync to pair devices on the same network with a pairing code.",
+    "pairedByOther": "{{name}} paired with this device",
+    "pairingCode": {
+      "exhausted": "This code has expired. Refresh it",
+      "hide": "Hide pairing code",
+      "hint_one": "Pick this device on the other one and enter the code. {{count}} attempt left",
+      "hint_other": "Pick this device on the other one and enter the code. {{count}} attempts left",
+      "refresh": "Refresh pairing code",
+      "show": "Show pairing code",
+      "title": "Pairing Code"
+    },
+    "pairModal": {
+      "address": "Address",
+      "addressPlaceholder": "e.g. 192.168.1.8:41573",
+      "code": "Pairing code shown on the other device",
+      "codeHint": "Find the 6-digit code on the Sync page of the other device.",
+      "manualTitle": "Add a Device",
+      "ok": "Pair",
+      "title": "Pair with {{name}}"
+    },
+    "startFailed": "LAN sync couldn't start",
+    "starting": "Starting LAN sync",
+    "thisDevice": {
+      "noAddress": "No network connection",
+      "title": "This Device"
+    }
+  },
   "overview": {
     "categories": {
       "byBytes": "Size",
@@ -335,6 +380,15 @@
       },
       "globalShortcuts": {
         "title": "Global Shortcuts"
+      },
+      "lanContent": {
+        "title": "What to Sync"
+      },
+      "lanDevices": {
+        "title": "Devices"
+      },
+      "lanSync": {
+        "title": "LAN Sync"
       },
       "localData": {
         "title": "Data Management"
@@ -868,6 +922,36 @@
           "title": "Ignored Apps"
         }
       },
+      "sync": {
+        "lan": {
+          "deviceName": {
+            "description": "The name other devices see.",
+            "placeholder": "Computer name when empty",
+            "title": "Device Name"
+          },
+          "devices": {
+            "title": "Paired Devices"
+          },
+          "enabled": {
+            "description": "Text and images you copy reach your paired devices on the same network right away.",
+            "title": "LAN Sync"
+          },
+          "image": {
+            "title": "Sync Images"
+          },
+          "maxImageMb": {
+            "description": "Larger images are neither sent nor received.",
+            "title": "Image Size Limit"
+          },
+          "text": {
+            "title": "Sync Text"
+          },
+          "writeClipboard": {
+            "description": "When off, received items only go to history.",
+            "title": "Copy Received Items to Clipboard"
+          }
+        }
+      },
       "updates": {
         "autoCheck": {
           "title": "Automatically Check for Updates"
@@ -962,6 +1046,9 @@
       },
       "shortcuts": {
         "title": "Shortcuts"
+      },
+      "sync": {
+        "title": "Sync"
       },
       "window": {
         "title": "Clipboard Window"

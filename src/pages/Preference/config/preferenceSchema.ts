@@ -18,7 +18,13 @@ import {
 } from "@/constants/windowOpenSelection";
 import type { Settings } from "@/types/settings";
 import { isMac, isPortable, isWin } from "@/utils/is";
-import { STORAGE_LIMIT_MAX_MB, STORAGE_LIMIT_MIN_MB } from "../constants";
+import {
+  LAN_SYNC_AVAILABLE,
+  LAN_SYNC_MAX_IMAGE_MB_MAX,
+  LAN_SYNC_MAX_IMAGE_MB_MIN,
+  STORAGE_LIMIT_MAX_MB,
+  STORAGE_LIMIT_MIN_MB,
+} from "../constants";
 import type { PreferenceSetting, PreferenceTab } from "../types/preferences";
 
 const CLICK_ACTION_OPTIONS = [
@@ -939,6 +945,114 @@ export const preferenceTabs: PreferenceTab[] = [
       },
     ],
   },
+  ...(LAN_SYNC_AVAILABLE
+    ? ([
+        {
+          group: "data",
+          icon: "i-lucide:arrow-down-up",
+          id: "sync",
+          sections: [
+            {
+              id: "lanSync",
+              settings: [
+                {
+                  control: { type: "switch" },
+                  id: "sync.lan.enabled",
+                  keywords: [
+                    "lan",
+                    "sync",
+                    "network",
+                    "wifi",
+                    "device",
+                    "局域网",
+                  ],
+                  path: ["sync", "lan", "enabled"],
+                  value: (settings) => {
+                    return settings.sync.lan.enabled;
+                  },
+                },
+                {
+                  control: { type: "text" },
+                  id: "sync.lan.deviceName",
+                  keywords: ["device", "name", "computer"],
+                  path: ["sync", "lan", "deviceName"],
+                  value: (settings) => {
+                    return settings.sync.lan.deviceName;
+                  },
+                },
+              ],
+            },
+            {
+              id: "lanDevices",
+              settings: [
+                {
+                  control: { type: "lanSync" },
+                  id: "sync.lan.devices",
+                  keywords: [
+                    "pair",
+                    "pairing",
+                    "code",
+                    "device",
+                    "nearby",
+                    "address",
+                    "ip",
+                  ],
+                },
+              ],
+            },
+            {
+              id: "lanContent",
+              settings: [
+                {
+                  control: { type: "switch" },
+                  id: "sync.lan.text",
+                  keywords: ["text", "sync"],
+                  path: ["sync", "lan", "text"],
+                  value: (settings) => {
+                    return settings.sync.lan.text;
+                  },
+                },
+                {
+                  control: { type: "switch" },
+                  id: "sync.lan.image",
+                  keywords: ["image", "picture", "screenshot", "sync"],
+                  path: ["sync", "lan", "image"],
+                  value: (settings) => {
+                    return settings.sync.lan.image;
+                  },
+                },
+                {
+                  control: {
+                    max: LAN_SYNC_MAX_IMAGE_MB_MAX,
+                    min: LAN_SYNC_MAX_IMAGE_MB_MIN,
+                    suffixKey: "mb",
+                    type: "number",
+                  },
+                  disabledWhen: (settings) => {
+                    return !settings.sync.lan.image;
+                  },
+                  id: "sync.lan.maxImageMb",
+                  keywords: ["image", "size", "limit"],
+                  path: ["sync", "lan", "maxImageMb"],
+                  value: (settings) => {
+                    return settings.sync.lan.maxImageMb;
+                  },
+                },
+                {
+                  control: { type: "switch" },
+                  id: "sync.lan.writeClipboard",
+                  keywords: ["clipboard", "paste", "receive"],
+                  path: ["sync", "lan", "writeClipboard"],
+                  value: (settings) => {
+                    return settings.sync.lan.writeClipboard;
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ] satisfies PreferenceTab[])
+    : []),
   {
     group: "data",
     icon: "i-lucide:chart-pie",

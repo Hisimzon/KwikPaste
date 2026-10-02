@@ -14,6 +14,7 @@ import type {
   PreferenceSettingChangeHandler,
 } from "../types/preferences";
 import { translatePreferenceSection } from "../utils/preferenceI18n";
+import LanSyncPanel from "./lanSync";
 import PreferenceSettingRow from "./PreferenceSettingRow";
 import StorageOverviewPanel from "./storageOverview";
 
@@ -57,6 +58,14 @@ const PreferenceSection: FC<PreferenceSectionProps> = (props) => {
   const isStorageOverview = section.settings.some((setting) => {
     return setting.control.type === "storageOverview";
   });
+  const isLanSync = section.settings.some((setting) => {
+    return setting.control.type === "lanSync";
+  });
+
+  // 同步设备区自己分成本机、已配对、附近几组小标题，不再套分组标题。
+  if (isLanSync) {
+    return <LanSyncPanel settings={settings} />;
+  }
 
   if (isStorageOverview) {
     return (

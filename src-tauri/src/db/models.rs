@@ -65,6 +65,10 @@ pub struct ClipboardItem {
     pub note: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// 局域网同步收到的记录所来自的设备 id；本机采集的记录为 `None`。
+    #[sqlx(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_device_id: Option<String>,
 
     /// 来源应用名称。仅 list 查询通过 LEFT JOIN `clipboard_apps` 填充；
     /// 单条 `SELECT_ITEM` 路径与 `INSERT` 不读不写，`#[sqlx(default)]` 保证缺列时为 `None`。
@@ -81,6 +85,10 @@ pub struct ClipboardItem {
     #[sqlx(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_app_icon_path: Option<String>,
+    /// 来源设备名称：命令层按 `origin_device_id` 从已配对设备里回填，前端直接显示「来自 xxx」。
+    #[sqlx(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_device_name: Option<String>,
     /// Image 类型条目的缩略图绝对路径；命令层按需确保缩略图存在后回填，
     /// 前端可直接 `convertFileSrc` 渲染，避免逐条再发取图命令。
     #[sqlx(default)]

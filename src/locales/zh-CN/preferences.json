@@ -66,6 +66,50 @@
   "controls": {
     "saving": "保存中…"
   },
+  "lanSync": {
+    "devices": {
+      "empty": "还没有配对的设备",
+      "lastSeen": "{{time}} 在线",
+      "offline": "离线",
+      "online": "在线",
+      "remove": "取消配对",
+      "removeConfirmContent": "两台设备之后不再互相同步，已经收到的记录会保留。",
+      "removeConfirmTitle": "取消与 {{name}} 的配对？",
+      "title": "已配对设备"
+    },
+    "firewallHint": "其他设备搜不到或连不上本机时，请在 Windows 防火墙里允许快贴访问网络；家里的 Wi-Fi 被识别为「公用网络」时也需要勾选公用网络。",
+    "nearby": {
+      "empty": "正在搜索同一网络中开启了局域网同步的设备",
+      "manual": "手动添加",
+      "pair": "配对",
+      "title": "附近设备"
+    },
+    "off": "开启局域网同步后，可以在这里用配对码配对同一网络中的设备。",
+    "pairedByOther": "{{name}} 已与本机配对",
+    "pairingCode": {
+      "exhausted": "配对码已失效，请刷新",
+      "hide": "隐藏配对码",
+      "hint": "在另一台设备上选择本机并输入配对码，剩余尝试 {{count}} 次",
+      "refresh": "刷新配对码",
+      "show": "显示配对码",
+      "title": "配对码"
+    },
+    "pairModal": {
+      "address": "对方地址",
+      "addressPlaceholder": "例如 192.168.1.8:41573",
+      "code": "对方的配对码",
+      "codeHint": "在对方设备的「同步」页可以看到 6 位配对码。",
+      "manualTitle": "手动添加设备",
+      "ok": "配对",
+      "title": "与 {{name}} 配对"
+    },
+    "startFailed": "局域网同步没能启动",
+    "starting": "正在启动局域网同步",
+    "thisDevice": {
+      "noAddress": "没有可用的网络连接",
+      "title": "本机"
+    }
+  },
   "overview": {
     "categories": {
       "byBytes": "大小",
@@ -330,6 +374,15 @@
       },
       "globalShortcuts": {
         "title": "全局快捷键"
+      },
+      "lanContent": {
+        "title": "同步内容"
+      },
+      "lanDevices": {
+        "title": "设备"
+      },
+      "lanSync": {
+        "title": "局域网同步"
       },
       "localData": {
         "title": "数据管理"
@@ -862,6 +915,36 @@
           "title": "忽略应用"
         }
       },
+      "sync": {
+        "lan": {
+          "deviceName": {
+            "description": "在其他设备上显示的名称。",
+            "placeholder": "留空时使用电脑名",
+            "title": "设备名称"
+          },
+          "devices": {
+            "title": "配对设备"
+          },
+          "enabled": {
+            "description": "同一网络中配对过的设备之间，复制的文本和图片会实时互通。",
+            "title": "局域网同步"
+          },
+          "image": {
+            "title": "同步图片"
+          },
+          "maxImageMb": {
+            "description": "超过这个大小的图片不发送，也不接收。",
+            "title": "图片大小上限"
+          },
+          "text": {
+            "title": "同步文本"
+          },
+          "writeClipboard": {
+            "description": "关闭后，收到的内容只进历史记录。",
+            "title": "收到后写入剪贴板"
+          }
+        }
+      },
       "updates": {
         "autoCheck": {
           "title": "自动检查更新"
@@ -956,6 +1039,9 @@
       },
       "shortcuts": {
         "title": "快捷键"
+      },
+      "sync": {
+        "title": "同步"
       },
       "window": {
         "title": "剪贴板窗口"

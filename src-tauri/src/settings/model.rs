@@ -18,6 +18,7 @@ pub struct Settings {
     pub appearance: Appearance,
     pub shortcuts: Shortcuts,
     pub clipboard: Clipboard,
+    pub sync: SyncSettings,
     pub onboarding: Onboarding,
     pub update: Update,
 }
@@ -827,6 +828,50 @@ pub enum WindowPosition {
     #[default]
     FollowCursor,
     Center,
+}
+
+/// 多设备同步。设备身份与已配对设备不放这里：`settings.json` 会进备份包，导到别的电脑就成了冒充。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SyncSettings {
+    pub lan: LanSync,
+}
+
+pub const LAN_SYNC_DEVICE_NAME_MAX_CHARS: usize = 40;
+pub const LAN_SYNC_MAX_IMAGE_MB_MIN: u32 = 1;
+pub const LAN_SYNC_MAX_IMAGE_MB_MAX: u32 = 100;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LanSync {
+    pub enabled: bool,
+    /// 在其他设备上显示的名称；留空时用系统的电脑名。
+    pub device_name: String,
+    /// 收到其他设备的复制后，同时写入本机系统剪贴板，可以直接粘贴。
+    pub write_clipboard: bool,
+    pub text: bool,
+    pub image: bool,
+    /// 单张图片超过这个大小就不发送也不接收。
+    pub max_image_mb: u32,
+}
+
+impl Default for LanSync {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            device_name: String::new(),
+            write_clipboard: true,
+            text: true,
+            image: true,
+            max_image_mb: 20,
+        }
+    }
+}
+
+impl LanSync {
+    pub fn max_image_bytes(&self) -> u64 {
+        u64::from(self.max_image_mb) * 1024 * 1024
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
