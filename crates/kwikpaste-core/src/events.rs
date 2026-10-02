@@ -51,4 +51,7 @@ pub enum CoreEvent {
     CleanupStatus(CleanupStatus),
     /// 自定义分组增删改或排序变了（1.x `clipboard-groups://updated`），分组栏需要重新拉取。
     GroupsUpdated,
+    /// 历史数据整体换了一份：切换存储位置、导入备份（1.x `clipboard://updated` 的 `{ imported: true }`）。
+    /// 列表、分组栏、来源应用都要重新拉取。
+    ClipboardReloaded,
 }

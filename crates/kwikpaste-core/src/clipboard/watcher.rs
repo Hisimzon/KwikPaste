@@ -63,6 +63,27 @@ impl WatcherPause {
     pub fn set_paused(&self, paused: bool) {
         self.0.store(paused, Ordering::Relaxed);
     }
+
+    /// 暂停采集，返回的 guard drop 时恢复成暂停前的状态（宿主原本就暂停着则保持暂停）。
+    pub(crate) fn pause_scoped(&self) -> PauseGuard {
+        let previous = self.0.swap(true, Ordering::Relaxed);
+        PauseGuard {
+            pause: self.clone(),
+            previous,
+        }
+    }
+}
+
+/// [`WatcherPause::pause_scoped`] 的恢复 guard。
+pub(crate) struct PauseGuard {
+    pause: WatcherPause,
+    previous: bool,
+}
+
+impl Drop for PauseGuard {
+    fn drop(&mut self) {
+        self.pause.set_paused(self.previous);
+    }
 }
 
 /// 处理一次剪贴板变化的同步部分：识别来源 → 过滤忽略的应用 → 读取（带重试）→ 转成记录

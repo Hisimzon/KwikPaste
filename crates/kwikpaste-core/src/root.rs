@@ -33,6 +33,7 @@ use crate::runtime::hop;
 use crate::settings::{
     History, Language, Settings, SettingsDelta, SettingsLoadReport, SettingsStore,
 };
+use crate::window_state::WindowStateStore;
 
 /// core 的句柄，克隆很便宜，各处共用同一份状态。
 #[derive(Clone)]
@@ -41,6 +42,8 @@ pub struct Core(pub(crate) Arc<CoreInner>);
 pub(crate) struct CoreInner {
     pub(crate) info: AppInfo,
     pub(crate) paths: CorePaths,
+    /// 切换存储位置、覆盖导入后重开数据库时沿用启动时的连接池上限。
+    pub(crate) db_max_connections: u32,
     pub(crate) rt: Handle,
     pub(crate) events: Arc<dyn EventSink>,
     pub(crate) settings: SettingsStore,
@@ -49,6 +52,7 @@ pub(crate) struct CoreInner {
     pub(crate) images: ImageStore,
     pub(crate) app_icons: AppIconStore,
     pub(crate) file_icons: FileIconStore,
+    pub(crate) window_state: WindowStateStore,
     pub(crate) cleanup: clipboard::cleanup::CleanupScheduler,
     /// 来源应用缓存，监听与偏好页共用。
     pub(crate) apps: AppsRegistry,
@@ -81,10 +85,12 @@ impl Core {
             let images = ImageStore::new(&paths)?;
             let app_icons = AppIconStore::new(&paths)?;
             let file_icons = FileIconStore::new(&paths)?;
+            let window_state = WindowStateStore::new(&paths)?;
 
             let inner = Arc::new(CoreInner {
                 info,
                 paths,
+                db_max_connections: options.db_max_connections,
                 rt: handle,
                 events,
                 settings,
@@ -93,6 +99,7 @@ impl Core {
                 images,
                 app_icons,
                 file_icons,
+                window_state,
                 cleanup: Default::default(),
                 apps: AppsRegistry::default(),
                 watcher_pause: WatcherPause::default(),
@@ -265,6 +272,11 @@ impl Core {
 
     pub fn file_icon_store(&self) -> &FileIconStore {
         &self.0.file_icons
+    }
+
+    /// 窗口位置与尺寸存档（`state/window-state.gpui.json`），随存储位置切换。
+    pub fn window_state(&self) -> &WindowStateStore {
+        &self.0.window_state
     }
 
     /// 按当前的采集设置读取剪贴板，返回第一个启用且有内容的表示。

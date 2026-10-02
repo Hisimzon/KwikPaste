@@ -23,6 +23,7 @@ pub mod runtime;
 pub mod settings;
 #[cfg(test)]
 mod testing;
+pub mod window_state;
 
 pub use env::{AppEnv, AppInfo, CoreOptions, APP_IDENTIFIER, APP_NAME};
 pub use error::{AppError, Result};

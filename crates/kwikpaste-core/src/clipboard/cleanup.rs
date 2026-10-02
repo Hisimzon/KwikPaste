@@ -295,6 +295,12 @@ pub(crate) fn apply_outcome(core: &CoreInner, outcome: &CleanupOutcome, reason: 
 }
 
 impl CleanupScheduler {
+    /// 独占清理锁：持有期间后台清理、手动清理与预演都会等待。VACUUM、切换存储位置、
+    /// 覆盖导入备份时持有，避免和清理同时改数据库与资源文件。
+    pub(crate) async fn exclusive(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.running.lock().await
+    }
+
     fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
         self.pending
             .lock()
