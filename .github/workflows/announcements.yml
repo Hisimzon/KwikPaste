@@ -1,0 +1,104 @@
+name: Mirror Announcements
+
+# 把官网后台发布的公告同步成七牛上的静态快照。
+#
+# 客户端先请求后端 paste.fastthree.com/api/v1/announcements，失败才读这份快照
+# （见 src-tauri/src/update/announcement.rs）。快照只在后端宕机时兜底，所以定时同步即可：
+# 后台的改动最多约 15 分钟（另加 GitHub 定时任务的排队延迟）进入快照；想立刻同步就手动运行。
+#
+# 后端连不上或返回异常内容时保留旧快照，不会用空内容覆盖。
+# 七牛密钥只放在 GitHub Secrets：同一个桶里还有安装包，不把它交给对外服务的服务器。
+
+"on":
+  schedule:
+    # 避开整点，GitHub 的定时任务在整点前后排队最久。
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mirror-announcements
+  cancel-in-progress: false
+
+env:
+  SOURCE_URL: https://paste.fastthree.com/api/v1/announcements
+  SNAPSHOT_URL: https://dl.fastthree.com/kwikpaste/announcements.json
+  MIRROR_BUCKET: kwikpaste
+  MIRROR_KEY: kwikpaste/announcements.json
+  MIRROR_S3_ENDPOINT: https://s3.cn-south-1.qiniucs.com
+  MIRROR_S3_REGION: cn-south-1
+  # 与客户端的 MAX_RESPONSE_BYTES 一致，超过的响应客户端会整份丢弃。
+  MAX_BYTES: 262144
+
+jobs:
+  mirror:
+    name: Mirror announcements
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mirror to Qiniu
+        shell: bash
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${QINIU_ACCESS_KEY}" || -z "${QINIU_SECRET_KEY}" ]]; then
+            echo "::notice::未配置 QINIU_ACCESS_KEY / QINIU_SECRET_KEY，跳过。"
+            exit 0
+          fi
+
+          if ! curl -fsS --retry 3 --retry-delay 10 --max-time 30 -o snapshot.json "${SOURCE_URL}"; then
+            echo "::warning::${SOURCE_URL} 请求失败，保留七牛上的旧快照。"
+            exit 0
+          fi
+
+          size="$(stat -c %s snapshot.json)"
+          if (( size > MAX_BYTES )); then
+            echo "::error::公告列表有 ${size} 字节，超过客户端上限 ${MAX_BYTES}。"
+            exit 1
+          fi
+
+          if ! jq -e '.schema == 1 and (.items | type) == "array"' snapshot.json > /dev/null; then
+            echo "::error::${SOURCE_URL} 返回的不是 schema 1 的公告列表，保留旧快照。"
+            exit 1
+          fi
+
+          count="$(jq '.items | length' snapshot.json)"
+
+          export AWS_ACCESS_KEY_ID="${QINIU_ACCESS_KEY}"
+          export AWS_SECRET_ACCESS_KEY="${QINIU_SECRET_KEY}"
+          export AWS_DEFAULT_REGION="${MIRROR_S3_REGION}"
+          export AWS_EC2_METADATA_DISABLED=true
+          # AWS CLI 2.23 起上传默认附带 CRC 校验头和 aws-chunked 编码，多数 S3 兼容服务不认，改回按需。
+          export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+          export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+
+          s3() {
+            aws s3 --endpoint-url "${MIRROR_S3_ENDPOINT}" --only-show-errors "$@"
+          }
+
+          # 跟源站上的现有快照逐字节比较；第一次运行时还没有快照，下载失败即视为有变化。
+          if s3 cp "s3://${MIRROR_BUCKET}/${MIRROR_KEY}" current.json 2> /dev/null && cmp -s snapshot.json current.json; then
+            echo "快照没有变化（${count} 条公告）。"
+            exit 0
+          fi
+
+          s3 cp snapshot.json "s3://${MIRROR_BUCKET}/${MIRROR_KEY}" \
+            --content-type application/json \
+            --cache-control "public, max-age=300"
+
+          # 从客户端实际访问的 CDN 地址回读，直到拿到新内容；CDN 可能还缓存着旧快照或 404。
+          for _ in $(seq 1 20); do
+            if curl -fsS --max-time 15 -o served.json "${SNAPSHOT_URL}" && cmp -s snapshot.json served.json; then
+              echo "七牛快照已更新（${count} 条公告）。"
+              exit 0
+            fi
+
+            sleep 15
+          done
+
+          echo "::error::${SNAPSHOT_URL} 5 分钟后仍不是新内容，检查 CDN 的缓存规则。"
+          exit 1
