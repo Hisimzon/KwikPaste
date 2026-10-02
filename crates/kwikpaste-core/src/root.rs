@@ -715,8 +715,8 @@ mod tests {
         core.write_text_fragment(&target, "example").unwrap();
         assert_eq!(target.snapshot().text.as_deref(), Some("example"));
 
-        // 小库的 WAL 比数据本身还大，Windows 上目录枚举拿到的 WAL 大小又滞后，这里只验证能算出来。
-        block_on(core.storage_bytes_in_use()).unwrap();
+        // WAL / SHM 不计入占用，见 `ops::storage_tests`。
+        assert!(block_on(core.storage_bytes_in_use()).unwrap() > 0);
         let preview = block_on(core.preview_cleanup(History::default())).unwrap();
         assert_eq!(preview.removed, 0);
         assert_eq!(block_on(core.run_cleanup_now()).unwrap().removed, 0);

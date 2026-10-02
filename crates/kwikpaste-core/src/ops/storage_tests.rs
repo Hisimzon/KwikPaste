@@ -266,3 +266,41 @@ fn clean_resource_cache_runs_while_paused_but_waits_for_cleanup() {
     assert!(block_on(core.find_item(&image_id)).unwrap().is_some());
     block_on(core.shutdown()).unwrap();
 }
+
+/// WAL / SHM 不计入占用：只往 WAL 里写（不 checkpoint）时，占用不会因为 WAL 变长而变少；
+/// 结果等于跳过旁路文件后的目录大小减去 SQLite 可复用的空闲页。
+#[test]
+fn storage_in_use_skips_the_wal_and_shm() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    store(&core, text("first"));
+    let before = block_on(core.storage_bytes_in_use()).unwrap();
+
+    for index in 0..40 {
+        store(
+            &core,
+            text(&format!("grows the wal {index} {}", "x".repeat(2000))),
+        );
+    }
+    let db_path = crate::db::db_path(&fixture.paths).unwrap();
+    let wal = std::path::PathBuf::from(format!("{}-wal", db_path.display()));
+    let shm = std::path::PathBuf::from(format!("{}-shm", db_path.display()));
+    assert!(fs::metadata(&wal).unwrap().len() > 0);
+
+    let after = block_on(core.storage_bytes_in_use()).unwrap();
+    assert!(after >= before, "{after} < {before}");
+
+    let walked =
+        crate::disk::dir_size_excluding(&fixture.paths.app_data_dir().unwrap(), &[wal, shm])
+            .unwrap();
+    let reusable = block_on(core.hop({
+        let core = core.clone();
+        async move {
+            let pool = core.0.db.pool().await;
+            crate::db::items::reusable_page_bytes(&pool).await
+        }
+    }))
+    .unwrap();
+    assert_eq!(after, walked - reusable);
+    block_on(core.shutdown()).unwrap();
+}

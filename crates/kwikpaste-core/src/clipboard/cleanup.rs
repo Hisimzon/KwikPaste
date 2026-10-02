@@ -9,7 +9,7 @@
 //! 后台清理只统计存储占用，不删记录、不释放空闲页，直到用户显式保存一次历史设置；
 //! 用户在偏好页手动执行的清理不受影响。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,7 +25,7 @@ use crate::db::retention::{
     count_protected, delete_expired, delete_least_recent_until, delete_over_count,
     release_free_pages, rule_match_stats, AgePlan, RuleMatchStats, RulePlan,
 };
-use crate::disk::{dir_size, file_size};
+use crate::disk::dir_size_excluding;
 use crate::error::Result;
 use crate::events::CoreEvent;
 use crate::root::CoreInner;
@@ -268,19 +268,22 @@ pub(crate) async fn preview(core: &CoreInner, history: &History) -> Result<Clean
     Ok(preview)
 }
 
-/// 数据实际占用：数据目录总大小减去 SQLite 可复用的空闲页和 WAL 旁路文件。
+/// 数据实际占用：数据目录总大小（不含 WAL / SHM 旁路文件）减去 SQLite 可复用的空闲页。
 /// 偏好页展示与存储上限清理共用这一口径——删行后数据库文件不一定立即缩小，
 /// 按目录原始大小判断会让下一轮把已释放的空间再算一遍而继续误删，侧栏也会一直显示超限。
+///
+/// 旁路文件在遍历时直接跳过，而不是先加后减：Windows 上目录枚举拿到的是打开中文件的旧大小，
+/// 单独查到的是最新大小，先加旧值再减新值会把占用算少（WAL 刚写满时能少掉好几 MB）。
 pub(crate) async fn storage_bytes_in_use(core: &CoreInner, pool: &SqlitePool) -> Result<u64> {
-    let total = dir_size(&core.paths.app_data_dir()?)?;
     let db_path = crate::db::db_path(&core.paths)?;
+    let sidecars = ["-wal", "-shm"].map(|suffix| sidecar(&db_path, suffix));
+    let total = dir_size_excluding(&core.paths.app_data_dir()?, &sidecars)?;
 
-    let mut reusable = reusable_page_bytes(pool).await?;
-    for suffix in ["-wal", "-shm"] {
-        reusable += file_size(Path::new(&format!("{}{}", db_path.display(), suffix)))?;
-    }
+    Ok(total.saturating_sub(reusable_page_bytes(pool).await?))
+}
 
-    Ok(total.saturating_sub(reusable))
+fn sidecar(db_path: &Path, suffix: &str) -> PathBuf {
+    PathBuf::from(format!("{}{suffix}", db_path.display()))
 }
 
 /// 按范围删除记录后删掉对应图片文件并通知宿主刷新列表；没删到记录时什么都不做。
