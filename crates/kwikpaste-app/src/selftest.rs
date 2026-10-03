@@ -26,6 +26,8 @@ pub const SMOKE: &str = "--selftest-smoke";
 /// 平台探针：写探针日志（见 `platform::probe`），并接受后启动的自测实例转交的下面几条命令。
 pub const PLATFORM: &str = "--selftest-platform";
 pub const PANEL_INVARIANTS: &str = "--selftest-panel-invariants";
+/// macOS 拖出自测：启动面板、装载测试载荷并给 UI/CI 留出一次原生拖拽窗口。
+pub const DRAGOUT: &str = "--selftest-dragout";
 pub const SHOW: &str = "--selftest-show";
 pub const HIDE: &str = "--selftest-hide";
 pub const TOGGLE: &str = "--selftest-toggle";
@@ -131,11 +133,12 @@ pub fn kind() -> Option<&'static str> {
 
 /// 本进程是平台探针本身（`--selftest-platform`）或者给它转交命令的后启动实例。
 fn platform_probe() -> bool {
-    const COMMANDS: [&str; 14] = [
+    const COMMANDS: [&str; 15] = [
         COUNT,
         VSYNC_DEAD,
         PLATFORM,
         PANEL_INVARIANTS,
+        DRAGOUT,
         SHOW,
         HIDE,
         TOGGLE,
@@ -234,6 +237,22 @@ impl log::Log for StderrLogger {
 
 /// 按开关安排自测流程。在 `platform::start` 之后调用。
 pub fn schedule(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    if enabled(DRAGOUT) {
+        let mut payload_seen = false;
+        for argument in std::env::args() {
+            if let Some(payload) = argument.strip_prefix(DRAG_PAYLOAD) {
+                payload_seen = true;
+                if let Err(error) = crate::platform::drag_out::set_selftest_payload(payload) {
+                    log::error!("selftest drag payload rejected: {error:#}");
+                }
+            }
+        }
+        if !payload_seen && crate::platform::drag_out::selftest_payload().is_none() {
+            let _ =
+                crate::platform::drag_out::set_selftest_payload(r#"{"plain":"native-dragout"}"#);
+        }
+    }
     if enabled(SMOKE) {
         smoke(cx);
     }
@@ -257,6 +276,50 @@ pub fn schedule(cx: &mut App) {
         panel.request(PanelCommand::Show(Trigger::now(TriggerSource::Selftest)));
         cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_secs(3)).await;
+            cx.update(|cx| cx.quit());
+        })
+        .detach();
+    }
+    #[cfg(target_os = "macos")]
+    if enabled(DRAGOUT)
+        && let Some(panel) = cx.try_global::<Panel>()
+    {
+        let window = panel.window();
+        panel.request(PanelCommand::Show(Trigger::now(TriggerSource::Selftest)));
+        cx.spawn(async move |cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(800))
+                .await;
+            let native = window.and_then(|handle| {
+                cx.update(|cx| {
+                    handle.update(cx, |_, window, _| {
+                        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                        match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+                            RawWindowHandle::AppKit(handle) => {
+                                Some(handle.ns_view.as_ptr() as isize)
+                            }
+                            _ => None,
+                        }
+                    })
+                })
+                .ok()
+                .flatten()
+            });
+            let started = native.is_some_and(|native| {
+                cx.update(|_| unsafe { kwikpaste_os::mac::drag_out::selftest_drag(native).is_ok() })
+            });
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            let counts = kwikpaste_os::mac::drag_out::selftest_counts();
+            log::info!(
+                "dragout selftest: armed={} created={} ended={} unregistered={}",
+                started,
+                counts.0,
+                counts.1,
+                counts.2
+            );
+            if !started || counts.0 == 0 || counts.1 == 0 || counts.2 == 0 {
+                std::process::exit(1);
+            }
             cx.update(|cx| cx.quit());
         })
         .detach();

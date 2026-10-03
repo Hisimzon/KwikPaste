@@ -6,13 +6,16 @@ use std::io;
 use std::ptr::NonNull;
 
 use block2::RcBlock;
+use dispatch2::DispatchQueue;
+use kwikpaste_core::settings::Material;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, class, msg_send};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy, NSEvent,
-    NSEventMask, NSRunningApplication, NSScreen, NSView, NSWindow, NSWindowCollectionBehavior,
-    NSWindowStyleMask, NSWorkspace,
+    NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy,
+    NSAutoresizingMaskOptions, NSEvent, NSEventMask, NSRunningApplication, NSScreen, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -34,6 +37,7 @@ pub fn use_accessory_activation_policy() -> io::Result<()> {
 /// GPUI 创建的 NSView 对应的非激活 NSPanel。
 pub struct Panel {
     view: NonNull<c_void>,
+    effect_view: RefCell<Option<Retained<NSVisualEffectView>>>,
     outside_monitor: RefCell<Option<Retained<AnyObject>>>,
     previous_foreground: RefCell<Option<Retained<NSRunningApplication>>>,
 }
@@ -46,6 +50,7 @@ impl Panel {
     pub unsafe fn from_raw(ns_view: NonNull<c_void>) -> Self {
         Self {
             view: ns_view,
+            effect_view: RefCell::new(None),
             outside_monitor: RefCell::new(None),
             previous_foreground: RefCell::new(None),
         }
@@ -54,6 +59,10 @@ impl Panel {
     fn window(&self) -> Option<Retained<NSWindow>> {
         let view = unsafe { self.view.cast::<NSView>().as_ref() };
         view.window()
+    }
+
+    pub fn raw_view_handle(&self) -> isize {
+        self.view.as_ptr() as isize
     }
 
     /// 补上 GPUI WindowKind::PopUp 缺少的 NSPanel 约束。
@@ -70,6 +79,65 @@ impl Panel {
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
         window.setContentSize(NSSize::new(min_size.width as f64, min_size.height as f64));
+        self.schedule_unregister_dragged_types();
+        Ok(())
+    }
+
+    /// GPUI 建窗时可能暂时注册拖放类型；独立的下一轮主队列 turn 清掉它，避免自拖回面板触发投放。
+    pub fn schedule_unregister_dragged_types(&self) {
+        let view = self.view.as_ptr();
+        unsafe {
+            DispatchQueue::main().exec_async_f(view, unregister_dragged_types);
+        }
+    }
+
+    /// 在窗口下放置 AppKit 材质层；默认材质移除它并恢复不透明窗口。
+    pub fn set_material(&self, material: Material) -> io::Result<()> {
+        let window = self
+            .window()
+            .ok_or_else(|| io::Error::other("the panel view has no window"))?;
+        let content = window
+            .contentView()
+            .ok_or_else(|| io::Error::other("the panel window has no content view"))?;
+        set_corner_radius(&content);
+        match material {
+            Material::Default => {
+                window.setOpaque(true);
+                if let Some(effect) = self.effect_view.borrow_mut().take() {
+                    effect.removeFromSuperview();
+                }
+            }
+            Material::Mica | Material::Acrylic => {
+                window.setOpaque(false);
+                let effect = if let Some(effect) = self.effect_view.borrow().as_ref() {
+                    effect.clone()
+                } else {
+                    let marker = main_thread()?;
+                    let effect =
+                        NSVisualEffectView::initWithFrame(marker.alloc(), content.bounds());
+                    effect.setAutoresizingMask(
+                        NSAutoresizingMaskOptions::ViewWidthSizable
+                            | NSAutoresizingMaskOptions::ViewHeightSizable,
+                    );
+                    content.addSubview_positioned_relativeTo(
+                        &effect,
+                        NSWindowOrderingMode::Below,
+                        None,
+                    );
+                    *self.effect_view.borrow_mut() = Some(effect.clone());
+                    effect
+                };
+                set_corner_radius(&effect);
+                effect.setMaterial(match material {
+                    Material::Mica => NSVisualEffectMaterial::UnderWindowBackground,
+                    Material::Acrylic => NSVisualEffectMaterial::Popover,
+                    Material::Default => unreachable!(),
+                });
+                effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+                effect.setState(NSVisualEffectState::FollowsWindowActiveState);
+                effect.setFrame(content.bounds());
+            }
+        }
         Ok(())
     }
 
@@ -321,9 +389,25 @@ fn main_thread() -> io::Result<MainThreadMarker> {
         .ok_or_else(|| io::Error::other("AppKit calls must run on the main thread"))
 }
 
+fn set_corner_radius(view: &NSView) {
+    view.setWantsLayer(true);
+    if let Some(layer) = view.layer() {
+        layer.setCornerRadius(16.);
+    }
+}
+
 fn contains(rect: NSRect, point: NSPoint) -> bool {
     point.x >= rect.origin.x
         && point.x < rect.origin.x + rect.size.width
         && point.y >= rect.origin.y
         && point.y < rect.origin.y + rect.size.height
+}
+
+extern "C" fn unregister_dragged_types(context: *mut c_void) {
+    if context.is_null() {
+        return;
+    }
+    let view = unsafe { &*(context.cast::<NSView>()) };
+    view.unregisterDraggedTypes();
+    crate::mac::drag_out::record_unregistered();
 }

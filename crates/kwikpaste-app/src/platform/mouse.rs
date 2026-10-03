@@ -5,8 +5,8 @@
 //! 按下），以及鼠标按键唤起（设置 `shortcuts.mouseTrigger`，与 1.x 相同，见
 //! `kwikpaste_os::win::mouse`）。
 //!
-//! macOS：TODO：失焦隐藏走 `windowDidResignKey`（面板成为 key 窗口之后再接）；鼠标按键唤起要用
-//! CGEventTap 拦截 OtherMouseDown（需要辅助功能权限），1.x 也没做，偏好里只在 Windows 显示。
+//! macOS：失焦隐藏继续由面板自己的 global monitor 处理；鼠标按键唤起用 `NSEvent` 的 global
+//! monitor 观察 `OtherMouseDown`，不吞事件，也不需要 CGEventTap 的辅助功能权限。
 
 use async_channel::Sender;
 use gpui::App;
@@ -76,9 +76,34 @@ pub fn apply(shortcuts: &Shortcuts) {
     }
 }
 
-/// macOS：Win+V 不存在；鼠标按键唤起 TODO（见模块文档）。
+/// macOS：Win+V 不存在；鼠标按键唤起由 NSEvent global monitor 观察 OtherMouseDown。
 #[cfg(target_os = "macos")]
-pub fn apply(_shortcuts: &Shortcuts) {}
+pub fn apply(shortcuts: &Shortcuts) {
+    use kwikpaste_core::settings::MouseTrigger;
+    use kwikpaste_os::mac::mouse::{self, TriggerButton};
+
+    let button = match shortcuts.mouse_trigger {
+        MouseTrigger::Disabled => None,
+        MouseTrigger::Middle => Some(TriggerButton::Middle),
+        MouseTrigger::Back => Some(TriggerButton::Back),
+        MouseTrigger::Forward => Some(TriggerButton::Forward),
+    };
+    mouse::set_trigger(button);
+    log::info!("mouse trigger: {button:?}");
+}
 
 #[cfg(target_os = "macos")]
-pub fn serve(_cx: &mut App, _commands: Sender<PanelCommand>) {}
+pub fn serve(cx: &mut App, commands: Sender<PanelCommand>) {
+    let installed = kwikpaste_os::mac::mouse::set_sink(move |event| {
+        if matches!(event, kwikpaste_os::mac::mouse::MouseEvent::Trigger) {
+            let trigger = super::panel::Trigger::now(super::panel::TriggerSource::MouseButton);
+            let _ = commands.try_send(PanelCommand::Toggle(trigger));
+        }
+    });
+    if let Err(err) = installed {
+        log::error!("macOS mouse trigger monitor could not be installed: {err}");
+    }
+    if let Some(core) = crate::core_host::core(cx) {
+        apply(&core.settings().shortcuts);
+    }
+}

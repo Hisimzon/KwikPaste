@@ -113,6 +113,31 @@ pub fn serve(cx: &mut App, commands: Sender<PanelCommand>) {
     .detach();
 }
 
-/// TODO(macOS)：监听辅助功能显示选项的变化。
 #[cfg(target_os = "macos")]
-pub fn serve(_cx: &mut App, _commands: Sender<PanelCommand>) {}
+pub fn serve(cx: &mut App, _commands: Sender<PanelCommand>) {
+    let (sender, receiver) = async_channel::unbounded();
+    if let Err(err) = kwikpaste_os::mac::system::watch(move || {
+        let _ = sender.try_send(());
+    }) {
+        log::error!("macOS display options are not followed: {err}");
+        return;
+    }
+
+    cx.spawn(async move |cx| {
+        while receiver.recv().await.is_ok() {
+            let changed = cx.update(|cx| {
+                let signals = read();
+                let previous = cx.try_global::<SystemSignals>().copied();
+                if previous == Some(signals) {
+                    return false;
+                }
+                apply(signals, cx);
+                true
+            });
+            if changed {
+                log::info!("macOS display options changed");
+            }
+        }
+    })
+    .detach();
+}

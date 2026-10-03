@@ -129,11 +129,63 @@ mod windows {
 
 #[cfg(target_os = "macos")]
 mod mac {
+    use std::sync::{Arc, Mutex};
+
+    use dispatch2::DispatchQueue;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertStyle};
+    use objc2_foundation::NSString;
+
     use super::DialogButton;
 
-    pub(super) fn show(_title: &str, _body: &str, _buttons: &[DialogButton]) -> Option<usize> {
-        // TODO(macOS): 用 NSAlert 提供与 Windows TaskDialog 相同的按钮顺序。
-        log::warn!("NSAlert dialog integration is not available yet");
-        None
+    pub(super) fn show(title: &str, body: &str, buttons: &[DialogButton]) -> Option<usize> {
+        if buttons.is_empty() {
+            return None;
+        }
+        if MainThreadMarker::new().is_none() {
+            let title = title.to_owned();
+            let body = body.to_owned();
+            let buttons = buttons.to_vec();
+            let result = Arc::new(Mutex::new(None));
+            let output = result.clone();
+            DispatchQueue::main().exec_sync(move || {
+                *output
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                    show_on_main(&title, &body, &buttons);
+            });
+            return result
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+        }
+        show_on_main(title, body, buttons)
+    }
+
+    fn show_on_main(title: &str, body: &str, buttons: &[DialogButton]) -> Option<usize> {
+        let marker = MainThreadMarker::new()?;
+
+        let alert = NSAlert::new(marker);
+        alert.setAlertStyle(NSAlertStyle::Informational);
+        let title = NSString::from_str(title);
+        let body = NSString::from_str(body);
+        alert.setMessageText(&title);
+        alert.setInformativeText(&body);
+        for (index, button) in buttons.iter().enumerate() {
+            let label = NSString::from_str(&button.label);
+            let native = alert.addButtonWithTitle(&label);
+            if index + 1 == buttons.len() {
+                // Announcement prompts put Later/Close last; make Escape select that semantic
+                // button instead of the destructive “Don't remind me” action.
+                let escape = NSString::from_str("\u{1b}");
+                native.setKeyEquivalent(&escape);
+            }
+        }
+
+        let response = alert.runModal();
+        let index = response - NSAlertFirstButtonReturn;
+        usize::try_from(index)
+            .ok()
+            .filter(|index| *index < buttons.len())
     }
 }

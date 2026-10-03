@@ -6,6 +6,7 @@ use std::time::Instant;
 use anyhow::{Context as _, anyhow, bail};
 use async_channel::Sender;
 use gpui::Window;
+use kwikpaste_core::settings::Material;
 use kwikpaste_core::settings::WindowPosition;
 use kwikpaste_core::window_state::WindowGeometry;
 use kwikpaste_os::geometry::Size;
@@ -55,12 +56,19 @@ impl NativePanel {
         Ok(())
     }
 
+    pub fn set_material(&self, material: Material) -> anyhow::Result<()> {
+        self.panel
+            .set_material(material)
+            .context("macOS window material")?;
+        Ok(())
+    }
+
     pub fn is_visible(&self) -> bool {
         self.panel.is_visible()
     }
 
     pub fn raw_handle(&self) -> isize {
-        0
+        self.panel.raw_view_handle()
     }
 
     pub fn set_text_scale(&self, _text_scale: f64) {}

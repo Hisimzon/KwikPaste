@@ -18,6 +18,7 @@ use gpui::{
 use kwikpaste_os::clock;
 
 use super::editing::EditTrigger;
+use super::material::WindowMaterial;
 use super::native::NativePanel;
 use super::{probe, window_state};
 
@@ -30,20 +31,12 @@ pub enum TriggerSource {
     Hotkey,
     Tray,
     SecondInstance,
-    #[cfg_attr(
-        target_os = "macos",
-        expect(dead_code, reason = "macOS 的点外部隐藏还没做")
-    )]
     OutsideClick,
     #[cfg_attr(
         target_os = "macos",
         expect(dead_code, reason = "Win+V 只在 Windows 上")
     )]
     WinV,
-    #[cfg_attr(
-        target_os = "macos",
-        expect(dead_code, reason = "macOS 的鼠标按键唤起还没做")
-    )]
     MouseButton,
     Ui,
     /// 粘贴前让出前台。
@@ -102,6 +95,8 @@ pub enum PanelCommand {
         expect(dead_code, reason = "macOS 没有单独的文本大小设置")
     )]
     SetTextScale(f64),
+    /// 应用当前窗口材质；macOS 需要由持有原生面板的命令循环更新 NSVisualEffectView。
+    SetMaterial(WindowMaterial),
     /// 粘贴前让出前台：编辑态先把前台还给进入前的窗口，`keep_visible` 为假时再隐藏面板。
     /// 处理完后经 `done` 回报面板此前是否可见（见 [`super::paste`]）。
     YieldForPaste {
@@ -303,6 +298,9 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
     if let Err(err) = parts.native.install() {
         log::error!("panel native setup failed: {err:#}");
     }
+    if let Some(material) = cx.update(|cx| cx.try_global::<WindowMaterial>().copied()) {
+        apply_material(&parts, material, cx);
+    }
     probe::ready(&parts.native);
     let mut hide_on_outside_click = true;
 
@@ -334,6 +332,10 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
                 parts.native.set_text_scale(text_scale);
                 continue;
             }
+            PanelCommand::SetMaterial(material) => {
+                apply_material(&parts, material, cx);
+                continue;
+            }
             PanelCommand::YieldForPaste { keep_visible, done } => {
                 if visible {
                     end_editing(&parts, cx);
@@ -352,6 +354,26 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
             (false, true) => hide(&parts, trigger, cx),
             (false, false) => {}
         }
+    }
+}
+
+fn apply_material(parts: &Parts, material: WindowMaterial, cx: &mut AsyncApp) {
+    let result = cx.update(|cx| {
+        parts.window.update(cx, |_, window, cx| {
+            super::material::apply_to_window(window, &material);
+            kwikpaste_ui::set_root_translucent(
+                window,
+                material.effective != kwikpaste_core::settings::Material::Default,
+                cx,
+            );
+        })
+    });
+    if let Err(err) = result {
+        log::debug!("window material not applied now: {err:#}");
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(err) = parts.native.set_material(material.effective) {
+        log::debug!("macOS material not applied now: {err:#}");
     }
 }
 

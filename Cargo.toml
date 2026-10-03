@@ -54,6 +54,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # windows 与 GPUI 用同一个大版本，特性合并后不多编一份。
 
 async-channel = "2"
+dispatch2 = "0.3"
 global-hotkey = "0.8"
 kwikpaste-os = { path = "crates/kwikpaste-os" }
 objc2 = "0.6"
@@ -105,6 +106,8 @@ socket2 = "0.6"
 
 # kwikpaste-os 在 macOS 上注入 ⌘V（CGEvent），与 GPUI 用的是同一个 crate。
 objc2-core-graphics = { version = "0.3", default-features = false }
+# macOS NSVisualEffectView 的内容层圆角。
+objc2-quartz-core = { version = "0.3", default-features = false }
 
 # kwikpaste-app 的 build.rs：给 Windows exe 嵌图标组（ID 1）和 VERSIONINFO。GPUI 也用它嵌 manifest，同一版本。
 embed-resource = "3"

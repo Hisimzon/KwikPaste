@@ -11,12 +11,13 @@
 //!    给面板派发了一条窗口外坐标的左键 `MouseUp`，清掉所有元素残留的按下状态（否则右键抬起会凑成
 //!    一次幽灵点击）。
 //!
-//! 拖出期间：GPUI 的前台任务全部冻结（ole32 的模态循环），渲染照常；Esc 由键盘钩子转成取消；
+//! 拖出期间：GPUI 的前台任务全部冻结（Windows 的 ole32 模态循环；macOS 的 AppKit tracking
+//! loop），渲染照常；Windows 的 Esc 由键盘钩子转成取消，macOS 由 AppKit 处理；
 //! 窗外点击不隐藏面板；松开在面板自己上时过滤层回 NONE，GPUI 收不到 `MouseUp` / `FileDrop`。
 //! 全程不激活面板（`WM_ACTIVATE` 为 0）。
 //!
-//! macOS 尚未实现（TODO：`beginDraggingSession` 必须在 `on_mouse_move` 处理器里同步调用，见计划
-//! §5 macOS 一节），[`start`] 在 macOS 上返回错误。
+//! macOS 走 AppKit `beginDraggingSession`；调用必须保留在 `on_mouse_move` 同步路径的命名白名单
+//! 函数里，结束回调负责清掉活动标志，下一轮 GPUI 任务再派发窗口外的 `MouseUp`。
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -113,7 +114,38 @@ pub fn start(
     cx: &mut App,
 ) -> Task<anyhow::Result<DragReport>> {
     let target = DragTarget::of(window);
-    cx.spawn(async move |cx: &mut AsyncApp| run(target?, data, preview_png, cx).await)
+    #[cfg(target_os = "macos")]
+    {
+        let target = match target {
+            Ok(target) => target,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        let started = kwikpaste_os::clock::now_ticks();
+        probe::drag_started(&data);
+        let phase = super::enter_phase(crate::health::Phase::DragOut);
+        let (sender, receiver) = async_channel::bounded(1);
+        if let Err(error) = unsafe {
+            kwikpaste_os::mac::drag_out::begin_session_sync(
+                target.native,
+                &data,
+                preview_png.as_deref(),
+                move |report| {
+                    let _ = sender.try_send(report);
+                },
+            )
+        } {
+            drop(phase);
+            log::error!("drag-out failed: {error:#}");
+            return Task::ready(Err(error));
+        }
+        return cx.spawn(async move |cx| {
+            finish_mac_drag(target.handle, receiver, started, phase, cx).await
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        cx.spawn(async move |cx: &mut AsyncApp| run(target?, data, preview_png, cx).await)
+    }
 }
 
 /// 拖出源窗口：GPUI 句柄（拖后清理用）和原生句柄。
@@ -160,8 +192,22 @@ async fn run(
         .context("drag-out failed");
     #[cfg(target_os = "macos")]
     let report: anyhow::Result<DragReport> = {
-        let _ = preview_png;
-        Err(anyhow!("drag-out is not implemented on macOS yet"))
+        let (sender, receiver) = async_channel::bounded(1);
+        let begin = cx.update(|_| unsafe {
+            kwikpaste_os::mac::drag_out::begin_session_sync(
+                target.native,
+                &data,
+                preview_png.as_deref(),
+                move |report| {
+                    let _ = sender.try_send(report);
+                },
+            )
+        });
+        begin?;
+        Ok(receiver
+            .recv()
+            .await
+            .context("macOS drag session ended without a result")?)
     };
 
     let returned = kwikpaste_os::clock::now_ticks();
@@ -176,6 +222,26 @@ async fn run(
     }
 
     report
+}
+
+#[cfg(target_os = "macos")]
+async fn finish_mac_drag(
+    handle: AnyWindowHandle,
+    receiver: async_channel::Receiver<DragReport>,
+    started: i64,
+    phase: super::PhaseGuard,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<DragReport> {
+    let report = receiver
+        .recv()
+        .await
+        .context("macOS drag session ended without a result")?;
+    let returned = kwikpaste_os::clock::now_ticks();
+    drop(phase);
+    clear_pending_mouse_down(handle, cx);
+    probe::drag_finished(&report, started, returned);
+    log::debug!("drag-out finished: {report:?}");
+    Ok(report)
 }
 
 /// 拖拽期间真实的左键抬起被 ole32 吃掉，GPUI 元素里还留着按下状态；派发一条窗口外坐标的抬起，

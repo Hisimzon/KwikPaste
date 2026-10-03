@@ -1,5 +1,6 @@
 //! 拖出（drag-out）：把记录拖到别的应用（附录 C §5）。这里是与平台无关的部分：载荷、结果和
-//! 进程级的「正在拖出」标志；Windows 的 OLE 实现在 `win::drag_out`，macOS 尚未实现。
+//! 进程级的「正在拖出」标志；Windows 的 OLE 实现在 `win::drag_out`，macOS 的 AppKit 会话在
+//! `kwikpaste-app/src/platform/drag_out.rs` 里调用。
 //!
 //! 钩子、窗外点击自动隐藏和自拖过滤层都读 [`is_active`]：拖出期间 GPUI 的前台任务全部冻结，
 //! 拖拽中要响应的事（Esc 取消）只能在钩子线程或 `IDropSource` 回调里做。
@@ -51,7 +52,6 @@ pub fn is_active() -> bool {
     ACTIVE.load(Ordering::SeqCst)
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) fn set_active(active: bool) {
+pub fn set_active(active: bool) {
     ACTIVE.store(active, Ordering::SeqCst);
 }

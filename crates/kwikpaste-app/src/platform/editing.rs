@@ -9,8 +9,8 @@
 //! - 退出：恢复 `WS_EX_NOACTIVATE` 和钩子导航；面板还是前台时把前台还给原窗口。
 //!   编辑中直接隐藏面板时，系统会自己把前台交还，不再调用 `SetForegroundWindow`。
 //!
-//! macOS 的面板是非激活 NSPanel，成为 key 窗口不激活应用，不需要这一套。TODO(macOS)：
-//! 显示时 `makeKeyWindow`，编辑态直接聚焦输入框。
+//! macOS 的面板是非激活 NSPanel，成为 key 窗口不激活应用：显示时 `makeKeyWindow`，编辑态直接
+//! 聚焦输入框。
 
 /// 进入编辑态的触发方式，决定取前台的路径。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

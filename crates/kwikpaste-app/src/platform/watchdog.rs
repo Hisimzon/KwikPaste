@@ -5,7 +5,8 @@
 //! - 看门狗：显示面板前、以及每 10 s 检查渲染：vsync 线程（补丁 0001 的 `vsync_thread_alive`）死了
 //!   窗口就再也不会重绘；GPU 设备丢失后按计划重试都失败（补丁 0003 的 `device_loss_status().failing`，
 //!   约 8 s）说明进程内恢复不了。两者都按崩溃处理、有序重启（10 分钟内第 3 次降级重启时关掉
-//!   DirectComposition）。macOS 没有这两项，恒为正常。
+//!   DirectComposition）。macOS 的 GPUI 当前没有公开 Metal 设备移除回调，因此先保持现状并留出
+//!   明确的 TODO（见 [`recheck_device`]）。
 //! - 设备丢失恢复：系统唤醒后主动请求一次重建（`request_device_recheck`），不等驱动报错。
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -97,7 +98,9 @@ fn recheck_device() {
 }
 
 #[cfg(target_os = "macos")]
-fn recheck_device() {}
+fn recheck_device() {
+    // TODO(macOS): 接入 MTLDeviceWasRemovedNotification 后，把设备移除状态接到同一重启门槛。
+}
 
 /// 自测：让看门狗认为渲染线程已死。
 pub fn simulate_dead_render_thread() {

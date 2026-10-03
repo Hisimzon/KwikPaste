@@ -25,8 +25,8 @@
 //! 材质下不要用不透明的浮层盖住滚动内容：不透明底色在材质上是一块实色，模糊也盖不住下面滚过的行；
 //! 需要一直可见的东西（置顶行、表头）放在滚动容器外面。
 //!
-//! macOS：TODO（下个里程碑）：mica / acrylic 用 `Blurred` 加 `NSVisualEffectView`；在那之前生效的
-//! 材质恒为 default。
+//! macOS：default 用不透明窗口，mica / acrylic 用 `Blurred` 加 `NSVisualEffectView`；系统关闭
+//! 透明效果或高对比度时回退 default。
 
 use gpui::{App, Global, Window, WindowBackgroundAppearance};
 use kwikpaste_core::settings::{Material, Theme};
@@ -93,16 +93,8 @@ pub fn apply(cx: &mut App) {
         super::probe::material(&material);
     }
 
-    let Some(handle) = cx.try_global::<Panel>().and_then(Panel::window) else {
-        return;
-    };
-    // 每次都重套：系统深浅色变化时 GPUI 会按系统重设窗口的深色属性。
-    let applied = handle.update(cx, |_, window, cx| {
-        apply_to_window(window, &material);
-        kwikpaste_ui::set_root_translucent(window, material.effective != Material::Default, cx);
-    });
-    if let Err(err) = applied {
-        log::debug!("window material not applied now: {err:#}");
+    if let Some(panel) = cx.try_global::<Panel>() {
+        panel.request(super::panel::PanelCommand::SetMaterial(material));
     }
 }
 
@@ -136,7 +128,10 @@ fn supported(material: Material) -> bool {
 
 #[cfg(target_os = "macos")]
 fn supported(material: Material) -> bool {
-    material == Material::Default
+    matches!(
+        material,
+        Material::Default | Material::Mica | Material::Acrylic
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -146,7 +141,7 @@ fn build() -> u32 {
 }
 
 #[cfg(target_os = "windows")]
-fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
+pub(super) fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
     use kwikpaste_os::win::material::{
         Backdrop, acrylic_uses_backdrop, set_backdrop, set_dark_mode, set_round_corners,
     };
@@ -175,8 +170,13 @@ fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
 }
 
 #[cfg(target_os = "macos")]
-fn apply_to_window(window: &mut Window, _material: &WindowMaterial) {
-    window.set_background_appearance(WindowBackgroundAppearance::Opaque);
+pub(super) fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
+    let appearance = if material.effective == Material::Default {
+        WindowBackgroundAppearance::Opaque
+    } else {
+        WindowBackgroundAppearance::Blurred
+    };
+    window.set_background_appearance(appearance);
 }
 
 #[cfg(test)]

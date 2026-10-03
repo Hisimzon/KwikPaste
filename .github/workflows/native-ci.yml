@@ -442,3 +442,11 @@ jobs:
           grep -q '"can_become_main":false' "$probe"
           grep -q '"can_become_key":true' "$probe"
           grep -q '"activation_policy":"accessory"' "$probe"
+
+      - name: Drag-out selftest on macOS
+        if: runner.os == 'macOS'
+        run: |
+          output="$(KWIKPASTE_SELFTEST=1 ./KwikPaste --selftest-platform --selftest-dragout --selftest-drag-payload='{"plain":"native-dragout"}' 2>&1)"
+          printf '%s\n' "$output"
+          grep -q 'dragout selftest: armed=true' <<<"$output"
+          grep -q 'dragout selftest: armed=true created=1 ended=1 unregistered=1' <<<"$output"
