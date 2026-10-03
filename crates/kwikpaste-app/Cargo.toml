@@ -24,6 +24,8 @@ production-identity = []
 anyhow.workspace = true
 async-channel.workspace = true
 chrono.workspace = true
+# 保存图片的默认目录（下载文件夹，1.x 同）。
+dirs.workspace = true
 futures.workspace = true
 global-hotkey.workspace = true
 gpui.workspace = true

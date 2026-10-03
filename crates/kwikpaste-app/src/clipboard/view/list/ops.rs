@@ -40,7 +40,7 @@ const COPIED_FEEDBACK: Duration = Duration::from_secs(1);
 const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// 失败提示：“{动作}失败：{原因}”（1.x `commands:error`）。
-fn error_toast(label: &str, err: &anyhow::Error, window: &mut Window, cx: &mut App) {
+pub(super) fn error_toast(label: &str, err: &anyhow::Error, window: &mut Window, cx: &mut App) {
     log::warn!("{label} failed: {err:#}");
     let message = t_args(
         "commands:error",
@@ -142,7 +142,7 @@ impl ClipboardList {
         .detach();
     }
 
-    fn toast_success(key: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toast_success(key: &str, window: &mut Window, cx: &mut Context<Self>) {
         toast::show(Toast::success(t(key)), window, cx);
     }
 

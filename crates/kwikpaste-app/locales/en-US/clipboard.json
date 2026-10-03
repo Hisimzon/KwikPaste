@@ -48,6 +48,27 @@
     "searchPlaceholder": "Search clipboard...",
     "unpin": "Unpin"
   },
+  "menu": {
+    "addNote": "Add Note",
+    "copy": "Copy",
+    "delete": "Delete",
+    "editNote": "Edit Note",
+    "favorite": "Favorite",
+    "moveToGroup": "Move to Group",
+    "openLink": "Open Link",
+    "paste": "Paste",
+    "pasteAsPath": "Paste as Path",
+    "pasteAsPlainText": "Paste as Plain Text",
+    "pinItem": "Pin to Top",
+    "revealInExplorer": "Show in Explorer",
+    "revealInFinder": "Show in Finder",
+    "saveImage": "Save Image",
+    "select": "Select Multiple",
+    "sendEmail": "Send Email",
+    "splitWords": "Split Words",
+    "unfavorite": "Unfavorite",
+    "unpinItem": "Unpin from Top"
+  },
   "note": {
     "placeholder": "Add a note for this item...",
     "title": "Edit note"

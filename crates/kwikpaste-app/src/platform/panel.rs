@@ -96,6 +96,8 @@ pub enum PanelCommand {
         keep_visible: bool,
         done: Sender<bool>,
     },
+    /// 点击面板外部时是否隐藏（默认是）。UI 在固定面板、打开系统文件对话框期间关掉它。
+    SetHideOnOutsideClick(bool),
 }
 
 /// 面板状态变化，从 [`Panel::events`] 发出。
@@ -289,13 +291,24 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
         log::error!("panel native setup failed: {err:#}");
     }
     probe::ready(&parts.native);
+    let mut hide_on_outside_click = true;
 
     while let Ok(command) = commands.recv().await {
         let visible = parts.native.is_visible();
         let (want_visible, trigger) = match command {
             PanelCommand::Toggle(trigger) => (!visible, trigger),
             PanelCommand::Show(trigger) => (true, trigger),
+            PanelCommand::Hide(trigger)
+                if !hide_on_outside_click
+                    && matches!(trigger.source, TriggerSource::OutsideClick) =>
+            {
+                continue;
+            }
             PanelCommand::Hide(trigger) => (false, trigger),
+            PanelCommand::SetHideOnOutsideClick(hide) => {
+                hide_on_outside_click = hide;
+                continue;
+            }
             PanelCommand::BeginEditing(trigger) => {
                 begin_editing(&parts, trigger, cx);
                 continue;

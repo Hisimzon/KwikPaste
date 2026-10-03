@@ -1,4 +1,5 @@
-//! 列表交给宿主的动作：粘贴、粘贴片段、复制、复制片段。
+//! 列表交给宿主的动作：粘贴、粘贴片段、复制、复制片段。面板固定时（[`super::pin`]）粘贴、复制之后
+//! 面板留着。
 //!
 //! 数据来自平台层的 core 时走 [`crate::platform::paste`]（写回剪贴板、让出前台、注入粘贴键，复制后
 //! 按设置隐藏面板）；夹具和自测 core 没有粘贴链路：粘贴什么也不做（列表照常发 `ListIntent::Paste`
@@ -9,15 +10,11 @@ use std::sync::Arc;
 use gpui::{App, Task};
 use kwikpaste_core::clipboard::ClipboardFragment;
 
-use super::request_panel;
+use super::{pin, request_panel};
 use crate::{
     clipboard::source::ClipboardSource,
     platform::{self, PanelCommand, Trigger, TriggerSource},
 };
-
-/// 粘贴、复制之后面板是否保持显示。固定窗口还没有宿主能力，先一律不保持。
-// TODO(macOS, Windows): 固定窗口接上之后按头部的固定状态传。
-const KEEP_VISIBLE: bool = false;
 
 /// 宿主动作。返回的任务在 UI 线程上 await，错误消息是给提示用的根因。
 pub trait ItemHost {
@@ -54,7 +51,7 @@ fn ok_or_anyhow<T: 'static>(
 
 impl ItemHost for PlatformHost {
     fn paste(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>> {
-        let task = platform::paste::paste(cx, id.to_string(), plain, KEEP_VISIBLE);
+        let task = platform::paste::paste(cx, id.to_string(), plain, pin::pinned(cx));
         ok_or_anyhow(task, cx)
     }
 
@@ -64,12 +61,13 @@ impl ItemHost for PlatformHost {
         fragment: ClipboardFragment,
         cx: &mut App,
     ) -> Task<anyhow::Result<()>> {
-        let task = platform::paste::paste_fragment(cx, id.to_string(), fragment, KEEP_VISIBLE);
+        let keep_visible = pin::pinned(cx);
+        let task = platform::paste::paste_fragment(cx, id.to_string(), fragment, keep_visible);
         ok_or_anyhow(task, cx)
     }
 
     fn copy(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>> {
-        let task = platform::paste::copy(cx, id.to_string(), plain, KEEP_VISIBLE);
+        let task = platform::paste::copy(cx, id.to_string(), plain, pin::pinned(cx));
         ok_or_anyhow(task, cx)
     }
 
@@ -79,7 +77,8 @@ impl ItemHost for PlatformHost {
         fragment: ClipboardFragment,
         cx: &mut App,
     ) -> Task<anyhow::Result<()>> {
-        let task = platform::paste::copy_fragment(cx, id.to_string(), fragment, KEEP_VISIBLE);
+        let keep_visible = pin::pinned(cx);
+        let task = platform::paste::copy_fragment(cx, id.to_string(), fragment, keep_visible);
         ok_or_anyhow(task, cx)
     }
 }
@@ -116,7 +115,7 @@ impl ItemHost for SourceHost {
 
         cx.spawn(async move |cx| {
             let hide = future.await?;
-            if hide && !KEEP_VISIBLE {
+            if hide && !cx.update(|cx| pin::pinned(cx)) {
                 cx.update(|cx| {
                     request_panel(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)))
                 });

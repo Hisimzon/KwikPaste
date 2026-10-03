@@ -39,6 +39,13 @@ pub struct Group {
     pub is_hidden: bool,
 }
 
+/// 图片另存的来源（core `ImageSave`）：原图路径和默认文件名。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageSave {
+    pub source: PathBuf,
+    pub file_name: String,
+}
+
 /// 备注保存的结果（core `UpdateNoteResult`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoteSaved {
@@ -92,6 +99,16 @@ pub trait ClipboardSource: Send + Sync + 'static {
         id: Arc<str>,
         target: OpenTarget,
     ) -> BoxFuture<'static, anyhow::Result<Option<String>>>;
+
+    /// 把记录移到自定义分组；`None` 移出分组。
+    fn set_item_group(
+        &self,
+        id: Arc<str>,
+        group_id: Option<Arc<str>>,
+    ) -> BoxFuture<'static, anyhow::Result<()>>;
+
+    /// 图片另存：校验是图片且原图还在，给出原图路径与默认文件名。
+    fn image_save(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<ImageSave>>;
 
     /// 在分组栏隐藏一个分组（名称、图标不变）。
     fn hide_group(&self, group: Group) -> BoxFuture<'static, anyhow::Result<()>>;

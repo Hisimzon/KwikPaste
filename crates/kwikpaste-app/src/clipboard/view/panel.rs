@@ -18,7 +18,7 @@ use kwikpaste_core::{
     },
 };
 use kwikpaste_ui::{
-    ConfirmSpec, confirm, theme,
+    ConfirmSpec, confirm, menu_open, theme,
     toast::{self, Toast},
 };
 
@@ -32,7 +32,7 @@ use super::{
     header::{Header, HeaderEvent},
     host::ItemHost,
     list::{ClipboardList, ListIntent},
-    request_panel,
+    pin, request_panel,
 };
 use crate::{
     clipboard::{
@@ -46,10 +46,22 @@ use crate::{
     platform::{CoreEvents, EditTrigger, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource},
 };
 
-/// 主窗口发给宿主的意图：宿主一侧还没有的能力（固定窗口、偏好设置窗口、分组弹框）先只发事件。
+/// 菜单打开时主窗口的按键动作都不响应：菜单不处理的键（例如 ←/→ 落在没有子菜单的项上、Mod+D）
+/// 会冒泡到主窗口的绑定，而按键只该作用于菜单（1.x 的菜单是独立窗口，按键到不了列表）。
+fn unless_menu<A: 'static>(
+    handler: impl Fn(&mut ClipboardPanel, &A, &mut Window, &mut Context<ClipboardPanel>) + 'static,
+) -> impl Fn(&mut ClipboardPanel, &A, &mut Window, &mut Context<ClipboardPanel>) + 'static {
+    move |panel, action, window, cx| {
+        if menu_open(window) {
+            return;
+        }
+        handler(panel, action, window, cx);
+    }
+}
+
+/// 主窗口发给宿主的意图：宿主一侧还没有的能力（偏好设置窗口）先只发事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelIntent {
-    PinWindow(bool),
     OpenPreferences,
     NewGroup,
     ManageGroups,
@@ -336,11 +348,13 @@ impl ClipboardPanel {
         window.focus(&focus, cx);
     }
 
+    /// 固定 / 取消固定窗口（头部图钉、Mod+P）：点外部不隐藏，粘贴、复制后留着面板。
     fn toggle_pin(&mut self, cx: &mut Context<Self>) {
-        let pinned = !self.header.read(cx).pinned();
+        let pinned = !pin::pinned(cx);
+        log::info!("panel pinned: {pinned}");
+        pin::set_pinned(pinned, cx);
         self.header
             .update(cx, |header, cx| header.set_pinned(pinned, cx));
-        self.emit_intent(PanelIntent::PinWindow(pinned), cx);
     }
 
     /// 面板事件：显示时按设置重置筛选与搜索框，编辑态的进出交给对应的输入框。
@@ -510,107 +524,129 @@ impl Render for ClipboardPanel {
             .on_modifiers_changed(cx.listener(|panel, event: &ModifiersChangedEvent, _, cx| {
                 panel.set_key_hints(event.modifiers.secondary(), cx);
             }))
-            .on_action(cx.listener(|panel, _: &SelectPrevious, _, cx| {
+            .on_action(cx.listener(unless_menu(|panel, _: &SelectPrevious, _, cx| {
                 panel.list.update(cx, |list, cx| list.select_previous(cx));
-            }))
-            .on_action(cx.listener(|panel, _: &SelectNext, _, cx| {
+            })))
+            .on_action(cx.listener(unless_menu(|panel, _: &SelectNext, _, cx| {
                 panel.list.update(cx, |list, cx| list.select_next(cx));
-            }))
-            .on_action(cx.listener(|panel, _: &PasteSelected, window, cx| {
-                panel.list.update(cx, |list, cx| {
-                    if !list.selecting() {
-                        list.paste_active(false, cx);
-                    } else if let Some(item) = list.active_item() {
-                        // 多选时 Enter 勾选 / 取消当前项（1.x `handleSelectionKeyDown`）。
-                        list.toggle_checked(&item, window, cx);
-                    }
-                });
-            }))
-            .on_action(cx.listener(|panel, _: &PasteSelectedPlain, _, cx| {
-                panel.list.update(cx, |list, cx| {
-                    if !list.selecting() {
-                        list.paste_active(true, cx);
-                    }
-                });
-            }))
-            .on_action(cx.listener(Self::dismiss))
-            .on_action(cx.listener(Self::end_search))
-            .on_action(cx.listener(Self::focus_search))
-            .on_action(cx.listener(|panel, _: &ToggleRange, _, cx| {
+            })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &PasteSelected, window, cx| {
+                    panel.list.update(cx, |list, cx| {
+                        if !list.selecting() {
+                            list.paste_active(false, cx);
+                        } else if let Some(item) = list.active_item() {
+                            // 多选时 Enter 勾选 / 取消当前项（1.x `handleSelectionKeyDown`）。
+                            list.toggle_checked(&item, window, cx);
+                        }
+                    });
+                })),
+            )
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &PasteSelectedPlain, _, cx| {
+                    panel.list.update(cx, |list, cx| {
+                        if !list.selecting() {
+                            list.paste_active(true, cx);
+                        }
+                    });
+                })),
+            )
+            .on_action(cx.listener(unless_menu(Self::dismiss)))
+            .on_action(cx.listener(unless_menu(Self::end_search)))
+            .on_action(cx.listener(unless_menu(Self::focus_search)))
+            .on_action(cx.listener(unless_menu(|panel, _: &ToggleRange, _, cx| {
                 panel.update_filter(|filter| filter.range = filter.range.toggled(), cx);
-            }))
-            .on_action(cx.listener(|panel, _: &PreviousCategory, _, cx| {
-                let kind = panel.list.read(cx).filter().adjacent_category(false);
-                panel.update_filter(|filter| filter.category = Some(kind), cx);
-            }))
-            .on_action(cx.listener(|panel, _: &NextCategory, _, cx| {
+            })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &PreviousCategory, _, cx| {
+                    let kind = panel.list.read(cx).filter().adjacent_category(false);
+                    panel.update_filter(|filter| filter.category = Some(kind), cx);
+                })),
+            )
+            .on_action(cx.listener(unless_menu(|panel, _: &NextCategory, _, cx| {
                 let kind = panel.list.read(cx).filter().adjacent_category(true);
                 panel.update_filter(|filter| filter.category = Some(kind), cx);
-            }))
-            .on_action(cx.listener(|panel, _: &NextGroup, _, cx| {
+            })))
+            .on_action(cx.listener(unless_menu(|panel, _: &NextGroup, _, cx| {
                 panel.cycle_group(false, cx);
-            }))
-            .on_action(cx.listener(|panel, _: &PreviousGroup, _, cx| {
+            })))
+            .on_action(cx.listener(unless_menu(|panel, _: &PreviousGroup, _, cx| {
                 panel.cycle_group(true, cx);
-            }))
-            .on_action(cx.listener(|panel, _: &CopySelected, window, cx| {
-                panel.with_active(cx, |list, item, cx| {
-                    list.copy(item.id.clone(), false, None, window, cx)
-                });
-            }))
-            .on_action(cx.listener(|panel, _: &ToggleFavorite, window, cx| {
-                panel.with_active(cx, |list, item, cx| {
-                    list.toggle_favorite(item.id.clone(), window, cx)
-                });
-            }))
-            .on_action(cx.listener(|panel, _: &TogglePinned, window, cx| {
-                panel.with_active(cx, |list, item, cx| {
-                    list.toggle_pinned(item.id.clone(), window, cx)
-                });
-            }))
-            .on_action(cx.listener(|panel, _: &EditNote, window, cx| {
+            })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &CopySelected, window, cx| {
+                    panel.with_active(cx, |list, item, cx| {
+                        list.copy(item.id.clone(), false, None, window, cx)
+                    });
+                })),
+            )
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &ToggleFavorite, window, cx| {
+                    panel.with_active(cx, |list, item, cx| {
+                        list.toggle_favorite(item.id.clone(), window, cx)
+                    });
+                })),
+            )
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &TogglePinned, window, cx| {
+                    panel.with_active(cx, |list, item, cx| {
+                        list.toggle_pinned(item.id.clone(), window, cx)
+                    });
+                })),
+            )
+            .on_action(cx.listener(unless_menu(|panel, _: &EditNote, window, cx| {
                 panel.with_active(cx, |list, item, cx| {
                     list.edit_note(item.id.clone(), window, cx)
                 });
-            }))
-            .on_action(cx.listener(|panel, _: &OpenSelected, window, cx| {
-                panel.with_active(cx, |list, _, cx| list.open_active(window, cx));
-            }))
-            .on_action(cx.listener(|panel, _: &SplitSelected, _, cx| {
+            })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &OpenSelected, window, cx| {
+                    panel.with_active(cx, |list, _, cx| list.open_active(window, cx));
+                })),
+            )
+            .on_action(cx.listener(unless_menu(|panel, _: &SplitSelected, _, cx| {
                 panel.with_active(cx, |list, item, cx| list.split(&item, cx));
-            }))
-            .on_action(cx.listener(|panel, _: &DeleteSelected, window, cx| {
-                panel.list.update(cx, |list, cx| {
-                    if list.selecting() {
-                        list.delete_checked(window, cx);
-                    } else if let Some(item) = list.active_item() {
-                        list.delete(item.id.clone(), window, cx);
-                    }
-                });
-            }))
-            .on_action(cx.listener(|panel, _: &SelectAll, window, cx| {
+            })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &DeleteSelected, window, cx| {
+                    panel.list.update(cx, |list, cx| {
+                        if list.selecting() {
+                            list.delete_checked(window, cx);
+                        } else if let Some(item) = list.active_item() {
+                            list.delete(item.id.clone(), window, cx);
+                        }
+                    });
+                })),
+            )
+            .on_action(cx.listener(unless_menu(|panel, _: &SelectAll, window, cx| {
                 panel.list.update(cx, |list, cx| {
                     if list.total() > 0 {
                         list.toggle_all(window, cx);
                     }
                 });
-            }))
-            .on_action(cx.listener(|panel, action: &QuickPaste, _, cx| {
-                let key = action.key;
-                panel.list.update(cx, |list, cx| list.quick_paste(key, cx));
-            }))
-            .on_action(cx.listener(|panel, _: &PinWindow, _, cx| panel.toggle_pin(cx)))
-            .on_action(cx.listener(|panel, _: &OpenPreferences, _, cx| {
-                panel.emit_intent(PanelIntent::OpenPreferences, cx);
-            }))
-            .on_action(cx.listener(|panel, _: &ShowShortcuts, _, cx| {
+            })))
+            .on_action(
+                cx.listener(unless_menu(|panel, action: &QuickPaste, _, cx| {
+                    let key = action.key;
+                    panel.list.update(cx, |list, cx| list.quick_paste(key, cx));
+                })),
+            )
+            .on_action(cx.listener(unless_menu(|panel, _: &PinWindow, _, cx| {
+                panel.toggle_pin(cx)
+            })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &OpenPreferences, _, cx| {
+                    panel.emit_intent(PanelIntent::OpenPreferences, cx);
+                })),
+            )
+            .on_action(cx.listener(unless_menu(|panel, _: &ShowShortcuts, _, cx| {
                 panel
                     .list
                     .update(cx, |_, cx| cx.emit(ListIntent::ShowShortcuts));
-            }))
-            .on_action(cx.listener(|panel, _: &NewGroup, _, cx| {
+            })))
+            .on_action(cx.listener(unless_menu(|panel, _: &NewGroup, _, cx| {
                 panel.emit_intent(PanelIntent::NewGroup, cx);
-            }))
+            })))
             .child(self.header.clone())
             .child(self.groups.clone())
             .child(

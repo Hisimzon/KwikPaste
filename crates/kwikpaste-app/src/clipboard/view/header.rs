@@ -83,10 +83,6 @@ impl Header {
         }
     }
 
-    pub fn pinned(&self) -> bool {
-        self.pinned
-    }
-
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.pinned = pinned;
         cx.notify();

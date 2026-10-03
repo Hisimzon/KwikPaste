@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use kwikpaste_core::settings::Settings;
 
-use super::{ClipboardSource, Group, ListQuery, NoteSaved, synthetic::AssetSet};
+use super::{ClipboardSource, Group, ImageSave, ListQuery, NoteSaved, synthetic::AssetSet};
 use crate::clipboard::model::{
     actions::OpenTarget,
     filter::ListFilter,
@@ -356,6 +356,29 @@ impl ClipboardSource for FixtureSource {
                 OpenTarget::Reveal => item.file_rows().first().map(|row| row.path.to_string()),
             })
         })
+    }
+
+    fn set_item_group(
+        &self,
+        id: Arc<str>,
+        group_id: Option<Arc<str>>,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        self.with_store(move |store| {
+            if let Some(group_id) = &group_id
+                && !store.groups.iter().any(|group| group.id == *group_id)
+            {
+                anyhow::bail!("group not found: {group_id}");
+            }
+            if !store.patch(&id, |item| item.group_id = group_id) {
+                return Err(missing(&id));
+            }
+            Ok(())
+        })
+    }
+
+    /// 夹具的图片只有缩略图，没有可另存的原图。
+    fn image_save(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<ImageSave>> {
+        self.respond(move || anyhow::bail!("fixture image {id} has no original to save"))
     }
 
     fn hide_group(&self, group: Group) -> BoxFuture<'static, anyhow::Result<()>> {

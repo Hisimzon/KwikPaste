@@ -15,14 +15,16 @@ use std::{
 
 use gpui::{
     AnyWindowHandle, App, AsyncApp, Capslock, Entity, Focusable as _, Keystroke, Modifiers,
-    ModifiersChangedEvent, MouseMoveEvent, PlatformInput, point, px,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PlatformInput, point, px,
 };
-use kwikpaste_ui::{close_dialog, has_dialog};
+use kwikpaste_ui::{MenuEntry, close_dialog, has_dialog, menu_open};
 
 use super::{
     editing::RequestLog,
     list::{ClipboardList, ListIntent},
     panel::ClipboardPanel,
+    pin,
 };
 use crate::{
     clipboard::{
@@ -32,6 +34,7 @@ use crate::{
             empty_state::empty_text,
             filter::{ListFilter, Range},
             item::{ItemKind, ListItem},
+            menu::{MenuAction, menu_groups},
         },
         source::{ClipboardSource, FixtureStore, ListQuery},
     },
@@ -344,8 +347,229 @@ impl Driver {
         self.multi_select(cx).await;
         self.note(cx).await;
         self.snippet(cx).await;
+        self.context_menu(cx).await;
+        self.move_to_group(cx).await;
+        self.pin(cx).await;
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
+    }
+
+    /// 在窗口里的某个位置按下再松开右键。
+    fn right_click(&self, cx: &mut AsyncApp, x: f32, y: f32) {
+        let position = point(px(x), px(y));
+        self.window
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Right,
+                        position,
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Right,
+                        position,
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                    }),
+                    cx,
+                );
+            })
+            .ok();
+    }
+
+    fn menu_open(&self, cx: &mut AsyncApp) -> bool {
+        self.window
+            .update(cx, |_, window, _| menu_open(window))
+            .unwrap_or(false)
+    }
+
+    /// 等菜单打开或关上。
+    async fn settle_menu(&self, cx: &mut AsyncApp, open: bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < SETTLE {
+            if self.menu_open(cx) == open {
+                return true;
+            }
+            self.pause(cx, 16).await;
+        }
+        false
+    }
+
+    /// 把指针停在第一个非置顶行上（两次移动，越过显示后的指针门槛），返回悬停的记录。
+    async fn hover_row(&self, cx: &mut AsyncApp) -> Option<Arc<ListItem>> {
+        self.pointer_at(cx, 180., 356.);
+        self.pause(cx, 30).await;
+        self.pointer_at(cx, 180., 360.);
+        self.pause(cx, 30).await;
+        self.read(cx, |list, _| {
+            list.hovered
+                .as_ref()
+                .and_then(|id| list.model.find(id))
+                .cloned()
+        })
+    }
+
+    /// 右键菜单：在卡片上按右键弹出（画在窗口里、拿焦点），↓ 选第一项、Enter 执行（粘贴这张卡片），
+    /// 选完菜单关上；Esc 只关菜单、不隐藏面板；多选时不弹。
+    async fn context_menu(&mut self, cx: &mut AsyncApp) {
+        self.focus_list(cx);
+        let Some(item) = self.hover_row(cx).await else {
+            self.check("right click: a card under the pointer", false, || {
+                "nothing hovered".into()
+            });
+            return;
+        };
+
+        let entries = self
+            .list
+            .update(cx, |list, cx| list.context_menu_entries(cx));
+        let has_groups = entries
+            .iter()
+            .any(|entry| matches!(entry, MenuEntry::Submenu(_)));
+        self.check(
+            "the menu offers move to group when groups exist",
+            has_groups,
+            || "no submenu".into(),
+        );
+
+        self.right_click(cx, 180., 360.);
+        let opened = self.settle_menu(cx, true).await;
+        self.check("right click opens the card menu", opened, || {
+            "no menu".into()
+        });
+
+        // 菜单在指针处展开，指针下的那一项被悬停选中；挪开指针再用键盘从第一项选起。
+        self.pointer_at(cx, 20., 20.);
+        self.pause(cx, 30).await;
+        // 菜单不处理的键不能漏到列表：没有子菜单时 → 不换分类。
+        self.key(cx, "right");
+        let category = self.read(cx, |list, _| list.filter().category);
+        self.check(
+            "keys the menu ignores do not reach the list",
+            category.is_none() && self.menu_open(cx),
+            || format!("category {category:?}"),
+        );
+        self.intents.borrow_mut().clear();
+        self.key(cx, "down");
+        self.key(cx, "enter");
+        let closed = self.settle_menu(cx, false).await;
+        let pasted = self.intents.borrow().first().cloned();
+        self.check(
+            "enter runs the first item: paste the card under the pointer",
+            closed
+                && pasted
+                    == Some(ListIntent::Paste {
+                        id: item.id.clone(),
+                        plain: false,
+                    }),
+            || format!("closed {closed}, intents {pasted:?}"),
+        );
+
+        let requests = cx.update(|cx| cx.global::<RequestLog>().commands.len());
+        self.right_click(cx, 180., 360.);
+        self.settle_menu(cx, true).await;
+        self.key(cx, "escape");
+        let closed = self.settle_menu(cx, false).await;
+        let after = cx.update(|cx| cx.global::<RequestLog>().commands.len());
+        self.check(
+            "escape closes only the menu",
+            closed && after == requests,
+            || format!("closed {closed}, requests {requests} -> {after}"),
+        );
+
+        self.key(cx, "secondary-a");
+        self.settle(cx, |list, _| list.selecting()).await;
+        self.right_click(cx, 180., 360.);
+        self.pause(cx, 80).await;
+        let opened = self.menu_open(cx);
+        self.check("no card menu while selecting", !opened, || {
+            "menu opened".into()
+        });
+        self.key(cx, "escape");
+        self.pointer_at(cx, 20., 20.);
+    }
+
+    /// 移动到分组、再点当前分组移出分组；在分组视图里移走的记录离开列表。
+    async fn move_to_group(&mut self, cx: &mut AsyncApp) {
+        let Some(id) = self.select_where(cx, |item| item.group_id.is_none() && !item.is_pinned)
+        else {
+            self.check("move to group: an ungrouped record", false, || {
+                "none".into()
+            });
+            return;
+        };
+        let group: Arc<str> = "demo-work".into();
+        let item = self.read(cx, |list, _| list.model.find(&id).cloned());
+        let Some(item) = item else {
+            return;
+        };
+
+        let list = self.list.clone();
+        let (moved, target) = (item.clone(), group.clone());
+        self.window
+            .update(cx, |_, window, cx| {
+                list.update(cx, |list, cx| {
+                    list.move_to_group(moved, Some(target), window, cx)
+                });
+            })
+            .ok();
+        let wanted = id.clone();
+        let target = group.clone();
+        let moved = self
+            .settle(cx, move |list, _| {
+                list.model
+                    .find(&wanted)
+                    .is_some_and(|item| item.group_id.as_ref() == Some(&target))
+            })
+            .await;
+        self.check("move to group sets the record's group", moved, || {
+            "group not set".into()
+        });
+
+        let wanted = id.clone();
+        let (removed, list) = (item.clone(), self.list.clone());
+        self.window
+            .update(cx, |_, window, cx| {
+                list.update(cx, |list, cx| list.move_to_group(removed, None, window, cx));
+            })
+            .ok();
+        let cleared = self
+            .settle(cx, move |list, _| {
+                list.model
+                    .find(&wanted)
+                    .is_some_and(|item| item.group_id.is_none())
+            })
+            .await;
+        self.check(
+            "picking the current group again removes it",
+            cleared,
+            || "still grouped".into(),
+        );
+    }
+
+    /// Mod+P 固定窗口：点外部不再隐藏（平台开关关掉），再按一次恢复。
+    async fn pin(&mut self, cx: &mut AsyncApp) {
+        self.key(cx, "secondary-p");
+        let request = self.last_request(cx);
+        let pinned = cx.update(|cx| pin::pinned(cx));
+        self.check(
+            "mod+p pins the panel and keeps it on outside clicks",
+            pinned && matches!(request, Some(PanelCommand::SetHideOnOutsideClick(false))),
+            || format!("pinned {pinned}, request {request:?}"),
+        );
+        self.key(cx, "secondary-p");
+        let request = self.last_request(cx);
+        let pinned = cx.update(|cx| pin::pinned(cx));
+        self.check(
+            "mod+p again unpins it",
+            !pinned && matches!(request, Some(PanelCommand::SetHideOnOutsideClick(true))),
+            || format!("pinned {pinned}, request {request:?}"),
+        );
     }
 
     /// 把指针挪到窗口里的某个位置（逻辑像素），像光标停在那里一样。
@@ -1006,6 +1230,27 @@ impl Driver {
             "delete" => {
                 self.select_where(cx, |item| !item.is_pinned && !item.is_favorite);
                 self.key(cx, "secondary-backspace");
+            }
+            "menu" | "menu-group" => {
+                let Some(item) = self.hover_row(cx).await else {
+                    return;
+                };
+                self.right_click(cx, 180., 360.);
+                self.settle_menu(cx, true).await;
+                if stage == "menu-group" {
+                    self.pointer_at(cx, 20., 20.);
+                    self.pause(cx, 30).await;
+                    // ↓ 走到“移动到分组”（分隔线不占位置），→ 展开子菜单。
+                    let before = menu_groups(&item, true, true)
+                        .iter()
+                        .flatten()
+                        .take_while(|action| **action != MenuAction::MoveToGroup)
+                        .count();
+                    for _ in 0..=before {
+                        self.key(cx, "down");
+                    }
+                    self.key(cx, "right");
+                }
             }
             other => log::warn!("unknown demo stage {other}"),
         }

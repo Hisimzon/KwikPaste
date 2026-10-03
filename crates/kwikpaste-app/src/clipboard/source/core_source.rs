@@ -19,7 +19,7 @@ use kwikpaste_core::{
 };
 
 use super::{
-    ClipboardSource, Group, ListQuery, NoteSaved,
+    ClipboardSource, Group, ImageSave, ListQuery, NoteSaved,
     synthetic::{self, AssetSet, GenerateOptions},
 };
 use crate::clipboard::model::{
@@ -200,6 +200,36 @@ impl ClipboardSource for CoreSource {
                 OpenTarget::Link => core.link_target(&id, false).await?,
                 OpenTarget::Email => core.link_target(&id, true).await?,
                 OpenTarget::Reveal => core.reveal_target(&id).await?,
+            })
+        }
+        .boxed()
+    }
+
+    fn set_item_group(
+        &self,
+        id: Arc<str>,
+        group_id: Option<Arc<str>>,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+
+        async move {
+            match group_id {
+                Some(group_id) => core.set_item_group(&id, &group_id).await?,
+                None => core.clear_item_group(&id).await?,
+            }
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn image_save(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<ImageSave>> {
+        let core = self.core.clone();
+
+        async move {
+            let save = core.prepare_image_save(&id).await?;
+            Ok(ImageSave {
+                source: save.source,
+                file_name: save.default_file_name,
             })
         }
         .boxed()

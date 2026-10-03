@@ -11,6 +11,7 @@
 //! - L6 图片行按载荷宽高预测显式尺寸；
 //! - L7 剪贴板图片一律经 [`KpImageCache`]。
 
+mod menu;
 mod ops;
 mod parts;
 mod selecting;
@@ -35,7 +36,7 @@ use kwikpaste_core::{
     CoreEvent,
     settings::{AutoPaste, MiddleClickAction, Settings},
 };
-use kwikpaste_ui::{ListScrollbar, TextAreaInput, close_dialog, theme};
+use kwikpaste_ui::{ListScrollbar, TextAreaInput, close_dialog, context_menu, dismiss_menu, theme};
 
 use super::{
     bench::Bench,
@@ -415,9 +416,10 @@ impl ClipboardList {
                 self.motion.reveal = None;
                 self.motion.wheel = 0.;
                 self.hovered = None;
-                // 面板已经隐藏，还挂着的 Enter 不再执行。
+                // 面板已经隐藏，还挂着的 Enter 不再执行，开着的右键菜单收起。
                 self.pending_activation = None;
                 self.activation_timeout = None;
+                dismiss_menu(window, cx);
                 // 隐藏时退出多选（1.x `exitClipboardSelection`），收起备注框（当作取消）。
                 self.selection.exit();
                 if self.note.is_some() {
@@ -1231,8 +1233,13 @@ impl Render for ClipboardList {
                 root.child(div().flex().flex_col().flex_none().children(pinned))
             })
             .child(content)
-            .child(self.render_footer(cx))
-            .into_any_element();
+            .child(self.render_footer(cx));
+        let entity = cx.entity().downgrade();
+        let root = context_menu(root, move |_, cx| {
+            entity
+                .update(cx, |list, cx| list.context_menu_entries(cx))
+                .unwrap_or_default()
+        });
 
         match &self.timing {
             Some(timing) => {

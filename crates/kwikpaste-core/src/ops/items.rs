@@ -482,6 +482,14 @@ impl Core {
         .await
     }
 
+    /// 把记录移出自定义分组（回到未分组）。不发事件。
+    pub async fn clear_item_group(&self, id: &str) -> Result<()> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move { update_item_group(&core.0.db.pool().await, &id, None).await })
+            .await
+    }
+
     /// 删除一条记录；图片记录连带删除原图与缩略图（删文件失败只记日志）。不发事件。
     pub async fn delete_item(&self, id: &str) -> Result<()> {
         let core = self.clone();

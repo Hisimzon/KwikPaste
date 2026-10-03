@@ -16,6 +16,7 @@ pub mod host;
 mod image_cache;
 mod list;
 mod panel;
+pub mod pin;
 pub mod selftest;
 
 use gpui::{Action, App, KeyBinding, actions};

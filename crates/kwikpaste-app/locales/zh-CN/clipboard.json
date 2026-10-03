@@ -48,6 +48,27 @@
     "searchPlaceholder": "搜索剪贴板...",
     "unpin": "取消固定"
   },
+  "menu": {
+    "addNote": "添加备注",
+    "copy": "复制",
+    "delete": "删除",
+    "editNote": "编辑备注",
+    "favorite": "收藏",
+    "moveToGroup": "移动到分组",
+    "openLink": "打开链接",
+    "paste": "粘贴",
+    "pasteAsPath": "粘贴为路径",
+    "pasteAsPlainText": "粘贴为纯文本",
+    "pinItem": "置顶",
+    "revealInExplorer": "在资源管理器中显示",
+    "revealInFinder": "在访达中显示",
+    "saveImage": "保存图片",
+    "select": "多选",
+    "sendEmail": "发送邮件",
+    "splitWords": "拆词",
+    "unfavorite": "取消收藏",
+    "unpinItem": "取消置顶"
+  },
   "note": {
     "placeholder": "为这条记录添加备注...",
     "title": "编辑备注"
