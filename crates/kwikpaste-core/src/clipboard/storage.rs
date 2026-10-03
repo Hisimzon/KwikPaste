@@ -240,7 +240,15 @@ impl ImageStore {
         self.shard_path(THUMBNAILS_DIR, shard_key(file_name), file_name)
     }
 
+    /// 拼图片路径。文件名多半来自记录的 `content`（可能是同步或导入来的任意字符串）：
+    /// 不合法的名字一律换成 [`INVALID_IMAGE_NAME`]，路径始终落在图片目录里、且指向不存在的文件，
+    /// 读取报错、删除无事发生，不会被 `join` 换成别处的绝对路径。
     fn shard_path(&self, kind_dir: &str, shard_src: &str, file_name: &str) -> PathBuf {
+        let (shard_src, file_name) = if is_valid_image_file_name(file_name) {
+            (shard_src, file_name)
+        } else {
+            ("00", INVALID_IMAGE_NAME)
+        };
         self.images_root()
             .join(kind_dir)
             .join(shard_dir(shard_src))
@@ -255,16 +263,20 @@ impl ImageStore {
     }
 }
 
-/// 校验图片文件名：必须是单层 `<name>.png`，不含路径分隔符 / 父目录引用。
-/// 文件名来自界面（即记录的 `content`），拼路径前必须先过这一关，防止路径穿越。
-pub fn validate_image_file_name(file_name: &str) -> Result<()> {
-    let invalid = file_name.is_empty()
-        || file_name.contains('/')
-        || file_name.contains('\\')
-        || file_name.contains("..")
-        || !file_name.ends_with(".png");
+/// 不合法的图片文件名拼路径时的替身：带 `-`，永远不是合法名字，也不会被 [`ImageStore::store`] 写出来。
+const INVALID_IMAGE_NAME: &str = "invalid-image-name.png";
 
-    if invalid {
+/// 图片文件名是否合法：`<ASCII 字母数字>.png`（落盘的名字是内容哈希的 hex）。
+fn is_valid_image_file_name(file_name: &str) -> bool {
+    file_name.strip_suffix(".png").is_some_and(|stem| {
+        !stem.is_empty() && stem.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+
+/// 校验图片文件名：必须是单层 `<ASCII 字母数字>.png`。文件名来自记录的 `content`，可能是同步或导入来的
+/// 任意字符串，拼路径前先过这一关（[`ImageStore`] 拼路径时也会兜底），防止路径穿越。
+pub fn validate_image_file_name(file_name: &str) -> Result<()> {
+    if !is_valid_image_file_name(file_name) {
         return Err(AppError::Clipboard(format!(
             "invalid image file name: {file_name:?}"
         )));
@@ -280,14 +292,10 @@ fn thumbnail_parallelism() -> usize {
         .clamp(1, 4)
 }
 
-/// 分片子目录名：取来源串前 2 个字符（hash 恒为 hex，必有 2 位）；
-/// 异常短串兜底为 `00`，保证始终有一层分片。
+/// 分片子目录名：取来源串前 2 个字节（hash 恒为 hex，必有 2 位）；
+/// 异常的短串、前 2 个字节不是完整字符时兜底为 `00`，保证始终有一层分片。
 fn shard_dir(src: &str) -> &str {
-    if src.len() >= 2 {
-        &src[..2]
-    } else {
-        "00"
-    }
+    src.get(..2).unwrap_or("00")
 }
 
 /// 从文件名 `<hash>.png` 取分片来源（即 hash 本身）。
@@ -338,12 +346,8 @@ fn remove_dir_if_empty(dir: Option<&Path>) {
 pub fn image_file_dimensions(path: &Path) -> Option<(u32, u32)> {
     use image::ImageDecoder;
 
-    let mut decoder = image::ImageReader::open(path)
-        .ok()?
-        .with_guessed_format()
-        .ok()?
-        .into_decoder()
-        .ok()?;
+    // 超过解码上限的图在这里就拿不到宽高，按普通文件显示，不会去生成缩略图。
+    let mut decoder = crate::imaging::open(path).ok()?.into_decoder().ok()?;
     let (width, height) = decoder.dimensions();
     if width == 0 || height == 0 {
         return None;
@@ -391,19 +395,17 @@ fn file_thumbnail_key(source: &Path) -> Option<String> {
 }
 
 /// 解码图片文件（PNG、JPEG、GIF、WebP、BMP、TIFF、ICO）→ 按 EXIF 方向摆正 → 缩放 → 编码 PNG。
+/// 解码按 [`crate::imaging`] 的上限，超限返回错误。
 fn encode_file_thumbnail(source: &Path) -> Result<Vec<u8>> {
     use image::ImageDecoder;
 
-    let mut decoder = image::ImageReader::open(source)
-        .with_context(|| format!("failed to open {source:?}"))?
-        .with_guessed_format()
-        .with_context(|| format!("failed to read {source:?}"))?
-        .into_decoder()
-        .map_err(clip_err)?;
+    let mut decoder = crate::imaging::open(source)
+        .and_then(image::ImageReader::into_decoder)
+        .map_err(|err| AppError::Clipboard(format!("failed to read {source:?}: {err}")))?;
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
-    let mut image = image::DynamicImage::from_decoder(decoder).map_err(clip_err)?;
+    let mut image = crate::imaging::decode(decoder).map_err(clip_err)?;
     image.apply_orientation(orientation);
 
     // 只缩小不放大，与显示尺寸的算法（缩放比不超过 1）一致。
@@ -418,11 +420,13 @@ fn encode_file_thumbnail(source: &Path) -> Result<Vec<u8>> {
 }
 
 /// 把原图 PNG 字节解码 → 生成缩略图（最长边 <= [`THUMBNAIL_MAX`]，保持比例）→ 重新编码 PNG。
+/// 原图可能来自同步或备份导入，解码按 [`crate::imaging`] 的上限。编码交给 clipboard-rs：
+/// 泛型在它那里单态化，享受它的 opt-level 3（见根 Cargo.toml）。
 fn encode_thumbnail(png_bytes: &[u8]) -> Result<Vec<u8>> {
-    let image = RustImageData::from_bytes(png_bytes).map_err(clip_err)?;
-    let thumb = image
-        .thumbnail(THUMBNAIL_MAX, THUMBNAIL_MAX)
+    let image = crate::imaging::from_bytes(png_bytes)
+        .and_then(image::ImageReader::decode)
         .map_err(clip_err)?;
+    let thumb = RustImageData::from_dynamic_image(image.thumbnail(THUMBNAIL_MAX, THUMBNAIL_MAX));
     Ok(thumb.to_png().map_err(clip_err)?.get_bytes().to_vec())
 }
 
@@ -548,11 +552,35 @@ mod tests {
             "a/b.png",
             "/abs.png",
             "name..png", // 含 ".." 序列，保守拒绝
+            ".png",
+            "中.png",
+            "a中.png",
+            "C:\\Users\\x\\doc.png",
+            "C:doc.png",
         ] {
             assert!(
                 validate_image_file_name(bad).is_err(),
                 "should reject: {bad:?}"
             );
+        }
+    }
+
+    #[test]
+    fn paths_of_invalid_names_stay_inside_the_image_dir() {
+        let (dir, store) = temp_store();
+        for bad in [
+            "中.png",
+            "a中.png",
+            "C:\\Users\\x\\doc.docx",
+            "/etc/passwd",
+            "",
+        ] {
+            for path in [store.origin_path(bad), store.thumbnail_path(bad)] {
+                assert!(path.starts_with(dir.path()), "{bad:?} -> {path:?}");
+                assert!(path.ends_with(INVALID_IMAGE_NAME), "{bad:?} -> {path:?}");
+            }
+            assert_eq!(store.stored_bytes(bad), 0);
+            assert!(store.remove(bad).is_ok());
         }
     }
 

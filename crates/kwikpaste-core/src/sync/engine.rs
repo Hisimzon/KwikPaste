@@ -110,6 +110,10 @@ pub async fn wire_from_item(
             )))
         }
         ClipboardKind::Image => {
+            if crate::clipboard::validate_image_file_name(&item.content).is_err() {
+                log::warn!("lan sync skips an image record with an invalid file name");
+                return Ok(None);
+            }
             let path = core.images.origin_path(&item.content);
             let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
                 .await

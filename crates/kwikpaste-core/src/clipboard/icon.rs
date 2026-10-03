@@ -61,6 +61,18 @@ pub fn icon_png(path: &Path, size: Option<u32>) -> Option<Vec<u8>> {
             return None;
         }
     };
+    // write_image 在缓冲长度与宽高对不上时会 panic；系统给的图标按理不会，这里先核对。
+    let expected = u64::from(icon.width) * u64::from(icon.height) * 4;
+    if icon.pixels.len() as u64 != expected {
+        log::warn!(
+            "icon_png: {}x{} icon has {} bytes for {}",
+            icon.width,
+            icon.height,
+            icon.pixels.len(),
+            path.display()
+        );
+        return None;
+    }
     let mut out = Vec::with_capacity((size * size * 4) as usize / 2);
     let encoder = PngEncoder::new(&mut out);
     if let Err(err) = encoder.write_image(

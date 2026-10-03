@@ -181,10 +181,15 @@ impl KpImageCache {
 }
 
 /// 解码并缩放到 `width`×`height`（物理像素），转成 GPUI 要的 BGRA。在后台线程上运行。
+/// 解码按 core 的上限（图片可能来自同步或备份导入），超限返回错误。
 pub fn decode(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImage> {
-    let image = image::ImageReader::open(path)?
-        .with_guessed_format()?
-        .decode()?;
+    // 目标尺寸由显示设置推出来，设置文件里的离谱数值不能变成一次超大的缩放分配。
+    anyhow::ensure!(
+        width > 0 && height > 0,
+        "empty target size {width}x{height}"
+    );
+    kwikpaste_core::imaging::check_rgba_size(width, height)?;
+    let image = kwikpaste_core::imaging::open(path)?.decode()?;
     let image = if image.width() == width && image.height() == height {
         image
     } else {

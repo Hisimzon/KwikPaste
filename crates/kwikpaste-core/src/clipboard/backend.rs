@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use clipboard_rs::common::RustImage;
+use clipboard_rs::common::{RustImage, RustImageData};
 use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext, ContentFormat};
 
 use super::read::png_dimensions;
@@ -112,6 +112,27 @@ pub(super) const PNG_FORMAT: &str = "public.png";
 #[cfg(target_os = "windows")]
 pub(super) const PNG_FORMAT: &str = "PNG";
 
+/// macOS 剪贴板里 TIFF 的格式标识符（截图与多数应用复制的图片）。
+#[cfg(target_os = "macos")]
+const TIFF_FORMAT: &str = "public.tiff";
+
+/// 解码好的图片重新编码成 PNG。编码在 clipboard-rs 里做：image 的编码是泛型，在哪个 crate 里展开
+/// 就跟哪个 crate 的优化级别，clipboard-rs 在根 Cargo.toml 的 opt-level 3 名单上，core 是 z，
+/// 在 core 里编码一张 4K 图要慢好几倍。
+fn encode_image(image: RustImageData) -> Result<DecodedImage> {
+    let (width, height) = image.get_size();
+    if width == 0 || height == 0 {
+        return Ok(DecodedImage {
+            width,
+            height,
+            png: Vec::new(),
+        });
+    }
+
+    let png = image.to_png().map_err(clip_err)?.get_bytes().to_vec();
+    Ok(DecodedImage { width, height, png })
+}
+
 /// 本机系统剪贴板。`!Send`，在使用它的线程上创建。
 pub struct SystemClipboard {
     ctx: ClipboardContext,
@@ -139,8 +160,23 @@ impl ClipboardBackend for SystemClipboard {
         self.ctx.get_text().map_err(clip_err)
     }
 
+    #[cfg(target_os = "macos")]
     fn get_html(&self) -> Result<String> {
         self.ctx.get_html().map_err(clip_err)
+    }
+
+    /// clipboard-rs 按 CF_HTML 头里的字节偏移切字符串，偏移落在多字节字符中间（按字符或 UTF-16
+    /// 计数的写法）就会 panic：这里取原始数据，自己按偏移安全地切。
+    #[cfg(target_os = "windows")]
+    fn get_html(&self) -> Result<String> {
+        let data = self
+            .ctx
+            .get_buffer(windows_html::FORMAT)
+            .map_err(clip_err)?;
+        let data = String::from_utf8(data).map_err(clip_err)?;
+        windows_html::extract(&data)
+            .map(str::to_owned)
+            .ok_or_else(|| AppError::Clipboard("invalid CF_HTML offsets".to_owned()))
     }
 
     fn get_rich_text(&self) -> Result<String> {
@@ -155,19 +191,38 @@ impl ClipboardBackend for SystemClipboard {
         self.ctx.get_buffer(PNG_FORMAT).map_err(clip_err)
     }
 
+    /// clipboard-rs 的 `get_image` 解 `CF_DIBV5` 时不设任何上限：这里自己取原始数据，按
+    /// [`crate::imaging`] 的上限解码。
+    #[cfg(target_os = "windows")]
     fn get_image_as_png(&self) -> Result<DecodedImage> {
-        let image = self.ctx.get_image().map_err(clip_err)?;
-        let (width, height) = image.get_size();
-        if width == 0 || height == 0 {
-            return Ok(DecodedImage {
-                width,
-                height,
-                png: Vec::new(),
-            });
+        encode_image(windows_png::read_image()?)
+    }
+
+    /// 原始 PNG / TIFF 先只读图片头、按 [`crate::imaging`] 的上限核对宽高与缓冲，再交给 clipboard-rs
+    /// 解（解码是泛型，在它那里展开才跑 opt-level 3；它用 image 的默认上限，分配不超过 512 MiB）。
+    /// 都没有时才让 clipboard-rs 经 NSImage 转出 TIFF 再解，解出来超过宽高上限的照样不要。
+    #[cfg(target_os = "macos")]
+    fn get_image_as_png(&self) -> Result<DecodedImage> {
+        for format in [PNG_FORMAT, TIFF_FORMAT] {
+            let Ok(bytes) = self.ctx.get_buffer(format) else {
+                continue;
+            };
+            if bytes.is_empty() {
+                continue;
+            }
+            let (width, height) = crate::imaging::from_bytes(&bytes)
+                .and_then(image::ImageReader::into_dimensions)
+                .map_err(clip_err)?;
+            crate::imaging::check_rgba_size(width, height).map_err(clip_err)?;
+            return encode_image(RustImageData::from_bytes(&bytes).map_err(clip_err)?);
         }
 
-        let png = image.to_png().map_err(clip_err)?.get_bytes().to_vec();
-        Ok(DecodedImage { width, height, png })
+        let image = self.ctx.get_image().map_err(clip_err)?;
+        let (width, height) = image.get_size();
+        if width > 0 && height > 0 {
+            crate::imaging::check_rgba_size(width, height).map_err(clip_err)?;
+        }
+        encode_image(image)
     }
 
     fn set_text(&self, text: String) -> Result<()> {
@@ -214,10 +269,70 @@ impl ClipboardBackend for SystemClipboard {
     }
 }
 
+/// CF_HTML（`HTML Format`）：头部几行 `键:十进制字节偏移`，`StartHTML` / `EndHTML` 圈出 HTML 本体。
+#[cfg(target_os = "windows")]
+mod windows_html {
+    pub(super) const FORMAT: &str = "HTML Format";
+
+    /// 按 `StartHTML` / `EndHTML` 取出 HTML，规则与 clipboard-rs 相同（没有的键取整段的头或尾），
+    /// 偏移越界、倒置或不在字符边界上时返回 `None`。
+    pub(super) fn extract(data: &str) -> Option<&str> {
+        let mut start = 0usize;
+        let mut end = data.len();
+        for line in data.lines() {
+            let mut split = line.split(':');
+            let (Some(key), Some(value)) = (split.next(), split.next()) else {
+                break;
+            };
+            let target = match key {
+                "StartHTML" => &mut start,
+                "EndHTML" => &mut end,
+                _ => continue,
+            };
+            match value.trim_start_matches('0').parse() {
+                Ok(value) => *target = value,
+                Err(_) => break,
+            }
+        }
+        data.get(start..end)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn extracts_the_html_between_the_offsets() {
+            let body = "<html><body>你好</body></html>";
+            let header_len = "Version:0.9\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\n".len();
+            let data = format!(
+                "Version:0.9\r\nStartHTML:{header_len:010}\r\nEndHTML:{:010}\r\n{body}",
+                header_len + body.len()
+            );
+            assert_eq!(extract(&data), Some(body));
+        }
+
+        #[test]
+        fn offsets_inside_a_character_or_out_of_range_are_rejected() {
+            // 头部 42 字节，「你」占 42..45：从 43 开始切在字符中间。
+            let data = "StartHTML:0000000043\r\nEndHTML:0000000048\r\n你好";
+            assert_eq!(extract(data), None);
+            assert_eq!(extract("StartHTML:0000000099\r\n<b>x</b>"), None);
+            assert_eq!(
+                extract("StartHTML:0000000010\r\nEndHTML:0000000005\r\n"),
+                None
+            );
+            assert_eq!(extract("<b>x</b>"), Some("<b>x</b>"));
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows_png {
+    use clipboard_rs::common::{RustImage, RustImageData};
+
     use super::clip_err;
-    use crate::error::Result;
+    use crate::error::{AppError, Result};
 
     /// 打开剪贴板失败后的退避间隔。别的剪贴板监听程序可能正读着上一份（大图）内容，
     /// `new_attempts` 自带的重试只让出时间片、几微秒就耗尽，与读取侧一样给一段有界的等待。
@@ -242,12 +357,106 @@ mod windows_png {
     /// `BITMAPINFOHEADER` 的字节长度。
     pub(super) const DIB_HEADER_LEN: usize = 40;
 
+    /// `BITMAPINFOHEADER` 的 `biCompression`：未压缩、按位掩码。
+    const BI_RGB: u32 = 0;
+    const BI_BITFIELDS: u32 = 3;
+
+    /// 读剪贴板上的图片并按 [`crate::imaging`] 的上限解码。格式的先后与 clipboard-rs 相同：
+    /// 注册格式 `PNG`，再 `CF_DIBV5`、`CF_DIB`（系统会在几种位图格式之间互相合成）。
+    pub(super) fn read_image() -> Result<RustImageData> {
+        use clipboard_win::formats::{RawData, CF_DIB, CF_DIBV5};
+
+        if let Some(format) = clipboard_win::register_format(super::PNG_FORMAT) {
+            if clipboard_win::is_format_avail(format.get()) {
+                let png: Vec<u8> =
+                    clipboard_win::get_clipboard(RawData(format.get())).map_err(clip_err)?;
+                return crate::imaging::from_bytes(&png)
+                    .and_then(image::ImageReader::decode)
+                    .map(RustImageData::from_dynamic_image)
+                    .map_err(clip_err);
+            }
+        }
+        for format in [CF_DIBV5, CF_DIB] {
+            if clipboard_win::is_format_avail(format) {
+                let dib: Vec<u8> =
+                    clipboard_win::get_clipboard(RawData(format)).map_err(clip_err)?;
+                return decode_dib(&dib);
+            }
+        }
+        Err(AppError::Clipboard("no image data in clipboard".to_owned()))
+    }
+
+    /// 截图等常见的 DIB（24/32 位，未压缩或位掩码，40/108/124 字节的头）：返回宽、高和像素数据
+    /// 在 DIB 里的起点。起点的算法与 image 解无文件头 DIB 时一致：头之后，`BI_BITFIELDS` 再跳过
+    /// 3 个掩码。其余格式返回 `None`。
+    pub(super) fn common_dib_layout(dib: &[u8]) -> Option<(u32, u32, u32)> {
+        let u32_at = |offset: usize| -> Option<u32> {
+            Some(u32::from_le_bytes(
+                dib.get(offset..offset + 4)?.try_into().ok()?,
+            ))
+        };
+        let header_len = u32_at(0)?;
+        if !matches!(header_len, 40 | 108 | 124) || dib.len() < header_len as usize {
+            return None;
+        }
+        let width = u32_at(4)? as i32;
+        let height = u32_at(8)? as i32;
+        let bit_count = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?);
+        let compression = u32_at(16)?;
+        if width <= 0 || height == 0 || !matches!(bit_count, 24 | 32) {
+            return None;
+        }
+        let masks = match compression {
+            BI_RGB => 0,
+            BI_BITFIELDS => 12,
+            _ => return None,
+        };
+        Some((
+            width.unsigned_abs(),
+            height.unsigned_abs(),
+            header_len + masks,
+        ))
+    }
+
+    /// 解码 `CF_DIB` / `CF_DIBV5`（没有 `BITMAPFILEHEADER` 的 BMP），按 [`crate::imaging`] 的上限。
+    ///
+    /// 常见布局先从头里读宽高、核对上限，再补上文件头交给 clipboard-rs 解：image 的解码是泛型
+    /// （`load_from_memory` 也是 `inline(always)`），在 clipboard-rs 里展开才跑 opt-level 3，
+    /// 在 core 里解一张 4K 截图要慢 5 倍以上。clipboard-rs 用 image 的默认上限（分配不超过 512 MiB）。
+    /// 少见的格式（调色板、RLE、旧式头）在 core 里按上限解。
+    pub(super) fn decode_dib(dib: &[u8]) -> Result<RustImageData> {
+        let Some((width, height, data_offset)) = common_dib_layout(dib) else {
+            let decoder =
+                image::codecs::bmp::BmpDecoder::new_without_file_header(std::io::Cursor::new(dib))
+                    .map_err(clip_err)?;
+            return crate::imaging::decode(decoder)
+                .map(RustImageData::from_dynamic_image)
+                .map_err(clip_err);
+        };
+
+        crate::imaging::check_rgba_size(width, height).map_err(clip_err)?;
+        let file_len = u32::try_from(14 + dib.len())
+            .map_err(|_| AppError::Clipboard("the bitmap is too large".to_owned()))?;
+        let mut file = Vec::with_capacity(14 + dib.len());
+        file.extend_from_slice(b"BM");
+        file.extend_from_slice(&file_len.to_le_bytes());
+        file.extend_from_slice(&[0; 4]);
+        file.extend_from_slice(&(14 + data_offset).to_le_bytes());
+        file.extend_from_slice(dib);
+        RustImageData::from_bytes(&file).map_err(clip_err)
+    }
+
     /// 解码 PNG 为 `CF_DIB` 数据：`BITMAPINFOHEADER` + 自下而上的 32 位 BGRA 行（`BI_RGB`）。
+    /// PNG 可能来自同步或备份导入，解码按 [`crate::imaging`] 的上限。
     pub(super) fn png_to_dib(png: &[u8]) -> Result<Vec<u8>> {
-        let rgba = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        let rgba = crate::imaging::from_bytes(png)
+            .and_then(image::ImageReader::decode)
             .map_err(clip_err)?
             .into_rgba8();
         let (width, height) = rgba.dimensions();
+        if width == 0 || height == 0 {
+            return Err(AppError::Clipboard("the image is empty".to_owned()));
+        }
         let row_len = width as usize * 4;
         let pixels_len = row_len * height as usize;
 
@@ -306,6 +515,77 @@ mod windows_png {
                     0, 0, 255, 255, 0, 255, 0, 255, // 上排：红、绿
                 ]
             );
+        }
+
+        fn sample_png(width: u32, height: u32) -> Vec<u8> {
+            let image = image::RgbaImage::from_fn(width, height, |x, y| {
+                image::Rgba([(x * 40) as u8, (y * 60) as u8, 7, 255])
+            });
+            let mut png = Vec::new();
+            image::DynamicImage::ImageRgba8(image)
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            png
+        }
+
+        /// 40 字节头的 DIB 改写成 124 字节头（V5）+ `BI_BITFIELDS` + 头后 3 个掩码，像素不动。
+        fn as_v5_bitfields(dib: &[u8]) -> Vec<u8> {
+            let mut header = dib[..DIB_HEADER_LEN].to_vec();
+            header[0..4].copy_from_slice(&124u32.to_le_bytes());
+            header[16..20].copy_from_slice(&BI_BITFIELDS.to_le_bytes());
+            let masks: [u32; 4] = [0x00ff_0000, 0x0000_ff00, 0x0000_00ff, 0xff00_0000];
+            for mask in masks {
+                header.extend_from_slice(&mask.to_le_bytes());
+            }
+            header.resize(124, 0);
+            for mask in &masks[..3] {
+                header.extend_from_slice(&mask.to_le_bytes());
+            }
+            header.extend_from_slice(&dib[DIB_HEADER_LEN..]);
+            header
+        }
+
+        #[test]
+        fn dibs_decode_through_both_paths_alike() {
+            let png = sample_png(5, 3);
+            let expected = image::load_from_memory(&png).unwrap().into_rgba8();
+            let dib = png_to_dib(&png).unwrap();
+            let v5 = as_v5_bitfields(&dib);
+
+            assert_eq!(common_dib_layout(&dib), Some((5, 3, 40)));
+            assert_eq!(common_dib_layout(&v5), Some((5, 3, 136)));
+            for dib in [&dib, &v5] {
+                let fast = decode_dib(dib)
+                    .unwrap()
+                    .get_dynamic_image()
+                    .unwrap()
+                    .into_rgba8();
+                assert_eq!(fast, expected);
+                let generic = image::codecs::bmp::BmpDecoder::new_without_file_header(
+                    std::io::Cursor::new(dib.as_slice()),
+                )
+                .unwrap();
+                let generic = image::DynamicImage::from_decoder(generic)
+                    .unwrap()
+                    .into_rgba8();
+                assert_eq!(fast, generic);
+            }
+        }
+
+        #[test]
+        fn dibs_claiming_huge_sizes_fail_without_allocating() {
+            let mut dib = png_to_dib(&sample_png(2, 2)).unwrap();
+            dib[4..8].copy_from_slice(&100_000i32.to_le_bytes());
+            dib[8..12].copy_from_slice(&(-100_000i32).to_le_bytes());
+            assert!(decode_dib(&dib).is_err());
+
+            // 少见格式（8 位调色板）走 image 的无文件头解码，同样按上限。
+            dib[14..16].copy_from_slice(&8u16.to_le_bytes());
+            assert_eq!(common_dib_layout(&dib), None);
+            assert!(decode_dib(&dib).is_err());
+
+            assert!(decode_dib(&[]).is_err());
+            assert!(decode_dib(&[40, 0, 0]).is_err());
         }
     }
 }

@@ -1,7 +1,7 @@
 //! 列表卡片的展示数据：在数据库行上补齐缩略图、来源应用图标、文件条目、颜色预览、显示时间、
 //! 快捷信息与可用动作，并按设置脱敏。
 
-use chrono::{DateTime, Datelike, TimeZone};
+use chrono::{DateTime, Datelike, Offset as _, TimeZone};
 use sqlx::SqlitePool;
 
 use super::files::{is_image_path, resolve_file_icon_path};
@@ -219,7 +219,12 @@ where
     Tz::Offset: std::fmt::Display,
 {
     let local = created_at.with_timezone(&now.timezone());
-    let today = now.date_naive() == local.date_naive();
+    // date_naive 在本地时间超出 chrono 范围时会 panic；created_at 可能来自同步或导入，取值不可信。
+    let local_date = local
+        .naive_utc()
+        .checked_add_offset(local.offset().fix())
+        .map(|naive| naive.date());
+    let today = local_date == Some(now.date_naive());
     let same_year = now.year() == local.year();
 
     if today {
@@ -468,5 +473,17 @@ mod tests {
             display_created_at(&at(2025, 12, 31, 8, 0), &now),
             "2025-12-31 08:00"
         );
+    }
+
+    #[test]
+    fn display_time_survives_dates_at_the_edge_of_the_range() {
+        let east = FixedOffset::east_opt(8 * 3600).unwrap();
+        let west = FixedOffset::west_opt(8 * 3600).unwrap();
+        for created_at in [DateTime::<Utc>::MAX_UTC, DateTime::<Utc>::MIN_UTC] {
+            for tz in [east, west] {
+                let now = tz.with_ymd_and_hms(2026, 10, 2, 15, 30, 0).unwrap();
+                assert!(!display_created_at(&created_at, &now).is_empty());
+            }
+        }
     }
 }

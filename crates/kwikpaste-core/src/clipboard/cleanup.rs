@@ -572,6 +572,7 @@ fn emit_cleanup(core: &CoreInner, removed: u64) {
 
 /// `Retention` → 绝对截止时间。`Forever` 或 `value == 0` 表示不按时间清理。
 /// 月份近似按 30 天处理（与前端展示口径一致，不引日历库）。
+/// 设置文件或导入的设置里可能有离谱的数值：时长或截止时间超出 chrono 的范围时同样不按时间清理。
 fn retention_cutoff(retention: &Retention, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     if retention.value == 0 {
         return None;
@@ -579,13 +580,13 @@ fn retention_cutoff(retention: &Retention, now: DateTime<Utc>) -> Option<DateTim
     let value = i64::from(retention.value);
     let duration = match retention.unit {
         RetentionUnit::Forever => return None,
-        RetentionUnit::Minutes => ChronoDuration::minutes(value),
-        RetentionUnit::Hours => ChronoDuration::hours(value),
-        RetentionUnit::Days => ChronoDuration::days(value),
-        RetentionUnit::Weeks => ChronoDuration::weeks(value),
-        RetentionUnit::Months => ChronoDuration::days(value * 30),
-    };
-    Some(now - duration)
+        RetentionUnit::Minutes => ChronoDuration::try_minutes(value),
+        RetentionUnit::Hours => ChronoDuration::try_hours(value),
+        RetentionUnit::Days => ChronoDuration::try_days(value),
+        RetentionUnit::Weeks => ChronoDuration::try_weeks(value),
+        RetentionUnit::Months => ChronoDuration::try_days(value * 30),
+    }?;
+    now.checked_sub_signed(duration)
 }
 
 #[cfg(test)]
@@ -606,6 +607,19 @@ mod tests {
     fn retention_cutoff_returns_none_when_disabled() {
         assert!(retention_cutoff(&retention(0, RetentionUnit::Days), now()).is_none());
         assert!(retention_cutoff(&retention(7, RetentionUnit::Forever), now()).is_none());
+    }
+
+    #[test]
+    fn retention_cutoff_out_of_range_never_expires() {
+        for unit in [
+            RetentionUnit::Hours,
+            RetentionUnit::Days,
+            RetentionUnit::Weeks,
+            RetentionUnit::Months,
+        ] {
+            assert_eq!(retention_cutoff(&retention(u32::MAX, unit), now()), None);
+        }
+        assert!(retention_cutoff(&retention(u32::MAX, RetentionUnit::Minutes), now()).is_some());
     }
 
     #[test]

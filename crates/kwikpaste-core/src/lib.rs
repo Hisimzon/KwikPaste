@@ -14,6 +14,7 @@ pub mod env;
 pub mod error;
 pub mod events;
 pub mod i18n;
+pub mod imaging;
 pub mod ops;
 pub mod paths;
 pub mod platform;
