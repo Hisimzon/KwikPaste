@@ -5,8 +5,7 @@
 //! - 看门狗：显示面板前、以及每 10 s 检查渲染：vsync 线程（补丁 0001 的 `vsync_thread_alive`）死了
 //!   窗口就再也不会重绘；GPU 设备丢失后按计划重试都失败（补丁 0003 的 `device_loss_status().failing`，
 //!   约 8 s）说明进程内恢复不了。两者都按崩溃处理、有序重启（10 分钟内第 3 次降级重启时关掉
-//!   DirectComposition）。macOS 的 GPUI 当前没有公开 Metal 设备移除回调，因此先保持现状并留出
-//!   明确的 TODO（见 [`recheck_device`]）。
+//!   DirectComposition）。macOS 同样监听 Metal 设备移除通知并走同一条重启门槛。
 //! - 设备丢失恢复：系统唤醒后主动请求一次重建（`request_device_recheck`），不等驱动报错。
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,6 +55,14 @@ pub fn serve(cx: &mut App) {
         recheck_device();
     })
     .detach();
+
+    #[cfg(target_os = "macos")]
+    if let Err(err) = kwikpaste_os::mac::metal::watch_device_removed(|| {
+        log::error!("Metal reported that the rendering device was removed");
+        recheck_device();
+    }) {
+        log::warn!("could not watch Metal device removal: {err}");
+    }
 }
 
 /// 渲染是否正常；不正常时要求有序重启并返回 `false`（调用方不要再显示面板）。
@@ -89,7 +96,7 @@ fn device_recovery_failing() -> bool {
 
 #[cfg(target_os = "macos")]
 fn device_recovery_failing() -> bool {
-    false
+    kwikpaste_os::mac::metal::device_removed()
 }
 
 #[cfg(target_os = "windows")]
@@ -99,13 +106,30 @@ fn recheck_device() {
 
 #[cfg(target_os = "macos")]
 fn recheck_device() {
-    // TODO(macOS): 接入 MTLDeviceWasRemovedNotification 后，把设备移除状态接到同一重启门槛。
+    // GPUI's Metal display link rebuilds on the next run-loop turn. The latch remains set until
+    // the health gate observes it, so an unrecoverable removal takes the orderly restart path.
+    kwikpaste_os::mac::metal::request_device_recheck();
 }
 
 /// 自测：让看门狗认为渲染线程已死。
 pub fn simulate_dead_render_thread() {
     log::warn!("selftest: the watchdog now treats the vsync thread as dead");
     SIMULATED_DEAD.store(true, Ordering::SeqCst);
+}
+
+/// 自测：用补丁 0006 的同一状态位模拟显示器关闭再恢复，不触碰用户的真实显示器。
+pub fn simulate_display_sleep() {
+    #[cfg(target_os = "windows")]
+    {
+        gpui_windows::simulate_display_sleeping(true);
+        probe::display_power("off");
+        gpui_windows::simulate_display_sleeping(false);
+        probe::display_power("on");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        probe::display_power("unsupported");
+    }
 }
 
 /// 自测（`--selftest-device-lost=<n>`）：模拟一次 GPU 设备丢失，前 `n` 次重建全局设备失败；
@@ -149,7 +173,8 @@ pub fn simulate_device_lost(failed_attempts: u32, cx: &mut App) {
     #[cfg(target_os = "macos")]
     {
         let _ = (failed_attempts, cx);
-        log::warn!("selftest: GPU device loss is not simulated on macOS");
+        log::warn!("selftest: simulating a Metal device removal");
+        kwikpaste_os::mac::metal::simulate_device_removed();
     }
 }
 

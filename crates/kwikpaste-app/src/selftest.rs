@@ -69,6 +69,10 @@ pub const DRAG_PAYLOAD: &str = "--selftest-drag-payload=";
 pub const SEED: &str = "--selftest-seed=";
 /// 让看门狗认为 vsync 线程已死，下一次显示面板时有序重启。
 pub const VSYNC_DEAD: &str = "--selftest-vsync-dead";
+/// 模拟显示器关闭/解锁通知，验证 vsync 停泊后能被唤醒。
+pub const DISPLAY_SLEEP: &str = "--selftest-display-sleep";
+/// 验证外部崩溃守护已在 GPUI 之前启动。
+pub const WATCHDOG: &str = "--selftest-watchdog";
 /// `--selftest-device-lost=<n>`：模拟一次 GPU 设备丢失，前 n 次重建全局设备失败（补丁 0003 的注入点）。
 pub const DEVICE_LOST: &str = "--selftest-device-lost=";
 /// `--selftest-async-frame=<ms>`：过 ms 毫秒后不经输入把面板标脏，记录到下一次渲染隔了多久（探针事件 `async_frame`）。
@@ -133,9 +137,11 @@ pub fn kind() -> Option<&'static str> {
 
 /// 本进程是平台探针本身（`--selftest-platform`）或者给它转交命令的后启动实例。
 fn platform_probe() -> bool {
-    const COMMANDS: [&str; 15] = [
+    const COMMANDS: [&str; 17] = [
         COUNT,
         VSYNC_DEAD,
+        DISPLAY_SLEEP,
+        WATCHDOG,
         PLATFORM,
         PANEL_INVARIANTS,
         DRAGOUT,

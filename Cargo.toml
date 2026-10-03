@@ -60,6 +60,7 @@ kwikpaste-os = { path = "crates/kwikpaste-os" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-foundation = { version = "0.3", default-features = false }
+objc2-metal = { version = "0.3", default-features = false }
 block2 = "0.6"
 raw-window-handle = "0.6"
 tray-icon = { version = "0.24", default-features = false }
@@ -94,6 +95,7 @@ reqwest = { version = "0.13", default-features = false }
 time = "0.3"
 url = "2"
 windows-sys = "0.61"
+libc = "0.2"
 # macOS 的 .app.tar.gz 解包；Windows 上只在测试里用。
 flate2 = "1"
 tar = "0.4"

@@ -180,6 +180,7 @@ features = [
     "Win32_System_Pipes",
     "Win32_System_Power",
     "Win32_System_RestartManager",
+    "Win32_System_RemoteDesktop", # [kwikpaste patch 0006]
     "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_System_Threading",

@@ -212,6 +212,10 @@ fn serve(request: Request, cx: &mut App) {
         }
         Request::Exit(code) => {
             log::info!("update handoff: exiting with {code}");
+            // The installer intentionally terminates this process after the handoff.  Tell the
+            // external watchdog before releasing the app so that the termination is not treated
+            // as an unclean crash and relaunched during replacement.
+            crate::health::suppress_watchdog_restart();
             EXIT_CODE.store(code, Ordering::SeqCst);
             core_host::mark_shut_down();
             cx.quit();

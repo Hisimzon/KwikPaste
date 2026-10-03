@@ -47,6 +47,7 @@ embed-resource.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_windows.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_platform.workspace = true
@@ -54,6 +55,9 @@ gpui_platform.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
 workspace = true
 features = ["std", "NSApplication", "NSRunningApplication", "NSWindow"]
+
+[target.'cfg(target_os = "macos")'.dependencies.libc]
+workspace = true
 
 [lints]
 workspace = true

@@ -3,6 +3,7 @@
 pub mod apps;
 pub mod drag_out;
 pub mod keystroke;
+pub mod metal;
 pub mod monitor;
 pub mod mouse;
 pub mod panel;

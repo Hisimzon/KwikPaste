@@ -40,6 +40,7 @@ pub(crate) use wrapper::*;
 
 pub use platform::WindowsPlatform;
 pub use vsync::vsync_thread_alive; // [kwikpaste patch 0001]
+pub use vsync::simulate_display_sleeping; // [kwikpaste patch 0006]
 // [kwikpaste patch 0003]
 pub use directx_devices::{
     DeviceLossStatus, device_loss_status, request_device_recheck, simulate_device_lost,

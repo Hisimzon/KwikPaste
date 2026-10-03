@@ -14,12 +14,16 @@ mod selftest;
 use gpui::{App, Application};
 
 fn main() -> anyhow::Result<()> {
+    if health::run_watchdog_if_requested() {
+        return Ok(());
+    }
     // 第一步：日志与 panic hook（崩溃记录、崩溃重启），见 `health`。
     health::install();
     let Some(launch) = platform::launch()? else {
         return Ok(());
     };
     let platform = platform::create()?;
+    health::start_watchdog();
 
     Application::with_platform(platform)
         .with_assets(kwikpaste_ui::Assets)

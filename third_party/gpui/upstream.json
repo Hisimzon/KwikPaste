@@ -7,7 +7,8 @@
         "0002-honor-ws-ex-noactivate.diff",
         "0003-device-loss-no-panic.diff",
         "0004-load-on-windows-10-rtm.diff",
-        "0005-image-format-features.diff"
+        "0005-image-format-features.diff",
+        "0006-display-power-and-session-lock.diff"
       ],
       "sha256": "f05592a6f9e3e6bb7a9f2a0d4779271cf747a948db1c07b02448de777ffff8f3",
       "version": "0.3.7",

@@ -4250,6 +4250,7 @@ dependencies = [
  "kwikpaste-os",
  "kwikpaste-ui",
  "kwikpaste-updater",
+ "libc",
  "log",
  "objc2-app-kit 0.3.2",
  "raw-window-handle",
@@ -4257,6 +4258,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tray-icon",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4310,6 +4312,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
  "plist",
  "windows 0.62.2",

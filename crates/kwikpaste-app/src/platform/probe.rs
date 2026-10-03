@@ -138,6 +138,16 @@ pub fn hidden(trigger: Trigger, native_fields: &str) {
     );
 }
 
+/// External watchdog and display-power probes use compact events so CI can assert the transition
+/// without opening or powering off a real monitor.
+pub fn watchdog_started() {
+    write("watchdog_started", "");
+}
+
+pub fn display_power(state: &str) {
+    write("display_power", &format!(r#","state":"{state}""#));
+}
+
 /// 一次进入编辑态的结果。
 pub fn editing(
     trigger: EditTrigger,

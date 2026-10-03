@@ -40,6 +40,8 @@ use crate::selftest;
 pub const RELAUNCHED: &str = "--relaunched-after-crash";
 /// 降级重启另带的参数。
 pub const DEGRADED: &str = "--crash-degraded";
+/// Internal helper process mode. It is handled before GPUI/logging is initialized.
+pub const WATCHDOG: &str = "--watchdog";
 
 /// 应用当前所处的阶段，崩溃时记下来。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +104,8 @@ struct State {
     log_dir: Option<PathBuf>,
     /// 运行标记 `<bootstrap>/state/running.json`。
     running_file: Option<PathBuf>,
+    /// Graceful shutdown marker consumed by the external watchdog.
+    watchdog_stop_file: Option<PathBuf>,
     /// 这是第几次崩溃重启（普通启动为 0）。
     relaunch: u32,
     /// 降级启动。
@@ -139,6 +143,9 @@ pub fn install() {
         running_file: bootstrap
             .as_deref()
             .map(|dir| crash::state_file(dir, crash::RUNNING_FILE)),
+        watchdog_stop_file: bootstrap
+            .as_deref()
+            .map(|dir| crash::state_file(dir, crash::WATCHDOG_STOP_FILE)),
         relaunch,
         degraded,
         restart_enabled,
@@ -153,6 +160,59 @@ pub fn install() {
             crash::WINDOW.as_secs() / 60,
             if degraded { " (degraded mode)" } else { "" }
         );
+    }
+}
+
+/// Handle the helper process before any GPUI or renderer code is loaded.
+pub fn run_watchdog_if_requested() -> bool {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() != Some(WATCHDOG) {
+        return false;
+    }
+    let Some(pid) = args.next().and_then(|value| value.parse::<u32>().ok()) else {
+        return true;
+    };
+    let Some(running_file) = args.next().map(PathBuf::from) else {
+        return true;
+    };
+    let Some(crash_file) = args.next().map(PathBuf::from) else {
+        return true;
+    };
+    crash::run_watchdog(pid, running_file, crash_file, args.collect());
+    true
+}
+
+/// Start one tiny sibling process that waits for this process without initializing GPUI.
+pub fn start_watchdog() {
+    if selftest::active() && !selftest::enabled(selftest::WATCHDOG) {
+        return;
+    }
+    let Some(state) = STATE.get() else {
+        return;
+    };
+    let (Some(running), Some(crash)) = (&state.running_file, &state.crash_file) else {
+        return;
+    };
+    crash::start_watchdog(running, crash);
+}
+
+/// Mark an intentional stop (quit/update/installer handoff) so a forced process termination is
+/// never mistaken for a crash by the helper process.
+pub fn suppress_watchdog_restart() {
+    if let Some(path) = STATE
+        .get()
+        .and_then(|state| state.watchdog_stop_file.as_deref())
+    {
+        let _ = std::fs::write(path, std::process::id().to_string());
+    }
+}
+
+pub(super) fn mark_watchdog_handoff() {
+    if let Some(path) = STATE
+        .get()
+        .and_then(|state| state.watchdog_stop_file.as_deref())
+    {
+        let _ = std::fs::write(path, std::process::id().to_string());
     }
 }
 
@@ -184,6 +244,12 @@ pub fn after_claim() {
             *notice = Some(log_dir.clone());
         }
     }
+    if let Some(path) = STATE
+        .get()
+        .and_then(|state| state.watchdog_stop_file.as_deref())
+    {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// 取出本次启动需要提示用户的崩溃放弃重启通知。
@@ -199,6 +265,7 @@ pub fn clean_exit() {
     if let Some(running_file) = STATE.get().and_then(|state| state.running_file.as_deref()) {
         crash::clean_exit(running_file);
     }
+    crash::stop_watchdog();
 }
 
 /// 这是第几次崩溃重启（普通启动为 0）。

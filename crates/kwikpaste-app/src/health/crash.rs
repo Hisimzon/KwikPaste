@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
@@ -14,6 +14,7 @@ use super::{Phase, logger};
 
 pub const CRASH_FILE: &str = "last-crash.json";
 pub const RUNNING_FILE: &str = "running.json";
+pub const WATCHDOG_STOP_FILE: &str = "watchdog-stop";
 /// 统计重启次数的时间窗。
 pub const WINDOW: Duration = Duration::from_secs(10 * 60);
 /// 时间窗内最多重启几次（最后一次是降级重启）。
@@ -94,6 +95,8 @@ static REQUESTS: LazyLock<(Sender<Restart>, Receiver<Restart>)> =
 static HANDLING: AtomicBool = AtomicBool::new(false);
 static SPAWNED: AtomicBool = AtomicBool::new(false);
 static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
+static WATCHDOG_CHILD: LazyLock<Mutex<Option<std::process::Child>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 /// 主线程上要处理的有序重启请求。
 pub fn restart_requests() -> Receiver<Restart> {
@@ -285,6 +288,7 @@ pub fn spawn_relaunch(restart: &Restart) -> std::io::Result<u32> {
 
     match spawned {
         Ok(child) => {
+            super::mark_watchdog_handoff();
             EXIT_CODE.store(RESTART_EXIT_CODE, Ordering::SeqCst);
             logger::write_crash(&format!(
                 "restarted as pid {} (relaunch #{}{})",
@@ -297,6 +301,119 @@ pub fn spawn_relaunch(restart: &Restart) -> std::io::Result<u32> {
         Err(err) => {
             SPAWNED.store(false, Ordering::SeqCst);
             Err(err)
+        }
+    }
+}
+
+/// Spawn the minimal external helper. Its command line contains only the state paths and the
+/// original app arguments, so a relaunch is an exact replay of the candidate that crashed.
+pub(super) fn start_watchdog(running_file: &Path, crash_file: &Path) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut command = Command::new(exe);
+    command
+        .arg(super::WATCHDOG)
+        .arg(std::process::id().to_string())
+        .arg(running_file)
+        .arg(crash_file)
+        .args(std::env::args().skip(1));
+    match command.spawn() {
+        Ok(child) => {
+            if let Ok(mut slot) = WATCHDOG_CHILD.lock() {
+                *slot = Some(child);
+            }
+            log::debug!("external crash watchdog started");
+        }
+        Err(err) => log::warn!("external crash watchdog could not start: {err}"),
+    }
+}
+
+pub(super) fn stop_watchdog() {
+    if let Ok(mut slot) = WATCHDOG_CHILD.lock()
+        && let Some(mut child) = slot.take()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// Watchdog entry point. This process never calls `health::install`, creates a GPUI platform, or
+/// opens a window. It restarts only when the running marker still belongs to the dead parent and
+/// no intentional-stop marker was written.
+pub(super) fn run_watchdog(
+    pid: u32,
+    running_file: PathBuf,
+    crash_file: PathBuf,
+    original_args: Vec<String>,
+) {
+    wait_for_process(pid);
+    std::thread::sleep(Duration::from_millis(150));
+    let stop_file = running_file.with_file_name(WATCHDOG_STOP_FILE);
+    if stop_file.exists() || !running_marker_matches(&running_file, pid) {
+        return;
+    }
+    let log = load(&crash_file);
+    if log.gave_up {
+        return;
+    }
+    let recent_count = u32::try_from(recent(&log, Utc::now()).len()).unwrap_or(u32::MAX);
+    let previous = super::parse_relaunch(original_args.iter().cloned());
+    let relaunch = recent_count
+        .saturating_add(1)
+        .max(previous.saturating_add(1));
+    if relaunch > MAX_RESTARTS {
+        return;
+    }
+    let degraded = relaunch >= DEGRADED_FROM;
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut command = Command::new(exe);
+    command.args(super::relaunch_args(original_args, relaunch, degraded));
+    if degraded {
+        command.env(DISABLE_DIRECT_COMPOSITION, "1");
+    }
+    match command.spawn() {
+        Ok(child) => {
+            super::mark_watchdog_handoff();
+            log::warn!(
+                "external watchdog relaunched pid {} (#{relaunch})",
+                child.id()
+            );
+        }
+        Err(err) => log::error!("external watchdog could not relaunch the app: {err}"),
+    }
+}
+
+fn running_marker_matches(path: &Path, pid: u32) -> bool {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("pid").and_then(serde_json::Value::as_u64))
+        .is_some_and(|value| value == u64::from(pid))
+}
+
+fn wait_for_process(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            System::Threading::{INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+        };
+        // SAFETY: The helper receives a PID from its parent and requests only synchronization.
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        if !handle.is_null() {
+            unsafe {
+                WaitForSingleObject(handle, INFINITE);
+                CloseHandle(handle);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        while unsafe { libc::kill(pid as i32, 0) } == 0 {
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
 }

@@ -79,6 +79,7 @@ async fn handle(invocation: &Invocation, commands: &Sender<PanelCommand>, cx: &m
     log::info!("another launch handed over {args:?}");
 
     if args.iter().any(|arg| arg == QUIT) {
+        crate::health::suppress_watchdog_restart();
         cx.update(|cx| cx.quit());
         return;
     }
@@ -123,6 +124,8 @@ async fn handle_selftest(
                 cx.update(|cx| cx.quit());
             }
             selftest::VSYNC_DEAD => watchdog::simulate_dead_render_thread(),
+            selftest::DISPLAY_SLEEP => watchdog::simulate_display_sleep(),
+            selftest::WATCHDOG => probe::watchdog_started(),
             _ => {
                 if let Some(delay) = arg.strip_prefix(selftest::ASYNC_FRAME) {
                     let delay = std::time::Duration::from_millis(delay.parse().unwrap_or(0));

@@ -27,8 +27,13 @@ use windows::{
             LibraryLoader::*,
             Ole::*,
             Power::*,
+            // [kwikpaste patch 0006] Session lock/unlock notifications.
+            RemoteDesktop::{
+                NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification,
+                WTSUnRegisterSessionNotification,
+            },
             SystemInformation::*,
-            SystemServices::POWER_REQUEST_CONTEXT_VERSION,
+            SystemServices::{GUID_CONSOLE_DISPLAY_STATE, POWER_REQUEST_CONTEXT_VERSION},
             Threading::{POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0},
         },
         UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
@@ -55,6 +60,10 @@ pub struct WindowsPlatform {
     invalidate_devices: Arc<AtomicBool>,
     handle: HWND,
     suspend_resume_notification: RefCell<Option<HPOWERNOTIFY>>,
+    // [kwikpaste patch 0006] PowerSettingRegisterNotification is separate from sleep/wake: a
+    // console display can turn off without the machine entering suspend.
+    display_power_notification: RefCell<Option<HPOWERNOTIFY>>,
+    session_notification_registered: bool,
     disable_direct_composition: bool,
     has_package_identity: bool,
     app_identity: RefCell<Option<(String, String)>>,
@@ -258,6 +267,19 @@ impl WindowsPlatform {
             text_system,
             direct_write_text_system,
             suspend_resume_notification: RefCell::new(None),
+            display_power_notification: RefCell::new(unsafe {
+                RegisterPowerSettingNotification(
+                    HANDLE(handle.0),
+                    &GUID_CONSOLE_DISPLAY_STATE,
+                    DEVICE_NOTIFY_WINDOW_HANDLE,
+                )
+                .log_err()
+            }),
+            session_notification_registered: unsafe {
+                WTSRegisterSessionNotification(handle, NOTIFY_FOR_THIS_SESSION)
+                    .log_err()
+                    .is_some()
+            },
             disable_direct_composition,
             has_package_identity: has_package_identity(),
             drop_target_helper,
@@ -387,7 +409,8 @@ impl WindowsPlatform {
                 loop {
                     // [kwikpaste patch 0001] No visible window: park (device-lost is still
                     // polled once per second) instead of waking at the refresh rate.
-                    let any_visible = all_windows.upgrade().is_some_and(|windows| {
+                    let any_visible = !crate::vsync::display_sleeping()
+                        && all_windows.upgrade().is_some_and(|windows| {
                         windows
                             .read()
                             .iter()
@@ -1124,7 +1147,8 @@ impl WindowsPlatformInner {
             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
             | WM_GPUI_GPU_DEVICE_LOST
             | WM_GPUI_END_SESSION => self.handle_gpui_events(msg, wparam, lparam),
-            WM_POWERBROADCAST => self.handle_power_broadcast(wparam),
+            WM_POWERBROADCAST => self.handle_power_broadcast(wparam, lparam),
+            WM_WTSSESSION_CHANGE => self.handle_session_change(wparam),
             _ => None,
         };
         if let Some(result) = handled {
@@ -1280,7 +1304,7 @@ impl WindowsPlatformInner {
         Some(0)
     }
 
-    fn handle_power_broadcast(&self, wparam: WPARAM) -> Option<isize> {
+    fn handle_power_broadcast(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
         match wparam.0 as u32 {
             PBT_APMSUSPEND => {
                 self.with_callback(|callbacks| &callbacks.system_sleep, |callback| callback());
@@ -1288,9 +1312,33 @@ impl WindowsPlatformInner {
             PBT_APMRESUMEAUTOMATIC => {
                 self.with_callback(|callbacks| &callbacks.system_wake, |callback| callback());
             }
+            PBT_POWERSETTINGCHANGE => {
+                // SAFETY: Windows sends a POWERBROADCAST_SETTING pointer for this message. The
+                // GUID check makes sure a future power notification is ignored safely.
+                let setting = unsafe { (lparam.0 as *const POWERBROADCAST_SETTING).as_ref() };
+                if setting.is_some_and(|setting| setting.PowerSetting == GUID_CONSOLE_DISPLAY_STATE)
+                {
+                    let state = setting
+                        .filter(|setting| setting.DataLength >= 4)
+                        .map(|setting| unsafe {
+                            std::ptr::read_unaligned(setting.Data.as_ptr() as *const u32)
+                        })
+                        .unwrap_or(1);
+                    crate::vsync::set_display_sleeping(state == 0);
+                }
+            }
             _ => {}
         }
         Some(1)
+    }
+
+    fn handle_session_change(&self, wparam: WPARAM) -> Option<isize> {
+        match wparam.0 as u32 {
+            WTS_SESSION_LOCK => crate::vsync::set_display_sleeping(true),
+            WTS_SESSION_UNLOCK => crate::vsync::set_display_sleeping(false),
+            _ => {}
+        }
+        Some(0)
     }
 
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
@@ -1309,6 +1357,12 @@ impl Drop for WindowsPlatform {
             if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
                 // SAFETY: notification was returned by RegisterSuspendResumeNotification.
                 UnregisterSuspendResumeNotification(notification).log_err();
+            }
+            if let Some(notification) = self.display_power_notification.borrow_mut().take() {
+                UnregisterPowerSettingNotification(notification).log_err();
+            }
+            if self.session_notification_registered {
+                WTSUnRegisterSessionNotification(self.handle).log_err();
             }
             DestroyWindow(self.handle)
                 .context("Destroying platform window")

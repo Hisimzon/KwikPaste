@@ -2,6 +2,7 @@ use std::{
     sync::LazyLock,
     time::{Duration, Instant},
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use gpui_util::ResultExt;
@@ -37,6 +38,30 @@ struct WakeState {
 
 static VSYNC_WAKE: LazyLock<(std::sync::Mutex<WakeState>, std::sync::Condvar)> =
     LazyLock::new(|| (std::sync::Mutex::new(WakeState::default()), std::sync::Condvar::new()));
+
+// [kwikpaste patch 0006] The display can be powered off while a window remains visible.  Keep
+// this separate from window visibility: a locked session and a console-display power notification
+// both mean that calling DwmFlush is a busy loop with no frame that can be presented.
+static DISPLAY_SLEEPING: AtomicBool = AtomicBool::new(false);
+
+/// Set by the platform message window for display-off and session-lock notifications.
+pub fn set_display_sleeping(sleeping: bool) {
+    DISPLAY_SLEEPING.store(sleeping, Ordering::Release);
+    if !sleeping {
+        wake_vsync_thread();
+    }
+}
+
+/// Returns whether rendering should be parked even if a GPUI window is visible.
+pub fn display_sleeping() -> bool {
+    DISPLAY_SLEEPING.load(Ordering::Acquire)
+}
+
+/// Self-test hook; it exercises the same atomic and condition-variable path as a native power
+/// notification without changing the actual monitor state.
+pub fn simulate_display_sleeping(sleeping: bool) {
+    set_display_sleeping(sleeping);
+}
 
 /// Wake the vsync thread, e.g. because a window became visible.
 pub(crate) fn wake_vsync_thread() {
