@@ -8,7 +8,7 @@ use std::io::Write as _;
 use std::rc::Rc;
 use std::time::Duration;
 
-use gpui::App;
+use gpui::{App, Keystroke};
 use serde_json::json;
 
 use crate::platform::{self, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource};
@@ -253,7 +253,7 @@ fn preferences(cx: &mut App) {
     let core = crate::core_host::core(cx).cloned();
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_secs(3)).await;
-        let setting_updated = if let Some(core) = core {
+        let setting_updated = if let Some(core) = core.clone() {
             let before = core.settings().general.tray_icon;
             let toggled = core
                 .update_settings(json!({ "general": { "trayIcon": !before } }))
@@ -272,13 +272,27 @@ fn preferences(cx: &mut App) {
             "Alt+X",
             "X+Alt",
         );
+        let shortcut_recording_checked = Keystroke::parse("alt-x")
+            .ok()
+            .and_then(|keystroke| {
+                crate::preferences::view::shortcut_from_keystroke(&keystroke)
+            })
+            .is_some_and(|value| value == "Alt+X");
+        let import_confirmation_checked = crate::preferences::view::backup_confirmation_required(
+            kwikpaste_core::backup::BackupContainerMode::Plain,
+        );
+        let storage_overview_checked = if let Some(core) = core {
+            core.storage_overview().await.is_ok()
+        } else {
+            false
+        };
         let search_checked = crate::preferences::view::search_matches(
             "tray",
             "System startup",
             &["tray", "system"],
         );
         log::info!(
-            "preferences selftest: opened=true switched=true setting_updated={setting_updated} shortcut_conflict_checked={shortcut_conflict_checked} search_checked={search_checked}"
+            "preferences selftest: opened=true switched=true setting_updated={setting_updated} shortcut_conflict_checked={shortcut_conflict_checked} shortcut_recording_checked={shortcut_recording_checked} import_confirmation_checked={import_confirmation_checked} storage_overview_checked={storage_overview_checked} search_checked={search_checked}"
         );
         cx.update(|cx| cx.quit());
     })

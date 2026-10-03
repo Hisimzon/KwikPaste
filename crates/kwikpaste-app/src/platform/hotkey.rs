@@ -63,6 +63,7 @@ struct Hotkeys {
     preference: Option<HotKey>,
     quick_paste: Vec<HotKey>,
     actions: Actions,
+    suspended: bool,
 }
 
 impl Global for Hotkeys {}
@@ -133,6 +134,7 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
         preference: None,
         quick_paste: Vec::new(),
         actions,
+        suspended: false,
     });
     if let Some(core) = core_host::core(cx) {
         let shortcuts = core.settings().shortcuts;
@@ -152,6 +154,9 @@ pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
     let quick_paste = wanted_quick_paste(shortcuts);
 
     let hotkeys = cx.global_mut::<Hotkeys>();
+    if hotkeys.suspended {
+        return;
+    }
     if hotkeys.toggle != toggle {
         if let Some(previous) = hotkeys.toggle.take() {
             hotkeys.unregister(previous);
@@ -205,6 +210,32 @@ pub fn unregister_all(cx: &mut App) {
         return;
     }
     let hotkeys = cx.global_mut::<Hotkeys>();
+    clear_registered(hotkeys);
+}
+
+/// 暂停全局热键，给偏好设置里的物理按键录制让出输入。
+pub fn suspend(cx: &mut App) {
+    if !cx.has_global::<Hotkeys>() {
+        return;
+    }
+    let hotkeys = cx.global_mut::<Hotkeys>();
+    hotkeys.suspended = true;
+    clear_registered(hotkeys);
+}
+
+/// 恢复全局热键，并按最新设置重新注册。
+pub fn resume(cx: &mut App) {
+    if !cx.has_global::<Hotkeys>() {
+        return;
+    }
+    cx.global_mut::<Hotkeys>().suspended = false;
+    if let Some(core) = core_host::core(cx) {
+        let shortcuts = core.settings().shortcuts;
+        apply(&shortcuts, cx);
+    }
+}
+
+fn clear_registered(hotkeys: &mut Hotkeys) {
     let all: Vec<HotKey> = hotkeys
         .toggle
         .take()

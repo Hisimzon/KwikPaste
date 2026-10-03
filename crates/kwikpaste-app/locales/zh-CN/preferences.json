@@ -64,8 +64,8 @@
     "today": "今天 {{time}}"
   },
   "controls": {
-    "saving": "保存中…",
     "recordShortcut": "录制快捷键",
+    "saving": "保存中…",
     "shortcutConflict": "此快捷键与另一个全局快捷键冲突"
   },
   "lanSync": {
@@ -233,6 +233,8 @@
     "export": "选择位置并导出",
     "favorites": "仅收藏",
     "format": "文件格式",
+    "formatMarkdown": "Markdown (.md)",
+    "formatXlsx": "Excel (.xlsx)",
     "groups": "分组范围",
     "includeSensitive": "包含敏感内容（默认排除）",
     "merged": "合并为一个文件",

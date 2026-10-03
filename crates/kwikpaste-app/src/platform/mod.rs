@@ -35,7 +35,7 @@ pub(crate) mod autostart;
 pub mod drag_out;
 mod editing;
 pub mod host;
-mod hotkey;
+pub(crate) mod hotkey;
 mod instance;
 mod keyboard;
 pub mod material;

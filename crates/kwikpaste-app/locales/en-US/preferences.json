@@ -64,8 +64,8 @@
     "today": "Today {{time}}"
   },
   "controls": {
-    "saving": "Saving…",
     "recordShortcut": "Record shortcut",
+    "saving": "Saving…",
     "shortcutConflict": "This shortcut conflicts with another global shortcut"
   },
   "lanSync": {
@@ -234,6 +234,8 @@
     "export": "Choose location and export",
     "favorites": "Favorites only",
     "format": "File format",
+    "formatMarkdown": "Markdown (.md)",
+    "formatXlsx": "Excel (.xlsx)",
     "groups": "Group scope",
     "includeSensitive": "Include sensitive content (excluded by default)",
     "merged": "Merge into one file",
