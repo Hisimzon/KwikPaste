@@ -4,6 +4,7 @@
 //! - [`list_model`]：稀疏分页缓存；
 //! - [`controller`]：当前项、键盘移动、数字提示、刷新策略；
 //! - [`filter`]：范围、分类、自定义分组、搜索词；
+//! - [`freshness`]：数据追没追上 core，作用于当前项的按键何时执行；
 //! - [`empty_state`]：空列表的 16 种提示；
 //! - [`actions`]：悬停快捷动作、删除保护；
 //! - [`selection`]：多选；
@@ -14,6 +15,7 @@ pub mod actions;
 pub mod controller;
 pub mod empty_state;
 pub mod filter;
+pub mod freshness;
 pub mod item;
 pub mod layout;
 pub mod list_model;

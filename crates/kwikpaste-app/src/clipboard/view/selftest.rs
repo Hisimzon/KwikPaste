@@ -9,13 +9,13 @@
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use gpui::{
     AnyWindowHandle, App, AsyncApp, Capslock, Entity, Focusable as _, Keystroke, Modifiers,
-    ModifiersChangedEvent, PlatformInput,
+    ModifiersChangedEvent, MouseMoveEvent, PlatformInput, point, px,
 };
 use kwikpaste_ui::{close_dialog, has_dialog};
 
@@ -28,11 +28,12 @@ use crate::{
     clipboard::{
         model::{
             actions::DeletePolicy,
+            controller::ListUpdate,
             empty_state::empty_text,
             filter::{ListFilter, Range},
-            item::ItemKind,
+            item::{ItemKind, ListItem},
         },
-        source::{ClipboardSource, ListQuery},
+        source::{ClipboardSource, FixtureStore, ListQuery},
     },
     platform::{EditTrigger, Panel, PanelCommand, PanelEvent},
 };
@@ -41,7 +42,7 @@ use crate::{
 const SETTLE: Duration = Duration::from_secs(5);
 
 /// 跑交互脚本。
-pub fn run(panel: Entity<ClipboardPanel>, cx: &mut App) {
+pub fn run(panel: Entity<ClipboardPanel>, store: Arc<Mutex<FixtureStore>>, cx: &mut App) {
     cx.set_global(RequestLog::default());
     let intents: Rc<RefCell<Vec<ListIntent>>> = Rc::default();
     let list = panel.read(cx).list().clone();
@@ -58,6 +59,7 @@ pub fn run(panel: Entity<ClipboardPanel>, cx: &mut App) {
             list,
             window,
             intents,
+            store: Some(store),
             passed: 0,
             failed: Vec::new(),
         };
@@ -79,6 +81,8 @@ struct Driver {
     list: Entity<ClipboardList>,
     window: AnyWindowHandle,
     intents: Rc<RefCell<Vec<ListIntent>>>,
+    /// 夹具后端：模拟 core 在面板隐藏、显示前后存入新记录。
+    store: Option<Arc<Mutex<FixtureStore>>>,
     passed: usize,
     failed: Vec<String>,
 }
@@ -339,7 +343,183 @@ impl Driver {
         self.item_actions(cx).await;
         self.multi_select(cx).await;
         self.note(cx).await;
+        self.snippet(cx).await;
+        self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
+    }
+
+    /// 把指针挪到窗口里的某个位置（逻辑像素），像光标停在那里一样。
+    fn pointer_at(&self, cx: &mut AsyncApp, x: f32, y: f32) {
+        self.window
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(px(x), px(y)),
+                        pressed_button: None,
+                        modifiers: Modifiers::default(),
+                    }),
+                    cx,
+                );
+            })
+            .ok();
+    }
+
+    /// 像 core 存入新记录那样：夹具里插到置顶块之后，列表收到 `ClipboardUpserted`。
+    fn store_new_record(&self, cx: &mut AsyncApp, template: &ListItem, id: &str) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let item = ListItem {
+            id: id.into(),
+            summary: Some(format!("新记录 {id}").into()),
+            note: None,
+            is_pinned: false,
+            is_favorite: false,
+            group_id: None,
+            ..template.clone()
+        };
+        if let Ok(mut store) = store.lock() {
+            store.insert_newest(item);
+        }
+        self.list.update(cx, |list, cx| {
+            list.on_update(
+                ListUpdate::Upserted {
+                    kind: ItemKind::Text,
+                    deduplicated: false,
+                },
+                cx,
+            );
+        });
+    }
+
+    /// 显示面板后立刻按 Enter（平台线的复现：粘的是上一条）。新记录在面板隐藏时或刚显示时到达；
+    /// 一半的轮次面板出现在静止的光标下（首帧之后补一次指针移动，光标下是旧的第一行）；夹具查询慢
+    /// 60 ms，Enter 一定赶在刷新落地之前。
+    /// 粘贴的必须是新记录，刷新落地后当前项也必须是第一个非置顶行。
+    async fn show_then_enter(&mut self, cx: &mut AsyncApp) {
+        let template = self.read(cx, |list, _| {
+            (0..list.total())
+                .filter_map(|index| list.model.get(index))
+                .find(|item| item.kind == ItemKind::Text)
+                .map(|item| (**item).clone())
+        });
+        let Some(template) = template else {
+            self.check("show then enter: a text record to copy", false, || {
+                "no text record".into()
+            });
+            return;
+        };
+
+        let rounds = 8;
+        let mut pasted_newest = 0;
+        let mut active_newest = 0;
+        let mut details = Vec::new();
+        for round in 0..rounds {
+            let id = format!("selftest-fresh-{round}");
+            let after_show = round % 2 == 1;
+            let over_card = round % 4 < 2;
+
+            self.emit(cx, PanelEvent::Hidden);
+            self.pause(cx, 30).await;
+            self.pointer_at(cx, 20., 20.);
+            if !after_show {
+                self.store_new_record(cx, &template, &id);
+            }
+            self.intents.borrow_mut().clear();
+            self.emit(cx, PanelEvent::Shown);
+            if after_show {
+                self.store_new_record(cx, &template, &id);
+            }
+            if over_card {
+                // 面板出现在静止的光标下时系统会补发一次指针移动：等首帧画出（数据还是旧的），
+                // 再在第一个非置顶行（两张置顶卡片之下）的位置补一次移动，然后立刻按 Enter。
+                self.pause(cx, 20).await;
+                self.pointer_at(cx, 180., 360.);
+            }
+            self.key(cx, "enter");
+
+            let intents = self.intents.clone();
+            let started = Instant::now();
+            while started.elapsed() < SETTLE && intents.borrow().is_empty() {
+                self.pause(cx, 10).await;
+            }
+            let pasted = intents.borrow().first().cloned();
+            if pasted
+                == Some(ListIntent::Paste {
+                    id: id.clone().into(),
+                    plain: false,
+                })
+            {
+                pasted_newest += 1;
+            } else {
+                details.push(format!("round {round}: pasted {pasted:?}"));
+            }
+
+            let wanted = id.clone();
+            let caught_up = self
+                .settle(cx, move |list, _| {
+                    list.model.loaded_initial()
+                        && list.active_item().is_some_and(|item| *item.id == *wanted)
+                })
+                .await;
+            if caught_up {
+                active_newest += 1;
+            } else {
+                let active =
+                    self.read(cx, |list, _| list.active_item().map(|item| item.id.clone()));
+                details.push(format!("round {round}: active {active:?}"));
+            }
+        }
+
+        self.check(
+            "enter right after showing pastes the newest record",
+            pasted_newest == rounds,
+            || format!("{pasted_newest}/{rounds}: {}", details.join("; ")),
+        );
+        self.check(
+            "after showing the active row is the newest record",
+            active_newest == rounds,
+            || format!("{active_newest}/{rounds}: {}", details.join("; ")),
+        );
+        self.pointer_at(cx, 20., 20.);
+    }
+
+    /// 点快捷信息：默认“双击粘贴”时粘贴这个片段（宿主是夹具替身，只核对意图）。
+    async fn snippet(&mut self, cx: &mut AsyncApp) {
+        let target = self.read(cx, |list, _| {
+            (0..list.total())
+                .filter_map(|index| list.model.get(index))
+                .find_map(|item| {
+                    item.quick_snippets
+                        .first()
+                        .map(|text| (item.clone(), text.clone()))
+                })
+        });
+        let Some((item, text)) = target else {
+            self.check("a record with quick snippets", false, || "none".into());
+            return;
+        };
+
+        self.intents.borrow_mut().clear();
+        let list = self.list.clone();
+        let (pick_item, pick_text) = (item.clone(), text.clone());
+        self.window
+            .update(cx, |_, window, cx| {
+                list.update(cx, |list, cx| {
+                    list.pick_snippet(pick_item, pick_text, window, cx)
+                });
+            })
+            .ok();
+        let pasted = self.intents.borrow().first().cloned();
+        self.check(
+            "clicking a quick snippet pastes it",
+            pasted
+                == Some(ListIntent::PasteSnippet {
+                    id: item.id.clone(),
+                    text: text.clone(),
+                }),
+            || format!("{pasted:?}"),
+        );
     }
 
     async fn search(&mut self, cx: &mut AsyncApp, all: usize) {
@@ -365,11 +545,13 @@ impl Driver {
         let header = cx.update(|cx| self.panel.read(cx).header().clone());
         self.window
             .update(cx, |_, window, cx| {
-                header.update(cx, |header, cx| header.type_text("  cargo ", window, cx));
+                header.update(cx, |header, cx| {
+                    header.type_text("  kwikpaste ", window, cx)
+                });
             })
             .ok();
         let keyword = ListFilter {
-            keyword: "cargo".into(),
+            keyword: "kwikpaste".into(),
             ..ListFilter::default()
         };
         self.filtered(cx, "typing searches after the debounce", keyword)
@@ -762,6 +944,7 @@ pub fn stage_demo(panel: Entity<ClipboardPanel>, cx: &mut App) {
             list,
             window,
             intents: Rc::default(),
+            store: None,
             passed: 0,
             failed: Vec::new(),
         };

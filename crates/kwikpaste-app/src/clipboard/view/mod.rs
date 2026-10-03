@@ -12,6 +12,7 @@ mod editing;
 mod frame;
 mod group_bar;
 mod header;
+pub mod host;
 mod image_cache;
 mod list;
 mod panel;
@@ -21,7 +22,6 @@ use gpui::{Action, App, KeyBinding, actions};
 use kwikpaste_ui::INPUT_KEY_CONTEXT;
 
 pub use editing::request_panel;
-pub use list::ListIntent;
 pub use panel::ClipboardPanel;
 
 /// 主窗口的 key context。Windows 上面板收不到键盘消息，平台层的钩子用 `Window::dispatch_keystroke`

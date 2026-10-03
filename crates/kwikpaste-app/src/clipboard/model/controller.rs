@@ -3,7 +3,8 @@
 //! - 当前项（“选中”）只有一个：没有显式选中时，第一个可见的非置顶项就是当前项；
 //!   指针移进卡片就把它设为当前项，键盘和指针共用一个选中。
 //! - ↑/↓ 夹在首尾、不循环；目标行没加载时先发请求，这一次移动作废（与 1.x 相同）。
-//! - 剪贴板有新内容时：面板隐藏只记挂起；不在顶部也只记挂起，回到顶部的那一帧再刷新（附录 D L3）。
+//! - 剪贴板有新内容时：面板隐藏时立即重拉第一页（再显示总会回到顶部，显示时数据已经是新的）；
+//!   显示中不在顶部只记挂起，回到顶部的那一帧再刷新（附录 D L3）。
 
 use std::sync::Arc;
 
@@ -204,13 +205,6 @@ impl ListController {
 
     /// 列表变化的处理决定（1.x `handleClipboardUpdated` + `requestReloadAtTop`）。
     pub fn on_update(&mut self, update: ListUpdate, visible: bool, at_top: bool) -> UpdateAction {
-        if !visible {
-            self.pending_reload = true;
-            return UpdateAction::Defer {
-                reset_selection: false,
-            };
-        }
-
         let reset_selection = match update {
             ListUpdate::Cleaned { .. } | ListUpdate::Reloaded => true,
             ListUpdate::Upserted { kind, .. } => {
@@ -222,6 +216,11 @@ impl ListController {
         };
         if reset_selection {
             self.selected = None;
+        }
+        // 隐藏时立即重拉：不打断任何人的浏览位置，显示时也不用再等一次查询。
+        if !visible {
+            self.pending_reload = false;
+            return UpdateAction::ReloadNow { reset_selection };
         }
 
         self.request_reload_at_top(at_top, reset_selection)
@@ -483,19 +482,35 @@ mod tests {
     }
 
     #[test]
-    fn hidden_panel_only_records_a_pending_reload() {
+    fn hidden_panel_reloads_right_away() {
         let mut controller = ListController::new();
         controller.hover(&"r1".into());
-        let action = controller.on_update(ListUpdate::Cleaned { removed: 3 }, false, true);
+        let action = controller.on_update(
+            ListUpdate::Upserted {
+                kind: ItemKind::Text,
+                deduplicated: false,
+            },
+            false,
+            false,
+        );
 
         assert_eq!(
             action,
-            UpdateAction::Defer {
+            UpdateAction::ReloadNow {
                 reset_selection: false
+            },
+            "not at the top does not matter while hidden"
+        );
+        assert!(!controller.has_pending_reload());
+
+        let cleaned = controller.on_update(ListUpdate::Cleaned { removed: 3 }, false, true);
+        assert_eq!(
+            cleaned,
+            UpdateAction::ReloadNow {
+                reset_selection: true
             }
         );
-        assert!(controller.has_pending_reload());
-        assert!(controller.selected().is_some());
+        assert!(controller.selected().is_none());
     }
 
     #[test]

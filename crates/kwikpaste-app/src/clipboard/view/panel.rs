@@ -3,7 +3,7 @@
 //! 按键都绑在 [`KEY_CONTEXT`] 上，焦点在列表或搜索框里都会命中；搜索框聚焦时由
 //! [`super::SEARCH_CONTEXT`] 的绑定把 ↑/↓/Enter/Esc/Tab 交给列表。
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _,
@@ -30,6 +30,7 @@ use super::{
     editing::{self, EditTarget},
     group_bar::{GroupBar, GroupBarEvent},
     header::{Header, HeaderEvent},
+    host::ItemHost,
     list::{ClipboardList, ListIntent},
     request_panel,
 };
@@ -69,12 +70,13 @@ impl EventEmitter<PanelIntent> for ClipboardPanel {}
 impl ClipboardPanel {
     pub fn new(
         source: Arc<dyn ClipboardSource>,
+        host: Rc<dyn ItemHost>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         // 列表先建：面板事件按订阅顺序送达，列表先处理 Shown（回到顶部、拿焦点），主窗口再按设置
         // 调整筛选条件。
-        let list = cx.new(|cx| ClipboardList::new(source.clone(), window, cx));
+        let list = cx.new(|cx| ClipboardList::new(source.clone(), host, window, cx));
         let header = cx.new(|cx| Header::new(window, cx));
         let groups = cx.new(|_| GroupBar::new());
 

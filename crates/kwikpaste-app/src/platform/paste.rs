@@ -5,10 +5,9 @@
 //!   可见卡片）：[`paste`]`(cx, id, plain, keep_visible)`。流程：`Core::prepare_paste` 按「粘贴时去除格式」
 //!   「粘贴文件为路径」写回剪贴板并记一次使用 → 让出前台（编辑态先把前台还给进入前的窗口；
 //!   `keep_visible` 为假时隐藏面板，固定面板时传真）→ 面板原先可见就等 50 ms → 注入粘贴键
-//!   （Windows Ctrl+V，macOS ⌘V）。列表的 `ListIntent::Paste { id, plain }` 已在
-//!   `clipboard::build_panel` 里接到这里（`keep_visible` 先传假）；粘贴的就是列表给的 id，
-//!   「当前项是不是刚复制的那条」由列表负责。
-//! - **粘贴片段**（快捷信息、拆词选区）：[`paste_fragment`]，流程同上。
+//!   （Windows Ctrl+V，macOS ⌘V）。列表经 `clipboard::view::host::PlatformHost` 调到这里
+//!   （`keep_visible` 先传假）；粘贴的就是列表给的 id，「当前项是不是刚复制的那条」由列表负责。
+//! - **粘贴片段**（快捷信息、拆词选区）：[`paste_fragment`]，流程同上；只复制不粘贴用 [`copy_fragment`]。
 //! - **复制**（不粘贴）：[`copy`]。`Core::copy_item` 写回剪贴板；设置「复制后隐藏窗口」打开且
 //!   `keep_visible` 为假时隐藏面板。
 //! - **全局快速粘贴**（设置 `shortcuts.quickPaste` 的修饰键 + 1…9、0）由热键模块直接调用
@@ -53,7 +52,6 @@ pub fn paste(cx: &mut App, id: String, plain: bool, keep_visible: bool) -> Task<
 }
 
 /// 粘贴一条记录里的片段，流程同 [`paste`]。
-#[allow(dead_code, reason = "UI 接线用的接口，见本模块文档")]
 pub fn paste_fragment(
     cx: &mut App,
     id: String,
@@ -92,6 +90,29 @@ pub fn copy(
             });
         }
         probe::copied(&id, plain, outcome.hide_window);
+        Ok(outcome)
+    })
+}
+
+/// 把记录里的片段（快捷信息、拆词选区）写回剪贴板（不粘贴），隐藏规则同 [`copy`]。
+pub fn copy_fragment(
+    cx: &mut App,
+    id: String,
+    fragment: ClipboardFragment,
+    keep_visible: bool,
+) -> Task<Result<CopyOutcome>> {
+    let Some(core) = core_host::core(cx).cloned() else {
+        return Task::ready(Err(core_missing()));
+    };
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let outcome = core.copy_fragment(&id, fragment).await?;
+        if outcome.hide_window && !keep_visible {
+            cx.update(|cx| {
+                super::request(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)))
+            });
+        }
+        probe::copied(&id, false, outcome.hide_window);
         Ok(outcome)
     })
 }

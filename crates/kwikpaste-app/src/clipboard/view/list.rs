@@ -27,9 +27,9 @@ use chrono::{DateTime, Local};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, ClickEvent, Context, DispatchPhase, Entity,
     EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, ListAlignment, ListOffset,
-    ListState, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render, ScrollDelta,
-    ScrollWheelEvent, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window,
-    canvas, div, list, prelude::FluentBuilder as _, px,
+    ListState, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Point,
+    Render, ScrollDelta, ScrollWheelEvent, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, Window, canvas, div, list, prelude::FluentBuilder as _, px,
 };
 use kwikpaste_core::{
     CoreEvent,
@@ -39,9 +39,10 @@ use kwikpaste_ui::{ListScrollbar, TextAreaInput, close_dialog, theme};
 
 use super::{
     bench::Bench,
-    card::{self, CardEnv, CardState, Visual, dp},
+    card::{self, CardEnv, CardState, SnippetHandler, Visual, dp},
     editing::{self, EditTarget},
     frame::{FrameTimer, FrameTiming, ListFrame, PaintedCallback, Snapshot, WidthHint},
+    host::ItemHost,
     image_cache::{ImageKey, ImageState, KpImageCache, path_of},
 };
 
@@ -50,6 +51,7 @@ use crate::{
         model::{
             actions::{DeletePolicy, QuickAction, visible_actions},
             controller::{ListController, ListUpdate, Nav, NavOutcome, UpdateAction},
+            freshness::{Activation, Freshness},
             item::ListItem,
             layout::LayoutSpec,
             list_model::{Applied, FetchRequest, ListModel},
@@ -72,14 +74,39 @@ const MAX_HEIGHT_SAMPLES: u64 = 5000;
 /// 缩略图路径缓存的上限（1.x `useImageThumbnail` 的 512）。
 const THUMBNAIL_PATHS_MAX: usize = 512;
 
-/// 列表发给外面的意图：宿主还没接上的动作只发事件（粘贴链路在平台线，拆词面板与快捷键列表在
-/// U2 第二部分）。
+/// 列表发出的事件：粘贴类是已交给宿主的通知；拆词面板与快捷键列表在 U2 第二部分，先只发事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListIntent {
-    Paste { id: Arc<str>, plain: bool },
-    SplitWords { id: Arc<str> },
+    /// 已交给宿主粘贴（通知，自测和探针据此核对粘贴的是哪一条）。
+    Paste {
+        id: Arc<str>,
+        plain: bool,
+    },
+    /// 已交给宿主粘贴一条记录里的快捷信息。
+    PasteSnippet {
+        id: Arc<str>,
+        text: Arc<str>,
+    },
+    SplitWords {
+        id: Arc<str>,
+    },
     ShowShortcuts,
 }
+
+/// 指针相对面板显示时的状态。面板出现在静止的光标下时，光标下的卡片不算被悬停选中：
+/// 不然面板一显示，当前项就被光标下那张卡片（往往是刷新前的旧第一行）抢走。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pointer {
+    /// 显示之后还没收到指针移动。
+    Waiting,
+    /// 显示之后第一次收到的指针位置（系统在窗口出现时会补发一次移动）。
+    Resting(Point<Pixels>),
+    /// 指针动过了：悬停照常选中。
+    Moved,
+}
+
+/// 指针离开显示时的位置超过这个距离才算动过。
+const POINTER_SLOP: f32 = 2.;
 
 /// 正在编辑的备注。
 struct NoteEdit {
@@ -196,6 +223,13 @@ pub struct ClipboardList {
     /// 批量删除后第一页落地时再补拉视图范围。
     refetch_view_after_first_page: bool,
     note: Option<NoteEdit>,
+    /// 粘贴、复制交给谁做（平台层的粘贴链路，或夹具的替身）。
+    host: Rc<dyn ItemHost>,
+    freshness: Freshness,
+    /// 数据还没追上 core 时按下的 Enter / Mod+数字，第一页落地后执行。
+    pending_activation: Option<Activation>,
+    activation_timeout: Option<Task<()>>,
+    pointer: Pointer,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -210,6 +244,7 @@ impl gpui::Focusable for ClipboardList {
 impl ClipboardList {
     pub fn new(
         source: Arc<dyn ClipboardSource>,
+        host: Rc<dyn ItemHost>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -261,6 +296,11 @@ impl ClipboardList {
             copied_reset: None,
             refetch_view_after_first_page: false,
             note: None,
+            host,
+            freshness: Freshness::default(),
+            pending_activation: None,
+            activation_timeout: None,
+            pointer: Pointer::Moved,
             _subscriptions: subscriptions,
         };
         let request = list.model.reset_and_reload();
@@ -324,6 +364,9 @@ impl ClipboardList {
             // 清理、导入之后不再勾着可能已经不存在的记录（1.x `resetChecked`）。
             self.selection.reset();
         }
+        if action != UpdateAction::Ignore {
+            self.freshness.changed();
+        }
         if let UpdateAction::ReloadNow { .. } = action {
             self.reload(cx);
         }
@@ -336,8 +379,11 @@ impl ClipboardList {
         match event {
             PanelEvent::Shown => {
                 self.visible = true;
-                // `scrollToTopOnOpen` 默认开启：清掉选中、回到顶部；挂起的刷新在下一帧到顶时消费。
+                // `scrollToTopOnOpen` 默认开启：清掉选中、回到顶部，当前项就是第一个非置顶行；
+                // 光标下的卡片要等指针动过才能抢走当前项。挂起的刷新当场发出。
                 self.controller.on_shown();
+                self.controller.set_first_visible(self.rows.pinned);
+                self.pointer = Pointer::Waiting;
                 self.motion.reveal = None;
                 self.motion.wheel = 0.;
                 self.motion.last_frame = None;
@@ -345,6 +391,9 @@ impl ClipboardList {
                     item_ix: 0,
                     offset_in_item: px(0.),
                 });
+                if self.controller.take_reload_at_top(true) {
+                    self.reload(cx);
+                }
                 window.focus(&self.focus, cx);
                 cx.notify();
             }
@@ -366,6 +415,9 @@ impl ClipboardList {
                 self.motion.reveal = None;
                 self.motion.wheel = 0.;
                 self.hovered = None;
+                // 面板已经隐藏，还挂着的 Enter 不再执行。
+                self.pending_activation = None;
+                self.activation_timeout = None;
                 // 隐藏时退出多选（1.x `exitClipboardSelection`），收起备注框（当作取消）。
                 self.selection.exit();
                 if self.note.is_some() {
@@ -386,6 +438,9 @@ impl ClipboardList {
     // ---------------------------------------------------------------- 数据
 
     pub(super) fn fetch(&mut self, request: FetchRequest, cx: &mut Context<Self>) {
+        if request.replace && request.range.start == 0 {
+            self.freshness.first_page_sent(request.token);
+        }
         let future = self.source.list(ListQuery {
             offset: request.range.start,
             limit: request.range.len(),
@@ -427,6 +482,10 @@ impl ClipboardList {
                 }
             }
         }
+        if request.replace && request.range.start == 0 {
+            self.freshness.first_page_done(request.token);
+            self.run_pending_activation(cx);
+        }
         cx.notify();
     }
 
@@ -454,6 +513,8 @@ impl ClipboardList {
             self.rows = target;
             self.hints.dirty = true;
             self.heights.sampled.clear();
+            // 回到了顶部：当前项立刻是新的第一个非置顶行，不等下一帧的布局快照。
+            self.controller.set_first_visible(target.pinned);
             return;
         }
 
@@ -752,12 +813,35 @@ impl ClipboardList {
     /// 指针进出卡片：进入时它成为当前项（1.x hover 与键盘共用选中），并显示快捷动作。
     fn hover_card(&mut self, id: &Arc<str>, hovered: bool, cx: &mut Context<Self>) {
         if hovered {
-            self.controller.hover(id);
+            if self.pointer == Pointer::Moved {
+                self.controller.hover(id);
+            }
             self.hovered = Some(id.clone());
         } else if self.hovered.as_ref() == Some(id) {
             self.hovered = None;
         }
         cx.notify();
+    }
+
+    /// 指针移动：显示后第一次移动只记下位置（可能是系统补发的），离开它超过 [`POINTER_SLOP`]
+    /// 才算动过，这时光标下的卡片成为当前项。
+    fn pointer_moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        match self.pointer {
+            Pointer::Moved => {}
+            Pointer::Waiting => self.pointer = Pointer::Resting(position),
+            Pointer::Resting(rest) => {
+                let dx = (position.x - rest.x).as_f32();
+                let dy = (position.y - rest.y).as_f32();
+                if dx.hypot(dy) <= POINTER_SLOP {
+                    return;
+                }
+                self.pointer = Pointer::Moved;
+                if let Some(id) = self.hovered.clone() {
+                    self.controller.hover(&id);
+                    cx.notify();
+                }
+            }
+        }
     }
 
     /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选；否则左键选中并按
@@ -942,6 +1026,18 @@ impl ClipboardList {
             .filter(|actions| !actions.is_empty())
             .map(|actions| self.quick_actions(&item, actions, cx));
         let checkbox = selecting.then(|| self.checkbox(&item, can_delete));
+        let on_snippet = (!selecting && !item.quick_snippets.is_empty()).then(|| {
+            let entity = cx.entity().downgrade();
+            let target = item.clone();
+            let handler: SnippetHandler = Rc::new(move |text, window, cx| {
+                entity
+                    .update(cx, |list, cx| {
+                        list.pick_snippet(target.clone(), text, window, cx);
+                    })
+                    .ok();
+            });
+            handler
+        });
         let state = CardState {
             active,
             image,
@@ -950,6 +1046,7 @@ impl ClipboardList {
             checked: selecting && self.selection.is_checked(&item.id),
             actions,
             checkbox,
+            on_snippet,
         };
         let id = item.id.clone();
         let pressed = item.clone();
@@ -1121,6 +1218,9 @@ impl Render for ClipboardList {
         let root = div()
             .id("clipboard-list")
             .track_focus(&self.focus)
+            .on_mouse_move(cx.listener(|list, event: &MouseMoveEvent, _, cx| {
+                list.pointer_moved(event.position, cx);
+            }))
             .flex()
             .flex_col()
             .size_full()

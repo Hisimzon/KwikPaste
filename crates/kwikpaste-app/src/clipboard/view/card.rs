@@ -4,16 +4,17 @@
 //! 交互（悬停、点击）由列表视图挂在返回的元素上；悬停快捷动作、多选复选框这类带回调的部件也由
 //! 列表画好后经 [`CardState`] 交进来，这里只管摆放。
 
-use std::{sync::Arc, time::Duration};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Local};
 use gpui::{
-    AbsoluteLength, Animation, AnimationExt as _, AnyElement, Div, ElementId, Image, ImageSource,
-    InteractiveElement as _, IntoElement, ParentElement as _, Rems, RenderImage, SharedString,
-    Styled, div, img, prelude::FluentBuilder as _, pulsating_between, relative, rems,
+    AbsoluteLength, Animation, AnimationExt as _, AnyElement, App, Div, ElementId, Image,
+    ImageSource, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems,
+    RenderImage, SharedString, StatefulInteractiveElement as _, Styled, Window, div, img,
+    prelude::FluentBuilder as _, pulsating_between, relative, rems,
 };
 use kwikpaste_ui::{
-    Icon, IconName, KeyHint, KpStyled as _,
+    Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _,
     theme::{KpTokens, TextSize, css_color, radius},
 };
 
@@ -68,7 +69,15 @@ pub struct CardState {
     pub actions: Option<AnyElement>,
     /// 多选的复选框。
     pub checkbox: Option<AnyElement>,
+    /// 点卡片下方的快捷信息；多选时为空，快捷信息不响应点击。
+    pub on_snippet: Option<SnippetHandler>,
 }
+
+/// 快捷信息被点了：参数是那段文字。
+pub type SnippetHandler = Rc<dyn Fn(Arc<str>, &mut Window, &mut App)>;
+
+/// 超过这个长度的片段（多为链接）大概率会被截断，悬停时补一个完整内容的提示（1.x 同）。
+const SNIPPET_TOOLTIP_MIN_CHARS: usize = 32;
 
 /// 一行卡片（含外层间距）。返回的元素带 id，调用方再挂交互。
 pub fn card(
@@ -85,6 +94,7 @@ pub fn card(
     let hint = state.hint;
     let actions = state.actions;
     let checkbox = state.checkbox;
+    let on_snippet = state.on_snippet;
 
     let mut frame = div()
         .relative()
@@ -116,6 +126,7 @@ pub fn card(
                 env,
                 item,
                 usize::from(pinned) + usize::from(sensitive),
+                on_snippet,
             ))
             .when(pinned || sensitive, |frame| {
                 frame.child(status_marks(tokens, pinned, sensitive, false))
@@ -140,7 +151,7 @@ pub fn card(
                     .min_w_0()
                     .gap(dp(2.))
                     .child(body)
-                    .children(snippets(env, item, 0)),
+                    .children(snippets(env, item, 0, on_snippet)),
             )
             .when(pinned || sensitive, |frame| {
                 frame.child(status_marks(tokens, pinned, sensitive, true))
@@ -173,7 +184,8 @@ pub fn card(
     };
 
     div()
-        .id(ElementId::NamedInteger("card".into(), index as u64))
+        // 按记录 id 而不是行号标识：刷新后新记录挪到光标下时，悬停、点击状态不会继承给它。
+        .id(ElementId::Name(SharedString::from(item.id.clone())))
         .relative()
         .px(dp(layout.item_padding_x))
         .pt(dp(layout.item_gap))
@@ -644,7 +656,12 @@ fn files_body(env: &CardEnv<'_>, rows: &[FileRow]) -> AnyElement {
 
 /// 卡片下方的快捷信息：一行放得下的片段，放不下的整个隐藏（1.x `QuickSnippets`）。
 /// `marks` 是右下角水印的个数，给水印留出位置。
-fn snippets(env: &CardEnv<'_>, item: &ListItem, marks: usize) -> Option<AnyElement> {
+fn snippets(
+    env: &CardEnv<'_>,
+    item: &ListItem,
+    marks: usize,
+    on_pick: Option<SnippetHandler>,
+) -> Option<AnyElement> {
     if item.quick_snippets.is_empty() {
         return None;
     }
@@ -663,19 +680,41 @@ fn snippets(env: &CardEnv<'_>, item: &ListItem, marks: usize) -> Option<AnyEleme
             .gap(dp(4.))
             .overflow_hidden()
             .pr(dp(reserve))
-            .children(item.quick_snippets.iter().map(|snippet| {
-                div()
-                    .flex()
-                    .h(dp(24.))
-                    .max_w_full()
-                    .items_center()
-                    .px(dp(8.))
-                    .rounded(radius::MD)
-                    .bg(tokens.fill_tertiary)
-                    .kp_text(TextSize::Xs)
-                    .text_color(tokens.secondary)
-                    .child(div().truncate().child(shared(snippet)))
-            }))
+            .children(
+                item.quick_snippets
+                    .iter()
+                    .enumerate()
+                    .map(|(index, snippet)| {
+                        let chip = div()
+                            .id(ElementId::NamedInteger("snippet".into(), index as u64))
+                            .flex()
+                            .h(dp(24.))
+                            .max_w_full()
+                            .items_center()
+                            .px(dp(8.))
+                            .rounded(radius::MD)
+                            .bg(tokens.fill_tertiary)
+                            .kp_text(TextSize::Xs)
+                            .text_color(tokens.secondary)
+                            .child(div().truncate().child(shared(snippet)));
+                        let Some(on_pick) = on_pick.clone() else {
+                            return chip.into_any_element();
+                        };
+                        let text = snippet.clone();
+                        let long = snippet.chars().count() >= SNIPPET_TOOLTIP_MIN_CHARS;
+
+                        // 按下时拦住事件，不触发卡片的选中、单击粘贴和双击粘贴（1.x `SnippetChip`）。
+                        chip.cursor_pointer()
+                            .hover(|style| style.bg(tokens.fill_secondary).text_color(tokens.text))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                on_pick(text.clone(), window, cx);
+                            })
+                            .when(long, |chip| chip.kp_tooltip(shared(snippet)))
+                            .into_any_element()
+                    }),
+            )
             .into_any_element(),
     )
 }

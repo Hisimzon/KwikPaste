@@ -18,7 +18,9 @@ use std::{
     time::Duration,
 };
 
-use gpui::{App, AppContext as _, Entity, TaskExt as _, Window};
+use std::rc::Rc;
+
+use gpui::{App, AppContext as _, Entity, Window};
 
 use self::{
     source::{
@@ -26,7 +28,10 @@ use self::{
         core_source::CoreSource,
         synthetic::{self, AssetSet},
     },
-    view::{ClipboardPanel, ListIntent},
+    view::{
+        ClipboardPanel,
+        host::{ItemHost, PlatformHost, SourceHost},
+    },
 };
 use crate::{core_host, platform, selftest};
 
@@ -36,11 +41,15 @@ pub use view::init;
 const SAMPLE: &str = include_str!("../../fixtures/list-sample.json");
 /// 跑分时夹具查询的模拟延迟（与 core 查 30 行加展示层加工的量级相当）。
 const BENCH_LATENCY: Duration = Duration::from_millis(8);
+/// 交互自测的夹具查询延迟：比 core 实际的查询慢，让“显示后立刻按 Enter”一定赶在刷新落地之前。
+const PANEL_UI_LATENCY: Duration = Duration::from_millis(60);
 
-/// 选好的数据源。`source` 为空表示用平台层的 core；跑分时还带着夹具后端，用来模拟新记录、删除等变化。
+/// 选好的数据源。`source` 为空表示用平台层的 core；跑分时还带着夹具后端，用来模拟新记录、删除等变化；
+/// 交互自测也带着夹具后端，用来模拟面板隐藏时来的新记录。
 pub struct PreparedSource {
     source: Option<Arc<dyn ClipboardSource>>,
     bench: Option<(Arc<Mutex<FixtureStore>>, AssetSet, usize)>,
+    store: Option<Arc<Mutex<FixtureStore>>>,
 }
 
 /// 按启动参数选数据源。
@@ -48,6 +57,7 @@ pub fn prepare_source() -> PreparedSource {
     let core = PreparedSource {
         source: None,
         bench: None,
+        store: None,
     };
     let fixtures = selftest::list_selftest() || selftest::enabled(selftest::CORE_LIST);
     if !fixtures {
@@ -76,6 +86,7 @@ pub fn prepare_source() -> PreparedSource {
         return PreparedSource {
             source: Some(Arc::new(source)),
             bench: Some((store, assets, rows)),
+            store: None,
         };
     }
 
@@ -85,6 +96,7 @@ pub fn prepare_source() -> PreparedSource {
                 return PreparedSource {
                     source: Some(Arc::new(source)),
                     bench: None,
+                    store: None,
                 };
             }
             Err(err) => log::error!("the selftest core could not start: {err:#}"),
@@ -97,8 +109,13 @@ pub fn prepare_source() -> PreparedSource {
             log::error!("the sample fixture is invalid: {err:#}");
             FixtureStore::default()
         });
+    let mut source = FixtureSource::new(store, &assets);
+    if selftest::enabled(selftest::PANEL_UI) {
+        source = source.with_latency(PANEL_UI_LATENCY);
+    }
     PreparedSource {
-        source: Some(Arc::new(FixtureSource::new(store, &assets))),
+        store: Some(source.store()),
+        source: Some(Arc::new(source)),
         bench: None,
     }
 }
@@ -156,20 +173,17 @@ pub fn build_panel(
         }
     };
 
-    let panel = cx.new(|cx| ClipboardPanel::new(source, window, cx));
     // 只有数据来自平台层的 core 时才跟随它的事件、接上粘贴链路；夹具和自测 core 不受本机开发数据
     // 影响，夹具里的记录也粘贴不了。
-    if prepared.source.is_none() {
-        if let Some(events) = platform::core_events(cx) {
-            panel.update(cx, |panel, cx| panel.follow_core_events(&events, cx));
-        }
-        let list = panel.read(cx).list().clone();
-        cx.subscribe(&list, |_, intent: &ListIntent, cx| {
-            if let ListIntent::Paste { id, plain } = intent {
-                platform::paste::paste(cx, id.to_string(), *plain, false).detach_and_log_err(cx);
-            }
-        })
-        .detach();
+    let host_core = prepared.source.is_none() && host_core.is_some();
+    let host: Rc<dyn ItemHost> = if host_core {
+        Rc::new(PlatformHost)
+    } else {
+        Rc::new(SourceHost::new(source.clone()))
+    };
+    let panel = cx.new(|cx| ClipboardPanel::new(source, host, window, cx));
+    if host_core && let Some(events) = platform::core_events(cx) {
+        panel.update(cx, |panel, cx| panel.follow_core_events(&events, cx));
     }
 
     panel
@@ -182,8 +196,10 @@ pub fn attach(panel: &Entity<ClipboardPanel>, prepared: PreparedSource, cx: &mut
         let window = list.read(cx).window_handle();
         view::bench::start(&list, store, assets, rows, window, cx);
     }
-    if selftest::enabled(selftest::PANEL_UI) {
-        view::selftest::run(panel.clone(), cx);
+    if selftest::enabled(selftest::PANEL_UI)
+        && let Some(store) = prepared.store
+    {
+        view::selftest::run(panel.clone(), store, cx);
     } else if selftest::enabled(selftest::LIST_DEMO) {
         view::selftest::stage_demo(panel.clone(), cx);
     }

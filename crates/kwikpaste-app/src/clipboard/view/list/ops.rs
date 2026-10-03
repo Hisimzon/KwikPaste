@@ -6,8 +6,11 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
-use gpui::{Context, IntoElement as _, Window};
-use kwikpaste_core::settings::Settings;
+use gpui::{App, Context, IntoElement as _, Task, Window};
+use kwikpaste_core::{
+    clipboard::ClipboardFragment,
+    settings::{AutoPaste, Settings},
+};
 use kwikpaste_ui::{
     ConfirmSpec, DialogSpec, TextArea, TextAreaInput, confirm, form_dialog,
     toast::{self, Toast},
@@ -19,22 +22,32 @@ use crate::{
         model::{
             actions::{DeletePolicy, OpenTarget, QuickAction, is_available, is_copy, open_target},
             filter::ListFilter,
+            freshness::Activation,
             item::ListItem,
         },
         source::Group,
-        view::{
-            editing::{self, EditTarget},
-            request_panel,
-        },
+        view::editing::{self, EditTarget},
     },
     i18n::{t, t_args},
-    platform::{EditTrigger, PanelCommand, Trigger, TriggerSource},
+    platform::EditTrigger,
 };
 
 /// 1.x 备注框 `maxLength={256}`。
 const NOTE_MAX_CHARS: usize = 256;
 /// 复制按钮显示“已复制”的时长（1.x 1000 ms）。
 const COPIED_FEEDBACK: Duration = Duration::from_secs(1);
+/// 挂起的按键最多等这么久；第一页查询正常几十毫秒就落地。
+const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// 失败提示：“{动作}失败：{原因}”（1.x `commands:error`）。
+fn error_toast(label: &str, err: &anyhow::Error, window: &mut Window, cx: &mut App) {
+    log::warn!("{label} failed: {err:#}");
+    let message = t_args(
+        "commands:error",
+        &[("label", &t(label)), ("message", &err.to_string())],
+    );
+    toast::show(Toast::error(message), window, cx);
+}
 
 impl ClipboardList {
     // ------------------------------------------------------------ 筛选与设置
@@ -108,12 +121,25 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::warn!("{label} failed: {err:#}");
-        let message = t_args(
-            "commands:error",
-            &[("label", &t(label)), ("message", &err.to_string())],
-        );
-        toast::show(Toast::error(message), window, cx);
+        error_toast(label, err, window, cx);
+    }
+
+    /// 等宿主动作做完；失败时在面板上提示（宿主动作可能在面板隐藏之后才失败，提示照样留在面板里）。
+    fn report_host_failure(
+        &self,
+        label: &'static str,
+        task: Task<anyhow::Result<()>>,
+        cx: &mut Context<Self>,
+    ) {
+        let window = self.window;
+        cx.spawn(async move |_, cx| {
+            if let Err(err) = task.await {
+                window
+                    .update(cx, |_, window, cx| error_toast(label, &err, window, cx))
+                    .ok();
+            }
+        })
+        .detach();
     }
 
     fn toast_success(key: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -131,39 +157,132 @@ impl ClipboardList {
         self.controller.active_item(&self.model).cloned()
     }
 
-    /// Enter / Mod+Enter / 双击：发粘贴意图（宿主的粘贴链路接上之前只记日志）。
+    /// 粘贴一条记录：交给宿主（写回剪贴板、让出前台、注入粘贴键），同时发 `ListIntent::Paste` 通知。
     pub fn paste_item(&mut self, id: Arc<str>, plain: bool, cx: &mut Context<Self>) {
         log::info!("paste requested for {id} (plain: {plain})");
+        let task = self.host.paste(id.clone(), plain, cx);
+        self.report_host_failure("commands:labels.paste", task, cx);
         cx.emit(ListIntent::Paste { id, plain });
     }
 
+    /// Enter / Mod+Enter：粘贴当前项。数据还没追上 core 时先挂起，第一页落地后按那时的第一行执行。
     pub fn paste_active(&mut self, plain: bool, cx: &mut Context<Self>) {
-        if let Some(item) = self.active_item() {
-            self.paste_item(item.id.clone(), plain, cx);
-        }
+        self.activate(Activation::Paste { plain }, cx);
     }
 
-    /// Mod+数字：粘贴第 N 个可见非置顶项。多选时不响应（也不显示角标）。
+    /// Mod+数字：粘贴第 N 个可见非置顶项。多选时不响应（也不显示角标）；数据没追上时同 Enter 挂起。
     pub fn quick_paste(&mut self, key: char, cx: &mut Context<Self>) {
         if self.selection.active() {
             return;
         }
-        let Some(item) = self
-            .controller
-            .hint_index(key)
-            .and_then(|index| self.model.get(index))
-            .cloned()
-        else {
-            return;
-        };
 
+        self.activate(Activation::QuickPaste { key }, cx);
+    }
+
+    /// 执行或挂起一个作用于当前项的按键。挂起时确保有一个覆盖全部变化的第一页请求在路上；
+    /// 万一一直等不到（查询失败也算等到），[`ACTIVATION_TIMEOUT`] 后按当时的数据执行。
+    fn activate(&mut self, activation: Activation, cx: &mut Context<Self>) {
+        if self.freshness.fresh() && self.model.loaded_initial() {
+            self.run_activation(activation, cx);
+            return;
+        }
+
+        log::debug!("{activation:?} waits for the first page to catch up");
+        self.pending_activation = Some(activation);
+        if !self.freshness.awaiting() {
+            self.reload(cx);
+        }
+        self.activation_timeout = Some(cx.spawn(async move |list, cx| {
+            cx.background_executor().timer(ACTIVATION_TIMEOUT).await;
+            list.update(cx, |list, cx| {
+                if let Some(activation) = list.pending_activation.take() {
+                    log::warn!("{activation:?} ran on data that has not caught up");
+                    list.run_activation(activation, cx);
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// 数据追上之后执行挂起的按键（第一页落地时调用）。
+    pub(super) fn run_pending_activation(&mut self, cx: &mut Context<Self>) {
+        if !self.freshness.fresh() {
+            return;
+        }
+        if let Some(activation) = self.pending_activation.take() {
+            self.activation_timeout = None;
+            self.run_activation(activation, cx);
+        }
+    }
+
+    fn run_activation(&mut self, activation: Activation, cx: &mut Context<Self>) {
+        match activation {
+            Activation::Paste { plain } => {
+                if let Some(item) = self.active_item() {
+                    self.paste_item(item.id.clone(), plain, cx);
+                }
+            }
+            Activation::QuickPaste { key } => {
+                let Some(item) = self
+                    .controller
+                    .hint_index(key)
+                    .and_then(|index| self.model.get(index))
+                    .cloned()
+                else {
+                    return;
+                };
+                self.controller.select(&item.id);
+                self.paste_item(item.id.clone(), false, cx);
+            }
+        }
+    }
+
+    /// 点卡片下方的快捷信息（1.x `pickSnippet`）：点击设置为复制时只复制这个片段，否则粘贴它。
+    pub fn pick_snippet(
+        &mut self,
+        item: Arc<ListItem>,
+        text: Arc<str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.controller.select(&item.id);
-        self.paste_item(item.id.clone(), false, cx);
+        let fragment = ClipboardFragment::Snippet {
+            text: text.to_string(),
+        };
+        let copy = matches!(
+            self.settings.clipboard.content.auto_paste,
+            AutoPaste::SingleClickCopy | AutoPaste::DoubleClickCopy
+        );
+
+        if copy {
+            let task = self.host.copy_fragment(item.id.clone(), fragment, cx);
+            cx.spawn_in(window, async move |_, cx| {
+                let result = task.await;
+                cx.update(|window, cx| match result {
+                    Ok(()) => {
+                        toast::show(Toast::success(t("commands:messages.copied")), window, cx)
+                    }
+                    Err(err) => error_toast("commands:labels.copy", &err, window, cx),
+                })
+                .ok();
+            })
+            .detach();
+        } else {
+            log::info!("snippet paste requested for {}", item.id);
+            let task = self.host.paste_fragment(item.id.clone(), fragment, cx);
+            self.report_host_failure("commands:labels.paste", task, cx);
+            cx.emit(ListIntent::PasteSnippet {
+                id: item.id.clone(),
+                text,
+            });
+        }
+        cx.notify();
     }
 
     // ------------------------------------------------------------ 复制
 
-    /// 写回剪贴板。`feedback` 是点的那个快捷动作按钮，成功后显示 1 秒“已复制”。
+    /// 写回剪贴板（宿主按设置决定复制后是否隐藏面板）。`feedback` 是点的那个快捷动作按钮，
+    /// 成功后显示 1 秒“已复制”。
     pub fn copy(
         &mut self,
         id: Arc<str>,
@@ -172,18 +291,15 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let future = self.source.copy(id.clone(), plain);
+        let task = self.host.copy(id.clone(), plain, cx);
 
         cx.spawn_in(window, async move |list, cx| {
-            let result = future.await;
+            let result = task.await;
             list.update_in(cx, |list, window, cx| match result {
-                Ok(hide) => {
+                Ok(()) => {
                     Self::toast_success("commands:messages.copied", window, cx);
                     if let Some(action) = feedback {
                         list.show_copied(id, action, cx);
-                    }
-                    if hide {
-                        request_panel(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Ui)));
                     }
                 }
                 Err(err) => Self::toast_error("commands:labels.copy", &err, window, cx),
