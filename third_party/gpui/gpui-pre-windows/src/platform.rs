@@ -399,10 +399,13 @@ impl WindowsPlatform {
         let text_system = Arc::downgrade(direct_write_text_system);
         let invalidate_devices = self.invalidate_devices.clone();
 
+        // [kwikpaste patch 0007] Mark the vsync thread alive before spawning it: a panel shown right
+        // after startup could otherwise read the flag before the new thread first runs.
+        let alive = crate::vsync::VSyncThreadAlive::mark();
         std::thread::Builder::new()
             .name("VSyncProvider".to_owned())
             .spawn(move || {
-                let _alive = crate::vsync::VSyncThreadAlive::mark(); // [kwikpaste patch 0001]
+                let _alive = alive; // [kwikpaste patch 0001] [kwikpaste patch 0007]
                 let vsync_provider = VSyncProvider::new();
                 // [kwikpaste patch 0003] (detected at, attempts made) while recovering.
                 let mut recovery: Option<(std::time::Instant, usize)> = None;
