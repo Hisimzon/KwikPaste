@@ -8,7 +8,7 @@ use gpui::{App, AppContext as _, Entity, EventEmitter, Global};
 use kwikpaste_core::CoreEvent;
 use kwikpaste_core::settings::Language;
 
-use super::{autostart, hotkey, material, tray};
+use super::{autostart, hotkey, material, mouse, tray};
 use crate::core_host;
 
 /// core 事件的发送者：订阅它即可收到 [`CoreEvent`]（设置变更、记录入库、清理……）。
@@ -73,6 +73,9 @@ pub fn follow(cx: &mut App) {
             tray::apply(settings, cx);
         }
         autostart::apply(settings, delta);
+        if delta.touches("shortcuts.winV") || delta.touches("shortcuts.mouseTrigger") {
+            mouse::apply(&settings.shortcuts);
+        }
         if delta.touches("appearance.material") || delta.touches("appearance.theme") {
             material::apply(cx);
         }

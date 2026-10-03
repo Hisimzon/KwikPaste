@@ -15,6 +15,7 @@ pub mod mouse;
 pub mod panel;
 pub mod single_instance;
 pub mod system;
+pub mod win_v;
 
 use std::ffi::c_void;
 

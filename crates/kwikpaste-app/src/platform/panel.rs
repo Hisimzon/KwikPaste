@@ -35,6 +35,16 @@ pub enum TriggerSource {
         expect(dead_code, reason = "macOS 的点外部隐藏还没做")
     )]
     OutsideClick,
+    #[cfg_attr(
+        target_os = "macos",
+        expect(dead_code, reason = "Win+V 只在 Windows 上")
+    )]
+    WinV,
+    #[cfg_attr(
+        target_os = "macos",
+        expect(dead_code, reason = "macOS 的鼠标按键唤起还没做")
+    )]
+    MouseButton,
     Ui,
     /// 粘贴前让出前台。
     Paste,
@@ -50,6 +60,8 @@ impl TriggerSource {
             Self::Tray => "tray",
             Self::SecondInstance => "second-instance",
             Self::OutsideClick => "outside-click",
+            Self::WinV => "win-v",
+            Self::MouseButton => "mouse-button",
             Self::Ui => "ui",
             Self::Paste => "paste",
             Self::Copy => "copy",
