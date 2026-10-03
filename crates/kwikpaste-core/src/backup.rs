@@ -50,6 +50,11 @@ const FORMAT_VERSION: u16 = 1;
 const ARGON2_MEMORY_KIB: u32 = 64 * 1024;
 const ARGON2_TIME_COST: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 1;
+/// 导入时接受的 KDF 参数上限。参数写在备份文件头里、在核对密码之前就要用：不设上限的话，
+/// 一个手工改过的文件头能让 argon2 申请上 TB 内存（分配失败直接终止进程）或者永远算不完。
+const ARGON2_MEMORY_KIB_MAX: u32 = 512 * 1024;
+const ARGON2_TIME_COST_MAX: u32 = 16;
+const ARGON2_PARALLELISM_MAX: u32 = 16;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
@@ -810,6 +815,12 @@ fn decrypt_payload(
     if kdf.salt.len() != SALT_LEN || cipher_header.nonce.len() != NONCE_LEN {
         return app_error("加密备份文件头无效");
     }
+    if kdf.memory_kib > ARGON2_MEMORY_KIB_MAX
+        || kdf.time_cost > ARGON2_TIME_COST_MAX
+        || kdf.parallelism > ARGON2_PARALLELISM_MAX
+    {
+        return app_error("加密备份文件头无效");
+    }
 
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     let params = Params::new(
@@ -834,13 +845,37 @@ fn decrypt_payload(
         .map_err(|_| AppError::Other(anyhow!("备份密码不正确或文件已损坏")))
 }
 
+/// 把备份里的 zip 解到临时目录。只解普通文件和目录：zip 的 `extract` 遇到符号链接条目时按条目里
+/// 声称的大小预分配缓冲，手工构造的文件能让它 panic 或申请几十 GB；路径一律经 `enclosed_name`，
+/// 不会写到临时目录外面。
 fn extract_payload_zip(payload: &[u8]) -> Result<TempDir> {
     let temp = tempfile::tempdir().context("failed to create temporary import directory")?;
     let cursor = Cursor::new(payload);
     let mut archive = ZipArchive::new(cursor).context("failed to read backup zip payload")?;
-    archive
-        .extract(temp.path())
-        .context("failed to extract backup payload")?;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .context("failed to read backup zip entry")?;
+        let Some(relative) = entry.enclosed_name() else {
+            return app_error("备份文件里有无效的路径");
+        };
+        let target = temp.path().join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&target)
+                .with_context(|| format!("failed to create {target:?}"))?;
+            continue;
+        }
+        if !entry.is_file() {
+            return app_error("备份文件里有不支持的条目");
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {parent:?}"))?;
+        }
+        let mut file = std::fs::File::create(&target)
+            .with_context(|| format!("failed to create {target:?}"))?;
+        std::io::copy(&mut entry, &mut file).context("failed to extract backup payload")?;
+    }
 
     Ok(temp)
 }

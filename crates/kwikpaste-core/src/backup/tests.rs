@@ -48,6 +48,70 @@ fn encrypted_payload_header_round_trips() {
 }
 
 #[test]
+fn oversized_kdf_parameters_are_rejected_before_deriving() {
+    let encrypted = encrypt_payload(b"hello", PASSWORD).unwrap();
+    let kdf = encrypted.header.kdf.as_ref().unwrap();
+    let cipher = encrypted.header.cipher.as_ref().unwrap();
+    assert_eq!(
+        decrypt_payload(&encrypted.ciphertext, PASSWORD, kdf, cipher).unwrap(),
+        b"hello"
+    );
+
+    for (memory_kib, time_cost, parallelism) in [
+        (u32::MAX, ARGON2_TIME_COST, ARGON2_PARALLELISM),
+        (ARGON2_MEMORY_KIB, u32::MAX, ARGON2_PARALLELISM),
+        (ARGON2_MEMORY_KIB, ARGON2_TIME_COST, 0x00ff_ffff),
+    ] {
+        let crafted = KdfHeader {
+            algorithm: kdf.algorithm.clone(),
+            memory_kib,
+            time_cost,
+            parallelism,
+            salt: kdf.salt.clone(),
+        };
+        assert!(decrypt_payload(&encrypted.ciphertext, PASSWORD, &crafted, cipher).is_err());
+    }
+}
+
+/// 用 `build` 写出一个 zip，返回字节。
+fn zip_bytes(build: impl FnOnce(&mut zip::ZipWriter<Cursor<Vec<u8>>>)) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    build(&mut writer);
+    writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn payload_extraction_keeps_files_and_rejects_links_and_escapes() {
+    use std::io::Write as _;
+
+    let options = zip::write::SimpleFileOptions::default();
+    let payload = zip_bytes(|writer| {
+        writer.add_directory("resources/", options).unwrap();
+        writer.start_file("db/clipboard.db", options).unwrap();
+        writer.write_all(b"db").unwrap();
+    });
+    let dir = extract_payload_zip(&payload).unwrap();
+    assert_eq!(
+        std::fs::read(dir.path().join("db").join("clipboard.db")).unwrap(),
+        b"db"
+    );
+    assert!(dir.path().join("resources").is_dir());
+
+    let link = zip_bytes(|writer| {
+        writer
+            .add_symlink("config/settings.json", "/etc/passwd", options)
+            .unwrap();
+    });
+    assert!(extract_payload_zip(&link).is_err());
+
+    let escape = zip_bytes(|writer| {
+        writer.start_file("../outside.txt", options).unwrap();
+        writer.write_all(b"x").unwrap();
+    });
+    assert!(extract_payload_zip(&escape).is_err());
+}
+
+#[test]
 fn inspect_backup_reader_recognizes_plain_zip() {
     let mut cursor = Cursor::new(b"PK\x03\x04demo".to_vec());
 

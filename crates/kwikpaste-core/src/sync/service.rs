@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -1512,6 +1512,9 @@ async fn read_loop(
 ) {
     let peer_id = session.peer_id;
     let mut shutdown = shared.shutdown.clone();
+    // 每次补齐要把一整页（最多几十张图）读进内存：同一条连接同时只答一个请求，
+    // 对方连发的请求不会把内存堆上去。正常的对端收到一页才要下一页。
+    let catching_up = Arc::new(AtomicBool::new(false));
     loop {
         let received = tokio::select! {
             received = tokio::time::timeout(IDLE_TIMEOUT, reader.recv_message()) => received,
@@ -1554,6 +1557,13 @@ async fn read_loop(
                 let Some(core) = shared.core() else {
                     return;
                 };
+                if catching_up.swap(true, Ordering::AcqRel) {
+                    log::debug!(
+                        "lan sync ignores a catch-up request from {peer_id} while one runs"
+                    );
+                    continue;
+                }
+                let busy = catching_up.clone();
                 let request = CatchUpRequest {
                     shared: shared.clone(),
                     peer_id: peer_id.to_owned(),
@@ -1563,6 +1573,7 @@ async fn read_loop(
                 };
                 tokio::spawn(async move {
                     send_catch_up(core, request, after, epoch).await;
+                    busy.store(false, Ordering::Release);
                 });
             }
             // 这一页（或检查点）之前的记录都已经在上面逐条入库，可以推进水位线。

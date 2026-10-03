@@ -53,9 +53,13 @@ pub(crate) fn current_invocation() -> Invocation {
         .and_then(|dir| dir.to_str().map(str::to_owned))
         .unwrap_or_default();
 
+    // std::env::args 遇到不是合法 Unicode 的参数会 panic（例如带孤立代理项的 NTFS 路径）；
+    // 两边的协议本来就按 UTF-8 有损传递。
     Invocation {
         cwd,
-        args: std::env::args().collect(),
+        args: std::env::args_os()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect(),
     }
 }
 

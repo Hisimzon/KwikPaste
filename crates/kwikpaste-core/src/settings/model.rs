@@ -869,8 +869,13 @@ impl Default for LanSync {
 }
 
 impl LanSync {
+    /// 同步图片的大小上限。设置文件按宽松规则读入、不过校验，手改出来的值在这里收进允许范围，
+    /// 免得接收缓冲跟着一个离谱的值涨。
     pub fn max_image_bytes(&self) -> u64 {
-        u64::from(self.max_image_mb) * 1024 * 1024
+        let mb = self
+            .max_image_mb
+            .clamp(LAN_SYNC_MAX_IMAGE_MB_MIN, LAN_SYNC_MAX_IMAGE_MB_MAX);
+        u64::from(mb) * 1024 * 1024
     }
 }
 

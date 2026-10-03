@@ -6,7 +6,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,21 +26,26 @@ pub(crate) fn cleanup_leftovers(exe: &Path) {
         return;
     }
 
-    std::thread::spawn(move || {
-        for _ in 0..CLEANUP_ATTEMPTS {
-            let pending = leftovers
-                .iter()
-                .filter(|path| path.exists() && fs::remove_file(path).is_err())
-                .count();
-            if pending == 0 {
-                return;
+    let spawned = std::thread::Builder::new()
+        .name("portable-cleanup".to_owned())
+        .spawn(move || {
+            for _ in 0..CLEANUP_ATTEMPTS {
+                let pending = leftovers
+                    .iter()
+                    .filter(|path| path.exists() && fs::remove_file(path).is_err())
+                    .count();
+                if pending == 0 {
+                    return;
+                }
+
+                std::thread::sleep(CLEANUP_RETRY_INTERVAL);
             }
 
-            std::thread::sleep(CLEANUP_RETRY_INTERVAL);
-        }
-
-        log::warn!("portable update leftovers are still locked: {leftovers:?}");
-    });
+            log::warn!("portable update leftovers are still locked: {leftovers:?}");
+        });
+    if let Err(err) = spawned {
+        log::warn!("portable update cleanup could not start: {err}");
+    }
 }
 
 /// 从便携包里取出唯一的 exe。签名已经验过，这里只防打包出错把 exe 换成坏文件。
@@ -69,12 +74,11 @@ pub(crate) fn extract_binary(package: &[u8]) -> anyhow::Result<Vec<u8>> {
     }
 
     let index = exe_index.ok_or_else(|| anyhow!("portable package contains no executable"))?;
-    let mut entry = archive
+    let entry = archive
         .by_index(index)
         .context("failed to read portable package entry")?;
-    let mut binary = Vec::with_capacity(entry.size() as usize);
-    entry
-        .read_to_end(&mut binary)
+    let size = entry.size();
+    let binary = crate::download::read_entry(entry, size)
         .context("failed to extract executable from portable package")?;
 
     if !binary.starts_with(b"MZ") {

@@ -187,13 +187,27 @@ fn nsis_installer(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
         }
     }
     let index = found.ok_or_else(|| anyhow!("installer archive contains no executable"))?;
-    let mut entry = archive.by_index(index)?;
-    let mut installer = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut installer)?;
+    let entry = archive.by_index(index)?;
+    let size = entry.size();
+    let installer = read_entry(entry, size)?;
     if !installer.starts_with(b"MZ") {
         bail!("installer is not a Windows program");
     }
     Ok(installer)
+}
+
+/// 读出压缩包里的一个文件，最多 [`MAX_PACKAGE_BYTES`]。条目头里声称的大小只用来预分配（同样封顶），
+/// 实际读到超过上限就报错：改过的包不能让我们按它声称的大小去分配内存（分配失败直接终止进程）。
+pub(crate) fn read_entry(entry: impl Read, declared_size: u64) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(declared_size.min(MAX_PACKAGE_BYTES) as usize);
+    entry
+        .take(MAX_PACKAGE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to read package entry")?;
+    if bytes.len() as u64 > MAX_PACKAGE_BYTES {
+        bail!("package entry is larger than {MAX_PACKAGE_BYTES} bytes");
+    }
+    Ok(bytes)
 }
 
 /// 删掉一天以前的 `KwikPaste-*-updater-*` 临时目录（Tauri 的更新器也用这个前缀，它从来不清理）。
