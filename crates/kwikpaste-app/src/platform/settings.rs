@@ -1,4 +1,4 @@
-//! core 事件进 GPUI，以及平台层跟随设置：热键、托盘、界面语言。
+//! core 事件进 GPUI，以及平台层跟随设置：热键、托盘、界面语言、开机自启与管理员启动。
 //!
 //! core 在自己的 runtime 线程上发事件，这里转进 channel，由主线程任务从 [`CoreEvents`] 实体
 //! 发出；平台层和 UI 都订阅这个实体。
@@ -8,7 +8,7 @@ use gpui::{App, AppContext as _, Entity, EventEmitter, Global};
 use kwikpaste_core::CoreEvent;
 use kwikpaste_core::settings::Language;
 
-use super::{hotkey, tray};
+use super::{autostart, hotkey, tray};
 use crate::core_host;
 
 /// core 事件的发送者：订阅它即可收到 [`CoreEvent`]（设置变更、记录入库、清理……）。
@@ -53,7 +53,7 @@ pub fn serve(cx: &mut App, events: Receiver<CoreEvent>) {
     .detach();
 }
 
-/// 平台层跟随设置变更：快捷键重新注册，语言变了重建托盘菜单，托盘显隐。
+/// 平台层跟随设置变更：快捷键重新注册，语言变了重建托盘菜单，托盘显隐，开机自启与管理员启动。
 pub fn follow(cx: &mut App) {
     let Some(hub) = core_events(cx) else {
         return;
@@ -72,6 +72,7 @@ pub fn follow(cx: &mut App) {
         if language_changed || delta.touches("general.trayIcon") {
             tray::apply(settings, cx);
         }
+        autostart::apply(settings, delta);
     })
     .detach();
 }

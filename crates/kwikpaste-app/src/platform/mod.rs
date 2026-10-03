@@ -28,6 +28,7 @@
 //!   [`drag_out`] 模块文档。
 //! - core：`crate::core_host::core(cx)` 取 `Core`；[`CoreEvents`] 转发 core 的全部事件。
 
+mod autostart;
 pub mod drag_out;
 mod editing;
 mod hotkey;
@@ -83,7 +84,10 @@ pub fn exit_code() -> i32 {
 /// 判重通过后带进 GPUI 的启动状态。
 pub struct Launch {
     instance: PrimaryInstance,
-    invocations: async_channel::Receiver<Invocation>,
+    invocations: (
+        async_channel::Sender<Invocation>,
+        async_channel::Receiver<Invocation>,
+    ),
     core: StartedCore,
 }
 
@@ -92,9 +96,14 @@ pub struct Launch {
 /// 必须在 [`create`] 之前调用：第二实例不初始化 GPU，也不碰数据库。
 pub fn launch() -> anyhow::Result<Option<Launch>> {
     let identifier = crate::identity::identifier();
+    // 设置要求以管理员运行而当前没提权：拉起提权的进程后退出（与 1.x 相同，在判重之前）。
+    if autostart::elevate_if_configured() {
+        return Ok(None);
+    }
     let (sender, invocations) = async_channel::unbounded();
+    let forward = sender.clone();
     let on_invocation = move |invocation| {
-        let _ = sender.try_send(invocation);
+        let _ = forward.try_send(invocation);
     };
     // 崩溃重启的子进程不把参数转交给正在死去的前一个实例，而是等它退出后接管。
     let claim = if health::relaunch_count() > 0 {
@@ -122,7 +131,7 @@ pub fn launch() -> anyhow::Result<Option<Launch>> {
 
     Ok(Some(Launch {
         instance,
-        invocations,
+        invocations: (sender, invocations),
         core,
     }))
 }
@@ -197,6 +206,7 @@ pub fn start<V: Render>(
         }
     }
     settings::follow(cx);
+    autostart::sync_at_startup(cx);
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
     updater::start(cx);

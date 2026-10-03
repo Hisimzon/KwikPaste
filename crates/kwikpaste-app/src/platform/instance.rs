@@ -2,7 +2,7 @@
 
 use async_channel::{Receiver, Sender};
 use gpui::{App, AsyncApp, Global};
-use kwikpaste_os::single_instance::{Invocation, PrimaryInstance};
+use kwikpaste_os::single_instance::{self, Claim, Invocation, PrimaryInstance};
 
 use super::editing::EditTrigger;
 use super::panel::{PanelCommand, Trigger, TriggerSource};
@@ -12,9 +12,10 @@ use crate::{core_host, selftest};
 /// 开机自启带的参数：第二实例带它时静默退出，主实例什么也不做（与 1.x 相同）。
 const AUTO_LAUNCH: &str = "--auto-launch";
 
-/// 持有主实例守卫：退出前丢弃，释放单实例名字。
+/// 持有主实例守卫：退出前丢弃，释放单实例名字。`sender` 是转交参数的入口，重新占回单实例时用。
 struct Instance {
     guard: Option<PrimaryInstance>,
+    sender: Sender<Invocation>,
 }
 
 impl Global for Instance {}
@@ -22,10 +23,13 @@ impl Global for Instance {}
 pub fn serve(
     cx: &mut App,
     guard: PrimaryInstance,
-    invocations: Receiver<Invocation>,
+    (sender, invocations): (Sender<Invocation>, Receiver<Invocation>),
     commands: Sender<PanelCommand>,
 ) {
-    cx.set_global(Instance { guard: Some(guard) });
+    cx.set_global(Instance {
+        guard: Some(guard),
+        sender,
+    });
     cx.on_app_quit(|cx| {
         release(cx);
         async {}
@@ -45,6 +49,28 @@ pub fn serve(
 pub fn release(cx: &mut App) {
     if cx.has_global::<Instance>() {
         cx.global_mut::<Instance>().guard = None;
+    }
+}
+
+/// [`release`] 之后没能交出去（例如提权重启被取消）时重新占回单实例。
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn reclaim(cx: &mut App) -> anyhow::Result<()> {
+    let Some(instance) = cx.try_global::<Instance>() else {
+        anyhow::bail!("the single instance is not served");
+    };
+    if instance.guard.is_some() {
+        return Ok(());
+    }
+    let sender = instance.sender.clone();
+    let claim = single_instance::claim(crate::identity::identifier(), move |invocation| {
+        let _ = sender.try_send(invocation);
+    })?;
+    match claim {
+        Claim::Primary(guard) => {
+            cx.global_mut::<Instance>().guard = Some(guard);
+            Ok(())
+        }
+        Claim::Forwarded => anyhow::bail!("another instance took over the single instance name"),
     }
 }
 
