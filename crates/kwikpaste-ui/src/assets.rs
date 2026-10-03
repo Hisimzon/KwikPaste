@@ -48,6 +48,7 @@ const EMBEDDED: &[(&str, &[u8])] = embedded![
     "lucide-eye-off.svg",
     "lucide-file-symlink.svg",
     "lucide-folder-open.svg",
+    "lucide-grip-vertical.svg",
     "lucide-image-off.svg",
     "lucide-key-round.svg",
     "lucide-keyboard.svg",

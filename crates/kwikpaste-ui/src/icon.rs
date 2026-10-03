@@ -37,6 +37,8 @@ pub enum IconName {
     /// 1.x `i-lucide:folder-open`：在文件管理器中显示。
     FolderOpen,
     Globe,
+    /// 1.x 管理分组里可拖动行的把手（antd Tree `draggable` 的 holder）。
+    GripVertical,
     /// 1.x `i-lets-icons:widget`：分组栏“全部”。
     GroupAll,
     /// 1.x `i-lets-icons:star`：分组栏“收藏”。
@@ -105,6 +107,7 @@ impl IconName {
             Self::EyeOff => "lucide-eye-off.svg",
             Self::FileSymlink => "lucide-file-symlink.svg",
             Self::FolderOpen => "lucide-folder-open.svg",
+            Self::GripVertical => "lucide-grip-vertical.svg",
             Self::GroupAll => "lets-icons-widget.svg",
             Self::GroupFavorite => "lets-icons-star.svg",
             Self::GroupFiles => "lets-icons-folder-file-alt.svg",
@@ -234,6 +237,7 @@ mod tests {
             IconName::EyeOff,
             IconName::FileSymlink,
             IconName::FolderOpen,
+            IconName::GripVertical,
             IconName::GroupAll,
             IconName::GroupFavorite,
             IconName::GroupFiles,

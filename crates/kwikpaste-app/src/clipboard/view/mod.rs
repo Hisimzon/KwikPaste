@@ -11,6 +11,7 @@ mod chrome;
 mod editing;
 mod frame;
 mod group_bar;
+pub mod group_dialogs;
 mod header;
 pub mod host;
 mod image_cache;

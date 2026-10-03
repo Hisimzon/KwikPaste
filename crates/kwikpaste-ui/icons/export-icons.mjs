@@ -21,6 +21,7 @@ const ICONS = [
   "lucide:eye-off",
   "lucide:file-symlink",
   "lucide:folder-open",
+  "lucide:grip-vertical",
   "lucide:image-off",
   "lucide:key-round",
   "lucide:keyboard",

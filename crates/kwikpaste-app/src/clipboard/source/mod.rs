@@ -39,6 +39,14 @@ pub struct Group {
     pub is_hidden: bool,
 }
 
+/// 新建或编辑分组的输入（core `ClipboardGroupInput`）：`icon` 是预设图标的类名或 SVG 源码。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupInput {
+    pub name: String,
+    pub icon: String,
+    pub is_hidden: bool,
+}
+
 /// 图片另存的来源（core `ImageSave`）：原图路径和默认文件名。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImageSave {
@@ -115,4 +123,24 @@ pub trait ClipboardSource: Send + Sync + 'static {
 
     /// 删除分组，组内记录回到未分组。
     fn delete_group(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>>;
+
+    /// 新建分组（排在最后），返回建好的分组。名称去首尾空白，空名称、超过 32 个字报错。
+    fn create_group(&self, input: GroupInput) -> BoxFuture<'static, anyhow::Result<Group>>;
+
+    /// 改分组的名称、图标和显隐。
+    fn update_group(
+        &self,
+        id: Arc<str>,
+        input: GroupInput,
+    ) -> BoxFuture<'static, anyhow::Result<()>>;
+
+    /// 一次保存全部分组的顺序和显隐（`visible` 是显示在分组栏上的分组）。
+    fn update_groups_layout(
+        &self,
+        order: Vec<Arc<str>>,
+        visible: Vec<Arc<str>>,
+    ) -> BoxFuture<'static, anyhow::Result<()>>;
+
+    /// 读取用户选的 SVG 文件作为分组图标（扩展名、大小、内容经过校验），返回 SVG 源码。
+    fn import_group_svg(&self, path: PathBuf) -> BoxFuture<'static, anyhow::Result<String>>;
 }

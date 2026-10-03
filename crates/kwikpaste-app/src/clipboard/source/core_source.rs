@@ -13,13 +13,13 @@ use kwikpaste_core::{
         ClipboardGroup, ClipboardItemQuery, ClipboardKind, ClipboardSubKind,
         Platform as CorePlatform,
     },
-    ops::ClipboardGroupInput,
+    ops::{ClipboardGroupInput, ClipboardGroupLayoutInput},
     presenter::{ClipboardAction, ClipboardItemView, FileEntry, FilesPreviewKind},
     settings::Settings,
 };
 
 use super::{
-    ClipboardSource, Group, ImageSave, ListQuery, NoteSaved,
+    ClipboardSource, Group, GroupInput, ImageSave, ListQuery, NoteSaved,
     synthetic::{self, AssetSet, GenerateOptions},
 };
 use crate::clipboard::model::{
@@ -76,6 +76,14 @@ pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
         limit: i64::try_from(query.limit).unwrap_or(i64::MAX),
         offset: i64::try_from(query.offset).unwrap_or(i64::MAX),
         ..ClipboardItemQuery::default()
+    }
+}
+
+fn group_input(input: GroupInput) -> ClipboardGroupInput {
+    ClipboardGroupInput {
+        name: input.name,
+        icon: input.icon,
+        is_hidden: input.is_hidden,
     }
 }
 
@@ -253,6 +261,42 @@ impl ClipboardSource for CoreSource {
         let core = self.core.clone();
 
         async move { Ok(core.delete_group(&id).await?) }.boxed()
+    }
+
+    fn create_group(&self, input: GroupInput) -> BoxFuture<'static, anyhow::Result<Group>> {
+        let core = self.core.clone();
+
+        async move { Ok(group(core.create_group(group_input(input)).await?)) }.boxed()
+    }
+
+    fn update_group(
+        &self,
+        id: Arc<str>,
+        input: GroupInput,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.update_group(&id, group_input(input)).await?) }.boxed()
+    }
+
+    fn update_groups_layout(
+        &self,
+        order: Vec<Arc<str>>,
+        visible: Vec<Arc<str>>,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+        let input = ClipboardGroupLayoutInput {
+            order: order.iter().map(|id| id.to_string()).collect(),
+            visible_ids: visible.iter().map(|id| id.to_string()).collect(),
+        };
+
+        async move { Ok(core.update_groups_layout(input).await?) }.boxed()
+    }
+
+    fn import_group_svg(&self, path: PathBuf) -> BoxFuture<'static, anyhow::Result<String>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.import_group_svg(&path)?) }.boxed()
     }
 }
 

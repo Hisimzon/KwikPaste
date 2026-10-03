@@ -18,7 +18,7 @@ use kwikpaste_core::{
     },
 };
 use kwikpaste_ui::{
-    ConfirmSpec, confirm, menu_open, theme,
+    ConfirmSpec, close_dialog, confirm, has_dialog, menu_open, theme,
     toast::{self, Toast},
 };
 
@@ -29,6 +29,7 @@ use super::{
     ShowShortcuts, SplitSelected, ToggleFavorite, TogglePinned, ToggleRange,
     editing::{self, EditTarget},
     group_bar::{GroupBar, GroupBarEvent},
+    group_dialogs,
     header::{Header, HeaderEvent},
     host::ItemHost,
     list::{ClipboardList, ListIntent},
@@ -63,8 +64,6 @@ fn unless_menu<A: 'static>(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelIntent {
     OpenPreferences,
-    NewGroup,
-    ManageGroups,
 }
 
 pub struct ClipboardPanel {
@@ -129,6 +128,11 @@ impl ClipboardPanel {
 
     pub fn header(&self) -> &Entity<Header> {
         &self.header
+    }
+
+    /// 全部自定义分组（含隐藏的），按排序。
+    pub fn group_list(&self) -> &[Group] {
+        &self.group_list
     }
 
     /// 跟随 core 的事件：记录变化、设置变化交给列表，分组变化重读分组。
@@ -224,11 +228,45 @@ impl ClipboardPanel {
             }
             GroupBarEvent::ToggleCategory(kind) => self.toggle_category(*kind, cx),
             GroupBarEvent::ToggleGroup(id) => self.toggle_group(id.clone(), cx),
+            GroupBarEvent::EditGroup(group) => self.edit_group(Some(group.clone()), window, cx),
             GroupBarEvent::HideGroup(group) => self.hide_group(group.clone(), window, cx),
             GroupBarEvent::DeleteGroup(group) => self.delete_group(group.clone(), window, cx),
-            GroupBarEvent::NewGroup => self.emit_intent(PanelIntent::NewGroup, cx),
-            GroupBarEvent::ManageGroups => self.emit_intent(PanelIntent::ManageGroups, cx),
+            GroupBarEvent::NewGroup => self.edit_group(None, window, cx),
+            GroupBarEvent::ManageGroups => self.manage_groups(window, cx),
         }
+    }
+
+    /// 新增（`None`）或编辑分组；保存后重读分组。
+    pub(super) fn edit_group(
+        &mut self,
+        group: Option<Group>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = cx.entity().downgrade();
+        group_dialogs::edit_group(
+            self.source.clone(),
+            group,
+            move |_, _, cx| {
+                panel.update(cx, |panel, cx| panel.reload_groups(cx)).ok();
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// 管理分组（1.x 在偏好设置里，偏好设置窗口在 U3）：任何写入之后重读分组。
+    pub(super) fn manage_groups(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = cx.entity().downgrade();
+        group_dialogs::manage_groups(
+            self.source.clone(),
+            self.group_list.clone(),
+            move |_, cx| {
+                panel.update(cx, |panel, cx| panel.reload_groups(cx)).ok();
+            },
+            window,
+            cx,
+        );
     }
 
     /// 隐藏分组（1.x 右键菜单“隐藏分组”）：名称和图标不变，只改显隐。
@@ -348,6 +386,12 @@ impl ClipboardPanel {
         window.focus(&focus, cx);
     }
 
+    fn focus_dialog_input(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = editing::dialog_input(cx) {
+            input.focus(window, cx);
+        }
+    }
+
     /// 固定 / 取消固定窗口（头部图钉、Mod+P）：点外部不隐藏，粘贴、复制后留着面板。
     fn toggle_pin(&mut self, cx: &mut Context<Self>) {
         let pinned = !pin::pinned(cx);
@@ -368,21 +412,33 @@ impl ClipboardPanel {
                     self.clear_search(window, cx);
                 }
                 self.set_key_hints(false, cx);
+                // 还开着的分组弹框、确认框当作取消（隐藏时编辑态已经结束，再显示时名称框打不了字）。
+                for _ in 0..4 {
+                    if !has_dialog(window, cx) {
+                        break;
+                    }
+                    close_dialog(window, cx);
+                }
             }
-            PanelEvent::EditingStarted => {
-                if editing::target(cx) == Some(EditTarget::Search) {
+            PanelEvent::EditingStarted => match editing::target(cx) {
+                Some(EditTarget::Search) => {
                     self.header.update(cx, |header, cx| {
                         header.set_editing(true, cx);
                         header.focus_input(window, cx);
                     });
                 }
-            }
-            PanelEvent::EditingRefused => {
-                if editing::target(cx) == Some(EditTarget::Search) {
+                Some(EditTarget::Dialog) => self.focus_dialog_input(window, cx),
+                _ => {}
+            },
+            PanelEvent::EditingRefused => match editing::target(cx) {
+                Some(EditTarget::Search) => {
                     editing::clear(cx);
                     self.focus_list(window, cx);
                 }
-            }
+                // 没拿到前台也聚焦，Esc 仍能关掉弹框。
+                Some(EditTarget::Dialog) => self.focus_dialog_input(window, cx),
+                _ => {}
+            },
             PanelEvent::EditingEnded => {
                 self.header
                     .update(cx, |header, cx| header.set_editing(false, cx));
@@ -644,8 +700,8 @@ impl Render for ClipboardPanel {
                     .list
                     .update(cx, |_, cx| cx.emit(ListIntent::ShowShortcuts));
             })))
-            .on_action(cx.listener(unless_menu(|panel, _: &NewGroup, _, cx| {
-                panel.emit_intent(PanelIntent::NewGroup, cx);
+            .on_action(cx.listener(unless_menu(|panel, _: &NewGroup, window, cx| {
+                panel.edit_group(None, window, cx);
             })))
             .child(self.header.clone())
             .child(self.groups.clone())

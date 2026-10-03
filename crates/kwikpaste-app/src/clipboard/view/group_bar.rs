@@ -2,7 +2,7 @@
 //!
 //! - 范围始终有一个选中；分类、自定义分组再点一次取消；
 //! - 隐藏的分组不出现在栏上；放不下的自定义分组收进“更多”菜单；
-//! - 自定义分组右键可以隐藏、删除。新增、编辑、管理分组（弹框与偏好页）在 U2 第二部分，这里先发意图。
+//! - 自定义分组右键可以编辑、隐藏、删除；新增、编辑、管理分组的弹框由主窗口打开（`group_dialogs`）。
 
 use std::sync::Arc;
 
@@ -45,6 +45,7 @@ pub enum GroupBarEvent {
     SelectRange(Range),
     ToggleCategory(ItemKind),
     ToggleGroup(Arc<str>),
+    EditGroup(Group),
     HideGroup(Group),
     DeleteGroup(Group),
     NewGroup,
@@ -259,13 +260,22 @@ fn look(selected: bool) -> Look {
     if selected { Look::Selected } else { Look::Text }
 }
 
-/// 自定义分组的右键菜单：隐藏、删除（编辑在 U2 第二部分）。
+/// 自定义分组的右键菜单：编辑、隐藏、删除（1.x `buildGroupActionMenuItems`）。
 fn group_menu(group: &Group, entity: gpui::WeakEntity<GroupBar>) -> Vec<MenuEntry> {
+    let edit = group.clone();
     let hide = group.clone();
     let delete = group.clone();
+    let edit_entity = entity.clone();
     let hide_entity = entity.clone();
 
     vec![
+        MenuItem::new(t("clipboard:groups.edit"), move |_, cx| {
+            edit_entity
+                .update(cx, |_, cx| cx.emit(GroupBarEvent::EditGroup(edit.clone())))
+                .ok();
+        })
+        .icon(IconName::Pencil)
+        .into(),
         MenuItem::new(t("clipboard:groups.hide"), move |_, cx| {
             hide_entity
                 .update(cx, |_, cx| cx.emit(GroupBarEvent::HideGroup(hide.clone())))

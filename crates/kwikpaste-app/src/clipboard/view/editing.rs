@@ -8,6 +8,7 @@
 //! 自测再自己发出相应的面板事件，不会真的取前台、隐藏面板。
 
 use gpui::{App, Global};
+use kwikpaste_ui::TextInput;
 
 use crate::platform::{self, EditTrigger, PanelCommand};
 
@@ -16,11 +17,15 @@ use crate::platform::{self, EditTrigger, PanelCommand};
 pub enum EditTarget {
     Search,
     Note,
+    /// 对话框里的单行输入框（分组名称），由主窗口在编辑态开始后聚焦。
+    Dialog,
 }
 
 #[derive(Default)]
 struct Editing {
     target: Option<EditTarget>,
+    /// [`EditTarget::Dialog`] 要聚焦的输入框。
+    dialog_input: Option<TextInput>,
 }
 
 impl Global for Editing {}
@@ -64,4 +69,24 @@ pub fn target(cx: &App) -> Option<EditTarget> {
 /// 编辑态结束或被拒绝后清掉归属。
 pub fn clear(cx: &mut App) {
     cx.default_global::<Editing>().target = None;
+}
+
+/// 对话框里有要打字的输入框：记下它并请求编辑态，`EditingStarted` 之后由主窗口聚焦它。
+pub fn begin_dialog_input(input: TextInput, cx: &mut App) {
+    cx.default_global::<Editing>().dialog_input = Some(input);
+    begin(EditTarget::Dialog, EditTrigger::Keyboard, cx);
+}
+
+/// 编辑态要聚焦的对话框输入框。
+pub fn dialog_input(cx: &App) -> Option<TextInput> {
+    cx.try_global::<Editing>()
+        .and_then(|editing| editing.dialog_input.clone())
+}
+
+/// 对话框关了：退出它的编辑态（焦点由收到 `EditingEnded` 的列表拿回）。
+pub fn end_dialog_input(cx: &mut App) {
+    cx.default_global::<Editing>().dialog_input = None;
+    if target(cx) == Some(EditTarget::Dialog) {
+        end(cx);
+    }
 }

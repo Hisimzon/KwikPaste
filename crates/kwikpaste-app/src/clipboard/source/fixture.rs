@@ -16,7 +16,9 @@ use serde::Deserialize;
 
 use kwikpaste_core::settings::Settings;
 
-use super::{ClipboardSource, Group, ImageSave, ListQuery, NoteSaved, synthetic::AssetSet};
+use super::{
+    ClipboardSource, Group, GroupInput, ImageSave, ListQuery, NoteSaved, synthetic::AssetSet,
+};
 use crate::clipboard::model::{
     actions::OpenTarget,
     filter::ListFilter,
@@ -167,6 +169,56 @@ impl FixtureStore {
         };
         group.is_hidden = true;
         true
+    }
+
+    /// 按 core 的规则归一化名称（去首尾空白、非空、不超过 32 个字）。
+    fn group_name(name: &str) -> anyhow::Result<Arc<str>> {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("分组名称不能为空");
+        }
+        if name.chars().count() > 32 {
+            anyhow::bail!("分组名称不能超过 32 个字符");
+        }
+        Ok(Arc::from(name))
+    }
+
+    fn create_group(&mut self, input: GroupInput) -> anyhow::Result<Group> {
+        let group = Group {
+            id: Arc::from(format!("fixture-group-{}", self.groups.len() + 1)),
+            name: Self::group_name(&input.name)?,
+            icon: Arc::from(input.icon),
+            is_hidden: input.is_hidden,
+        };
+        self.groups.push(group.clone());
+        Ok(group)
+    }
+
+    fn update_group(&mut self, id: &str, input: GroupInput) -> anyhow::Result<()> {
+        let name = Self::group_name(&input.name)?;
+        let group = self
+            .groups
+            .iter_mut()
+            .find(|group| &*group.id == id)
+            .ok_or_else(|| anyhow::anyhow!("group not found: {id}"))?;
+        group.name = name;
+        group.icon = Arc::from(input.icon);
+        group.is_hidden = input.is_hidden;
+        Ok(())
+    }
+
+    /// 按 `order` 重排（不在里面的排到最后），`visible` 之外的都隐藏。
+    fn update_layout(&mut self, order: &[Arc<str>], visible: &[Arc<str>]) {
+        let rank = |group: &Group| {
+            order
+                .iter()
+                .position(|id| *id == group.id)
+                .unwrap_or(usize::MAX)
+        };
+        self.groups.sort_by_key(rank);
+        for group in &mut self.groups {
+            group.is_hidden = !visible.contains(&group.id);
+        }
     }
 
     fn delete_group(&mut self, id: &str) -> bool {
@@ -396,6 +448,46 @@ impl ClipboardSource for FixtureSource {
                 anyhow::bail!("group not found: {id}");
             }
             Ok(())
+        })
+    }
+
+    fn create_group(&self, input: GroupInput) -> BoxFuture<'static, anyhow::Result<Group>> {
+        self.with_store(move |store| store.create_group(input))
+    }
+
+    fn update_group(
+        &self,
+        id: Arc<str>,
+        input: GroupInput,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        self.with_store(move |store| store.update_group(&id, input))
+    }
+
+    fn update_groups_layout(
+        &self,
+        order: Vec<Arc<str>>,
+        visible: Vec<Arc<str>>,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        self.with_store(move |store| {
+            store.update_layout(&order, &visible);
+            Ok(())
+        })
+    }
+
+    /// 与 core 相同的基本校验：`.svg` 扩展名、`<svg` 开头。
+    fn import_group_svg(&self, path: PathBuf) -> BoxFuture<'static, anyhow::Result<String>> {
+        self.respond(move || {
+            let is_svg = path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
+            if !is_svg {
+                anyhow::bail!("请选择 SVG 文件");
+            }
+            let markup = std::fs::read_to_string(&path)?;
+            if !markup.trim_start().starts_with("<svg") {
+                anyhow::bail!("请选择有效的 SVG 图标");
+            }
+            Ok(markup)
         })
     }
 }

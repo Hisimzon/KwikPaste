@@ -14,14 +14,15 @@ use std::{
 };
 
 use gpui::{
-    AnyWindowHandle, App, AsyncApp, Capslock, Entity, Focusable as _, Keystroke, Modifiers,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    AnyWindowHandle, App, AppContext as _, AsyncApp, Capslock, Entity, Focusable as _, Keystroke,
+    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     PlatformInput, point, px,
 };
 use kwikpaste_ui::{MenuEntry, close_dialog, has_dialog, menu_open};
 
 use super::{
-    editing::RequestLog,
+    editing::{self, RequestLog},
+    group_dialogs::{self, GroupEditor, GroupManager},
     list::{ClipboardList, ListIntent},
     panel::ClipboardPanel,
     pin,
@@ -350,6 +351,7 @@ impl Driver {
         self.context_menu(cx).await;
         self.move_to_group(cx).await;
         self.pin(cx).await;
+        self.groups(cx).await;
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
     }
@@ -550,6 +552,129 @@ impl Driver {
             cleared,
             || "still grouped".into(),
         );
+    }
+
+    /// 分组弹框：Mod+N 打开新增弹框并请求编辑态，编辑态开始后聚焦名称框，关掉弹框退出编辑态；
+    /// 名称必填、去首尾空白、最多 32 个字；保存后分组栏多出新分组；管理框拖动排序、取消勾选后
+    /// 保存，顺序与显隐写回数据源。
+    async fn groups(&mut self, cx: &mut AsyncApp) {
+        self.focus_list(cx);
+        self.key(cx, "secondary-n");
+        let opened = self.dialog_open(cx);
+        let request = self.last_request(cx);
+        self.check(
+            "mod+n opens the new group dialog and asks for editing",
+            opened
+                && matches!(
+                    request,
+                    Some(PanelCommand::BeginEditing(EditTrigger::Keyboard))
+                ),
+            || format!("dialog {opened}, request {request:?}"),
+        );
+        self.emit(cx, PanelEvent::EditingStarted);
+        self.pause(cx, 30).await;
+        let focused = self
+            .window
+            .update(cx, |_, window, cx| {
+                editing::dialog_input(cx).is_some_and(|input| input.is_focused(window, cx))
+            })
+            .unwrap_or(false);
+        self.check("editing focuses the group name box", focused, || {
+            "name box not focused".into()
+        });
+        self.window
+            .update(cx, |_, window, cx| close_dialog(window, cx))
+            .ok();
+        self.pause(cx, 30).await;
+        let (open, request) = (self.dialog_open(cx), self.last_request(cx));
+        self.check(
+            "closing the dialog ends editing",
+            !open && matches!(request, Some(PanelCommand::EndEditing)),
+            || format!("dialog {open}, request {request:?}"),
+        );
+        self.emit(cx, PanelEvent::EditingEnded);
+
+        let source = self.source(cx);
+        let editor = self
+            .window
+            .update(cx, |_, window, cx| {
+                cx.new(|cx| GroupEditor::new(None, source.clone(), window, cx))
+            })
+            .ok();
+        let Some(editor) = editor else {
+            return;
+        };
+        let empty = editor.update(cx, |editor, cx| editor.submit(cx));
+        self.check("an empty group name is refused", empty.is_none(), || {
+            format!("{empty:?}")
+        });
+        let long = format!("  {}  ", "分组".repeat(20));
+        self.window
+            .update(cx, |_, window, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.type_name(&long, window, cx);
+                    editor.pick_icon("i-lets-icons:book", cx);
+                });
+            })
+            .ok();
+        let input = editor.update(cx, |editor, cx| editor.submit(cx));
+        let ok = input.as_ref().is_some_and(|input| {
+            input.name.chars().count() <= 32
+                && !input.name.starts_with(' ')
+                && input.icon == "i-lets-icons:book"
+        });
+        self.check(
+            "group names are trimmed and cut to 32 characters",
+            ok,
+            || format!("{input:?}"),
+        );
+
+        let before = cx.update(|cx| self.panel.read(cx).group_list().len());
+        let saved = match input {
+            Some(input) => group_dialogs::save_group(source.as_ref(), None, input).await,
+            None => Err(anyhow::anyhow!("no input")),
+        };
+        self.panel.update(cx, |panel, cx| panel.reload_groups(cx));
+        let panel = self.panel.clone();
+        let grew = self
+            .settle(cx, move |_, cx| {
+                panel.read(cx).group_list().len() == before + 1
+            })
+            .await;
+        self.check(
+            "saving adds the group to the group bar",
+            saved.is_ok() && grew,
+            || format!("{saved:?}"),
+        );
+
+        let groups = cx.update(|cx| self.panel.read(cx).group_list().to_vec());
+        let manager = cx.new(|_| {
+            let changed: group_dialogs::Changed = Rc::new(|_, _| {});
+            GroupManager::new(groups.clone(), source.clone(), changed)
+        });
+        let first = groups.first().map(|group| group.id.clone());
+        manager.update(cx, |manager, cx| {
+            manager.move_group(0, 1, cx);
+            if let Some(first) = first.clone() {
+                manager.set_visible(first, false, cx);
+            }
+        });
+        let (order, visible) = manager.read_with(cx, |manager, _| manager.layout());
+        let layout = source
+            .update_groups_layout(order.clone(), visible.clone())
+            .await;
+        let stored = source.groups().await.unwrap_or_default();
+        let moved = stored.get(1).map(|group| group.id.clone()) == first
+            && stored
+                .iter()
+                .find(|group| Some(&group.id) == first.as_ref())
+                .is_some_and(|group| group.is_hidden);
+        self.check(
+            "managing groups saves their order and visibility",
+            layout.is_ok() && moved,
+            || format!("{layout:?}, order {order:?}, stored {stored:?}"),
+        );
+        self.panel.update(cx, |panel, cx| panel.reload_groups(cx));
     }
 
     /// Mod+P 固定窗口：点外部不再隐藏（平台开关关掉），再按一次恢复。
@@ -1230,6 +1355,28 @@ impl Driver {
             "delete" => {
                 self.select_where(cx, |item| !item.is_pinned && !item.is_favorite);
                 self.key(cx, "secondary-backspace");
+            }
+            "group-new" => {
+                self.key(cx, "secondary-n");
+                self.emit(cx, PanelEvent::EditingStarted);
+            }
+            "group-edit" | "group-manage" => {
+                let panel = self.panel.clone();
+                let first = cx.update(|cx| panel.read(cx).group_list().first().cloned());
+                self.window
+                    .update(cx, |_, window, cx| {
+                        panel.update(cx, |panel, cx| {
+                            if stage == "group-edit" {
+                                panel.edit_group(first, window, cx);
+                            } else {
+                                panel.manage_groups(window, cx);
+                            }
+                        });
+                    })
+                    .ok();
+                if stage == "group-edit" {
+                    self.emit(cx, PanelEvent::EditingStarted);
+                }
             }
             "menu" | "menu-group" => {
                 let Some(item) = self.hover_row(cx).await else {

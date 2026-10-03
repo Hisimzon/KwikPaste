@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{App, Global, Task};
+use gpui::{App, Global, PathPromptOptions, Task};
 
 use super::request_panel;
 use crate::platform::PanelCommand;
@@ -66,5 +66,24 @@ pub fn prompt_for_new_path(directory: &Path, name: &str, cx: &mut App) -> Task<O
         };
         cx.update(end_dialog);
         path
+    })
+}
+
+/// 系统的打开文件对话框；取消或失败时为 `None`（失败写日志）。
+pub fn prompt_for_paths(options: PathPromptOptions, cx: &mut App) -> Task<Option<Vec<PathBuf>>> {
+    begin_dialog(cx);
+    let answer = cx.prompt_for_paths(options);
+
+    cx.spawn(async move |cx| {
+        let paths = match answer.await {
+            Ok(Ok(paths)) => paths,
+            Ok(Err(err)) => {
+                log::warn!("open dialog failed: {err:#}");
+                None
+            }
+            Err(_) => None,
+        };
+        cx.update(end_dialog);
+        paths
     })
 }

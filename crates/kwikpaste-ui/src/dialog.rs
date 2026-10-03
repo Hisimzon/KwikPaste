@@ -17,12 +17,17 @@ use crate::{
     theme::{self, TextSize, radius, space},
 };
 
-/// 对话框的标题与按钮文字。
-#[derive(Clone, Debug)]
+type DialogCheck = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
+type FooterExtra = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+
+/// 对话框的标题、按钮文字，以及可选的确定前校验和页脚额外按钮。
+#[derive(Clone)]
 pub struct DialogSpec {
     title: SharedString,
     ok_text: Option<SharedString>,
     cancel_text: Option<SharedString>,
+    validate: Option<DialogCheck>,
+    footer_extra: Option<FooterExtra>,
 }
 
 impl DialogSpec {
@@ -31,7 +36,24 @@ impl DialogSpec {
             title: title.into(),
             ok_text: None,
             cancel_text: None,
+            validate: None,
+            footer_extra: None,
         }
+    }
+
+    /// 点确定时先校验（antd `form.validateFields`）：返回假时对话框留着，由表单自己显示错误。
+    pub fn validate(mut self, check: impl Fn(&mut Window, &mut App) -> bool + 'static) -> Self {
+        self.validate = Some(Rc::new(check));
+        self
+    }
+
+    /// 页脚里排在取消前面的额外按钮（1.x `SortableTreeModal` 的 `footerExtra`）。
+    pub fn footer_extra(
+        mut self,
+        extra: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+    ) -> Self {
+        self.footer_extra = Some(Rc::new(extra));
+        self
     }
 
     /// 确定按钮文字；不给时用注入的默认文案（`UiStrings::ok`）。
@@ -81,6 +103,8 @@ pub fn form_dialog(
         let on_cancel = answer.clone();
         let title = spec.title.clone();
         let content = content.clone();
+        let validate = spec.validate.clone();
+        let footer_extra = spec.footer_extra.clone();
         // antd Modal 默认宽 520 px；面板只有 360 px 宽，左右各留 16 px。
         let width = rems(32.5)
             .to_pixels(window.rem_size())
@@ -98,6 +122,8 @@ pub fn form_dialog(
             .content(move |body, window, cx| {
                 let ok_answer = ok_answer.clone();
                 let cancel_answer = cancel_answer.clone();
+                let validate = validate.clone();
+                let extra = footer_extra.as_ref().map(|extra| extra(window, cx));
                 body.child(
                     v_flex()
                         .gap(space(3.))
@@ -113,6 +139,7 @@ pub fn form_dialog(
                             h_flex()
                                 .justify_end()
                                 .gap(space(2.))
+                                .children(extra)
                                 .child(
                                     Button::new("kp-dialog-cancel", cancel_text.clone()).on_click(
                                         move |_, window, cx| {
@@ -125,6 +152,11 @@ pub fn form_dialog(
                                     Button::new("kp-dialog-ok", ok_text.clone())
                                         .primary()
                                         .on_click(move |_, window, cx| {
+                                            if let Some(validate) = &validate
+                                                && !validate(window, cx)
+                                            {
+                                                return;
+                                            }
                                             ok_answer.send(true);
                                             window.close_dialog(cx);
                                         }),
