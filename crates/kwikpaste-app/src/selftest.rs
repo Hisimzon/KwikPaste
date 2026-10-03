@@ -52,6 +52,8 @@ pub const PANIC: &str = "--selftest-panic=";
 /// `--selftest-drag-payload=<JSON>`：平台自测视图按住拖动时拖出的内容，
 /// `{"plain": …, "html": …, "rtf": …}` 或 `{"files": […]}`。
 pub const DRAG_PAYLOAD: &str = "--selftest-drag-payload=";
+/// `--selftest-seed=<n>`：往平台自测进程的 core 灌 n 条合成记录（含真实尺寸和 4K 图片），内存验收用。
+pub const SEED: &str = "--selftest-seed=";
 /// 让看门狗认为 vsync 线程已死，下一次显示面板时有序重启。
 pub const VSYNC_DEAD: &str = "--selftest-vsync-dead";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
@@ -129,6 +131,7 @@ fn platform_probe() -> bool {
                 || arg.starts_with(HANDOFF)
                 || arg.starts_with(PANIC)
                 || arg.starts_with(DRAG_PAYLOAD)
+                || arg.starts_with(SEED)
         })
 }
 

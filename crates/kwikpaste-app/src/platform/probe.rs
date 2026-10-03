@@ -375,6 +375,17 @@ pub fn drag_finished(report: &kwikpaste_os::drag_out::DragReport, started: i64, 
     );
 }
 
+/// 合成记录灌好了（`--selftest-seed`）。
+pub fn seeded(seeded: &super::seed::Seeded) {
+    write(
+        "seeded",
+        &format!(
+            r#","records":{},"images":{},"four_k":{},"image_bytes":{},"elapsed_ms":{}"#,
+            seeded.records, seeded.images, seeded.four_k, seeded.image_bytes, seeded.elapsed_ms
+        ),
+    );
+}
+
 /// 平台自测视图收到的鼠标事件（拖出后不该有幽灵点击、`FileDrop`）。
 pub fn view_event(event: &str, detail: &str) {
     write(event, &format!(r#","detail":{}"#, json_string(detail)));

@@ -39,6 +39,7 @@ mod panel;
 pub mod paste;
 mod probe;
 mod probe_view;
+mod seed;
 mod settings;
 mod system;
 mod tray;

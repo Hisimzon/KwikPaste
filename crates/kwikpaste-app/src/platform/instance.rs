@@ -124,6 +124,8 @@ async fn handle_selftest(
             _ => {
                 if let Some(place) = arg.strip_prefix(selftest::PANIC) {
                     selftest_panic(place);
+                } else if let Some(count) = arg.strip_prefix(selftest::SEED) {
+                    seed_history(count, cx).await;
                 } else if let Some(json) = arg.strip_prefix(selftest::DRAG_PAYLOAD) {
                     match super::drag_out::set_selftest_payload(json) {
                         Ok(()) => probe::view_event("drag_payload", json),
@@ -168,6 +170,25 @@ fn selftest_panic(place: &str) {
         #[cfg(target_os = "windows")]
         "native" => kwikpaste_os::win::crash::raise_access_violation(),
         _ => panic!("selftest panic on the main thread"),
+    }
+}
+
+/// `--selftest-seed=<n>`：在后台线程上灌合成记录，完成后写探针事件 `seeded`。
+async fn seed_history(count: &str, cx: &mut AsyncApp) {
+    let Ok(count) = count.parse::<usize>() else {
+        log::error!("selftest seed count {count:?} is not a number");
+        return;
+    };
+    let Some(core) = cx.update(|cx| core_host::core(cx).cloned()) else {
+        return;
+    };
+    match cx
+        .background_executor()
+        .spawn(super::seed::seed(core, count))
+        .await
+    {
+        Ok(seeded) => probe::seeded(&seeded),
+        Err(err) => log::error!("selftest seed failed: {err:#}"),
     }
 }
 
