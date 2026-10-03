@@ -9,7 +9,8 @@
 //               absolute or .. paths, the executable is 0755; Info.plist has the 19 keys of 1.4.0 with the
 //               same identifier, executable and document types, and LSMinimumSystemVersion 10.15.
 //   e2e         no binary contains the e2e-overrides sentinel.
-//   size        the Windows installers stay within the budget: warning above 5.5 MiB, error above 6 MiB.
+//   size        the Windows installers stay within the budget in lib/size.mjs: warning above 5.5 MiB,
+//               error above 6 MiB.
 //   latest.json must not exist: old clients read GitHub's latest/download/latest.json.
 //
 // Usage: node scripts/ci/check-native-artifacts.mjs <dir> --version <v> [--identity production|test]
@@ -21,12 +22,10 @@ import { pathToFileURL } from "node:url";
 import { tarEntries, zipEntries, zipRead } from "./lib/archive.mjs";
 import { parsePublicKey, verifySignature } from "./lib/minisign.mjs";
 import { parsePlist } from "./lib/plist.mjs";
+import { checkSetupSize } from "./lib/size.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 export const SENTINEL = "KWIKPASTE_E2E_OVERRIDES_ENABLED";
-const MIB = 1024 * 1024;
-export const SETUP_WARN_BYTES = 5.5 * MIB;
-export const SETUP_MAX_BYTES = 6 * MIB;
 
 const say = (line) => {
   process.stdout.write(`${line}\n`);
@@ -271,15 +270,14 @@ export const checkDirectory = (options) => {
       if (buf.toString("latin1", 0, 2) !== "MZ") {
         problems.push(`${name} is not an executable`);
       }
-      const mib = (size / MIB).toFixed(2);
-      if (size > SETUP_MAX_BYTES) {
-        problems.push(`${name} is ${mib} MiB, over the 6.0 MiB limit`);
-      } else if (size > SETUP_WARN_BYTES) {
-        warnings.push(
-          `${name} is ${mib} MiB, over the 5.5 MiB target (limit 6.0 MiB)`,
-        );
+      const { note, problem, warning } = checkSetupSize(name, size);
+      if (problem) {
+        problems.push(problem);
+      } else if (warning) {
+        warnings.push(warning);
+      } else {
+        notes.push(note);
       }
-      notes.push(`${name}: ${size} bytes (${mib} MiB)`);
       checkSig(name);
     } else if (portable) {
       known.add(name);

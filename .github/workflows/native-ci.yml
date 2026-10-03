@@ -11,6 +11,8 @@ name: Native CI
 #          GitHub 的 Windows 机器没有显卡，走的是 WARP 软件渲染；macOS Intel 在 Apple Silicon 上经 Rosetta 运行。
 #          Windows x64 另跑 tools/platform-probes/panel-invariants.ps1：面板窗口样式、MA_NOACTIVATE、
 #          显示位置、最小尺寸、不抢前台。它不注入键鼠，只要有桌面会话。
+#   installer-size  用 build 的 Windows exe 按发布流水线的方式打 NSIS 安装包（不签名、不上传），按 MiB 报体积：
+#          超过 5.5 MiB 警告，超过 6 MiB 失败（scripts/ci/lib/size.mjs）。单独成 job，超预算不影响 smoke。
 #
 # 1.x 的 Tauri 版（src/、src-tauri/）不在这里检查，见 pr-check.yml 和 release.yml。
 
@@ -286,6 +288,57 @@ jobs:
           path: target/${{ matrix.target }}/release/KwikPaste${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 7
+
+  installer-size:
+    name: Installer size ${{ matrix.label }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            target: x86_64-pc-windows-msvc
+          - label: Windows ARM64
+            target: aarch64-pc-windows-msvc
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # tauri bundle 读 workspace 的 cargo metadata。
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Download
+        uses: actions/download-artifact@v4
+        with:
+          name: KwikPaste-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # tauri bundle 用 lockfile 里精确的 @tauri-apps/cli 2.11.4。
+      - name: Install Tauri CLI
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      # 正式身份的配置与钩子，和发布一样；不签更新签名（--no-sign），产物只量体积。
+      - name: Package
+        shell: bash
+        run: node scripts/release/package-native.mjs --target ${{ matrix.target }} --out dist --no-sign
+
+      - name: Check size
+        shell: bash
+        run: node scripts/ci/check-installer-size.mjs dist/KwikPaste_*-setup.exe --exe "target/${{ matrix.target }}/release/KwikPaste.exe"
 
   smoke:
     name: Smoke ${{ matrix.label }}
