@@ -172,11 +172,12 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         }
     };
 
-    if repeats.is_repeat(&item.content_hash, Instant::now()) {
-        return None;
-    }
-    // 自身写回触发的变更：跳过入库，避免回环。
-    if core.guard.should_skip(&item.content_hash) {
+    // 同一次复制的重复通知、自身写回触发的变更（避免回环）都跳过入库。两样都要判：
+    // 刚复制过的内容马上被写回时，写回的通知也是「重复」，但仍要消费掉写回登记，
+    // 不然它会吞掉之后一次真的复制。
+    let repeat = repeats.is_repeat(&item.content_hash, Instant::now());
+    let own_writeback = core.guard.should_skip(&item.content_hash);
+    if repeat || own_writeback {
         return None;
     }
 

@@ -135,6 +135,22 @@ fn one_copy_takes_one_sync_number() {
 }
 
 #[test]
+fn writing_back_a_just_copied_record_still_consumes_the_writeback_guard() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let mut repeats = RepeatFilter::new(Duration::from_secs(60));
+
+    let id = notify_in(&core, text("pasted right back"), &mut repeats).unwrap();
+    block_on(core.copy_item(&id, false)).unwrap();
+    let state = fixture.clipboard.snapshot();
+    // 写回的通知既是自身写回，也是刚才那次复制的「重复」。
+    assert_eq!(notify_in(&core, state.clone(), &mut repeats), None);
+
+    // 过了合并窗口再复制同样的内容，是真的复制：写回登记已经消费掉，不会把它吞掉。
+    assert_eq!(copy_in(&core, state), Some(id));
+}
+
+#[test]
 fn capture_skips_excluded_apps_self_writes_and_pauses() {
     let fixture = Fixture::new();
     let core = fixture.start();
