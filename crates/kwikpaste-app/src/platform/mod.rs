@@ -229,11 +229,25 @@ pub fn start<V: Render>(
     // Host 请求（托盘、快捷键、第二次启动和备份文件）统一交给偏好窗口。
     // 注册必须先于 `queue_launch_arguments`，这样冷启动携带的备份文件不会退回面板。
     host::set_handler(cx, |request, cx| {
-        if let Err(err) = crate::preferences::open_request(cx, request.clone()) {
+        let result = if matches!(request, host::HostRequest::OpenPreferences { .. })
+            && core_host::core(cx).is_some_and(|core| !core.settings().onboarding.completed)
+        {
+            // 与 1.x 相同：首次启动尚未完成引导时，偏好请求先打开引导窗。
+            crate::preferences::open_onboarding(cx)
+        } else {
+            crate::preferences::open_request(cx, request.clone())
+        };
+        if let Err(err) = result {
             log::error!("could not handle host request {request:?}: {err:#}");
         }
     });
     host::queue_launch_arguments(cx);
+    let should_open_onboarding = (!selftest::active()
+        && core_host::core(cx).is_some_and(|core| !core.settings().onboarding.completed))
+        || selftest::onboarding_requested();
+    if should_open_onboarding && let Err(err) = crate::preferences::open_onboarding(cx) {
+        log::error!("could not open first-run onboarding: {err:#}");
+    }
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
     updater::start(cx);

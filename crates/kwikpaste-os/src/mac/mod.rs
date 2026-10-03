@@ -4,5 +4,6 @@ pub mod apps;
 pub mod keystroke;
 pub mod monitor;
 pub mod panel;
+pub mod permissions;
 pub mod single_instance;
 pub mod system;

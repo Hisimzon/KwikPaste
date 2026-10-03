@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod onboarding;
 pub(crate) mod view;
 
 pub mod icons;
@@ -29,4 +30,8 @@ pub fn open_request(cx: &mut App, request: HostRequest) -> Result<()> {
 
 pub fn open(cx: &mut App) -> Result<()> {
     view::open(cx)
+}
+
+pub fn open_onboarding(cx: &mut App) -> Result<()> {
+    onboarding::open(cx)
 }

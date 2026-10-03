@@ -425,7 +425,7 @@ fn general_sections(portable: bool) -> Vec<Section> {
     sections
 }
 
-fn shortcut_settings() -> Vec<Setting> {
+pub(super) fn shortcut_settings() -> Vec<Setting> {
     let mut settings = vec![
         Setting::new("shortcuts.openClipboard", Control::ShortcutRecorder)
             .path("shortcuts.openClipboard")

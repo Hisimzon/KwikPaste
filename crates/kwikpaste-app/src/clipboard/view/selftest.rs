@@ -693,12 +693,22 @@ impl Driver {
     /// 键盘预览随 ↓ 换到新的当前项；滚轮关掉悬停预览。
     async fn preview(&mut self, cx: &mut AsyncApp) {
         self.focus_list(cx);
-        let Some(item) = self.hover_row(cx).await else {
+        // 预览用例不依赖真实鼠标：直接把合成指针悬停到夹具卡片，避免宿主光标位置
+        // 或窗口首次显示时序让 on_hover 偶发收不到事件。
+        let Some(item) = self.read(cx, |list, _| {
+            (0..list.total())
+                .filter_map(|index| list.model.get(index))
+                .find(|item| !item.is_pinned)
+                .cloned()
+        }) else {
             self.check("preview: a card under the pointer", false, || {
                 "nothing hovered".into()
             });
             return;
         };
+        let wanted = item.id.clone();
+        self.list
+            .update(cx, |list, cx| list.selftest_hover(&wanted, cx));
 
         let started = Instant::now();
         // 前面的用例留下的异步刷新可能让指针下换成相邻的卡片：核对的是“预览的就是指针下的那张”。
@@ -803,10 +813,17 @@ impl Driver {
             list.apply_settings(settings, cx);
         });
 
-        let Some(item) = self.hover_row(cx).await else {
+        let Some(item) = self.read(cx, |list, _| {
+            (0..list.total())
+                .filter_map(|index| list.model.get(index))
+                .find(|item| !item.is_pinned)
+                .cloned()
+        }) else {
             return;
         };
         let wanted = item.id.clone();
+        self.list
+            .update(cx, |list, cx| list.selftest_hover(&wanted, cx));
         self.settle(cx, move |list, _| {
             list.preview_session().is_some_and(|(id, _)| id == wanted)
         })

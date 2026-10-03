@@ -78,6 +78,8 @@ pub const CORE_LIST: &str = "--selftest-core-list";
 pub const PANEL_UI: &str = "--selftest-panel-ui";
 /// 偏好设置窗口交互自测：打开窗口、切换页面、写入开关并验证搜索路径。
 pub const PREFERENCES: &str = "--selftest-preferences";
+/// 首次引导窗：打开窗口、检查步骤并写入完成标记。
+pub const ONBOARDING: &str = "--selftest-onboarding";
 
 const SMOKE_DURATION: Duration = Duration::from_secs(3);
 /// 平台探针最长运行时间：测量脚本中途出错时不留下进程。
@@ -108,6 +110,7 @@ pub fn kind() -> Option<&'static str> {
         (CORE_LIST, "core-list"),
         (PANEL_UI, "panel-ui"),
         (PREFERENCES, "preferences"),
+        (ONBOARDING, "onboarding"),
         (UPDATER_UI, "updater-ui"),
         (ANNOUNCEMENT, "announcement"),
         (CRASH_GAVE_UP, "crash-gave-up"),
@@ -174,6 +177,10 @@ pub fn preferences_requested() -> bool {
     enabled(PREFERENCES)
 }
 
+pub fn onboarding_requested() -> bool {
+    enabled(ONBOARDING)
+}
+
 fn env_enabled() -> bool {
     std::env::var_os(ENV).is_some_and(|value| value == "1")
 }
@@ -235,6 +242,9 @@ pub fn schedule(cx: &mut App) {
     }
     if preferences_requested() {
         preferences(cx);
+    }
+    if onboarding_requested() {
+        onboarding(cx);
     }
     if enabled(PANEL_INVARIANTS)
         && let Some(panel) = cx.try_global::<Panel>()
@@ -313,6 +323,26 @@ fn preferences(cx: &mut App) {
         log::info!(
             "preferences selftest: opened=true switched=true setting_updated={setting_updated} shortcut_conflict_checked={shortcut_conflict_checked} shortcut_recording_checked={shortcut_recording_checked} import_confirmation_checked={import_confirmation_checked} storage_overview_checked={storage_overview_checked} search_checked={search_checked}"
         );
+        cx.update(|cx| cx.quit());
+    })
+    .detach();
+}
+
+/// 引导窗自测：窗口已经由平台层打开，随后用真实 core 写入完成标记并退出。
+fn onboarding(cx: &mut App) {
+    let core = crate::core_host::core(cx).cloned();
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        let completed = if let Some(core) = core {
+            core.update_settings(json!({ "onboarding": { "completed": true, "lastStep": 4 } }))
+                .await
+                .is_ok()
+        } else {
+            false
+        };
+        log::info!("onboarding selftest: opened=true completed={completed}");
         cx.update(|cx| cx.quit());
     })
     .detach();

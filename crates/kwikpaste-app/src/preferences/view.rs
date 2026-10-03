@@ -73,7 +73,7 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn bring_window_to_front(window: &Window) {
+pub(super) fn bring_window_to_front(window: &Window) {
     use kwikpaste_os::win::foreground::bring_to_front;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -87,7 +87,7 @@ fn bring_window_to_front(window: &Window) {
 }
 
 #[cfg(target_os = "macos")]
-fn bring_window_to_front(_: &Window) {
+pub(super) fn bring_window_to_front(_: &Window) {
     // TODO: bridge to NSWindow makeKeyAndOrderFront without activating the panel.
     log::debug!("macOS preferences foreground handoff is not implemented yet");
 }
@@ -385,6 +385,11 @@ impl Preferences {
                     "localData.logDirectory" => this.open_directory(PreferenceDirectory::Logs, cx),
                     "organizing.customGroups" => this.open_group_manager(window, cx),
                     "source.excludedApps" => this.open_source_apps(window, cx),
+                    "control.reopenOnboarding" => {
+                        if let Err(error) = super::open_onboarding(cx) {
+                            log::warn!("could not reopen onboarding: {error:#}");
+                        }
+                    }
                     "about.checkUpdates" => {
                         log::info!("manual update check requested from preferences")
                     }
@@ -995,27 +1000,9 @@ impl Preferences {
                     .as_ref()
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default();
-                let conflict =
-                    shortcut_conflicts_with_settings(setting.id, current, &self.settings);
                 let recording = self.recording == Some(setting.id);
-                let label: gpui::SharedString = if recording {
-                    i18n::t("preferences:controls.recordShortcut")
-                } else if conflict {
-                    format!("{} ⚠", text::format_shortcut(current)).into()
-                } else {
-                    text::format_shortcut(current).into()
-                };
                 let id = setting.id;
-                Button::new(format!("shortcut-{}", setting.id), label)
-                    .ghost()
-                    .when(conflict && !recording, |button| button.danger())
-                    .tooltip(if recording {
-                        i18n::t("preferences:controls.recordShortcut")
-                    } else if conflict {
-                        i18n::t("preferences:controls.shortcutConflict")
-                    } else {
-                        i18n::t("preferences:controls.recordShortcut")
-                    })
+                shortcut_recorder_button(id, current, &self.settings, recording)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.begin_recording(id, window, cx);
                     }))
@@ -1469,6 +1456,33 @@ fn normalize_recorded_key(key: &str) -> Option<String> {
         _ => return None,
     };
     Some(name.to_owned())
+}
+
+/// 偏好设置与首次引导共用的快捷键录制控件外观。
+pub(crate) fn shortcut_recorder_button(
+    id: &'static str,
+    current: &str,
+    settings: &Settings,
+    recording: bool,
+) -> Button {
+    let conflict = shortcut_conflicts_with_settings(id, current, settings);
+    let label: gpui::SharedString = if recording {
+        i18n::t("preferences:controls.recordShortcut")
+    } else if conflict {
+        format!("{} ⚠", text::format_shortcut(current)).into()
+    } else {
+        text::format_shortcut(current).into()
+    };
+    Button::new(format!("shortcut-{id}"), label)
+        .ghost()
+        .when(conflict && !recording, |button| button.danger())
+        .tooltip(if recording {
+            i18n::t("preferences:controls.recordShortcut")
+        } else if conflict {
+            i18n::t("preferences:controls.shortcutConflict")
+        } else {
+            i18n::t("preferences:controls.recordShortcut")
+        })
 }
 
 pub(crate) fn search_matches(query: &str, title: &str, keywords: &[&str]) -> bool {

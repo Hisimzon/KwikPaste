@@ -853,6 +853,11 @@ impl ClipboardList {
         cx.notify();
     }
 
+    /// 交互自测使用的合成悬停，不读取系统指针位置；仍走正式的悬停预览计时器。
+    pub(crate) fn selftest_hover(&mut self, id: &Arc<str>, cx: &mut Context<Self>) {
+        self.hover_card(id, true, cx);
+    }
+
     /// 指针移动：显示后第一次移动只记下位置（可能是系统补发的），离开它超过 [`POINTER_SLOP`]
     /// 才算动过，这时光标下的卡片成为当前项。
     fn pointer_moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {

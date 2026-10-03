@@ -60,7 +60,7 @@ impl Language {
 /// 回退语言（1.x `fallbackLng`）。
 const FALLBACK: Language = Language::ZhCn;
 
-/// 命名空间与 1.x 一致；`gallery` 是原生版组件展示窗专用的新增命名空间。
+/// 命名空间与 1.x 一致；`gallery` 与 `onboarding` 是原生版窗口使用的新增命名空间。
 const SOURCES: &[(Language, &str, &str)] = &[
     (
         Language::ZhCn,
@@ -93,6 +93,11 @@ const SOURCES: &[(Language, &str, &str)] = &[
         include_str!("../locales/zh-CN/gallery.json"),
     ),
     (
+        Language::ZhCn,
+        "onboarding",
+        include_str!("../locales/zh-CN/onboarding.json"),
+    ),
+    (
         Language::EnUs,
         "common",
         include_str!("../locales/en-US/common.json"),
@@ -121,6 +126,11 @@ const SOURCES: &[(Language, &str, &str)] = &[
         Language::EnUs,
         "gallery",
         include_str!("../locales/en-US/gallery.json"),
+    ),
+    (
+        Language::EnUs,
+        "onboarding",
+        include_str!("../locales/en-US/onboarding.json"),
     ),
 ];
 
@@ -317,6 +327,7 @@ mod tests {
         "preferences",
         "preview",
         "gallery",
+        "onboarding",
     ];
 
     fn catalogs() -> &'static Catalogs {
