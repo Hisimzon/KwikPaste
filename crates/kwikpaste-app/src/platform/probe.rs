@@ -333,6 +333,53 @@ pub fn quitting() {
     write("quit", "");
 }
 
+/// 拖出开始（`DoDragDrop` 之前），带面板到此为止收到的激活次数。
+pub fn drag_started(data: &kwikpaste_os::drag_out::DragData) {
+    let kind = match data {
+        kwikpaste_os::drag_out::DragData::Text { html, rtf, .. } => match (html, rtf) {
+            (Some(_), _) => "html",
+            (None, Some(_)) => "rtf",
+            (None, None) => "text",
+        },
+        kwikpaste_os::drag_out::DragData::Files(_) => "files",
+    };
+    #[cfg(target_os = "windows")]
+    let activations = kwikpaste_os::win::panel::counters().activations;
+    #[cfg(target_os = "macos")]
+    let activations = 0;
+    write(
+        "drag_started",
+        &format!(r#","kind":"{kind}","activations":{activations}"#),
+    );
+}
+
+/// 拖出结束：结果、effect、返回码；`started`、`returned` 是 `DoDragDrop` 前后的刻度，Esc 取消时带上请求时刻。
+pub fn drag_finished(report: &kwikpaste_os::drag_out::DragReport, started: i64, returned: i64) {
+    let cancel = report
+        .cancel_requested
+        .map_or_else(|| "null".to_owned(), |ticks| ticks.to_string());
+    #[cfg(target_os = "windows")]
+    let native = format!(
+        r#","activations":{},"foreground":{}"#,
+        kwikpaste_os::win::panel::counters().activations,
+        kwikpaste_os::win::foreground_window()
+    );
+    #[cfg(target_os = "macos")]
+    let native = String::new();
+    write(
+        "drag_finished",
+        &format!(
+            r#","result":"{:?}","effect":{},"hresult":{},"started":{started},"returned":{returned},"cancel_requested":{cancel}{native}"#,
+            report.result, report.effect, report.hresult
+        ),
+    );
+}
+
+/// 平台自测视图收到的鼠标事件（拖出后不该有幽灵点击、`FileDrop`）。
+pub fn view_event(event: &str, detail: &str) {
+    write(event, &format!(r#","detail":{}"#, json_string(detail)));
+}
+
 /// 启动时的崩溃重启状态：第几次重启、是否降级、DirectComposition 是否被关掉。
 pub fn health(relaunch: u32, degraded: bool, direct_composition_disabled: bool) {
     write(

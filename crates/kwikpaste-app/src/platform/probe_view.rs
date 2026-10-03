@@ -2,16 +2,19 @@
 //! `tools/platform-probes` 验证钩子按键、编辑态和输入法。不是正式界面，接法与正式 UI 相同：
 //! 收到 `Shown` 把焦点放到列表上，在输入框上按下鼠标或按 Ctrl+F 请求编辑态，
 //! `EditingStarted` 后聚焦输入框，Esc 退出编辑态。Enter 粘贴最新一条记录，Ctrl+Enter 纯文本粘贴，
-//! 走 [`super::paste`]（正式列表粘贴选中的记录）。
+//! 走 [`super::paste`]（正式列表粘贴选中的记录）。中间一块是拖出源，接法与 [`super::drag_out`]
+//! 文档里卡片的接法相同。
 
 use gpui::{
-    App, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding, MouseButton,
-    MouseDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription,
-    TaskExt as _, Window, actions, div,
+    App, Context, ExternalPaths, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TaskExt as _, Window,
+    actions, div,
 };
 use kwikpaste_core::db::models::ClipboardItemQuery;
 use kwikpaste_ui::{Input, TextInput, theme};
 
+use super::drag_out::{self, DragTracker};
 use super::editing::EditTrigger;
 use super::panel::{Panel, PanelCommand, PanelEvent, Trigger, TriggerSource};
 use super::{paste, probe};
@@ -29,6 +32,7 @@ pub struct ProbeView {
     list: FocusHandle,
     selected: i32,
     editing: bool,
+    drag: DragTracker,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -66,6 +70,7 @@ impl ProbeView {
             list: cx.focus_handle(),
             selected: 0,
             editing: false,
+            drag: DragTracker::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -163,7 +168,43 @@ impl Render for ProbeView {
                     }))
                     .child(Input::search(&self.input)),
             )
-            .child(div().flex_1().child("KwikPaste platform probe"))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if this.drag.moved(event, window).is_some()
+                    && let Some(data) = drag_out::selftest_payload()
+                {
+                    drag_out::start(data, None, window, cx).detach_and_log_err(cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| this.drag.release()),
+            )
+            .on_drop(|paths: &ExternalPaths, _, _| {
+                probe::view_event("file_drop", &format!("{:?}", paths.paths()));
+            })
+            .child(
+                // 拖出源：按住拖动时拖 `--selftest-drag-payload` 给的内容；点击、抬起都写进探针日志，
+                // 用来核对拖后没有幽灵点击。
+                div()
+                    .id("drag-source")
+                    .flex_1()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, _| {
+                            this.drag.press("probe", event.position);
+                        }),
+                    )
+                    .on_mouse_up(MouseButton::Left, |_, _, _| {
+                        probe::view_event("mouse_up", "left");
+                    })
+                    .on_mouse_up(MouseButton::Right, |_, _, _| {
+                        probe::view_event("mouse_up", "right");
+                    })
+                    .on_click(|event, _, _| {
+                        probe::view_event("click", &format!("{:?}", event.position()));
+                    })
+                    .child("KwikPaste platform probe"),
+            )
             .child(div().text_color(tokens.secondary).child(status))
     }
 }

@@ -24,8 +24,11 @@
 //!   文本大小已经同步给 `kwikpaste_ui::theme::set_text_scale`，减少动画已写进 `cx.reduce_motion()`。
 //! - 粘贴、复制：列表的意图交给 [`paste`] 模块（[`paste::paste`]、[`paste::paste_fragment`]、
 //!   [`paste::copy`]），流程与时序见该模块文档；全局快速粘贴由热键直接走 [`paste::quick_paste`]。
+//! - 拖出：卡片按下记 [`drag_out::DragTracker`]，越过阈值后 [`drag_out::start_item`]，接法见
+//!   [`drag_out`] 模块文档。
 //! - core：`crate::core_host::core(cx)` 取 `Core`；[`CoreEvents`] 转发 core 的全部事件。
 
+pub mod drag_out;
 mod editing;
 mod hotkey;
 mod instance;
@@ -158,6 +161,9 @@ pub fn start<V: Render>(
     cx.set_cursor_hide_mode(CursorHideMode::Never);
     probe::init();
     watchdog::serve(cx);
+    if selftest::enabled(selftest::PLATFORM) {
+        drag_out::guard_selftest_drops();
+    }
 
     let StartedCore { host, events } = launch.core;
     cx.set_global(host);

@@ -290,7 +290,7 @@ impl NativePanel {
     pub fn probe_fields(&self, placement: Option<&Placement>) -> String {
         let counters = win_panel::counters();
         let mut fields = format!(
-            r#","hwnd":{},"visible":{},"foreground":{},"editing":{},"non_activating":{},"dpi":{},"text_scale":{},"phantom_activations":{},"mouse_activate_replies":{:?},"mouse_activate_overrides":{}"#,
+            r#","hwnd":{},"visible":{},"foreground":{},"editing":{},"non_activating":{},"dpi":{},"text_scale":{},"activations":{},"phantom_activations":{},"mouse_activate_replies":{:?},"mouse_activate_overrides":{}"#,
             self.panel.raw(),
             self.panel.is_visible(),
             os::foreground_window(),
@@ -298,6 +298,7 @@ impl NativePanel {
             self.panel.is_non_activating(),
             self.panel.dpi(),
             self.text_scale.get(),
+            counters.activations,
             counters.phantom_activations,
             counters.mouse_activate_replies,
             counters.mouse_activate_overrides,

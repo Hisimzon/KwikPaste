@@ -98,6 +98,11 @@ async fn handle_selftest(
             _ => {
                 if let Some(place) = arg.strip_prefix(selftest::PANIC) {
                     selftest_panic(place);
+                } else if let Some(json) = arg.strip_prefix(selftest::DRAG_PAYLOAD) {
+                    match super::drag_out::set_selftest_payload(json) {
+                        Ok(()) => probe::view_event("drag_payload", json),
+                        Err(err) => log::error!("selftest drag payload rejected: {err:#}"),
+                    }
                 } else if let Some(patch) = arg.strip_prefix(selftest::SETTINGS) {
                     update_settings(patch, cx).await;
                 } else if let Some(code) = arg.strip_prefix(selftest::HANDOFF) {

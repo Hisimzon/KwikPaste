@@ -72,6 +72,8 @@ function Start-ProbeApp([string]$Exe, [string]$ResultDir, [switch]$KeepState, [s
 function Send-ProbeCommand([string]$Exe, [string]$Command) {
     $env:KWIKPASTE_SELFTEST = '1'
     $argument = $Command.Replace('"', '\"')
+    # Start-Process joins arguments with spaces as they are; an argument with a space must be quoted.
+    if ($argument -match '\s') { $argument = '"' + $argument + '"' }
     $second = Start-Process -FilePath $Exe -ArgumentList $argument -PassThru -NoNewWindow -RedirectStandardError $script:SecondStderr
     $null = $second.Handle
     if (-not $second.WaitForExit(15000)) { $second.Kill(); throw "The second launch with $Command did not exit." }

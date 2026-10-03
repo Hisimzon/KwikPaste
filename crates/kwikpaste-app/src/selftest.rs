@@ -49,6 +49,9 @@ pub const UI_PANEL: &str = "--selftest-ui-panel";
 pub const CRASH_RESTART: &str = "--selftest-crash-restart";
 /// `--selftest-panic=main|thread`：在主线程（前台任务里）或一个新线程上 panic。
 pub const PANIC: &str = "--selftest-panic=";
+/// `--selftest-drag-payload=<JSON>`：平台自测视图按住拖动时拖出的内容，
+/// `{"plain": …, "html": …, "rtf": …}` 或 `{"files": […]}`。
+pub const DRAG_PAYLOAD: &str = "--selftest-drag-payload=";
 /// 让看门狗认为 vsync 线程已死，下一次显示面板时有序重启。
 pub const VSYNC_DEAD: &str = "--selftest-vsync-dead";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
@@ -125,6 +128,7 @@ fn platform_probe() -> bool {
                 || arg.starts_with(COPY_ITEM)
                 || arg.starts_with(HANDOFF)
                 || arg.starts_with(PANIC)
+                || arg.starts_with(DRAG_PAYLOAD)
         })
 }
 
