@@ -111,9 +111,29 @@
     "selected": "已选 {{count}} 项"
   },
   "shortcuts": {
+    "closePreviewFilterWindow": "关闭预览 / 筛选 / 窗口",
     "copySelected": "复制选中项",
+    "createGroup": "新增分组",
+    "deleteSelected": "删除选中项",
+    "favoriteSelected": "收藏 / 取消收藏",
     "focusSearch": "聚焦搜索框",
-    "navigate": "上下导航"
+    "navigate": "上下导航",
+    "noteSelected": "添加 / 编辑备注",
+    "openPreference": "打开偏好设置窗口",
+    "openSelected": "打开链接 / 邮箱 / 文件位置",
+    "pasteNth": "粘贴前 10 项",
+    "pasteSelected": "粘贴选中项",
+    "pasteSelectedPlain": "粘贴选中项为纯文本",
+    "pinSelected": "置顶 / 取消置顶",
+    "pinWindow": "固定 / 取消固定窗口",
+    "previewSelected": "按住预览选中项",
+    "selectAll": "全选 / 取消全选",
+    "showShortcuts": "显示快捷键",
+    "splitSelected": "拆词选中项",
+    "switchCategory": "切换分类",
+    "switchCustomGroup": "切换自定义分组",
+    "title": "键盘快捷键",
+    "toggleRange": "切换全部 / 收藏"
   },
   "types": {
     "color": "颜色",

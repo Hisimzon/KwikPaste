@@ -42,6 +42,10 @@ pub const COPY_ITEM: &str = "--selftest-copy-item=";
 pub const READ_NOW: &str = "--selftest-read-now";
 /// `--selftest-handoff=<code>`：演练更新交接的宿主步骤后以 `code` 退出（见 `platform::updater`）。
 pub const HANDOFF: &str = "--selftest-handoff=";
+/// 直接显示更新窗、公告框或崩溃放弃重启提示，供开发截图使用。
+pub const UPDATER_UI: &str = "--selftest-updater-ui";
+pub const ANNOUNCEMENT: &str = "--selftest-announcement";
+pub const CRASH_GAVE_UP: &str = "--selftest-crash-gave-up";
 /// 把历史记录总数写进探针日志。
 pub const COUNT: &str = "--selftest-count";
 /// 平台探针的面板放正式的列表（UI 的 `build_panel`），不放平台自测视图；验证列表的粘贴意图用。
@@ -104,6 +108,9 @@ pub fn kind() -> Option<&'static str> {
         (CORE_LIST, "core-list"),
         (PANEL_UI, "panel-ui"),
         (PREFERENCES, "preferences"),
+        (UPDATER_UI, "updater-ui"),
+        (ANNOUNCEMENT, "announcement"),
+        (CRASH_GAVE_UP, "crash-gave-up"),
     ];
 
     Some(

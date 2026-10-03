@@ -17,11 +17,32 @@
     "conflict": "{{shortcut}} 已被「{{label}}」占用",
     "press": "按下录入快捷键"
   },
+  "health": {
+    "gaveUpBody": "KwikPaste 已多次异常退出，自动重启已暂停。",
+    "gaveUpTitle": "已暂停自动重启",
+    "ok": "知道了",
+    "openLogs": "打开日志目录"
+  },
   "ui": {
     "ok": "确定",
     "selectPlaceholder": "请选择"
   },
   "units": {
     "items": "{{count}} 项"
+  },
+  "update": {
+    "available": "发现新版本 {{version}}",
+    "current": "当前版本：{{version}}",
+    "download": "下载更新",
+    "downloaded": "下载完成",
+    "downloading": "下载进度：{{progress}}%",
+    "error": "更新失败：{{message}}",
+    "install": "安装更新",
+    "installing": "正在安装",
+    "later": "稍后",
+    "notes": "更新说明",
+    "skip": "跳过此版本",
+    "title": "KwikPaste 更新",
+    "unsupported": "暂无更新说明"
   }
 }

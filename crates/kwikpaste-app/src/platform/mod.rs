@@ -59,14 +59,14 @@ mod native;
 #[path = "native_windows.rs"]
 mod native;
 
-use std::rc::Rc;
+use std::{path::PathBuf, rc::Rc};
 
 use anyhow::Context as _;
 use gpui::{App, AppContext as _, CursorHideMode, Entity, Platform, QuitMode, Render, Window};
 use kwikpaste_os::single_instance::{self, Claim, Invocation, PrimaryInstance};
 
 use crate::core_host::{self, StartedCore};
-use crate::{health, selftest};
+use crate::{health, i18n::t, selftest};
 
 #[allow(unused_imports, reason = "UI 接线用的接口，见本模块文档")]
 pub use editing::EditTrigger;
@@ -203,6 +203,11 @@ pub fn start<V: Render>(
         panel::open(cx, text_scale, build_panel)?;
     }
     material::apply(cx);
+    if !selftest::active()
+        && let Some(log_dir) = health::take_gave_up_notice()
+    {
+        show_crash_notice(log_dir);
+    }
     let commands = cx.global::<Panel>().commands();
     keyboard::serve(cx);
     mouse::serve(cx, commands.clone());
@@ -232,6 +237,17 @@ pub fn start<V: Render>(
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
     updater::start(cx);
+    if selftest::enabled(selftest::UPDATER_UI) {
+        updater::selftest_update_window(cx);
+    }
+    if selftest::enabled(selftest::ANNOUNCEMENT) {
+        updater::selftest_announcement();
+    }
+    if selftest::enabled(selftest::CRASH_GAVE_UP)
+        && let Some(core) = core_host::core(cx)
+    {
+        show_crash_notice(core.paths().log_dir());
+    }
     // 面板起来了才算正常启动：这时再在后台清掉 1.x 的 WebView2 数据（只清一次，不挡启动）。
     if !selftest::active()
         && let Some(core) = core_host::core(cx)
@@ -241,6 +257,22 @@ pub fn start<V: Render>(
     health::set_phase(health::Phase::Idle);
 
     Ok(())
+}
+
+fn show_crash_notice(log_dir: PathBuf) {
+    let title = t("common:health.gaveUpTitle");
+    let body = t("common:health.gaveUpBody");
+    let open_logs = t("common:health.openLogs");
+    let ok = t("common:health.ok");
+    let buttons = [
+        kwikpaste_os::dialogs::DialogButton::new(open_logs),
+        kwikpaste_os::dialogs::DialogButton::new(ok),
+    ];
+    if kwikpaste_os::dialogs::show(&title, &body, &buttons) == Some(0)
+        && let Err(err) = kwikpaste_os::dialogs::open_path(&log_dir)
+    {
+        log::warn!("crash log directory could not be opened: {err}");
+    }
 }
 
 /// 进入一个短暂的阶段（粘贴、拖出），守卫丢弃时按面板是否显示回到 `Panel` 或 `Idle`。

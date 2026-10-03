@@ -322,7 +322,7 @@ fn start_fallback(restart: Restart) {
 
 /// 主实例确认之后：上次没有正常退出、又没留下崩溃记录（原生 `__fastfail`、被杀、断电）的补记一条；
 /// 普通启动时，上一轮崩溃次数超限、没再重启的记一条日志并清掉标记。最后写本次的运行标记。
-pub(super) fn after_claim(crash_file: &Path, running_file: &Path, relaunch: u32) {
+pub(super) fn after_claim(crash_file: &Path, running_file: &Path, relaunch: u32) -> bool {
     let mut log = load(crash_file);
     let mut changed = false;
 
@@ -351,7 +351,8 @@ pub(super) fn after_claim(crash_file: &Path, running_file: &Path, relaunch: u32)
         changed = true;
     }
 
-    if relaunch == 0 && log.gave_up {
+    let gave_up = relaunch == 0 && log.gave_up;
+    if gave_up {
         if let Some(last) = log
             .crashes
             .iter()
@@ -382,6 +383,7 @@ pub(super) fn after_claim(crash_file: &Path, running_file: &Path, relaunch: u32)
             started: Utc::now(),
         },
     );
+    gave_up
 }
 
 /// 正常退出：删掉运行标记。

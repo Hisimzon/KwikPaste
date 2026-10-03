@@ -5,6 +5,7 @@
 
 pub mod autostart;
 pub mod clock;
+pub mod dialogs;
 pub mod drag_out;
 pub mod geometry;
 pub mod hook_keys;

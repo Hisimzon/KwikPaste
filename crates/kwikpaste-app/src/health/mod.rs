@@ -29,8 +29,8 @@ mod logger;
 mod panic;
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 pub use crash::{Restart, exit_code, request_restart, restart_requests, spawn_relaunch};
 
@@ -98,6 +98,8 @@ pub fn phase() -> Phase {
 struct State {
     /// 崩溃记录 `<bootstrap>/state/last-crash.json`；路径解析失败时为 `None`（只写日志）。
     crash_file: Option<PathBuf>,
+    /// 原生提示中要打开的日志目录。
+    log_dir: Option<PathBuf>,
     /// 运行标记 `<bootstrap>/state/running.json`。
     running_file: Option<PathBuf>,
     /// 这是第几次崩溃重启（普通启动为 0）。
@@ -109,6 +111,7 @@ struct State {
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
+static GAVE_UP_NOTICE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 /// `main` 的第一步：开日志、装 panic hook 和原生崩溃处理。
 pub fn install() {
@@ -127,11 +130,12 @@ pub fn install() {
     let relaunch = parse_relaunch(args.iter().cloned());
     let degraded = args.iter().any(|arg| arg == DEGRADED);
     let restart_enabled = !selftest::active() || selftest::enabled(selftest::CRASH_RESTART);
-    let bootstrap = paths.map(|paths| paths.bootstrap_dir());
+    let bootstrap = paths.as_ref().map(|paths| paths.bootstrap_dir());
     let _ = STATE.set(State {
         crash_file: bootstrap
             .as_deref()
             .map(|dir| crash::state_file(dir, crash::CRASH_FILE)),
+        log_dir: paths.as_ref().map(|paths| paths.log_dir()),
         running_file: bootstrap
             .as_deref()
             .map(|dir| crash::state_file(dir, crash::RUNNING_FILE)),
@@ -172,9 +176,21 @@ fn on_native_crash(code: u32, address: usize) {
 pub fn after_claim() {
     if let Some(state) = STATE.get()
         && let (Some(crash_file), Some(running_file)) = (&state.crash_file, &state.running_file)
+        && crash::after_claim(crash_file, running_file, state.relaunch)
+        && let Some(log_dir) = &state.log_dir
     {
-        crash::after_claim(crash_file, running_file, state.relaunch);
+        let notice = GAVE_UP_NOTICE.get_or_init(|| Mutex::new(None));
+        if let Ok(mut notice) = notice.lock() {
+            *notice = Some(log_dir.clone());
+        }
     }
+}
+
+/// 取出本次启动需要提示用户的崩溃放弃重启通知。
+pub fn take_gave_up_notice() -> Option<PathBuf> {
+    GAVE_UP_NOTICE
+        .get()
+        .and_then(|notice| notice.lock().ok()?.take())
 }
 
 /// 正常退出（`Application::run` 返回之后）：删掉运行标记。

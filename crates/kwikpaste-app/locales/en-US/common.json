@@ -17,11 +17,32 @@
     "conflict": "{{shortcut}} is already used by \"{{label}}\"",
     "press": "Press shortcut"
   },
+  "health": {
+    "gaveUpBody": "KwikPaste exited unexpectedly several times and automatic restart has been paused.",
+    "gaveUpTitle": "Automatic restart paused",
+    "ok": "Got it",
+    "openLogs": "Open log folder"
+  },
   "ui": {
     "ok": "OK",
     "selectPlaceholder": "Please select"
   },
   "units": {
     "items": "{{count}} items"
+  },
+  "update": {
+    "available": "Version {{version}} is available",
+    "current": "Current version: {{version}}",
+    "download": "Download update",
+    "downloaded": "Download complete",
+    "downloading": "Downloading… {{progress}}%",
+    "error": "Update failed: {{message}}",
+    "install": "Install and restart",
+    "installing": "Installing…",
+    "later": "Later",
+    "notes": "Release notes",
+    "skip": "Skip this version",
+    "title": "KwikPaste update",
+    "unsupported": "This build cannot install updates automatically."
   }
 }

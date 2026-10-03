@@ -33,7 +33,7 @@ use super::{
     header::{Header, HeaderEvent},
     host::ItemHost,
     list::{ClipboardList, ListIntent},
-    pin, request_panel,
+    pin, request_panel, shortcuts,
 };
 use crate::{
     clipboard::{
@@ -94,9 +94,7 @@ impl ClipboardPanel {
         let mut subscriptions = vec![
             cx.subscribe_in(&header, window, Self::on_header_event),
             cx.subscribe_in(&groups, window, Self::on_group_event),
-            cx.subscribe(&list, |_, _, intent: &ListIntent, _| {
-                log::debug!("list intent: {intent:?}");
-            }),
+            cx.subscribe_in(&list, window, Self::on_list_intent),
         ];
         if let Some(panel) = cx.try_global::<Panel>() {
             let events = panel.events().clone();
@@ -128,6 +126,31 @@ impl ClipboardPanel {
 
     pub fn header(&self) -> &Entity<Header> {
         &self.header
+    }
+
+    fn on_list_intent(
+        &mut self,
+        _: &Entity<ClipboardList>,
+        intent: &ListIntent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match intent {
+            ListIntent::SplitWords { id } => {
+                self.list
+                    .update(cx, |list, cx| list.split_words(id.clone(), cx));
+            }
+            ListIntent::ShowShortcuts => shortcuts::show(window, cx),
+            ListIntent::Paste { id, plain } => {
+                log::debug!("paste intent handled by panel host: {id} plain={plain}");
+            }
+            ListIntent::PasteSnippet { id, text } => {
+                log::debug!("paste snippet intent handled by panel host: {id} ({text})");
+            }
+            ListIntent::DragOut { id } => {
+                log::debug!("drag-out intent handled by panel host: {id}");
+            }
+        }
     }
 
     /// 全部自定义分组（含隐藏的），按排序。

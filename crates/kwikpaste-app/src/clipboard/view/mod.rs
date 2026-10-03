@@ -20,6 +20,7 @@ mod panel;
 pub mod pin;
 mod preview;
 pub mod selftest;
+mod shortcuts;
 
 use gpui::{Action, App, KeyBinding, actions};
 use kwikpaste_ui::INPUT_KEY_CONTEXT;

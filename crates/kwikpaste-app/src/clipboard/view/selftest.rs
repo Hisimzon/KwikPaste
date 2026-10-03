@@ -353,6 +353,8 @@ impl Driver {
         self.pin(cx).await;
         self.groups(cx).await;
         self.preview(cx).await;
+        self.split_words(cx).await;
+        self.shortcuts(cx).await;
         self.drag_out(cx).await;
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
@@ -404,18 +406,26 @@ impl Driver {
         false
     }
 
-    /// 把指针停在第一个非置顶行上（两次移动，越过显示后的指针门槛），返回悬停的记录。
+    /// 把指针停在第一个非置顶行上（重复移动，越过显示后的指针门槛），返回悬停的记录。
     async fn hover_row(&self, cx: &mut AsyncApp) -> Option<Arc<ListItem>> {
-        self.pointer_at(cx, 180., 356.);
-        self.pause(cx, 30).await;
-        self.pointer_at(cx, 180., 360.);
-        self.pause(cx, 30).await;
-        self.read(cx, |list, _| {
-            list.hovered
-                .as_ref()
-                .and_then(|id| list.model.find(id))
-                .cloned()
-        })
+        // WM_SHOWWINDOW 与首帧绘制是异步的；在 vsync 休眠/唤醒的窗口里，前两次注入可能
+        // 发生在卡片还没有命中测试区域之前。重复同一对移动，但在第二次移动后马上
+        // 检查，避免指针门槛已经越过后又用下一次移动重置悬停计时器。
+        for _ in 0..100 {
+            self.pointer_at(cx, 180., 356.);
+            self.pause(cx, 16).await;
+            self.pointer_at(cx, 180., 360.);
+            self.pause(cx, 16).await;
+            if let Some(item) = self.read(cx, |list, _| {
+                list.hovered
+                    .as_ref()
+                    .and_then(|id| list.model.find(id))
+                    .cloned()
+            }) {
+                return Some(item);
+            }
+        }
+        None
     }
 
     /// 右键菜单：在卡片上按右键弹出（画在窗口里、拿焦点），↓ 选第一项、Enter 执行（粘贴这张卡片），
@@ -810,6 +820,41 @@ impl Driver {
             "still open".into()
         });
         self.pointer_at(cx, 20., 20.);
+    }
+
+    async fn split_words(&mut self, cx: &mut AsyncApp) {
+        let Some(id) = self.select_where(cx, |item| item.kind == ItemKind::Text) else {
+            self.check("split words: a text record", false, || {
+                "no text record".into()
+            });
+            return;
+        };
+        self.focus_list(cx);
+        self.intents.borrow_mut().clear();
+        self.key(cx, "secondary-s");
+        self.pause(cx, 80).await;
+        let split = self.intents.borrow().iter().any(
+            |intent| matches!(intent, ListIntent::SplitWords { id: intent_id } if intent_id == &id),
+        );
+        let intents = self.intents.borrow().clone();
+        self.check("mod+s emits split words intent", split, || {
+            format!("intents {intents:?}")
+        });
+    }
+
+    async fn shortcuts(&mut self, cx: &mut AsyncApp) {
+        self.focus_list(cx);
+        self.key(cx, "secondary-k");
+        let opened = self.dialog_open(cx);
+        self.check("mod+k opens the shortcuts list", opened, || {
+            "dialog is closed".into()
+        });
+        if opened {
+            self.window
+                .update(cx, |_, window, cx| close_dialog(window, cx))
+                .ok();
+            self.pause(cx, 40).await;
+        }
     }
 
     /// 在卡片上按下左键再移动（`pressed_button` 为左键）。

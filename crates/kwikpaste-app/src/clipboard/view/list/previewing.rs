@@ -110,6 +110,12 @@ fn hover_delay(delay: PreviewHoverDelayMs) -> Duration {
 }
 
 impl ClipboardList {
+    /// 直接打开现有预览，并切到可选择词语的模式。
+    pub fn split_words(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
+        self.settings.clipboard.preview.text_view = PreviewTextView::Words;
+        self.open_preview(id, PreviewTrigger::Keyboard, cx);
+    }
+
     /// 正在预览的记录与打开方式。
     pub fn preview_session(&self) -> Option<(Arc<str>, PreviewTrigger)> {
         self.previewing.session.clone()
