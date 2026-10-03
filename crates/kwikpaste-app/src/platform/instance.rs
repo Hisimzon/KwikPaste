@@ -9,6 +9,9 @@ use super::panel::{PanelCommand, Trigger, TriggerSource};
 use super::{host, paste, probe, updater, watchdog};
 use crate::{core_host, selftest};
 
+/// 传给正在运行的主实例，让它走和托盘「退出应用」相同的有序退出路径。
+pub const QUIT: &str = "--quit";
+
 /// 持有主实例守卫：退出前丢弃，释放单实例名字。`sender` 是转交参数的入口，重新占回单实例时用。
 struct Instance {
     guard: Option<PrimaryInstance>,
@@ -74,6 +77,11 @@ pub fn reclaim(cx: &mut App) -> anyhow::Result<()> {
 async fn handle(invocation: &Invocation, commands: &Sender<PanelCommand>, cx: &mut AsyncApp) {
     let args = invocation.args.get(1..).unwrap_or_default();
     log::info!("another launch handed over {args:?}");
+
+    if args.iter().any(|arg| arg == QUIT) {
+        cx.update(|cx| cx.quit());
+        return;
+    }
 
     if selftest::enabled(selftest::PLATFORM) && handle_selftest(args, commands, cx).await {
         return;

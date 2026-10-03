@@ -7,7 +7,8 @@
 ;   1. .onInit 里检查系统版本（Windows 10 1803，build 17134，GPUI 的实际下限），不满足就提示并退出；
 ;   2. 保住开机自启：界面安装默认「安装前卸载旧版」，旧版卸载程序会删掉 HKCU Run 里的自启项；
 ;   3. 删掉 1.2.0 / 1.3.0 装在安装目录里的 assets\tray.ico。
-; 关掉正在运行的 1.x / 2.x 由模板的 CheckIfAppIsRunning 负责：两者的进程名都是 KwikPaste.exe。
+; 安装前先把 2.x 主实例通过 --quit 有序关掉；仍在运行时再交给模板的
+; CheckIfAppIsRunning 兜底（1.x 不认 --quit，也会走模板原来的结束逻辑）。
 
 !ifndef KWIKPASTE_MINBUILD
   !define KWIKPASTE_MINBUILD 17134
@@ -61,6 +62,27 @@ Var KwikPasteAutostart
     SetErrorLevel 1150
     Quit
   ${EndIf}
+!macroend
+
+; tauri-bundler 在安装 Section 里先插入这个钩子，再调用 CheckIfAppIsRunning。
+; 给正在运行的 2.x 最多三秒走正常退出；旧版或卡住的进程仍由模板随后处理。
+!macro NSIS_HOOK_PREINSTALL
+  IfFileExists "$INSTDIR\${MAINBINARYNAME}.exe" 0 kwikpaste_quit_done
+    ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --quit' $0
+    StrCpy $1 30
+    kwikpaste_quit_wait:
+      nsis_tauri_utils::FindProcess "${MAINBINARYNAME}.exe"
+      Pop $2
+      ${If} $2 != 0
+        Goto kwikpaste_quit_done
+      ${EndIf}
+      ${If} $1 = 0
+        Goto kwikpaste_quit_done
+      ${EndIf}
+      Sleep 100
+      IntOp $1 $1 - 1
+      Goto kwikpaste_quit_wait
+    kwikpaste_quit_done:
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL

@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::io;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
@@ -24,6 +24,7 @@ const PREVIEW_SIZE: f64 = 128.;
 static CREATED: AtomicU32 = AtomicU32::new(0);
 static ENDED: AtomicU32 = AtomicU32::new(0);
 static UNREGISTERED: AtomicU32 = AtomicU32::new(0);
+static SELFTEST_RELEASE: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static SOURCE: RefCell<Option<Retained<DragSource>>> = const { RefCell::new(None) };
@@ -182,7 +183,32 @@ pub unsafe fn begin_session_sync(
     });
     let source: Retained<DragSource> = unsafe { msg_send![super(source), init] };
     SOURCE.with(|slot| *slot.borrow_mut() = Some(source.clone()));
+
+    // `beginDraggingSession` enters AppKit's tracking loop synchronously. The selftest arms this
+    // before posting its synthetic drag event; enqueueing the release at the front here means it
+    // is observed after the current drag event starts the session, without CGEvent permissions.
+    let selftest_release = if SELFTEST_RELEASE.swap(false, Ordering::SeqCst) {
+        Some(
+            NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                NSEventType::LeftMouseUp,
+                event.locationInWindow(),
+                NSEventModifierFlags::empty(),
+                0.,
+                window.windowNumber(),
+                None,
+                0,
+                1,
+                1.,
+            )
+            .ok_or_else(|| io::Error::other("selftest mouse-up event could not be created"))?,
+        )
+    } else {
+        None
+    };
     set_active(true);
+    if let Some(event) = selftest_release {
+        NSApplication::sharedApplication(marker).postEvent_atStart(&event, true);
+    }
     let session = view.beginDraggingSessionWithItems_event_source(
         &items,
         &event,
@@ -236,6 +262,10 @@ pub fn selftest_escape() -> io::Result<()> {
 }
 
 /// 给自测视图发送一组本进程鼠标事件；实际拖出仍由视图的 `on_mouse_move` 同步发起。
+///
+/// AppKit 的拖动 tracking loop 在 CI 上没有真实鼠标松开事件，因此先为本次会话 armed，
+/// 再由 `begin_session_sync` 把合成的 `LeftMouseUp` 放进本进程事件队列，让 `endedAtPoint`
+/// 走正常的清理路径。
 pub unsafe fn selftest_drag(native: isize) -> io::Result<()> {
     let view = unsafe { &*(native as *const NSView) };
     let bounds = view.bounds();
@@ -243,6 +273,7 @@ pub unsafe fn selftest_drag(native: isize) -> io::Result<()> {
         bounds.origin.x + bounds.size.width / 2.,
         bounds.origin.y + bounds.size.height * 0.55,
     );
+    SELFTEST_RELEASE.store(true, Ordering::SeqCst);
     unsafe {
         selftest_mouse(native, NSEventType::LeftMouseDown, point.x, point.y)?;
         selftest_mouse(
@@ -251,7 +282,6 @@ pub unsafe fn selftest_drag(native: isize) -> io::Result<()> {
             point.x + 12.,
             point.y + 12.,
         )?;
-        selftest_escape()?;
     }
     Ok(())
 }

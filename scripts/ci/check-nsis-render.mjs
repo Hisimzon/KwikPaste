@@ -4,8 +4,9 @@
 // install mode, the start menu shortcut and the .kwikpastebak association.
 //
 // It also checks the assumptions packaging/windows/installer-hooks.nsh makes about the template of the
-// pinned CLI: the hooks file is included, `.onInit` still inserts SetContext (where the OS gate runs),
-// and the original SetContext body has not changed.
+// pinned CLI: the hooks file is included, its graceful `--quit` preinstall hook still precedes
+// `CheckIfAppIsRunning`, `.onInit` still inserts SetContext (where the OS gate runs), and the original
+// SetContext body has not changed.
 //
 // --identity test checks the opposite for a throwaway package: nothing of the real identity is left, so
 // installing it on a developer machine cannot touch the installed 1.x.
@@ -175,6 +176,37 @@ export const checkRender = (script, utils, { version, arch, identity }) => {
   ) {
     problems.push("the installer no longer closes a running KwikPaste.exe");
   }
+  const preinstall = script.match(
+    /^!macro NSIS_HOOK_PREINSTALL\r?\n([\s\S]*?)^!macroend\s*$/m,
+  );
+  if (!preinstall) {
+    problems.push("the preinstall hook no longer requests graceful --quit");
+  } else {
+    const body = preinstall[1];
+    if (
+      !body.includes("ExecWait '\"$INSTDIR\\${MAINBINARYNAME}.exe\" --quit'")
+    ) {
+      problems.push("the preinstall hook does not launch KwikPaste.exe --quit");
+    }
+    if (
+      !body.includes('nsis_tauri_utils::FindProcess "${MAINBINARYNAME}.exe"') ||
+      !body.includes("Sleep 100") ||
+      !body.includes("StrCpy $1 30")
+    ) {
+      problems.push(
+        "the preinstall hook no longer waits up to three seconds for exit",
+      );
+    }
+    const hookOffset = script.indexOf("!macro NSIS_HOOK_PREINSTALL");
+    const checkOffset = script.indexOf(
+      '!insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"',
+    );
+    if (hookOffset < 0 || checkOffset < 0 || hookOffset > checkOffset) {
+      problems.push(
+        "the graceful quit hook must run before CheckIfAppIsRunning",
+      );
+    }
+  }
   if (
     !functionBody(script, ".onInstSuccess")?.includes(
       'nsis_tauri_utils::RunAsUser "$INSTDIR\\${MAINBINARYNAME}.exe" "$R0"',
@@ -223,7 +255,7 @@ const main = () => {
     process.exit(1);
   }
   say(
-    `ok  ${dir}: ${identity} identity, hooks included, OS gate in .onInit, template unchanged`,
+    `ok  ${dir}: ${identity} identity, graceful quit hook before running-app check, OS gate in .onInit, template unchanged`,
   );
 };
 

@@ -132,6 +132,12 @@ pub fn launch() -> anyhow::Result<Option<Launch>> {
             return Ok(None);
         }
     };
+    // The installer uses this same executable to ask an existing instance to quit. If there is
+    // no instance to receive it, do not turn the installer probe into a normal app launch.
+    if std::env::args().skip(1).any(|arg| arg == instance::QUIT) {
+        drop(instance);
+        return Ok(None);
+    }
     health::after_claim();
     // 崩溃重启自测：模拟「一启动就崩」的毒输入（子进程继承环境变量，每次启动都崩）。
     if selftest::enabled(selftest::CRASH_RESTART)
