@@ -1479,6 +1479,12 @@ impl Driver {
                     list.open_preview(id, PreviewTrigger::Keyboard, cx);
                 });
             }
+            "group-menu" => {
+                // 分组栏第一个自定义分组上按右键（1.x 的编辑、隐藏、删除菜单）。
+                self.pointer_at(cx, 190., 56.);
+                self.right_click(cx, 190., 56.);
+                self.settle_menu(cx, true).await;
+            }
             "group-new" => {
                 self.key(cx, "secondary-n");
                 self.emit(cx, PanelEvent::EditingStarted);

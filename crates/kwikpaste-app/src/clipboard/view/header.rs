@@ -118,6 +118,8 @@ impl Header {
 
     fn debounce_keyword(&mut self, value: SharedString, cx: &mut Context<Self>) {
         let keyword: Arc<str> = Arc::from(value.trim());
+        // 只记长度：搜索词是用户内容，不进日志。
+        log::debug!("search input changed ({} chars)", keyword.chars().count());
         self.debounce = Some(cx.spawn(async move |header, cx| {
             cx.background_executor().timer(SEARCH_DEBOUNCE).await;
             header
