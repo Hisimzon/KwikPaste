@@ -27,6 +27,7 @@
 //! - 拖出：卡片按下记 [`drag_out::DragTracker`]，越过阈值后 [`drag_out::start_item`]，接法见
 //!   [`drag_out`] 模块文档。
 //! - core：`crate::core_host::core(cx)` 取 `Core`；[`CoreEvents`] 转发 core 的全部事件。
+//! - 窗口材质：根元素底色按 [`material::current`] 选，接法见 [`material`] 模块文档。
 //! - 偏好设置、引导、备份导入：第二次启动、托盘、偏好快捷键和带 `.kwikpastebak` 的启动都变成
 //!   [`host::HostRequest`]，UI 用 [`host::set_handler`] 接手，见 [`host`] 模块文档。
 
@@ -37,6 +38,7 @@ pub mod host;
 mod hotkey;
 mod instance;
 mod keyboard;
+pub mod material;
 mod mouse;
 mod panel;
 pub mod paste;
@@ -200,6 +202,7 @@ pub fn start<V: Render>(
     } else {
         panel::open(cx, text_scale, build_panel)?;
     }
+    material::apply(cx);
     let commands = cx.global::<Panel>().commands();
     keyboard::serve(cx);
     mouse::serve(cx, commands.clone());

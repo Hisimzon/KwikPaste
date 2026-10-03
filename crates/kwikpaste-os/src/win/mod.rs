@@ -9,6 +9,7 @@ pub mod drag_out;
 pub mod ime;
 pub mod keyboard;
 pub mod keystroke;
+pub mod material;
 pub mod monitor;
 pub mod mouse;
 pub mod panel;

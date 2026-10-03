@@ -12,6 +12,7 @@ use gpui::{
     actions, div,
 };
 use kwikpaste_core::db::models::ClipboardItemQuery;
+use kwikpaste_core::settings::Material;
 use kwikpaste_ui::{Input, TextInput, theme};
 
 use super::drag_out::{self, DragTracker};
@@ -119,6 +120,12 @@ impl ProbeView {
 impl Render for ProbeView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::tokens(cx);
+        // 材质下根元素半透明（底色比例与 1.x 的 .kp-material-surface 相同），否则不透明。
+        let background = match super::material::current(cx).effective {
+            Material::Default => tokens.bg_container,
+            Material::Mica => tokens.bg_container.opacity(0.58),
+            Material::Acrylic => tokens.bg_container.opacity(0.34),
+        };
         let status: SharedString = format!(
             "{} · selected {} · text scale {}",
             if self.editing { "editing" } else { "list" },
@@ -135,7 +142,7 @@ impl Render for ProbeView {
             .flex_col()
             .gap_2()
             .p_3()
-            .bg(tokens.bg_container)
+            .bg(background)
             .text_color(tokens.text)
             .on_action(cx.listener(|_, _: &EnterEditing, _, cx| {
                 Self::request(PanelCommand::BeginEditing(EditTrigger::Keyboard), cx);

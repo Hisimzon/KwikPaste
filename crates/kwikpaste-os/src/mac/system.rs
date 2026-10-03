@@ -12,6 +12,9 @@ pub struct SystemSettings {
     pub text_scale: f64,
     pub high_contrast: bool,
     pub reduce_motion: bool,
+    /// 系统要求减少透明度时为 false。
+    pub transparency: bool,
+    pub dark: bool,
 }
 
 pub fn read() -> SystemSettings {
@@ -21,5 +24,8 @@ pub fn read() -> SystemSettings {
         text_scale: 1.0,
         high_contrast: workspace.accessibilityDisplayShouldIncreaseContrast(),
         reduce_motion: workspace.accessibilityDisplayShouldReduceMotion(),
+        transparency: !workspace.accessibilityDisplayShouldReduceTransparency(),
+        // TODO(macOS)：读 NSApp.effectiveAppearance；材质在 macOS 上还没接，暂不需要。
+        dark: false,
     }
 }

@@ -4,6 +4,7 @@
 //!   它同时提供变化事件；拿不到时退回注册表，与 1.x 相同。
 //! - 高对比度：`SPI_GETHIGHCONTRAST` 的 `HCF_HIGHCONTRASTON`。
 //! - 减少动画：`SPI_GETCLIENTAREAANIMATION` 关闭即视为要求减少动画（与 gpui-base 的读法相同）。
+//! - 透明效果、系统深色：见 [`super::material`]，材质跟随它们。
 //!
 //! 变化来源：`UISettings.TextScaleFactorChanged`，以及面板窗口收到的 `WM_SETTINGCHANGE` /
 //! `WM_SYSCOLORCHANGE`（面板子类过程转给 [`notify_changed`]）。出口只说“可能变了”，宿主重新 [`read`]。
@@ -28,6 +29,10 @@ pub struct SystemSettings {
     pub text_scale: f64,
     pub high_contrast: bool,
     pub reduce_motion: bool,
+    /// 系统「透明效果」打开。
+    pub transparency: bool,
+    /// 系统应用用深色。
+    pub dark: bool,
 }
 
 type Sink = Box<dyn Fn() + Send + Sync>;
@@ -40,6 +45,8 @@ pub fn read() -> SystemSettings {
         text_scale: text_scale_factor(),
         high_contrast: high_contrast(),
         reduce_motion: reduce_motion(),
+        transparency: super::material::transparency_enabled(),
+        dark: super::material::system_dark(),
     }
 }
 

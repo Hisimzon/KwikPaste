@@ -3,7 +3,8 @@
 //! 读到的值存成 [`SystemSignals`] 全局（UI 用 `cx.observe_global::<SystemSignals>` 订阅），并直接应用：
 //! - 文本大小 → `kwikpaste_ui::theme::set_text_scale`（rem 基准），面板的最小、默认尺寸同步补偿；
 //! - 减少动画 → `cx.set_reduce_motion`（gpui-base 只在启动时读一次，这里跟随运行中的变化）；
-//! - 高对比度 → 只放进全局，配色由 UI 决定。
+//! - 高对比度 → 只放进全局，配色由 UI 决定；
+//! - 透明效果、系统深色 → 窗口材质跟随（见 [`super::material`]）。
 //!
 //! Windows 上 `UISettings` 的文本大小事件和面板收到的 `WM_SETTINGCHANGE` 都会触发重读。
 //! 自测进程可用 `KP_TEXT_SCALE` 模拟文本大小（与组件展示窗相同），不改系统设置。
@@ -21,6 +22,10 @@ pub struct SystemSignals {
     pub text_scale: f64,
     pub high_contrast: bool,
     pub reduce_motion: bool,
+    /// 系统「透明效果」打开（关掉时材质收敛为 default）。
+    pub transparency: bool,
+    /// 系统用深色（`appearance.theme = auto` 时材质的深浅跟它走）。
+    pub dark: bool,
 }
 
 impl Global for SystemSignals {}
@@ -51,6 +56,8 @@ fn read() -> SystemSignals {
         high_contrast: settings.high_contrast,
         // 崩溃重启的降级模式关掉动画。
         reduce_motion: settings.reduce_motion || crate::health::degraded(),
+        transparency: settings.transparency,
+        dark: settings.dark,
     }
 }
 
@@ -62,6 +69,7 @@ fn apply(signals: SystemSignals, cx: &mut App) {
     }
     super::probe::signals(&signals);
     cx.set_global(signals);
+    super::material::apply(cx);
 }
 
 /// 订阅变化（Windows）：重读，有变化就应用并通知面板补偿尺寸。

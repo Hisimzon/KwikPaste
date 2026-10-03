@@ -391,6 +391,17 @@ pub fn view_event(event: &str, detail: &str) {
     write(event, &format!(r#","detail":{}"#, json_string(detail)));
 }
 
+/// 窗口材质变了：设置值、生效值、深浅色。
+pub fn material(material: &super::material::WindowMaterial) {
+    write(
+        "material",
+        &format!(
+            r#","requested":"{:?}","effective":"{:?}","dark":{}"#,
+            material.requested, material.effective, material.dark
+        ),
+    );
+}
+
 /// GPU 设备丢失自测的结果：累计丢失、恢复次数，最近一次恢复用时，恢复后画了几帧。
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn device(event: &str, losses: u32, recoveries: u32, recovery_ms: u32, frames: u64) {
