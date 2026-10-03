@@ -2,7 +2,6 @@
 
 use std::ffi::c_void;
 use std::io;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
@@ -210,7 +209,12 @@ unsafe extern "system" fn message_window_proc(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+/// 另一个实例转发来的参数。这里不能 panic：在窗口过程里，而且 release 是 `panic = "abort"`。
+/// `decode_pipe` 只做有损解码和切分；`sink` 是宿主给的非阻塞投递（kwikpaste-app 往无界通道 `try_send`）。
 fn receive(hwnd: HWND, lparam: LPARAM) {
+    if lparam.0 == 0 {
+        return;
+    }
     let copy = unsafe { &*(lparam.0 as *const COPYDATASTRUCT) };
     let sink = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const Sink;
     if copy.dwData != COPYDATA_TAG || copy.lpData.is_null() || sink.is_null() {
@@ -221,10 +225,7 @@ fn receive(hwnd: HWND, lparam: LPARAM) {
         unsafe { std::slice::from_raw_parts(copy.lpData as *const u8, copy.cbData as usize) };
     let invocation = decode_pipe(bytes);
     let sink = unsafe { &*sink };
-    // 窗口过程里 panic 会直接终止进程。
-    if catch_unwind(AssertUnwindSafe(|| sink(invocation))).is_err() {
-        log::error!("single instance handler panicked");
-    }
+    sink(invocation);
 }
 
 #[cfg(test)]

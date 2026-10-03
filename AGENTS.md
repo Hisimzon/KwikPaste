@@ -183,6 +183,7 @@ cargo fmt
 - Windows 平台由应用自己调用 `gpui_windows::WindowsPlatform::new` 创建（拿到 `Result`），不调用 `gpui_platform::application()`。
 - `line_clamp(n)` 必须配 `.text_ellipsis()` 或 `.truncate()`。
 - 渲染与事件回调里不得 panic（进程会直接以 0xC0000409 退出）；可失败的路径返回 `Result` 并写日志。
+- release 是 `panic = "abort"`：任何线程上的 panic 都会终止进程。后台线程与任务同样不得 panic，可失败的路径一律返回 `Result`。
 - 不引入 gpui-wry 或任何 WebView。
 - 仓库根目录不放 `.cargo/config.toml`（会泄漏进 `src-tauri` 的构建）；release profile 不开 `debug-assertions`。
 - 自测入口必须同时满足 `--selftest-*` 参数和 `KWIKPASTE_SELFTEST=1`。

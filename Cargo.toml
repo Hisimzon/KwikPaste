@@ -120,11 +120,15 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = 0
 
-# 与 src-tauri 的 release 配置一致。不要打开 debug-assertions：GPUI 会在运行时从 CARGO_MANIFEST_DIR 编译 HLSL。
+# 与 src-tauri 的 release 配置一致，只多了 panic = "abort"。不要打开 debug-assertions：GPUI 会在运行时从 CARGO_MANIFEST_DIR 编译 HLSL。
+# panic = "abort"：界面线程上的 panic 本来就会终止进程（窗口过程不能 unwind），后台线程和任务也一样直接退出，
+# 不会“任务悄悄死了、程序还开着”（比如剪贴板监听停了却没人知道），由崩溃重启接手。unwind 的清理代码约占 exe 的三分之一，
+# 安装包因此小约 1.3 MiB。dev 与测试不受影响（Cargo 给测试一律用 unwind）。
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = "z"
+panic = "abort"
 strip = true
 
 [profile.release.package.image]
