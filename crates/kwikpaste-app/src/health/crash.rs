@@ -121,6 +121,7 @@ pub(super) fn on_panic(info: CrashInfo, on_main_thread: bool) {
 }
 
 /// 没人处理的原生异常（访问冲突等）：进程马上结束，直接拉起子进程。
+#[cfg(target_os = "windows")]
 pub(super) fn on_native_crash(info: CrashInfo) {
     if let Some(restart) = begin(info) {
         spawn_now(&restart);

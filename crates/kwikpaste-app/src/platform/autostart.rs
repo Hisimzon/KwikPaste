@@ -15,13 +15,13 @@
 //! 需要显示真实状态时用 [`autostart_registered`]、[`admin_status`]；「立即以管理员身份重启」用
 //! [`restart_as_admin`]。
 
-use std::path::PathBuf;
-
 use gpui::App;
 use kwikpaste_core::settings::{Settings, SettingsDelta};
 use kwikpaste_os::autostart::Autostart;
 
-use crate::{core_host, identity, selftest};
+#[cfg(target_os = "windows")]
+use crate::selftest;
+use crate::{core_host, identity};
 
 /// 1.x 的启动项名（`productName`）与计划任务名。
 const OFFICIAL_ENTRY: &str = "KwikPaste";
@@ -251,7 +251,7 @@ fn configured_run_as_admin() -> bool {
     }
 
     let identity = identity::current();
-    let settings: Option<PathBuf> =
+    let settings: Option<std::path::PathBuf> =
         kwikpaste_core::CorePaths::for_native(identity.identifier, identity.env)
             .and_then(|paths| paths.config_dir())
             .map(|dir| dir.join("settings.json"))
