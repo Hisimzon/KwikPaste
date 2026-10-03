@@ -375,9 +375,16 @@ jobs:
         shell: pwsh
         run: |
           $env:KWIKPASTE_SELFTEST = '1'
-          $process = Start-Process ./KwikPaste.exe -ArgumentList '--selftest-smoke' -PassThru
-          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'KwikPaste did not exit within 60 s.' }
-          if ($process.ExitCode -ne 0) { throw "KwikPaste exited with $($process.ExitCode)." }
+          $env:RUST_LOG = 'info'
+          $process = Start-Process ./KwikPaste.exe -ArgumentList '--selftest-smoke' -PassThru `
+            -RedirectStandardOutput smoke-stdout.log -RedirectStandardError smoke-stderr.log
+          $exited = $process.WaitForExit(60000)
+          if (-not $exited) { $process.Kill() }
+          if (-not $exited -or $process.ExitCode -ne 0) {
+            Get-Content smoke-stdout.log, smoke-stderr.log -ErrorAction SilentlyContinue | Select-Object -Last 80
+            if (-not $exited) { throw 'KwikPaste did not exit within 60 s.' }
+            throw "KwikPaste exited with $($process.ExitCode)."
+          }
           'KwikPaste started and exited cleanly.'
 
       - name: Checkout probe scripts
