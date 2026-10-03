@@ -4,10 +4,17 @@
 #   ... run real-clipboard.ps1 / paste.ps1 ...
 #   powershell -STA -NoProfile -ExecutionPolicy Bypass -File tools\platform-probes\installed-app.ps1 -Action Restore
 #
+# The installed app is the user's everyday KwikPaste (2.0 since the overwrite install; 1.x before). Both
+# put the same tray-icon window and menu up, so the same steps quit either one.
+#
 # Prepare: waits for the user to be idle, saves the clipboard text and the autostart (HKCU Run) value,
-#          then quits the installed KwikPaste through its own tray menu (Exit), like the user would.
+#          then quits the installed KwikPaste through its own tray menu (Exit), like the user would; it
+#          never kills the process.
 # Restore: puts the clipboard text back, deletes the backup, starts the installed app again with
-#          --auto-launch (it starts silently in the tray) and checks the autostart value is unchanged.
+#          --auto-launch (it starts silently in the tray), waits until it runs and checks the autostart
+#          value is unchanged.
+# Both refuse while %TEMP%\kwikpaste-installed-app.lock exists: the packaging session is then installing
+# or checking the installed app.
 param(
     [Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Restore')][string]$Action,
     [string]$Installed = "$env:ProgramFiles\KwikPaste\KwikPaste.exe",
@@ -53,8 +60,11 @@ public static class InstalledTray {
 $backup = Join-Path $env:TEMP 'kwikpaste-probe-clipboard-backup.txt'
 $runBackup = Join-Path $env:TEMP 'kwikpaste-probe-run-value.txt'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-# Exit menu item of the 1.x tray in zh-CN, as code points so the script stays ASCII.
-$exitLabel = [string][char]0x9000 + [char]0x51FA + [char]0x5E94 + [char]0x7528
+# Exit menu item of the tray (kwikpaste-core's tray strings, same as 1.x) in zh-CN and en-US; zh-CN as
+# code points so the script stays ASCII.
+$exitLabels = @(([string][char]0x9000 + [char]0x51FA + [char]0x5E94 + [char]0x7528), 'Exit')
+$lock = Join-Path $env:TEMP 'kwikpaste-installed-app.lock'
+if (Test-Path $lock) { throw "$lock exists: the installed app is being installed or checked by another session; try again later." }
 
 function Get-Installed {
     return @(Get-Process KwikPaste -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Installed })
@@ -89,7 +99,8 @@ if ($Action -eq 'Prepare') {
     }
     if ($menu -eq [IntPtr]::Zero) { throw 'The tray menu of the installed app did not open.' }
     $items = [InstalledTray]::Items($menu)
-    $index = [array]::IndexOf($items, $exitLabel)
+    $index = -1
+    foreach ($label in $exitLabels) { if ($index -lt 0) { $index = [array]::IndexOf($items, $label) } }
     Write-Host "tray menu: $($items -join ' / ')"
     if ($index -lt 0) {
         [void][InstalledTray]::PostMessageW($menu, 0x0100, [IntPtr]0x1B, [IntPtr]::Zero)
@@ -113,14 +124,19 @@ if (Test-Path $backup) {
 Write-Host "clipboard text restored ($($text.Length) chars)"
 if ((Get-Installed).Count -eq 0) {
     Start-Process -FilePath $Installed -ArgumentList '--auto-launch'
-    Start-Sleep -Seconds 3
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ((Get-Installed).Count -eq 0 -and $watch.ElapsedMilliseconds -lt 10000) { Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
 }
-Write-Host "installed app running: $((Get-Installed).Count -gt 0)"
+$restarted = (Get-Installed).Count -gt 0
+Write-Host "installed app running: $restarted"
+$failed = -not $restarted
 if (Test-Path $runBackup) {
     $before = [System.IO.File]::ReadAllText($runBackup, [System.Text.Encoding]::UTF8)
     Remove-Item $runBackup
     $after = Get-RunValue
     Write-Host "autostart before: $before"
     Write-Host "autostart after:  $after"
-    if ($before -ne $after) { Write-Host 'AUTOSTART CHANGED'; exit 1 }
+    if ($before -ne $after) { Write-Host 'AUTOSTART CHANGED'; $failed = $true }
 }
+if ($failed) { Write-Host 'FAILED'; exit 1 }

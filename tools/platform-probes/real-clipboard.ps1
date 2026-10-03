@@ -15,9 +15,10 @@
 #   written (HTML + plain fallback, PNG + CF_DIB, CF_HDROP).
 # Read retry: right after a copy another window takes the clipboard; held 60 ms it is read on a retry,
 #   held 400 ms (longer than the 15 + 35 + 75 ms retries) the read gives up.
-# Paste targets (unless -SkipApps): HTML into an HTML editor (MSHTML contenteditable, Word / WPS are not
-# installed here), the plain fallback into Notepad (its session is saved before and put back after), the
-# image into Paint, the files into an Explorer folder.
+# Paste targets (unless -SkipApps), all windows this script creates; apps that restore the user's session
+# (Notepad, Edge, Office) are never used: HTML into an HTML editor (MSHTML contenteditable; Word / WPS
+# are not installed here), the plain fallback into a WinForms TextBox, the image into a WinForms window
+# that reads Clipboard.GetImage on Ctrl+V, the files into one that reads Clipboard.GetFileDropList.
 param(
     [string]$Exe = '',
     [int]$IdleSeconds = 30,
@@ -32,47 +33,46 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
-[StructLayout(LayoutKind.Sequential)] public struct WinRect { public int L, T, R, B; }
-public static class Apps {
-    public delegate bool EnumProc(IntPtr h, IntPtr l);
-    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
-    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
-    [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
-    [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
-    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out WinRect r);
-    /// First visible top-level window of this class whose title contains `title` ("" for any).
-    public static IntPtr Find(string cls, string title) {
-        IntPtr found = IntPtr.Zero;
-        EnumWindows((h, l) => {
-            if (!IsWindowVisible(h)) return true;
-            var c = new StringBuilder(256); GetClassNameW(h, c, 256);
-            if (c.ToString() != cls) return true;
-            var t = new StringBuilder(512); GetWindowTextW(h, t, 512);
-            if (t.ToString().IndexOf(title, StringComparison.OrdinalIgnoreCase) < 0) return true;
-            found = h; return false;
-        }, IntPtr.Zero);
-        return found;
+/// A paste target window: on a real Ctrl+V it reads the clipboard the way an ordinary .NET app does.
+/// "text": a TextBox (the system pastes its plain text); "image": Clipboard.GetImage(); "files":
+/// Clipboard.GetFileDropList().
+public class PasteTarget : Form {
+    public TextBox Box;
+    public string Mode;
+    public Bitmap Image;
+    public string[] Files = new string[0];
+    public int Pastes;
+    public PasteTarget(string mode) {
+        Mode = mode;
+        Text = "kwikpaste-probe-" + mode + "-target";
+        StartPosition = FormStartPosition.Manual;
+        KeyPreview = true;
+        Box = new TextBox();
+        Box.Multiline = true;
+        Box.ReadOnly = mode != "text";
+        Box.Dock = DockStyle.Fill;
+        Controls.Add(Box);
+        KeyDown += (s, e) => {
+            if (!(e.Control && e.KeyCode == Keys.V) || Mode == "text") return;
+            Pastes++;
+            if (Mode == "image" && Clipboard.ContainsImage()) Image = new Bitmap(Clipboard.GetImage());
+            if (Mode == "files" && Clipboard.ContainsFileDropList()) {
+                var list = Clipboard.GetFileDropList();
+                Files = new string[list.Count];
+                list.CopyTo(Files, 0);
+            }
+            e.SuppressKeyPress = true;
+        };
     }
-    /// Counts the pixels of a window (PrintWindow, full content) within `tolerance` of `color`.
-    public static int CountColor(IntPtr h, Color color, int tolerance, string savePath) {
-        WinRect r; GetWindowRect(h, out r);
-        int w = r.R - r.L, hgt = r.B - r.T;
-        using (var bitmap = new Bitmap(w, hgt, PixelFormat.Format32bppArgb)) {
-            using (var g = Graphics.FromImage(bitmap)) {
-                IntPtr dc = g.GetHdc();
-                PrintWindow(h, dc, 2);
-                g.ReleaseHdc(dc);
-            }
-            if (!String.IsNullOrEmpty(savePath)) bitmap.Save(savePath, ImageFormat.Png);
-            int count = 0;
-            for (int y = 0; y < hgt; y += 2) for (int x = 0; x < w; x += 2) {
-                Color c = bitmap.GetPixel(x, y);
-                if (Math.Abs(c.R - color.R) <= tolerance && Math.Abs(c.G - color.G) <= tolerance && Math.Abs(c.B - color.B) <= tolerance) count++;
-            }
-            return count;
+    /// Pixels of the pasted image within `tolerance` of `color`.
+    public int CountColor(Color color, int tolerance) {
+        if (Image == null) return 0;
+        int count = 0;
+        for (int y = 0; y < Image.Height; y++) for (int x = 0; x < Image.Width; x++) {
+            Color c = Image.GetPixel(x, y);
+            if (Math.Abs(c.R - color.R) <= tolerance && Math.Abs(c.G - color.G) <= tolerance && Math.Abs(c.B - color.B) <= tolerance) count++;
         }
+        return count;
     }
 }
 public class HtmlEditor : Form {
@@ -165,8 +165,7 @@ $userForeground = [Probe]::GetForegroundWindow()
 $userCursor = New-Object Probe+POINT; [void][Probe]::GetCursorPos([ref]$userCursor)
 
 $app = $null; $form = $null; $editor = $null
-$notepadSaved = $false
-$opened = New-Object System.Collections.Generic.List[IntPtr]
+$targets = New-Object System.Collections.Generic.List[object]
 $items = @{}
 try {
     $app = Start-RealApp
@@ -329,88 +328,52 @@ try {
             $editor.Close(); $editor = $null
         }
 
-        # Notepad: a file of our own. Its session (tabs it restores) is saved first and put back afterwards.
-        if (Get-Process Notepad -ErrorAction SilentlyContinue) {
-            Note '  Notepad is already running (the user''s windows): not tested'
-        } elseif ($items.ContainsKey('html')) {
-            Save-NotepadSession
-            $notepadSaved = $true
-            $noteFile = Join-Path $results "kp-notepad-$stamp.txt"
-            [System.IO.File]::WriteAllText($noteFile, '')
-            Start-Process notepad.exe -ArgumentList "`"$noteFile`""
-            $notepad = [IntPtr]::Zero
-            $watch = [Diagnostics.Stopwatch]::StartNew()
-            while ($notepad -eq [IntPtr]::Zero -and $watch.ElapsedMilliseconds -lt 8000) { [Probe]::Pump(200); $notepad = [Apps]::Find('Notepad', "kp-notepad-$stamp") }
-            if ($notepad -ne [IntPtr]::Zero) {
-                $opened.Add($notepad)
-                [Probe]::Pump(500)
-                $rect = [Probe]::ClientRectOnScreen($notepad)
-                $focused = [Probe]::ClickIntoForegroundAt($notepad, [int](($rect[0] + $rect[2]) / 2), [int](($rect[1] + $rect[3]) / 2))
-                [void](Copy-Item-Back $items.html)
-                [Probe]::Pump(200)
-                # Only into our own tab: the title names the active tab.
-                $mine = [Apps]::Find('Notepad', "kp-notepad-$stamp") -eq $notepad
-                if ($focused -and $mine) { Paste-Into $notepad; [Probe]::Pump(800) }
-                # Every open tab has a document; only the active one is on screen.
-                $document = [System.Windows.Automation.AutomationElement]::FromHandle($notepad).FindAll([System.Windows.Automation.TreeScope]::Descendants,
-                    (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Document))) |
-                    Where-Object { -not $_.Current.IsOffscreen } | Select-Object -First 1
-                $noteText = if ($null -ne $document) { $document.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1) } else { '<no document>' }
-                Note "  Notepad: '$($noteText.Trim())' (foreground $focused, our tab active $mine)"
-                Check 'HTML item pasted into Notepad as its plain text fallback' ($focused -and $mine -and $noteText.Trim() -eq $htmlPlain)
-                Close-WithoutSaving $notepad
-            } else {
-                Check 'Notepad opened' $false
-            }
+        # Opens a paste target of this script and makes it the foreground window.
+        function Open-Target([string]$Mode) {
+            $target = New-Object PasteTarget $Mode
+            $work = [Probe]::PrimaryWorkArea()
+            $target.Bounds = New-Object System.Drawing.Rectangle(($work[0] + 700), ($work[1] + 60), 480, 240)
+            $target.TopMost = $true
+            $target.Show()
+            $targets.Add($target)
+            [Probe]::Pump(400)
+            $center = $target.Box.PointToScreen((New-Object System.Drawing.Point(150, 80)))
+            $focused = [Probe]::ClickIntoForegroundAt($target.Handle, $center.X, $center.Y)
+            return [pscustomobject]@{ Window = $target; Focused = $focused }
         }
 
-        # Paint: paste the CF_DIB image, find its colors in the window, close without saving.
+        if ($items.ContainsKey('html')) {
+            $opened = Open-Target 'text'
+            [void](Copy-Item-Back $items.html)
+            [Probe]::Pump(200)
+            if ($opened.Focused) { Paste-Into $opened.Window.Handle; [Probe]::Pump(500) }
+            $pastedText = $opened.Window.Box.Text
+            Note "  TextBox: '$pastedText' (foreground $($opened.Focused))"
+            Check 'HTML item pasted into a plain TextBox as its plain text fallback' ($opened.Focused -and $pastedText -eq $htmlPlain)
+            $opened.Window.Close()
+        }
+
         if ($items.ContainsKey('dib')) {
-            Start-Process mspaint.exe
-            $paint = [IntPtr]::Zero
-            $watch = [Diagnostics.Stopwatch]::StartNew()
-            while ($paint -eq [IntPtr]::Zero -and $watch.ElapsedMilliseconds -lt 10000) { [Probe]::Pump(200); $paint = [Apps]::Find('MSPaintApp', '') }
-            if ($paint -ne [IntPtr]::Zero) {
-                $opened.Add($paint)
-                [Probe]::Pump(1500)
-                $window = [Probe]::WindowRect($paint)
-                # The title bar: a click there never draws on the canvas.
-                $focused = [Probe]::ClickIntoForegroundAt($paint, [int](($window[0] + $window[2]) / 2), $window[1] + 12)
-                [void](Copy-Item-Back $items.dib)
-                [Probe]::Pump(200)
-                $redBefore = [Apps]::CountColor($paint, $red, 12, '')
-                $blueBefore = [Apps]::CountColor($paint, $blue, 12, '')
-                if ($focused) { Paste-Into $paint; [Probe]::Pump(1500) }
-                $redAfter = [Apps]::CountColor($paint, $red, 12, (Join-Path $results 'paint-after-paste.png'))
-                $blueAfter = [Apps]::CountColor($paint, $blue, 12, '')
-                Check 'CF_DIB image pasted into Paint (its two colors appear)' ($focused -and $redAfter -gt $redBefore + 20 -and $blueAfter -gt $blueBefore + 20) "red $redBefore -> $redAfter, blue $blueBefore -> $blueAfter (sampled every 2 px; screenshot paint-after-paste.png)"
-                Close-WithoutSaving $paint
-            } else {
-                Check 'Paint opened' $false
-            }
+            $opened = Open-Target 'image'
+            [void](Copy-Item-Back $items.dib)
+            [Probe]::Pump(200)
+            if ($opened.Focused) { Paste-Into $opened.Window.Handle; [Probe]::Pump(500) }
+            $image = $opened.Window.Image
+            $redCount = $opened.Window.CountColor($red, 12)
+            $blueCount = $opened.Window.CountColor($blue, 12)
+            $size = if ($null -ne $image) { "$($image.Width)x$($image.Height)" } else { 'no image' }
+            Check 'CF_DIB image pasted into a .NET window (Clipboard.GetImage, its two colors)' ($opened.Focused -and $null -ne $image -and $image.Width -eq 50 -and $image.Height -eq 30 -and $redCount -gt 100 -and $blueCount -gt 100) "$size, red $redCount px, blue $blueCount px"
+            $opened.Window.Close()
         }
 
-        # Explorer: paste the files item into an empty folder window.
         if ($items.ContainsKey('files')) {
-            $dropDir = New-Item -ItemType Directory -Force -Path (Join-Path $results "kp-drop-$stamp")
-            Start-Process explorer.exe -ArgumentList "`"$dropDir`""
-            $folder = [IntPtr]::Zero
-            $watch = [Diagnostics.Stopwatch]::StartNew()
-            while ($folder -eq [IntPtr]::Zero -and $watch.ElapsedMilliseconds -lt 8000) { [Probe]::Pump(200); $folder = [Apps]::Find('CabinetWClass', "kp-drop-$stamp") }
-            if ($folder -ne [IntPtr]::Zero) {
-                $opened.Add($folder)
-                [Probe]::Pump(1000)
-                $window = [Probe]::WindowRect($folder)
-                $focused = [Probe]::ClickIntoForegroundAt($folder, [int](($window[0] + $window[2]) / 2), [int](($window[1] + $window[3]) / 2) + 60)
-                [void](Copy-Item-Back $items.files)
-                [Probe]::Pump(200)
-                if ($focused) { Paste-Into $folder; [Probe]::Pump(2000) }
-                $pasted = @(Get-ChildItem $dropDir | ForEach-Object { $_.Name })
-                Check 'files pasted into an Explorer folder' ($focused -and $pasted -contains (Split-Path $fileA -Leaf) -and $pasted -contains (Split-Path $fileB -Leaf)) ($pasted -join ',')
-                Close-WithoutSaving $folder
-            } else {
-                Check 'Explorer folder window opened' $false
-            }
+            $opened = Open-Target 'files'
+            [void](Copy-Item-Back $items.files)
+            [Probe]::Pump(200)
+            if ($opened.Focused) { Paste-Into $opened.Window.Handle; [Probe]::Pump(500) }
+            $pastedFiles = $opened.Window.Files
+            Check 'files pasted into a .NET window (Clipboard.GetFileDropList)' ($opened.Focused -and $pastedFiles -contains $fileA -and $pastedFiles -contains $fileB) ($pastedFiles -join ';')
+            $opened.Window.Close()
         }
         Note '  Word / WPS: not installed on this machine, not tested'
     }
@@ -419,10 +382,7 @@ try {
     Note "ERROR: $($_.Exception.Message)"
 } finally {
     if ($null -ne $editor) { $editor.Close() }
-    foreach ($window in $opened) {
-        if ([Probe]::IsWindow($window)) { Close-WithoutSaving $window }
-    }
-    if ($notepadSaved) { Restore-NotepadSession; Note '  Notepad session restored from the backup taken before the test' }
+    foreach ($target in $targets) { if (-not $target.IsDisposed) { $target.Close() } }
     Stop-ProbeApp $app $Exe
     if ($null -ne $form) { $form.Close(); [Probe]::Pump(200) }
     [void][Probe]::SetCursorPos($userCursor.X, $userCursor.Y)

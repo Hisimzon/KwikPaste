@@ -278,7 +278,7 @@ public static class Probe {
     }
 
     // ------------------------------------------------- input for any window the probe opened itself
-    // (Notepad, Paint, an Explorer folder window, a WebBrowser form): same safety rule, the target or
+    // (its other WinForms windows: paste targets, a WebBrowser form): same safety rule, the target or
     // the panel must be the foreground window before anything is sent.
 
     public static void RequireForegroundOf(IntPtr target, IntPtr panel, string what) {
