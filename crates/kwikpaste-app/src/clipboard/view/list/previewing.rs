@@ -23,7 +23,10 @@ use crate::{
     clipboard::{
         model::preview::{self, HEADER_HEIGHT, RectF},
         source::{Preview, PreviewContentMetrics, PreviewTextView},
-        view::preview::{PreviewEvent, PreviewWindow},
+        view::preview::{
+            PreviewEvent, PreviewWindow,
+            native::{self, NativePreview},
+        },
     },
     i18n::t,
 };
@@ -474,7 +477,6 @@ impl ClipboardList {
     }
 
     /// 按卡片位置算出预览窗在屏幕上的位置，换好内容，返回要显示的原生窗口与位置。
-    #[cfg(target_os = "windows")]
     fn place_preview(
         &mut self,
         id: &Arc<str>,
@@ -482,51 +484,21 @@ impl ClipboardList {
         preview: Option<Preview>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<(
-        Rc<crate::clipboard::view::preview::native::NativePreview>,
-        kwikpaste_os::geometry::Rect,
-        u32,
-    )> {
-        use crate::clipboard::view::preview::native;
-
+    ) -> Option<(Rc<NativePreview>, kwikpaste_os::geometry::Rect, u32)> {
         let Some(bounds) = self.previewing.anchor(id) else {
             log::debug!("preview of {id} has no card on screen");
             self.close_preview(cx);
             return None;
         };
-        let origin = native::client_origin(window)?;
-        let scale = f64::from(window.scale_factor());
-        let to_screen = |value: Pixels| f64::from(value.as_f32()) * scale;
-        let card_left = f64::from(origin.x) + to_screen(bounds.origin.x);
-        let card_top = f64::from(origin.y) + to_screen(bounds.origin.y);
-        let card_width = to_screen(bounds.size.width);
-        let card_height = to_screen(bounds.size.height);
-        let center = kwikpaste_os::geometry::Point {
-            x: (card_left + card_width / 2.) as i32,
-            y: (card_top + card_height / 2.) as i32,
-        };
-        let monitor = native::monitor_at(center)?;
-        let monitor_scale = monitor.scale();
-        let card = RectF {
-            left: (card_left - f64::from(monitor.monitor.left)) / monitor_scale,
-            top: (card_top - f64::from(monitor.monitor.top)) / monitor_scale,
-            width: card_width / monitor_scale,
-            height: card_height / monitor_scale,
-        };
-        let screen = RectF {
-            left: 0.,
-            top: 0.,
-            width: f64::from(monitor.monitor.width()) / monitor_scale,
-            height: f64::from(monitor.monitor.height()) / monitor_scale,
-        };
+        let place = native::screen_place(window, bounds)?;
         let prefer_left = trigger.pointer()
             && self.previewing.pointer.is_some_and(|pointer| {
                 pointer.x.as_f32() < window.viewport_size().width.as_f32() / 2.
             });
         let text_scale = f64::from(theme::text_scale(cx));
         let geometry = preview::geometry(
-            card,
-            screen,
+            place.card,
+            place.monitor,
             preview.as_ref().map(|preview| &preview.metrics),
             prefer_left,
             text_scale,
@@ -540,33 +512,11 @@ impl ClipboardList {
             .panel
             .update(cx, |panel, cx| panel.set(preview, text_view, image_box, cx));
 
-        let to_physical = |value: f64| (value * monitor_scale).round() as i32;
-        let left = monitor.monitor.left + to_physical(geometry.panel.left);
-        let top = monitor.monitor.top + to_physical(geometry.panel.top);
-        let client = kwikpaste_os::geometry::Rect {
-            left,
-            top,
-            right: left + to_physical(geometry.panel.width),
-            bottom: top + to_physical(geometry.panel.height),
-        };
-
-        Some((preview_window.native.clone(), client, monitor.dpi))
-    }
-
-    #[cfg(target_os = "macos")]
-    fn place_preview(
-        &mut self,
-        _: &Arc<str>,
-        _: PreviewTrigger,
-        _: Option<Preview>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<(
-        Rc<crate::clipboard::view::preview::native::NativePreview>,
-        kwikpaste_os::geometry::Rect,
-        u32,
-    )> {
-        None
+        Some((
+            preview_window.native.clone(),
+            place.to_screen(geometry.panel),
+            place.dpi,
+        ))
     }
 }
 

@@ -29,7 +29,7 @@ use super::{
 use crate::{
     clipboard::{
         model::preview::{
-            FILE_ROW_HEIGHT, HEADER_HEIGHT, TEXT_ROW_HEIGHT, WordSelection, format_bytes,
+            FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, TEXT_ROW_HEIGHT, WordSelection, format_bytes,
             text_rows, utf16_range,
         },
         source::{Preview, PreviewTextView},
@@ -743,13 +743,16 @@ impl PreviewWindow {
 #[cfg(target_os = "windows")]
 pub mod native {
     use anyhow::{anyhow, bail};
-    use gpui::Window;
+    use gpui::{Bounds, Pixels, Window};
     use kwikpaste_os::geometry::{Point, Rect};
     use kwikpaste_os::win::{
         monitor::{self, MonitorInfo},
         panel::{self as win_panel, PanelOptions},
     };
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    use super::ScreenPlace;
+    use crate::clipboard::model::preview::RectF;
 
     pub struct NativePreview {
         panel: win_panel::Panel,
@@ -807,7 +810,7 @@ pub mod native {
     }
 
     /// 窗口内容区左上角的屏幕坐标（物理像素）。
-    pub fn client_origin(window: &Window) -> Option<Point> {
+    fn client_origin(window: &Window) -> Option<Point> {
         let panel = unsafe { win_panel::Panel::from_raw(hwnd(window).ok()?) };
         let rect = panel.client_rect().ok()?;
         Some(Point {
@@ -817,7 +820,7 @@ pub mod native {
     }
 
     /// 包含这个点（物理像素）的显示器；都不包含时取第一块。
-    pub fn monitor_at(point: Point) -> Option<MonitorInfo> {
+    fn monitor_at(point: Point) -> Option<MonitorInfo> {
         let monitors = monitor::all();
         monitors
             .iter()
@@ -831,14 +834,80 @@ pub mod native {
             })
             .or_else(|| monitors.first().copied())
     }
+
+    /// 面板窗口里 `card`（逻辑像素）所在显示器上的几何。
+    pub fn screen_place(window: &Window, card: Bounds<Pixels>) -> Option<ScreenPlace> {
+        let origin = client_origin(window)?;
+        let scale = f64::from(window.scale_factor());
+        let to_screen = |value: Pixels| f64::from(value.as_f32()) * scale;
+        let left = f64::from(origin.x) + to_screen(card.origin.x);
+        let top = f64::from(origin.y) + to_screen(card.origin.y);
+        let width = to_screen(card.size.width);
+        let height = to_screen(card.size.height);
+        let monitor = monitor_at(Point {
+            x: (left + width / 2.) as i32,
+            y: (top + height / 2.) as i32,
+        })?;
+        let monitor_scale = monitor.scale();
+
+        Some(ScreenPlace {
+            card: RectF {
+                left: (left - f64::from(monitor.monitor.left)) / monitor_scale,
+                top: (top - f64::from(monitor.monitor.top)) / monitor_scale,
+                width: width / monitor_scale,
+                height: height / monitor_scale,
+            },
+            monitor: RectF {
+                left: 0.,
+                top: 0.,
+                width: f64::from(monitor.monitor.width()) / monitor_scale,
+                height: f64::from(monitor.monitor.height()) / monitor_scale,
+            },
+            origin: (monitor.monitor.left, monitor.monitor.top),
+            scale: monitor_scale,
+            dpi: monitor.dpi,
+        })
+    }
+}
+
+/// 卡片所在显示器上的几何：卡片与显示器都是以显示器左上角为原点的逻辑像素。
+pub struct ScreenPlace {
+    pub card: RectF,
+    pub monitor: RectF,
+    /// 显示器左上角的屏幕坐标（物理像素）。
+    pub origin: (i32, i32),
+    /// 显示器的缩放比例。
+    pub scale: f64,
+    pub dpi: u32,
+}
+
+impl ScreenPlace {
+    /// 显示器上的逻辑矩形换成屏幕上的物理矩形。
+    pub fn to_screen(&self, rect: RectF) -> kwikpaste_os::geometry::Rect {
+        let to_physical = |value: f64| (value * self.scale).round() as i32;
+        let left = self.origin.0 + to_physical(rect.left);
+        let top = self.origin.1 + to_physical(rect.top);
+        kwikpaste_os::geometry::Rect {
+            left,
+            top,
+            right: left + to_physical(rect.width),
+            bottom: top + to_physical(rect.height),
+        }
+    }
 }
 
 /// TODO(macOS)：预览窗要做成不激活的 NSPanel 才能显示；先不显示。
 #[cfg(target_os = "macos")]
 pub mod native {
-    use gpui::Window;
+    use gpui::{Bounds, Pixels, Window};
+
+    use super::ScreenPlace;
 
     pub struct NativePreview;
+
+    pub fn screen_place(_: &Window, _: Bounds<Pixels>) -> Option<ScreenPlace> {
+        None
+    }
 
     impl NativePreview {
         pub fn attach(_: &Window) -> anyhow::Result<Self> {
