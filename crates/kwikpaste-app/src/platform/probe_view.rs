@@ -119,6 +119,7 @@ impl ProbeView {
 
 impl Render for ProbeView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        probe::async_frame_rendered();
         let tokens = theme::tokens(cx);
         // 材质下根元素半透明（底色比例与 1.x 的 .kp-material-surface 相同），否则不透明。
         let background = match super::material::current(cx).effective {

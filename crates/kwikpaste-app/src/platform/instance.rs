@@ -116,7 +116,12 @@ async fn handle_selftest(
             }
             selftest::VSYNC_DEAD => watchdog::simulate_dead_render_thread(),
             _ => {
-                if let Some(attempts) = arg.strip_prefix(selftest::DEVICE_LOST) {
+                if let Some(delay) = arg.strip_prefix(selftest::ASYNC_FRAME) {
+                    let delay = std::time::Duration::from_millis(delay.parse().unwrap_or(0));
+                    cx.background_executor().timer(delay).await;
+                    probe::arm_async_frame();
+                    cx.update(|cx| cx.refresh_windows());
+                } else if let Some(attempts) = arg.strip_prefix(selftest::DEVICE_LOST) {
                     let attempts = attempts.parse().unwrap_or(0);
                     cx.update(|cx| watchdog::simulate_device_lost(attempts, cx));
                 } else if let Some(place) = arg.strip_prefix(selftest::PANIC) {

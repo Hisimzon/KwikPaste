@@ -58,6 +58,8 @@ pub const SEED: &str = "--selftest-seed=";
 pub const VSYNC_DEAD: &str = "--selftest-vsync-dead";
 /// `--selftest-device-lost=<n>`：模拟一次 GPU 设备丢失，前 n 次重建全局设备失败（补丁 0003 的注入点）。
 pub const DEVICE_LOST: &str = "--selftest-device-lost=";
+/// `--selftest-async-frame=<ms>`：过 ms 毫秒后不经输入把面板标脏，记录到下一次渲染隔了多久（探针事件 `async_frame`）。
+pub const ASYNC_FRAME: &str = "--selftest-async-frame=";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
 pub const GALLERY: &str = "--selftest-gallery";
 /// 列表跑分：1 万行合成数据，附录 D §3.7 的门槛与锚定场景（见 `clipboard::view::bench`）。
@@ -135,6 +137,7 @@ fn platform_probe() -> bool {
                 || arg.starts_with(DRAG_PAYLOAD)
                 || arg.starts_with(SEED)
                 || arg.starts_with(DEVICE_LOST)
+                || arg.starts_with(ASYNC_FRAME)
         })
 }
 

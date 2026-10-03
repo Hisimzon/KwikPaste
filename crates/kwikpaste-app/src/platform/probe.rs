@@ -391,6 +391,24 @@ pub fn view_event(event: &str, detail: &str) {
     write(event, &format!(r#","detail":{}"#, json_string(detail)));
 }
 
+/// `--selftest-async-frame`：标脏的时刻，渲染时取走。
+static ASYNC_FRAME_ARMED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// 记下「现在不经输入把面板标脏」的时刻。
+pub fn arm_async_frame() {
+    ASYNC_FRAME_ARMED.store(clock::now_ticks(), Ordering::SeqCst);
+}
+
+/// 平台自测视图渲染时调用：之前标过脏就写 `async_frame`（标脏到渲染的毫秒数）。
+pub fn async_frame_rendered() {
+    let armed = ASYNC_FRAME_ARMED.swap(0, Ordering::SeqCst);
+    if armed == 0 {
+        return;
+    }
+    let ms = (clock::now_ticks() - armed) as f64 * 1000.0 / clock::ticks_per_second() as f64;
+    write("async_frame", &format!(r#","latency_ms":{ms:.1}"#));
+}
+
 /// 窗口材质变了：设置值、生效值、深浅色。
 pub fn material(material: &super::material::WindowMaterial) {
     write(
