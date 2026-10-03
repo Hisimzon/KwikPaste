@@ -3,8 +3,7 @@
 //!
 //! 窗口启动后按需建一次、永不销毁；显示、隐藏、定位只走原生调用（Windows 与主面板一样是
 //! `WS_EX_NOACTIVATE` 的 topmost 工具窗口），点它、滚它、选词都不抢前台。原生调用都放在任务里、
-//! GPUI 的借用之外（见 `platform::panel` 的说明）。macOS 的不激活面板还没接上（TODO(macOS)），
-//! 预览先不出现。
+//! GPUI 的借用之外（见 `platform::panel` 的说明）。macOS 使用原生不激活 NSPanel。
 
 use std::{ops::Range, rc::Rc, sync::Arc};
 
@@ -896,36 +895,103 @@ impl ScreenPlace {
     }
 }
 
-/// TODO(macOS)：预览窗要做成不激活的 NSPanel 才能显示；先不显示。
 #[cfg(target_os = "macos")]
 pub mod native {
+    use anyhow::{anyhow, bail};
     use gpui::{Bounds, Pixels, Window};
+    use kwikpaste_os::geometry::{Rect, Size};
+    use kwikpaste_os::mac::{monitor, panel as mac_panel};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    use super::ScreenPlace;
+    use super::{RectF, ScreenPlace};
 
-    pub struct NativePreview;
+    pub struct NativePreview {
+        panel: mac_panel::Panel,
+    }
 
-    pub fn screen_place(_: &Window, _: Bounds<Pixels>) -> Option<ScreenPlace> {
-        None
+    pub fn screen_place(window: &Window, card: Bounds<Pixels>) -> Option<ScreenPlace> {
+        let handle = HasWindowHandle::window_handle(window).ok()?;
+        let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+            return None;
+        };
+        let panel = unsafe { mac_panel::Panel::from_raw(handle.ns_view) };
+        let frame = panel.frame()?;
+        let screens = monitor::screens();
+        let primary_height = screens.first()?.height;
+        let scale = f64::from(window.scale_factor());
+        let left = frame.origin.x + f64::from(card.origin.x.as_f32()) * scale;
+        let top = primary_height - (frame.origin.y + frame.size.height)
+            + f64::from(card.origin.y.as_f32()) * scale;
+        let width = f64::from(card.size.width.as_f32()) * scale;
+        let height = f64::from(card.size.height.as_f32()) * scale;
+        let monitor = screens
+            .iter()
+            .find(|screen| {
+                left + width / 2. >= screen.x
+                    && left + width / 2. < screen.x + screen.width
+                    && top + height / 2. >= screen.y
+                    && top + height / 2. < screen.y + screen.height
+            })
+            .or_else(|| screens.first())?;
+        let monitor_scale = monitor.scale;
+        Some(ScreenPlace {
+            card: RectF {
+                left: (left - monitor.x) / monitor_scale,
+                top: (top - monitor.y) / monitor_scale,
+                width: width / monitor_scale,
+                height: height / monitor_scale,
+            },
+            monitor: RectF {
+                left: 0.,
+                top: 0.,
+                width: monitor.width,
+                height: monitor.height,
+            },
+            origin: (monitor.x.round() as i32, monitor.y.round() as i32),
+            scale: monitor_scale,
+            dpi: (monitor_scale * 96.).round() as u32,
+        })
     }
 
     impl NativePreview {
-        pub fn attach(_: &Window) -> anyhow::Result<Self> {
-            anyhow::bail!("the preview window is not available on macOS yet")
+        pub fn attach(window: &Window) -> anyhow::Result<Self> {
+            let handle = HasWindowHandle::window_handle(window)
+                .map_err(|err| anyhow!("preview window handle: {err:?}"))?;
+            let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+                bail!("not an AppKit preview window");
+            };
+            Ok(Self {
+                panel: unsafe { mac_panel::Panel::from_raw(handle.ns_view) },
+            })
         }
 
-        pub fn install(&self) {}
+        pub fn install(&self) {
+            if let Err(err) = self.panel.install_preview(Size {
+                width: 1,
+                height: 1,
+            }) {
+                log::error!("preview window setup failed: {err}");
+            }
+        }
 
-        pub fn show(&self, _: kwikpaste_os::geometry::Rect, _: u32) {}
+        pub fn show(&self, rect: Rect, dpi: u32) {
+            if let Err(err) = self.panel.place_rect(rect, dpi) {
+                log::warn!("preview window could not be placed: {err}");
+                return;
+            }
+            self.panel.show_without_activating();
+        }
 
-        pub fn hide(&self) {}
+        pub fn hide(&self) {
+            self.panel.hide();
+        }
 
         pub fn is_visible(&self) -> bool {
-            false
+            self.panel.is_visible()
         }
 
         pub fn is_foreground(&self) -> bool {
-            false
+            self.panel.is_key() && self.panel.application_is_active()
         }
     }
 }

@@ -84,6 +84,18 @@ pub fn ready(native: &NativePanel) {
     }
 }
 
+pub fn panel_invariants(native: &NativePanel) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        native.check_invariants()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = native;
+        Ok(())
+    }
+}
+
 /// 系统设置信号（启动和变化时）。
 pub fn signals(signals: &SystemSignals) {
     write(

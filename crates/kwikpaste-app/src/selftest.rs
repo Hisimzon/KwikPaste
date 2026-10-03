@@ -20,6 +20,7 @@ const PREFIX: &str = "--selftest-";
 pub const SMOKE: &str = "--selftest-smoke";
 /// 平台探针：写探针日志（见 `platform::probe`），并接受后启动的自测实例转交的下面几条命令。
 pub const PLATFORM: &str = "--selftest-platform";
+pub const PANEL_INVARIANTS: &str = "--selftest-panel-invariants";
 pub const SHOW: &str = "--selftest-show";
 pub const HIDE: &str = "--selftest-hide";
 pub const TOGGLE: &str = "--selftest-toggle";
@@ -115,10 +116,11 @@ pub fn kind() -> Option<&'static str> {
 
 /// 本进程是平台探针本身（`--selftest-platform`）或者给它转交命令的后启动实例。
 fn platform_probe() -> bool {
-    const COMMANDS: [&str; 13] = [
+    const COMMANDS: [&str; 14] = [
         COUNT,
         VSYNC_DEAD,
         PLATFORM,
+        PANEL_INVARIANTS,
         SHOW,
         HIDE,
         TOGGLE,
@@ -226,6 +228,16 @@ pub fn schedule(cx: &mut App) {
     }
     if preferences_requested() {
         preferences(cx);
+    }
+    if enabled(PANEL_INVARIANTS)
+        && let Some(panel) = cx.try_global::<Panel>()
+    {
+        panel.request(PanelCommand::Show(Trigger::now(TriggerSource::Selftest)));
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_secs(3)).await;
+            cx.update(|cx| cx.quit());
+        })
+        .detach();
     }
     if (enabled(LIST_DEMO) || enabled(PANEL_UI))
         && let Some(panel) = cx.try_global::<Panel>()

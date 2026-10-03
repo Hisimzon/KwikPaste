@@ -11,6 +11,10 @@ const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
 /// 没有分配给任何按键的虚拟键码，注入后目标应用没有可见反应。
 const VK_UNASSIGNED: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
 
+pub fn ensure_accessibility_trusted() -> io::Result<()> {
+    Ok(())
+}
+
 pub fn simulate_paste() -> io::Result<()> {
     send_keys(&[
         (VK_CONTROL, KEYBD_EVENT_FLAGS(0)),

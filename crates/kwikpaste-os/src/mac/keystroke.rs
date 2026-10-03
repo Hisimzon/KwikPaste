@@ -1,6 +1,7 @@
 //! macOS 的按键注入（1.x `keystroke/macos.rs`），CGEvent 换成 objc2-core-graphics。
 
 use std::io;
+use std::process::Command;
 
 use objc2_app_kit::{NSEvent, NSEventModifierFlags};
 use objc2_core_graphics::{
@@ -9,6 +10,32 @@ use objc2_core_graphics::{
 
 /// kVK_ANSI_V（HIToolbox/Events.h），与键盘布局无关的硬件键码。
 const KEY_V: CGKeyCode = 0x09;
+
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> u8;
+}
+
+/// 检测辅助功能授权，未授权时打开系统设置并返回可展示给用户的权限错误。
+pub fn ensure_accessibility_trusted() -> io::Result<()> {
+    let trusted = unsafe { AXIsProcessTrusted() != 0 };
+    if trusted {
+        log::debug!("macOS Accessibility permission is available");
+        return Ok(());
+    }
+
+    log::warn!("macOS Accessibility permission is missing; opening System Settings");
+    if let Err(err) = Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .spawn()
+    {
+        log::warn!("could not open macOS Accessibility settings: {err}");
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "Accessibility permission is required to paste; enable KwikPaste in System Settings > Privacy & Security > Accessibility",
+    ))
+}
 
 pub fn simulate_paste() -> io::Result<()> {
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)

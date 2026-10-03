@@ -15,6 +15,11 @@ pub fn simulate_paste() -> std::io::Result<()> {
     platform::simulate_paste()
 }
 
+/// 确认 macOS 辅助功能权限；未授权时打开系统设置引导用户授权。
+pub fn ensure_accessibility_trusted() -> std::io::Result<()> {
+    platform::ensure_accessibility_trusted()
+}
+
 /// 全局快捷键命中时用户还按着修饰键；Windows 上 Alt / Win 在没有其它按键参与时松开，会激活目标窗口的
 /// 菜单栏或弹出开始菜单。趁它们还按着时注入一次无意义的按键，让这次松开不再被当成单独按下。
 /// macOS 松开 ⌥ / ⌘ 没有这个副作用，什么都不做。

@@ -174,6 +174,8 @@ async fn yield_and_inject(cx: &mut AsyncApp, keep_visible: bool) -> Result<Injec
         cx.background_executor().timer(SETTLE_DELAY).await;
     }
 
+    kwikpaste_os::keystroke::ensure_accessibility_trusted()
+        .map_err(|err| AppError::Other(err.into()))?;
     let foreground = foreground_window();
     keystroke::simulate_paste().map_err(|err| AppError::Other(err.into()))?;
     Ok(InjectReport {

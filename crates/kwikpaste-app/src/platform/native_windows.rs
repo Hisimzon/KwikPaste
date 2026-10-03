@@ -38,6 +38,8 @@ pub struct NativePanel {
 }
 
 impl NativePanel {
+    pub fn set_command_sender(&self, _sender: async_channel::Sender<super::panel::PanelCommand>) {}
+
     pub fn attach(window: &Window, text_scale: f64) -> anyhow::Result<Self> {
         let handle = HasWindowHandle::window_handle(window)
             .map_err(|err| anyhow!("panel window handle: {err:?}"))?;

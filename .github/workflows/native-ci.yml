@@ -94,7 +94,9 @@ jobs:
 
       - name: Vendored GPUI matches upstream plus patches
         shell: bash
-        run: node scripts/gpui/vendor.mjs gpui-pre-windows --check
+        run: |
+          node scripts/gpui/vendor.mjs gpui-pre-windows --check
+          node scripts/gpui/vendor.mjs gpui-pre-macos --check
 
       # 2.0 打开 1.x 的数据库：core 的迁移文件必须与 src-tauri 已发布的逐字节一致（git blob、检出字节、换行属性）。
       - name: Core migrations match the released ones
@@ -146,11 +148,13 @@ jobs:
           set -euo pipefail
 
           # 版本对不上时 [patch] 只给一条警告、退出码仍是 0，构建会悄悄换回 crates.io 上没打补丁的版本。
-          source="$(cargo metadata --locked --format-version 1 | jq -r '.packages[] | select(.name == "gpui-pre-windows") | .source')"
-          if [[ "${source}" != "null" ]]; then
-            echo "::error::gpui-pre-windows resolves to ${source}, not third_party/gpui."
-            exit 1
-          fi
+          for crate in gpui-pre-windows gpui-pre-macos; do
+            source="$(cargo metadata --locked --format-version 1 | jq -r --arg crate "$crate" '.packages[] | select(.name == $crate) | .source')"
+            if [[ "${source}" != "null" ]]; then
+              echo "::error::${crate} resolves to ${source}, not third_party/gpui."
+              exit 1
+            fi
+          done
 
       - name: Clippy
         shell: bash
@@ -417,3 +421,17 @@ jobs:
           fi
           wait "${pid}"
           echo "KwikPaste started and exited cleanly."
+
+      - name: Panel invariants on macOS
+        if: runner.os == 'macOS'
+        run: |
+          probe="$(mktemp)"
+          output="$(KWIKPASTE_SELFTEST=1 KWIKPASTE_PROBE_LOG="$probe" ./KwikPaste --selftest-platform --selftest-panel-invariants 2>&1)"
+          printf '%s\n' "$output"
+          grep -q 'macOS IME init order: sharedApplication -> MacKeyboardLayout' <<<"$output"
+          grep -q '"is_ns_panel":true' "$probe"
+          grep -q '"foreground_unchanged":true' "$probe"
+          grep -q '"non_activating":true' "$probe"
+          grep -q '"can_become_main":false' "$probe"
+          grep -q '"can_become_key":true' "$probe"
+          grep -q '"activation_policy":"accessory"' "$probe"

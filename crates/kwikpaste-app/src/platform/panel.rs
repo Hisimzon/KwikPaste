@@ -253,7 +253,7 @@ pub fn open<V: Render>(
     cx.set_global(Panel {
         events: events.clone(),
         window: None,
-        commands,
+        commands: commands.clone(),
     });
 
     let mut native = None;
@@ -270,6 +270,7 @@ pub fn open<V: Render>(
     })?;
     let native = native.context("the panel window was not built")??;
     let content = content.context("the panel window was not built")?;
+    native.set_command_sender(commands.clone());
 
     cx.global_mut::<Panel>().window = Some(window);
     let parts = Parts {
@@ -383,6 +384,12 @@ fn show(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
     let first_frame = arm_first_frame();
     let show_started = clock::now_ticks();
     native.show();
+    if crate::selftest::enabled(crate::selftest::PANEL_INVARIANTS)
+        && let Err(err) = probe::panel_invariants(native)
+    {
+        log::error!("panel invariants selftest failed: {err:#}");
+        std::process::exit(1);
+    }
     SHOWN.store(true, Ordering::SeqCst);
     crate::health::set_phase(crate::health::Phase::Panel);
     let show_returned = clock::now_ticks();
