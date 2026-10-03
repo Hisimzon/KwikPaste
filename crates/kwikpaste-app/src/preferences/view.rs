@@ -11,11 +11,12 @@ use kwikpaste_core::{
     ops::{PreferenceDirectory, StorageOverview},
     readable_export::{ExportFormat, ExportOptions, ExportPreview},
     settings::Settings,
+    settings::{CaptureKind, RetentionRule, RetentionUnit},
     sync::{LanDeviceView, LanNearbyView, LanSyncState, PairTarget},
 };
 use kwikpaste_ui::{
-    Button, Checkbox, DialogSpec, Input, KpStyled as _, NumberInput, NumberInputState, ScrollArea,
-    Select, SelectOption, SelectState, Switch, TextInput, form_dialog,
+    Button, Checkbox, DialogSpec, IconName, Input, KpStyled as _, NumberInput, NumberInputState,
+    ScrollArea, Select, SelectOption, SelectState, Switch, TextInput, form_dialog,
     theme::{self, TextSize, space},
     toast::{self, Toast},
 };
@@ -691,6 +692,362 @@ impl Preferences {
             .into_any_element()
     }
 
+    fn move_capture_kind(&mut self, kind: CaptureKind, offset: i8, cx: &mut Context<Self>) {
+        let order = self.settings.clipboard.capture.ordered_kinds();
+        let Some(index) = order.iter().position(|candidate| *candidate == kind) else {
+            return;
+        };
+        let target = index as i8 + offset;
+        if target < 0 || target as usize >= order.len() {
+            return;
+        }
+        self.move_capture_kind_to(kind, target as usize, cx);
+    }
+
+    /// 拖放按当前位置移入目标行；未启用的格式仍保留在顺序中，避免开关采集类型时丢失位置。
+    fn move_capture_kind_to(&mut self, kind: CaptureKind, target: usize, cx: &mut Context<Self>) {
+        let mut order = self.settings.clipboard.capture.ordered_kinds();
+        if !reorder_capture_kinds(&mut order, kind, target) {
+            return;
+        }
+        match serde_json::to_value(order) {
+            Ok(value) => self.update("clipboard.capture.order", value, cx),
+            Err(error) => log::warn!("could not encode capture order: {error}"),
+        }
+    }
+
+    fn add_retention_rule(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let rules = &self.settings.clipboard.history.rules;
+        let id = (1..=rules.len() + 1)
+            .map(|index| format!("custom-{index}"))
+            .find(|candidate| !rules.iter().any(|rule| rule.id == *candidate))
+            .unwrap_or_else(|| format!("custom-{}", rules.len() + 1));
+        let mut rule = RetentionRule {
+            id,
+            enabled: true,
+            keep: kwikpaste_core::settings::Retention {
+                value: 7,
+                unit: RetentionUnit::Days,
+            },
+            ..RetentionRule::default()
+        };
+        rule.categories = Vec::new();
+        self.open_retention_rule_editor(None, rule, window, cx);
+    }
+
+    fn update_retention_rules(&mut self, rules: Vec<RetentionRule>, cx: &mut Context<Self>) {
+        match serde_json::to_value(rules) {
+            Ok(value) => self.update("clipboard.history.rules", value, cx),
+            Err(error) => log::warn!("could not encode retention rules: {error}"),
+        }
+    }
+
+    fn edit_retention_rule(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(rule) = self.settings.clipboard.history.rules.get(index).cloned() else {
+            return;
+        };
+        self.open_retention_rule_editor(Some(index), rule, window, cx);
+    }
+
+    fn open_retention_rule_editor(
+        &self,
+        index: Option<usize>,
+        base: RetentionRule,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor = cx.new(|cx| RetentionRuleEditor::new(&base, window, cx));
+        let title_key = if index.is_some() {
+            "preferences:retentionRules.form.titleEdit"
+        } else {
+            "preferences:retentionRules.form.titleCreate"
+        };
+        let content = editor.clone();
+        let answer = form_dialog(
+            DialogSpec::new(i18n::t(title_key))
+                .ok_text(i18n::t("common:actions.save"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            move |_, _| content.clone().into_any_element(),
+            window,
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if !answer.await.unwrap_or(false) {
+                    return;
+                }
+                let Some(rule) = cx.update(|_, cx| editor.read(cx).to_rule(&base, cx)).ok() else {
+                    return;
+                };
+                let _ = entity.update(cx, |this, cx| {
+                    let mut rules = this.settings.clipboard.history.rules.clone();
+                    if let Some(index) = index {
+                        if let Some(current) = rules.get_mut(index) {
+                            *current = rule;
+                        }
+                    } else {
+                        rules.insert(0, rule);
+                    }
+                    this.update_retention_rules(rules, cx);
+                });
+            })
+            .detach();
+    }
+
+    fn render_capture_order(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let entity = cx.entity().downgrade();
+        let tokens = theme::tokens(cx);
+        let order = self.settings.clipboard.capture.ordered_kinds();
+        let rows = order.iter().enumerate().map(|(index, kind)| {
+            let kind = *kind;
+            let label = capture_kind_label(kind);
+            let icon = capture_kind_icon(kind);
+            let up = entity.clone();
+            let down = entity.clone();
+            div()
+                .id(format!("capture-order-{index}"))
+                .flex()
+                .items_center()
+                .gap(space(2.))
+                .px(space(2.))
+                .py(space(1.5))
+                .border_b_1()
+                .border_color(tokens.border_secondary)
+                .on_drag(CaptureOrderDrag { kind }, |dragged, _, _, cx| {
+                    cx.new(|_| *dragged)
+                })
+                .drag_over::<CaptureOrderDrag>(move |style, _, _, _| {
+                    style.bg(tokens.fill_secondary)
+                })
+                .on_drop(cx.listener(move |this, dragged: &CaptureOrderDrag, _, cx| {
+                    this.move_capture_kind_to(dragged.kind, index, cx);
+                }))
+                .child(PrefIcon::Grip.view(rems(1.), tokens.secondary))
+                .child(icon.view(rems(1.), tokens.secondary))
+                .child(div().flex_1().kp_text(TextSize::Sm).child(label))
+                .child(
+                    Button::new(
+                        format!("capture-up-{index}"),
+                        i18n::t("preferences:retentionRules.moveUp"),
+                    )
+                    .small()
+                    .ghost()
+                    .disabled(index == 0)
+                    .on_click(move |_, _, cx| {
+                        if let Some(entity) = up.upgrade() {
+                            entity.update(cx, |this, cx| this.move_capture_kind(kind, -1, cx));
+                        }
+                    }),
+                )
+                .child(
+                    Button::new(
+                        format!("capture-down-{index}"),
+                        i18n::t("preferences:retentionRules.moveDown"),
+                    )
+                    .small()
+                    .ghost()
+                    .disabled(index + 1 == order.len())
+                    .on_click(move |_, _, cx| {
+                        if let Some(entity) = down.upgrade() {
+                            entity.update(cx, |this, cx| this.move_capture_kind(kind, 1, cx));
+                        }
+                    }),
+                )
+                .into_any_element()
+        });
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .rounded(theme::radius::SM)
+            .border_1()
+            .border_color(tokens.border_secondary)
+            .children(rows)
+            .into_any_element()
+    }
+
+    fn render_retention_rules(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let entity = cx.entity().downgrade();
+        let tokens = theme::tokens(cx);
+        let rules = &self.settings.clipboard.history.rules;
+        let rows = rules.iter().enumerate().map(|(index, rule)| {
+            let rule_id = rule.id.clone();
+            let up = entity.clone();
+            let down = entity.clone();
+            let remove = entity.clone();
+            let enabled = rule.enabled;
+            let summary = retention_rule_summary(rule);
+            let keep = retention_label(rule.keep.value, rule.keep.unit);
+            div()
+                .flex()
+                .items_center()
+                .gap(space(2.))
+                .px(space(2.))
+                .py(space(1.5))
+                .border_b_1()
+                .border_color(tokens.border_secondary)
+                .child(
+                    Switch::new(format!("retention-enabled-{index}"))
+                        .small()
+                        .checked(enabled)
+                        .accessibility_label(summary.clone())
+                        .on_change({
+                            let entity = entity.clone();
+                            let id = rule_id.clone();
+                            move |checked, _, cx| {
+                                if let Some(entity) = entity.upgrade() {
+                                    entity.update(cx, |this, cx| {
+                                        let mut next =
+                                            this.settings.clipboard.history.rules.clone();
+                                        if let Some(rule) =
+                                            next.iter_mut().find(|rule| rule.id == id)
+                                        {
+                                            rule.enabled = checked;
+                                        }
+                                        this.update_retention_rules(next, cx);
+                                    });
+                                }
+                            }
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(space(0.5))
+                        .flex_1()
+                        .child(div().kp_text(TextSize::Sm).child(summary))
+                        .child(
+                            div()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.secondary)
+                                .child(if enabled {
+                                    keep
+                                } else {
+                                    i18n::t("preferences:retentionRules.disabled")
+                                }),
+                        ),
+                )
+                .child(
+                    Button::new(
+                        format!("retention-up-{index}"),
+                        i18n::t("preferences:retentionRules.moveUp"),
+                    )
+                    .small()
+                    .ghost()
+                    .disabled(index == 0)
+                    .on_click(move |_, _, cx| {
+                        if let Some(entity) = up.upgrade() {
+                            entity.update(cx, |this, cx| {
+                                let mut next = this.settings.clipboard.history.rules.clone();
+                                if index > 0 {
+                                    next.swap(index, index - 1);
+                                    this.update_retention_rules(next, cx);
+                                }
+                            });
+                        }
+                    }),
+                )
+                .child(
+                    Button::new(
+                        format!("retention-down-{index}"),
+                        i18n::t("preferences:retentionRules.moveDown"),
+                    )
+                    .small()
+                    .ghost()
+                    .disabled(index + 1 >= rules.len())
+                    .on_click(move |_, _, cx| {
+                        if let Some(entity) = down.upgrade() {
+                            entity.update(cx, |this, cx| {
+                                let mut next = this.settings.clipboard.history.rules.clone();
+                                if index + 1 < next.len() {
+                                    next.swap(index, index + 1);
+                                    this.update_retention_rules(next, cx);
+                                }
+                            });
+                        }
+                    }),
+                )
+                .child(
+                    Button::new(
+                        format!("retention-edit-{index}"),
+                        i18n::t("preferences:retentionRules.edit"),
+                    )
+                    .small()
+                    .ghost()
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, window, cx| {
+                            if let Some(entity) = entity.upgrade() {
+                                entity.update(cx, |this, cx| {
+                                    this.edit_retention_rule(index, window, cx);
+                                });
+                            }
+                        }
+                    }),
+                )
+                .child(
+                    Button::new(
+                        format!("retention-delete-{index}"),
+                        i18n::t("preferences:retentionRules.delete"),
+                    )
+                    .small()
+                    .danger_outline()
+                    .on_click(move |_, _, cx| {
+                        if let Some(entity) = remove.upgrade() {
+                            entity.update(cx, |this, cx| {
+                                let next = this
+                                    .settings
+                                    .clipboard
+                                    .history
+                                    .rules
+                                    .iter()
+                                    .filter(|rule| rule.id != rule_id)
+                                    .cloned()
+                                    .collect();
+                                this.update_retention_rules(next, cx);
+                            });
+                        }
+                    }),
+                )
+                .into_any_element()
+        });
+        let add = entity.clone();
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .gap(space(2.))
+            .child(if rules.is_empty() {
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.secondary)
+                    .child(i18n::t("preferences:retentionRules.empty"))
+                    .into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_col()
+                    .rounded(theme::radius::SM)
+                    .border_1()
+                    .border_color(tokens.border_secondary)
+                    .children(rows)
+                    .into_any_element()
+            })
+            .child(
+                Button::new("retention-add", i18n::t("preferences:retentionRules.add"))
+                    .small()
+                    .with_icon(IconName::Plus)
+                    .on_click(move |_, window, cx| {
+                        if let Some(entity) = add.upgrade() {
+                            entity.update(cx, |this, cx| this.add_retention_rule(window, cx));
+                        }
+                    }),
+            )
+            .into_any_element()
+    }
+
     fn render_storage_overview(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(overview) = self.storage_overview.as_ref() else {
             let entity = cx.entity().downgrade();
@@ -721,6 +1078,20 @@ impl Preferences {
             "preferences:overview.space.reclaimable",
             &[("count", &reclaimable_count), ("size", &reclaimable_size)],
         );
+        let limit = self.settings.clipboard.history.storage_limit_mb as u64 * 1024 * 1024;
+        let used_ratio = if limit == 0 {
+            0.0
+        } else {
+            (usage.total_bytes as f32 / limit as f32).clamp(0.0, 1.0)
+        };
+        let used_width = 40. * used_ratio.max(0.02);
+        let used_bytes = usage.total_bytes.max(1) as f32;
+        let storage_segment = |bytes: u64, color| {
+            div()
+                .h_full()
+                .w(rems(used_width * (bytes as f32 / used_bytes)))
+                .bg(color)
+        };
         let total_records = overview.history.totals.total;
         let today_records = overview.history.daily.last().map_or(0, |day| day.count);
         let reuse_count = overview.history.totals.reuses;
@@ -883,14 +1254,7 @@ impl Preferences {
                         div()
                             .kp_text(TextSize::Xs)
                             .text_color(theme::tokens(cx).secondary)
-                            .child(format!(
-                                "/ {}",
-                                format_bytes(
-                                    self.settings.clipboard.history.storage_limit_mb as u64
-                                        * 1024
-                                        * 1024,
-                                ),
-                            )),
+                            .child(format!("/ {}", format_bytes(limit),)),
                     ),
             )
             .child(
@@ -901,35 +1265,47 @@ impl Preferences {
                     .bg(theme::tokens(cx).fill_secondary)
                     .child(
                         div()
+                            .flex()
                             .h_full()
+                            .w(rems(used_width))
                             .rounded(theme::radius::SM)
-                            .w(rems(
-                                (usage.total_bytes as f32
-                                    / (self.settings.clipboard.history.storage_limit_mb as f32
-                                        * 1024.
-                                        * 1024.))
-                                    .clamp(0.01, 1.0)
-                                    * 40.0,
-                            ))
-                            .bg(theme::tokens(cx).primary),
+                            .overflow_hidden()
+                            .children([
+                                storage_segment(
+                                    overview.breakdown.database_bytes,
+                                    theme::tokens(cx).primary,
+                                ),
+                                storage_segment(
+                                    overview.breakdown.image_bytes,
+                                    theme::tokens(cx).info,
+                                ),
+                                storage_segment(
+                                    overview.breakdown.icon_bytes,
+                                    theme::tokens(cx).warning,
+                                ),
+                                storage_segment(
+                                    overview.breakdown.other_bytes,
+                                    theme::tokens(cx).secondary,
+                                ),
+                            ]),
                     ),
             )
             .children([
                 format_storage_row(
                     i18n::t("preferences:overview.space.segments.database"),
-                    usage.database_bytes,
+                    overview.breakdown.database_bytes,
+                ),
+                format_storage_row(
+                    i18n::t("preferences:overview.space.segments.image"),
+                    overview.breakdown.image_bytes,
+                ),
+                format_storage_row(
+                    i18n::t("preferences:overview.space.segments.icon"),
+                    overview.breakdown.icon_bytes,
                 ),
                 format_storage_row(
                     i18n::t("preferences:overview.space.segments.other"),
-                    usage.resources_bytes,
-                ),
-                format_storage_row(
-                    i18n::t("preferences:overview.space.hints.other"),
-                    usage.settings_bytes,
-                ),
-                format_storage_row(
-                    i18n::t("preferences:overview.tiles.total.label"),
-                    usage.total_bytes,
+                    overview.breakdown.other_bytes,
                 ),
             ])
             .child(
@@ -963,7 +1339,7 @@ impl Preferences {
                         })),
                     ),
             )
-            .child(div().grid_cols(4).gap(space(2.)).children([
+            .child(div().grid().grid_cols(4).gap(space(2.)).children([
                 overview_metric_card(
                     i18n::t("preferences:overview.tiles.total.label"),
                     total_records.to_string(),
@@ -989,44 +1365,24 @@ impl Preferences {
                     cx,
                 ),
             ]))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(space(1.))
-                    .kp_text(TextSize::Sm)
-                    .child(format!(
-                        "{}: {}",
-                        i18n::t("preferences:overview.tiles.total.label"),
-                        overview.history.totals.total
-                    ))
-                    .child(format!(
-                        "{}: {}",
-                        i18n::t("preferences:overview.categories.title"),
-                        overview.history.categories.len()
-                    ))
-                    .child(format!(
-                        "{}: {}",
-                        i18n::t("preferences:overview.sources.title"),
-                        overview.history.source_apps.len()
-                    )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(space(1.))
-                    .child(i18n::t("preferences:overview.categories.title"))
-                    .children(category_rows),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(space(1.))
-                    .child(i18n::t("preferences:overview.sources.title"))
-                    .children(source_rows),
-            )
+            .child(overview_trend_card(&overview.history.daily, cx))
+            .child(div().grid().grid_cols(2).gap(space(2.)).children([
+                overview_detail_card(
+                    i18n::t("preferences:overview.categories.title"),
+                    category_rows,
+                    cx,
+                ),
+                overview_detail_card(
+                    i18n::t("preferences:overview.sources.title"),
+                    source_rows,
+                    cx,
+                ),
+            ]))
+            .child(overview_groups_card(
+                &overview.history.groups,
+                &overview.history.totals,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -2158,7 +2514,7 @@ impl Preferences {
                         div()
                             .h_full()
                             .rounded(theme::radius::SM)
-                            .w(rems(10. * ratio))
+                            .w(rems(10. * ratio.max(0.12)))
                             .bg(tokens.success),
                     ),
             );
@@ -2301,7 +2657,9 @@ impl Preferences {
             }
             Control::StorageOverview => self.render_storage_overview(cx),
             Control::CaptureKinds => self.render_capture_kinds(value, cx),
+            Control::CaptureOrder => self.render_capture_order(cx),
             Control::Retention => self.render_retention(),
+            Control::RetentionRules => self.render_retention_rules(cx),
             Control::AppExclusion => self.render_app_exclusion(value, cx),
             Control::GroupSelect => self.render_group_select(path, value, cx),
             Control::Action { .. } | Control::CleanupStatus => self.render_action(setting.id, cx),
@@ -2312,6 +2670,9 @@ impl Preferences {
             .items_center()
             .justify_between()
             .gap(space(3.))
+            .when(setting.control.full_width(), |row| {
+                row.flex_col().items_start()
+            })
             .px(space(4.))
             .py(space(2.5))
             .when(setting.parent.is_some(), |row| row.pl(space(8.)))
@@ -2323,6 +2684,7 @@ impl Preferences {
                     .flex_col()
                     .gap(space(1.))
                     .flex_1()
+                    .min_w_0()
                     .child(div().kp_text(TextSize::Sm).child(title))
                     .when(!description.is_empty(), |row| {
                         row.child(
@@ -2333,7 +2695,16 @@ impl Preferences {
                         )
                     }),
             )
-            .child(control)
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .justify_end()
+                    .when(setting.control.full_width(), |wrapper| {
+                        wrapper.w_full().justify_start()
+                    })
+                    .child(control),
+            )
             .into_any_element()
     }
 
@@ -2823,6 +3194,314 @@ fn format_storage_row(name: gpui::SharedString, bytes: u64) -> gpui::AnyElement 
         .into_any_element()
 }
 
+#[derive(Clone, Copy)]
+struct CaptureOrderDrag {
+    kind: CaptureKind,
+}
+
+impl Render for CaptureOrderDrag {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::tokens(cx);
+        div()
+            .flex()
+            .items_center()
+            .gap(space(2.))
+            .p(space(2.))
+            .rounded(theme::radius::SM)
+            .border_1()
+            .border_color(tokens.primary)
+            .bg(tokens.bg_elevated)
+            .kp_text(TextSize::Sm)
+            .child(capture_kind_icon(self.kind).view(rems(1.), tokens.primary))
+            .child(capture_kind_label(self.kind))
+    }
+}
+
+/// 移动而不是交换两项，保证被跨过的格式保持原来的相对顺序。
+fn reorder_capture_kinds(order: &mut Vec<CaptureKind>, kind: CaptureKind, target: usize) -> bool {
+    let Some(index) = order.iter().position(|candidate| *candidate == kind) else {
+        return false;
+    };
+    if target >= order.len() || index == target {
+        return false;
+    }
+    let kind = order.remove(index);
+    order.insert(target, kind);
+    true
+}
+
+struct RetentionRuleEditor {
+    categories: Vec<ContentCategory>,
+    min_size: NumberInputState,
+    sensitive_only: bool,
+    unused_only: bool,
+    keep_value: NumberInputState,
+    keep_unit: SelectState,
+}
+
+impl RetentionRuleEditor {
+    fn new(rule: &RetentionRule, window: &mut Window, cx: &mut App) -> Self {
+        let keep_value = NumberInputState::new(
+            u64::from(rule.keep.value),
+            0,
+            u64::from(u32::MAX),
+            window,
+            cx,
+        );
+        let keep_unit = SelectState::new(
+            ["minutes", "hours", "days", "weeks", "months", "forever"]
+                .into_iter()
+                .map(|key| {
+                    SelectOption::new(
+                        key,
+                        i18n::t(&format!("preferences:schema.retentionUnits.{key}")),
+                    )
+                })
+                .collect(),
+            Some(retention_unit_key(rule.keep.unit)),
+            window,
+            cx,
+        );
+        Self {
+            categories: rule.categories.clone(),
+            min_size: NumberInputState::new(
+                u64::from(rule.min_size_kb),
+                0,
+                u64::from(u32::MAX),
+                window,
+                cx,
+            ),
+            sensitive_only: rule.sensitive_only,
+            unused_only: rule.unused_only,
+            keep_value,
+            keep_unit,
+        }
+    }
+
+    fn to_rule(&self, base: &RetentionRule, cx: &App) -> RetentionRule {
+        let mut rule = base.clone();
+        rule.categories = self.categories.clone();
+        rule.min_size_kb = self.min_size.clamped(cx) as u32;
+        rule.sensitive_only = self.sensitive_only;
+        rule.unused_only = self.unused_only;
+        rule.keep.value = self.keep_value.clamped(cx) as u32;
+        rule.keep.unit = self
+            .keep_unit
+            .selected_value(cx)
+            .map(|value| retention_unit_from_key(value.as_ref()))
+            .unwrap_or(RetentionUnit::Forever);
+        rule
+    }
+}
+
+impl Render for RetentionRuleEditor {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::tokens(cx);
+        let entity = cx.entity().downgrade();
+        let categories = ContentCategory::ALL.into_iter().map(|category| {
+            let checked = self.categories.contains(&category);
+            let entity = entity.clone();
+            Checkbox::new(format!("retention-category-{category:?}"))
+                .label(category_label(category))
+                .checked(checked)
+                .on_change(move |checked, _, cx| {
+                    if let Some(entity) = entity.upgrade() {
+                        entity.update(cx, |editor, cx| {
+                            if checked {
+                                if !editor.categories.contains(&category) {
+                                    editor.categories.push(category);
+                                }
+                            } else {
+                                editor.categories.retain(|item| *item != category);
+                            }
+                            cx.notify();
+                        });
+                    }
+                })
+        });
+        let condition_entity = cx.entity().downgrade();
+        let sensitive = Checkbox::new("retention-sensitive")
+            .label(i18n::t("preferences:retentionRules.form.sensitiveOnly"))
+            .checked(self.sensitive_only)
+            .on_change(move |checked, _, cx| {
+                if let Some(entity) = condition_entity.upgrade() {
+                    entity.update(cx, |editor, cx| {
+                        editor.sensitive_only = checked;
+                        cx.notify();
+                    });
+                }
+            });
+        let unused_entity = cx.entity().downgrade();
+        let unused = Checkbox::new("retention-unused")
+            .label(i18n::t("preferences:retentionRules.form.unusedOnly"))
+            .checked(self.unused_only)
+            .on_change(move |checked, _, cx| {
+                if let Some(entity) = unused_entity.upgrade() {
+                    entity.update(cx, |editor, cx| {
+                        editor.unused_only = checked;
+                        cx.notify();
+                    });
+                }
+            });
+        div()
+            .flex()
+            .flex_col()
+            .gap(space(2.))
+            .child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.secondary)
+                    .child(i18n::t("preferences:retentionRules.form.categories")),
+            )
+            .child(div().flex().flex_wrap().gap(space(1.)).children(categories))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(space(2.))
+                    .child(
+                        div()
+                            .kp_text(TextSize::Xs)
+                            .text_color(tokens.secondary)
+                            .child(i18n::t("preferences:retentionRules.form.minSize")),
+                    )
+                    .child(
+                        NumberInput::new(&self.min_size)
+                            .width(rems(12.))
+                            .suffix("KB"),
+                    ),
+            )
+            .child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.secondary)
+                    .child(i18n::t("preferences:retentionRules.form.conditions")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(1.))
+                    .child(sensitive)
+                    .child(unused),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(space(2.))
+                    .child(
+                        div()
+                            .kp_text(TextSize::Xs)
+                            .text_color(tokens.secondary)
+                            .child(i18n::t("preferences:retentionRules.form.keep")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(space(1.))
+                            .child(NumberInput::new(&self.keep_value).width(rems(9.)))
+                            .child(Select::new(&self.keep_unit).width(rems(11.))),
+                    ),
+            )
+    }
+}
+
+fn capture_kind_label(kind: CaptureKind) -> gpui::SharedString {
+    let key = match kind {
+        CaptureKind::Text => "text",
+        CaptureKind::Html => "html",
+        CaptureKind::Rtf => "rtf",
+        CaptureKind::Image => "image",
+        CaptureKind::Files => "files",
+    };
+    i18n::t(&format!("preferences:schema.captureKinds.{key}"))
+}
+
+fn capture_kind_icon(kind: CaptureKind) -> PrefIcon {
+    match kind {
+        CaptureKind::Text => PrefIcon::ClipboardType,
+        CaptureKind::Html => PrefIcon::FileCode,
+        CaptureKind::Rtf => PrefIcon::FileType,
+        CaptureKind::Image => PrefIcon::FileImage,
+        CaptureKind::Files => PrefIcon::Files,
+    }
+}
+
+fn retention_label(value: u32, unit: RetentionUnit) -> gpui::SharedString {
+    if matches!(unit, RetentionUnit::Forever) || value == 0 {
+        return i18n::t("preferences:retentionRules.summary.keepForever");
+    }
+    let key = match unit {
+        RetentionUnit::Minutes => "minutes",
+        RetentionUnit::Hours => "hours",
+        RetentionUnit::Days => "days",
+        RetentionUnit::Weeks => "weeks",
+        RetentionUnit::Months => "months",
+        RetentionUnit::Forever => "forever",
+    };
+    i18n::t_args(
+        &format!("preferences:retentionRules.durations.{key}"),
+        &[("count", &value.to_string())],
+    )
+}
+
+fn retention_unit_key(unit: RetentionUnit) -> &'static str {
+    match unit {
+        RetentionUnit::Minutes => "minutes",
+        RetentionUnit::Hours => "hours",
+        RetentionUnit::Days => "days",
+        RetentionUnit::Weeks => "weeks",
+        RetentionUnit::Months => "months",
+        RetentionUnit::Forever => "forever",
+    }
+}
+
+fn retention_unit_from_key(key: &str) -> RetentionUnit {
+    match key {
+        "minutes" => RetentionUnit::Minutes,
+        "hours" => RetentionUnit::Hours,
+        "days" => RetentionUnit::Days,
+        "weeks" => RetentionUnit::Weeks,
+        "months" => RetentionUnit::Months,
+        _ => RetentionUnit::Forever,
+    }
+}
+
+fn retention_rule_summary(rule: &RetentionRule) -> gpui::SharedString {
+    let mut parts = Vec::new();
+    if rule.categories.is_empty() {
+        parts.push(i18n::t("preferences:retentionRules.summary.all").to_string());
+    } else {
+        parts.push(
+            rule.categories
+                .iter()
+                .map(|category| category_label(*category).to_string())
+                .collect::<Vec<_>>()
+                .join("、"),
+        );
+    }
+    if rule.min_size_kb > 0 {
+        parts.push(
+            i18n::t_args(
+                "preferences:retentionRules.summary.larger",
+                &[("size", &format!("{} KB", rule.min_size_kb))],
+            )
+            .to_string(),
+        );
+    }
+    if rule.sensitive_only {
+        parts.push(i18n::t("preferences:retentionRules.summary.sensitive").to_string());
+    }
+    if rule.unused_only {
+        parts.push(i18n::t("preferences:retentionRules.summary.unused").to_string());
+    }
+    parts.join(" · ").into()
+}
+
 fn setting_row(
     title: gpui::SharedString,
     description: gpui::SharedString,
@@ -2921,6 +3600,197 @@ fn overview_metric_card(
                 .kp_text(TextSize::Xs)
                 .text_color(theme::tokens(cx).secondary)
                 .child(hint),
+        )
+        .into_any_element()
+}
+
+fn overview_detail_card<I>(
+    title: gpui::SharedString,
+    rows: I,
+    cx: &mut Context<Preferences>,
+) -> gpui::AnyElement
+where
+    I: IntoIterator<Item = gpui::AnyElement>,
+{
+    let tokens = theme::tokens(cx);
+    div()
+        .flex()
+        .flex_col()
+        .gap(space(2.))
+        .rounded(theme::radius::MD)
+        .border_1()
+        .border_color(tokens.border_secondary)
+        .bg(tokens.bg_container)
+        .p(space(3.))
+        .child(
+            div()
+                .kp_text(TextSize::Sm)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .children(rows)
+        .into_any_element()
+}
+
+fn overview_trend_card(
+    daily: &[kwikpaste_core::db::overview::DailyCount],
+    cx: &mut Context<Preferences>,
+) -> gpui::AnyElement {
+    let tokens = theme::tokens(cx);
+    let max_count = daily.iter().map(|day| day.count).max().unwrap_or(1).max(1);
+    let recent = daily.iter().rev().take(7).collect::<Vec<_>>();
+    let bars = recent.into_iter().rev().map(|day| {
+        let ratio = day.count as f32 / max_count as f32;
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_end()
+            .gap(space(0.5))
+            .flex_1()
+            .child(
+                div()
+                    .w(rems(1.25))
+                    .h(rems((ratio * 5.0).max(0.25)))
+                    .rounded(theme::radius::SM)
+                    .bg(tokens.primary),
+            )
+            .child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.secondary)
+                    .child(day.date.format("%m/%d").to_string()),
+            )
+            .into_any_element()
+    });
+    div()
+        .flex()
+        .flex_col()
+        .gap(space(2.))
+        .rounded(theme::radius::MD)
+        .border_1()
+        .border_color(tokens.border_secondary)
+        .bg(tokens.bg_container)
+        .p(space(3.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(space(1.))
+                .kp_text(TextSize::Sm)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(i18n::t("preferences:overview.trend.title"))
+                .child(
+                    div()
+                        .kp_text(TextSize::Xs)
+                        .text_color(tokens.secondary)
+                        .child(i18n::t_args(
+                            "preferences:overview.trend.subtitle",
+                            &[("count", "30")],
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_end()
+                .gap(space(2.))
+                .h(rems(8.))
+                .children(bars),
+        )
+        .into_any_element()
+}
+
+fn overview_groups_card(
+    groups: &[kwikpaste_core::db::overview::GroupStat],
+    totals: &kwikpaste_core::db::overview::ItemTotals,
+    cx: &mut Context<Preferences>,
+) -> gpui::AnyElement {
+    let tokens = theme::tokens(cx);
+    let rows = [
+        (
+            i18n::t("preferences:overview.organize.favorites"),
+            totals.favorites,
+        ),
+        (
+            i18n::t("preferences:overview.organize.pinned"),
+            totals.pinned,
+        ),
+        (i18n::t("preferences:overview.organize.noted"), totals.noted),
+        (
+            i18n::t("preferences:overview.organize.sensitive"),
+            totals.sensitive,
+        ),
+        (
+            i18n::t("preferences:overview.organize.ungrouped"),
+            totals.total.saturating_sub(totals.grouped),
+        ),
+    ];
+    let marks = rows.into_iter().map(|(label, count)| {
+        div()
+            .flex()
+            .items_center()
+            .gap(space(2.))
+            .child(div().kp_text(TextSize::Sm).child(label))
+            .child(
+                div()
+                    .flex_1()
+                    .h(px(4.))
+                    .rounded(theme::radius::SM)
+                    .bg(tokens.fill_secondary)
+                    .child(
+                        div()
+                            .h_full()
+                            .rounded(theme::radius::SM)
+                            .w(rems(
+                                (count as f32 / totals.total.max(1) as f32 * 12.0).max(0.2),
+                            ))
+                            .bg(tokens.primary),
+                    ),
+            )
+            .child(div().kp_text(TextSize::Xs).child(count.to_string()))
+            .into_any_element()
+    });
+    let group_rows = groups.iter().take(5).map(|group| {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .kp_text(TextSize::Sm)
+            .child(group.name.clone())
+            .child(group.count.to_string())
+            .into_any_element()
+    });
+    div()
+        .flex()
+        .flex_col()
+        .gap(space(2.))
+        .rounded(theme::radius::MD)
+        .border_1()
+        .border_color(tokens.border_secondary)
+        .bg(tokens.bg_container)
+        .p(space(3.))
+        .child(
+            div()
+                .kp_text(TextSize::Sm)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(i18n::t("preferences:overview.organize.title")),
+        )
+        .child(
+            div().grid().grid_cols(2).gap(space(4.)).children([
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(1.))
+                    .children(group_rows)
+                    .into_any_element(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(1.))
+                    .children(marks)
+                    .into_any_element(),
+            ]),
         )
         .into_any_element()
 }
@@ -3108,10 +3978,11 @@ mod tests {
     use gpui::{Keystroke, Modifiers};
 
     use kwikpaste_core::backup::BackupContainerMode;
+    use kwikpaste_core::settings::CaptureKind;
 
     use super::{
-        backup_confirmation_required, format_socket_address, search_matches, shortcut_conflicts,
-        shortcut_from_keystroke,
+        backup_confirmation_required, format_socket_address, reorder_capture_kinds, search_matches,
+        shortcut_conflicts, shortcut_from_keystroke,
     };
 
     #[test]
@@ -3169,5 +4040,15 @@ mod tests {
     fn every_backup_mode_requires_import_confirmation() {
         assert!(backup_confirmation_required(BackupContainerMode::Plain));
         assert!(backup_confirmation_required(BackupContainerMode::Encrypted));
+    }
+
+    #[test]
+    fn capture_order_drag_reorders_without_dropping_kinds() {
+        let mut order = CaptureKind::default_order();
+        let last = order.len() - 1;
+        assert!(reorder_capture_kinds(&mut order, CaptureKind::Files, last));
+        assert_eq!(order.len(), CaptureKind::default_order().len());
+        assert_eq!(order.last(), Some(&CaptureKind::Files));
+        assert!(!reorder_capture_kinds(&mut order, CaptureKind::Files, last));
     }
 }

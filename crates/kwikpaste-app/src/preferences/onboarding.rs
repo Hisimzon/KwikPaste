@@ -15,6 +15,7 @@ use kwikpaste_ui::{
 use serde_json::json;
 
 use super::{
+    icons::PrefIcon,
     schema::{self, Control},
     text, values, view,
 };
@@ -391,6 +392,7 @@ impl Onboarding {
             .flex()
             .flex_col()
             .gap(space(1.))
+            .min_w_0()
             .rounded(theme::radius::MD)
             .border_1()
             .border_color(theme::tokens(cx).border)
@@ -401,6 +403,54 @@ impl Onboarding {
                 div()
                     .kp_text(TextSize::Sm)
                     .text_color(theme::tokens(cx).secondary)
+                    .child(description),
+            )
+    }
+
+    fn render_feature_card(
+        &self,
+        icon: PrefIcon,
+        title: SharedString,
+        description: SharedString,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let tokens = theme::tokens(cx);
+        div()
+            .flex()
+            .flex_col()
+            .gap(space(2.))
+            .min_w_0()
+            .rounded(theme::radius::MD)
+            .border_1()
+            .border_color(tokens.border)
+            .bg(tokens.bg_container)
+            .p(space(3.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(space(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(rems(2.))
+                            .rounded(theme::radius::SM)
+                            .bg(tokens.bg_elevated)
+                            .child(icon.view(rems(1.25), tokens.primary)),
+                    )
+                    .child(
+                        div()
+                            .kp_text(TextSize::Base)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(title),
+                    ),
+            )
+            .child(
+                div()
+                    .kp_text(TextSize::Sm)
+                    .text_color(tokens.secondary)
                     .child(description),
             )
     }
@@ -423,18 +473,21 @@ impl Onboarding {
                     .text_color(theme::tokens(cx).secondary)
                     .child(i18n::t("onboarding:welcome.description")),
             )
-            .child(div().grid_cols(3).gap(space(3.)).children([
-                self.render_card(
+            .child(div().grid().w_full().grid_cols(3).gap(space(3.)).children([
+                self.render_feature_card(
+                    PrefIcon::ClipboardPlus,
                     i18n::t("onboarding:welcome.features.capture.title"),
                     i18n::t("onboarding:welcome.features.capture.description"),
                     cx,
                 ),
-                self.render_card(
+                self.render_feature_card(
+                    PrefIcon::Search,
                     i18n::t("onboarding:welcome.features.search.title"),
                     i18n::t("onboarding:welcome.features.search.description"),
                     cx,
                 ),
-                self.render_card(
+                self.render_feature_card(
+                    PrefIcon::ClipboardPaste,
                     i18n::t("onboarding:welcome.features.reuse.title"),
                     i18n::t("onboarding:welcome.features.reuse.description"),
                     cx,
@@ -752,18 +805,21 @@ impl Onboarding {
                     .text_color(theme::tokens(cx).secondary)
                     .child(i18n::t("onboarding:done.description")),
             )
-            .child(div().grid_cols(3).gap(space(3.)).children([
-                self.render_card(
+            .child(div().grid().w_full().grid_cols(3).gap(space(3.)).children([
+                self.render_feature_card(
+                    PrefIcon::ClipboardPlus,
                     i18n::t("onboarding:done.cards.open.title"),
                     i18n::t("onboarding:done.cards.open.description"),
                     cx,
                 ),
-                self.render_card(
+                self.render_feature_card(
+                    PrefIcon::Search,
                     i18n::t("onboarding:done.cards.search.title"),
                     i18n::t("onboarding:done.cards.search.description"),
                     cx,
                 ),
-                self.render_card(
+                self.render_feature_card(
+                    PrefIcon::Settings,
                     i18n::t("onboarding:done.cards.preferences.title"),
                     i18n::t("onboarding:done.cards.preferences.description"),
                     cx,

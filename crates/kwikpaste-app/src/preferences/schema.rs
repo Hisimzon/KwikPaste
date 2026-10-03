@@ -141,7 +141,11 @@ impl Control {
     pub fn full_width(self) -> bool {
         matches!(
             self,
-            Self::Tiles(_) | Self::CaptureKinds | Self::RetentionRules | Self::LanSync
+            Self::Tiles(_)
+                | Self::CaptureKinds
+                | Self::CaptureOrder
+                | Self::RetentionRules
+                | Self::LanSync
         )
     }
 }
