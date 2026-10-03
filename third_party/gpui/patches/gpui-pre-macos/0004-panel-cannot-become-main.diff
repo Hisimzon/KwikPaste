@@ -1,0 +1,50 @@
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -125,8 +125,9 @@ pub enum UserTabbingPreference {
+ #[ctor(unsafe)]
+ unsafe fn build_classes() {
+     unsafe {
+-        WINDOW_CLASS = build_window_class("GPUIWindow", class!(NSWindow));
+-        PANEL_CLASS = build_window_class("GPUIPanel", class!(NSPanel));
++        WINDOW_CLASS = build_window_class("GPUIWindow", class!(NSWindow), yes);
++        // [kwikpaste patch M0004] Popup panels must never become the application's main window.
++        PANEL_CLASS = build_window_class("GPUIPanel", class!(NSPanel), no);
+         VIEW_CLASS = {
+             let mut decl = ClassDecl::new("GPUIView", class!(NSView)).unwrap();
+             decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
+@@ -425,7 +426,11 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
+     }
+ }
+ 
+-unsafe fn build_window_class(name: &'static str, superclass: &Class) -> *const Class {
++unsafe fn build_window_class(
++    name: &'static str,
++    superclass: &Class,
++    can_become_main_window: extern "C" fn(&Object, Sel) -> BOOL,
++) -> *const Class {
+     unsafe {
+         let mut decl = ClassDecl::new(name, superclass).unwrap();
+         decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
+@@ -433,7 +438,7 @@ unsafe fn build_window_class(name: &'static str, superclass: &Class) -> *const C
+ 
+         decl.add_method(
+             sel!(canBecomeMainWindow),
+-            yes as extern "C" fn(&Object, Sel) -> BOOL,
++            can_become_main_window,
+         );
+         decl.add_method(
+             sel!(canBecomeKeyWindow),
+@@ -2471,6 +2476,11 @@ extern "C" fn yes(_: &Object, _: Sel) -> BOOL {
+     YES
+ }
+ 
++// [kwikpaste patch M0004] See `build_window_class` above.
++extern "C" fn no(_: &Object, _: Sel) -> BOOL {
++    NO
++}
++
+ extern "C" fn dealloc_window(this: &Object, _: Sel) {
+     unsafe {
+         drop_window_state(this);
+
+

@@ -1,0 +1,17 @@
+--- a/src/platform.rs
++++ b/src/platform.rs
+@@ -223,6 +223,14 @@ impl MacPlatform {
+             Arc::new(gpui::NoopTextSystem::new())
+         };
+ 
++        // [kwikpaste patch M0001] AppKit must initialize before querying the input source.
++        // Otherwise MacKeyboardLayout can observe no candidate input source (zed#62661).
++        unsafe {
++            let _: id = msg_send![APP_CLASS, sharedApplication];
++        }
++        if std::env::var_os("KWIKPASTE_SELFTEST").is_some() {
++            log::warn!("macOS IME init order: sharedApplication -> MacKeyboardLayout");
++        }
+         let keyboard_layout = MacKeyboardLayout::new();
+         let keyboard_mapper = Rc::new(MacKeyboardMapper::new(keyboard_layout.id()));
+ 

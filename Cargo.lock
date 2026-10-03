@@ -3101,8 +3101,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-macos"
 version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a43af845b260b09393e923c4f1e1a67a10fcfc847b4815192bbfd02ed9fe725"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4305,6 +4303,7 @@ name = "kwikpaste-os"
 version = "2.0.0-alpha.0"
 dependencies = [
  "auto-launch",
+ "block2 0.6.2",
  "kwikpaste-core",
  "log",
  "objc2 0.6.4",

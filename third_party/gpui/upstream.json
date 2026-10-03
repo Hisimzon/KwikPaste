@@ -11,6 +11,16 @@
       "sha256": "f05592a6f9e3e6bb7a9f2a0d4779271cf747a948db1c07b02448de777ffff8f3",
       "version": "0.3.7",
       "zedRev": "1a28cff4b409169bac058bca40dfbfeb7621d19b"
+    },
+    {
+      "name": "gpui-pre-macos",
+      "patches": [
+        "0001-ime-shared-application-before-keyboard-layout.diff",
+        "0004-panel-cannot-become-main.diff"
+      ],
+      "sha256": "5a43af845b260b09393e923c4f1e1a67a10fcfc847b4815192bbfd02ed9fe725",
+      "version": "0.3.7",
+      "zedRev": "1a28cff4b409169bac058bca40dfbfeb7621d19b"
     }
   ]
 }

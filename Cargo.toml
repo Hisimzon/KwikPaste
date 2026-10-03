@@ -59,6 +59,7 @@ kwikpaste-os = { path = "crates/kwikpaste-os" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-foundation = { version = "0.3", default-features = false }
+block2 = "0.6"
 raw-window-handle = "0.6"
 tray-icon = { version = "0.24", default-features = false }
 windows = "0.62"
@@ -120,6 +121,7 @@ unexpected_cfgs = "deny"
 
 [patch.crates-io]
 gpui-pre-windows = { path = "third_party/gpui/gpui-pre-windows" }
+gpui-pre-macos = { path = "third_party/gpui/gpui-pre-macos" }
 
 [profile.dev]
 debug = "line-tables-only"
