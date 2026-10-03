@@ -6,8 +6,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use futures::channel::oneshot;
 use gpui::{
-    App, IntoElement, ParentElement as _, Rems, RenderOnce, SharedString, Styled as _, Window,
-    rems, svg,
+    App, IntoElement, ParentElement as _, Pixels, Rems, RenderOnce, SharedString, Styled as _,
+    Window, px, rems, svg,
 };
 use gpui_base::{h_flex, v_flex};
 use gpui_component::WindowExt as _;
@@ -103,7 +103,7 @@ pub fn confirm(spec: ConfirmSpec, window: &mut Window, cx: &mut App) -> oneshot:
         // antd confirm：宽 416 px，内边距 20 px 24 px，圆角 borderRadiusLG，底色 colorBgElevated，无描边。
         // 阴影由 gpui-component 的进场动画每帧写入，覆盖不了，接受它的样子。
         dialog
-            .width(rems(26.).to_pixels(window.rem_size()))
+            .width(dialog_width(window))
             .close_button(false)
             .overlay_closable(false)
             .bg(tokens.bg_elevated)
@@ -148,8 +148,15 @@ impl ConfirmBody {
     }
 }
 
-/// 内容区宽度：416 px 减去左右内边距 24 px、图标 22 px 和间隔 12 px。
-const CONTENT_WIDTH: Rems = Rems(20.875);
+/// antd confirm 宽 416 px；窗口不够宽时（面板只有 360 px）左右各留 16 px，与 gpui-component 对话框的边距一致。
+fn dialog_width(window: &Window) -> Pixels {
+    rems(26.)
+        .to_pixels(window.rem_size())
+        .min(window.viewport_size().width - px(32.))
+}
+
+/// 内容区宽度：对话框宽度减去左右内边距 24 px、图标 22 px 和间隔 12 px。
+const CONTENT_INSET: Rems = Rems(5.125);
 
 impl RenderOnce for ConfirmBody {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -158,7 +165,7 @@ impl RenderOnce for ConfirmBody {
         let content = self.spec.content.as_ref().map(|content| {
             kinsoku_wrap(
                 content,
-                CONTENT_WIDTH.to_pixels(rem_size),
+                dialog_width(window) - CONTENT_INSET.to_pixels(rem_size),
                 TextSize::Sm.font_size().to_pixels(rem_size),
                 cx,
             )

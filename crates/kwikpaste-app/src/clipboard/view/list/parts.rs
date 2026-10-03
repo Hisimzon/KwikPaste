@@ -19,6 +19,7 @@ use crate::{
             actions::{QuickAction, is_copy},
             empty_state::{category_key, empty_text},
             item::ListItem,
+            shortcut,
         },
         view::{
             card::dp,
@@ -131,15 +132,6 @@ fn action_name(action: QuickAction) -> &'static str {
         QuickAction::Star => "star",
         QuickAction::PinItem => "pin-item",
         QuickAction::Delete => "delete",
-    }
-}
-
-/// Windows 与 macOS 的快捷键写法（1.x `formatShortcutDisplay`）。
-fn shortcut(windows: &'static str, macos: &'static str) -> SharedString {
-    if cfg!(target_os = "macos") {
-        macos.into()
-    } else {
-        windows.into()
     }
 }
 
@@ -368,7 +360,7 @@ impl ClipboardList {
                             .small()
                             .ghost()
                             .disabled(busy)
-                            .tooltip(shortcut("Ctrl+A", "⌘A"))
+                            .tooltip(shortcut::display("CmdOrCtrl+A"))
                             .on_click(cx.listener(|list, _, window, cx| {
                                 list.toggle_all(window, cx);
                             })),
@@ -376,9 +368,9 @@ impl ClipboardList {
                     .child(
                         Button::new("selection-delete", t("clipboard:selection.delete"))
                             .small()
-                            .danger()
+                            .danger_outline()
                             .disabled(busy || count == 0)
-                            .tooltip(shortcut("Ctrl+Backspace", "⌘⌫"))
+                            .tooltip(shortcut::display("CmdOrCtrl+Backspace"))
                             .on_click(cx.listener(|list, _, window, cx| {
                                 list.delete_checked(window, cx);
                             })),
@@ -387,7 +379,7 @@ impl ClipboardList {
                         Button::new("selection-exit", t("clipboard:selection.exit"))
                             .small()
                             .ghost()
-                            .tooltip(shortcut("Esc", "Esc"))
+                            .tooltip(shortcut::display("Escape"))
                             .on_click(cx.listener(|list, _, _, cx| list.exit_selection(cx))),
                     ),
             )
