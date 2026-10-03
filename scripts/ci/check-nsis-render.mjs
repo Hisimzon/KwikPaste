@@ -176,7 +176,12 @@ export const checkRender = (script, utils, { version, arch, identity }) => {
   ) {
     problems.push("the installer no longer closes a running KwikPaste.exe");
   }
-  const preinstall = script.match(
+  // The hook body lives in the included hooks file (both identities include it), not in installer.nsi.
+  const hooksSource = readFileSync(
+    new URL("../../packaging/windows/installer-hooks.nsh", import.meta.url),
+    "utf8",
+  );
+  const preinstall = hooksSource.match(
     /^!macro NSIS_HOOK_PREINSTALL\r?\n([\s\S]*?)^!macroend\s*$/m,
   );
   if (!preinstall) {
@@ -197,7 +202,7 @@ export const checkRender = (script, utils, { version, arch, identity }) => {
         "the preinstall hook no longer waits up to three seconds for exit",
       );
     }
-    const hookOffset = script.indexOf("!macro NSIS_HOOK_PREINSTALL");
+    const hookOffset = script.indexOf("!insertmacro NSIS_HOOK_PREINSTALL");
     const checkOffset = script.indexOf(
       '!insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"',
     );
