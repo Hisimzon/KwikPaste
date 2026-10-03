@@ -73,6 +73,10 @@ pub struct CardState {
     pub on_snippet: Option<SnippetHandler>,
     /// 按住修饰键时链接、邮箱卡片的正文是可点的链接（1.x `isLinkActive`）：点了打开。
     pub on_link: Option<LinkHandler>,
+    /// 当前条目在无障碍列表中的 1-based 位置。
+    pub position: usize,
+    /// 无障碍列表的总条数。
+    pub set_size: usize,
 }
 
 /// 快捷信息被点了：参数是那段文字。
@@ -198,12 +202,18 @@ pub fn card(
     div()
         // 按记录 id 而不是行号标识：刷新后新记录挪到光标下时，悬停、点击状态不会继承给它。
         .id(ElementId::Name(SharedString::from(item.id.clone())))
+        .role(gpui::Role::ListBoxOption)
+        .aria_label(accessibility_name(item, &env.now))
+        .aria_selected(state.active)
+        .aria_position_in_set(state.position)
+        .aria_size_of_set(state.set_size)
         .relative()
         .px(dp(layout.item_padding_x))
         .pt(dp(layout.item_gap))
         .child(frame)
         .when(state.active, |row| {
-            row.child(selection_ring(tokens, layout))
+            row.aria_active_descendant()
+                .child(selection_ring(tokens, layout))
         })
 }
 
@@ -434,6 +444,27 @@ fn type_label(key: TypeKey) -> SharedString {
         TypeKey::Path => t("clipboard:types.path"),
         TypeKey::Image => t("clipboard:types.image"),
         TypeKey::Files => t("clipboard:types.files"),
+    }
+}
+
+/// 生成条目在 UIA/AccessKit 中使用的可读名称。
+pub fn accessibility_name(item: &ListItem, now: &DateTime<Local>) -> SharedString {
+    let summary = item
+        .summary
+        .as_deref()
+        .or_else(|| match item.kind {
+            ItemKind::Image => Some(&*item.content),
+            ItemKind::Files => item.file_rows().first().map(|row| &*row.name),
+            ItemKind::Text => None,
+        })
+        .and_then(|value| value.lines().next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let kind = type_label(item.type_key());
+    let time = time_label(item.created_at, now);
+    match summary {
+        Some(summary) => format!("{kind} · {summary} · {time}").into(),
+        None => format!("{kind} · {time}").into(),
     }
 }
 

@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext as _, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
-    Keystroke, ParentElement as _, Render, ScrollHandle, Styled as _, Subscription,
+    Keystroke, ParentElement as _, Render, Role, ScrollHandle, Styled as _, Subscription,
     TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div,
     prelude::FluentBuilder as _, px, rems, size,
 };
@@ -1048,17 +1048,32 @@ impl Preferences {
             .child(setting_row(
                 i18n::t("preferences:schema.settings.sync.lan.text.title"),
                 gpui::SharedString::default(),
-                self.render_lan_switch("sync.lan.text", lan.text, cx),
+                self.render_lan_switch(
+                    "sync.lan.text",
+                    lan.text,
+                    i18n::t("preferences:schema.settings.sync.lan.text.title"),
+                    cx,
+                ),
             ))
             .child(setting_row(
                 i18n::t("preferences:schema.settings.sync.lan.image.title"),
                 gpui::SharedString::default(),
-                self.render_lan_switch("sync.lan.image", lan.image, cx),
+                self.render_lan_switch(
+                    "sync.lan.image",
+                    lan.image,
+                    i18n::t("preferences:schema.settings.sync.lan.image.title"),
+                    cx,
+                ),
             ))
             .child(setting_row(
                 i18n::t("preferences:schema.settings.sync.lan.writeClipboard.title"),
                 i18n::t("preferences:schema.settings.sync.lan.writeClipboard.description"),
-                self.render_lan_switch("sync.lan.writeClipboard", lan.write_clipboard, cx),
+                self.render_lan_switch(
+                    "sync.lan.writeClipboard",
+                    lan.write_clipboard,
+                    i18n::t("preferences:schema.settings.sync.lan.writeClipboard.title"),
+                    cx,
+                ),
             ))
             .child(setting_row(
                 i18n::t("preferences:schema.settings.sync.lan.maxImageMb.title"),
@@ -1302,10 +1317,12 @@ impl Preferences {
         &self,
         path: &'static str,
         checked: bool,
+        label: gpui::SharedString,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let entity = cx.entity().downgrade();
         Switch::new(path)
+            .accessibility_label(label)
             .checked(checked)
             .on_change(move |checked, _, cx| {
                 if let Some(entity) = entity.upgrade() {
@@ -1343,7 +1360,11 @@ impl Preferences {
                     .flex()
                     .flex_col()
                     .gap(space(2.))
-                    .child(Select::new(&mode_content).width(rems(16.)))
+                    .child(
+                        Select::new(&mode_content)
+                            .width(rems(16.))
+                            .accessibility_label(i18n::t("preferences:backup.export.mode")),
+                    )
                     .child(Input::new(&password_content))
                     .into_any_element()
             },
@@ -1464,7 +1485,11 @@ impl Preferences {
                         }
                     }))
                     .child(Input::new(&password_for_content))
-                    .child(Select::new(&strategy_for_content).width(rems(16.)))
+                    .child(
+                        Select::new(&strategy_for_content)
+                            .width(rems(16.))
+                            .accessibility_label(i18n::t("preferences:backup.import.strategy")),
+                    )
                     .into_any_element()
             },
             window,
@@ -1691,6 +1716,8 @@ impl Preferences {
                 let id = tab.id;
                 Button::new(id.key(), text::tab_title_of(&tab))
                     .when(selected, |button| button.primary())
+                    .selected(selected)
+                    .accessibility_role(Role::Tab)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tab = id;
                         if id == TabId::Overview {
@@ -1747,11 +1774,13 @@ impl Preferences {
                     Select::new(&self.appearance)
                         .small()
                         .width(rems(12.))
+                        .accessibility_label(title.clone())
                         .into_any_element()
                 } else if setting.id == "appearance.language" {
                     Select::new(&self.language)
                         .small()
                         .width(rems(12.))
+                        .accessibility_label(title.clone())
                         .into_any_element()
                 } else {
                     let selected = value
@@ -1779,6 +1808,7 @@ impl Preferences {
                     let entity = cx.entity().downgrade();
                     Button::new(format!("choice-{}", setting.id), selected.to_owned())
                         .ghost()
+                        .accessibility_label(title.clone())
                         .on_click(move |_, _, cx| {
                             if let Some(path) = path {
                                 let _ = entity.update(cx, |this, cx| {
@@ -1797,6 +1827,7 @@ impl Preferences {
                 let recording = self.recording == Some(setting.id);
                 let id = setting.id;
                 shortcut_recorder_button(id, current, &self.settings, recording)
+                    .accessibility_label(title.clone())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.begin_recording(id, window, cx);
                     }))
@@ -1811,6 +1842,7 @@ impl Preferences {
                 };
                 Button::new("restart-as-admin", label)
                     .ghost()
+                    .accessibility_label(title.clone())
                     .on_click(move |_, _, cx| {
                         if let Err(error) = crate::platform::autostart::restart_as_admin(cx) {
                             log::warn!("administrator restart was not started: {error:#}");
@@ -2081,7 +2113,11 @@ impl Render for ReadableExportDialog {
             .flex()
             .flex_col()
             .gap(space(2.))
-            .child(Select::new(&self.format).width(rems(16.)))
+            .child(
+                Select::new(&self.format)
+                    .width(rems(16.))
+                    .accessibility_label(i18n::t("preferences:readableExport.format")),
+            )
             .child(
                 Button::new(
                     "readable-groups-mode",

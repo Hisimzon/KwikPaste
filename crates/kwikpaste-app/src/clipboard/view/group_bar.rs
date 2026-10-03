@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, Context, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _,
 };
 use kwikpaste_ui::{
@@ -126,6 +126,8 @@ impl GroupBar {
         let hint = (self.hints && self.range.toggled() == range).then(|| SharedString::from("Q"));
 
         icon_button(tokens, id, Glyph::Icon(icon), label, hint, look(selected))
+            .role(Role::Tab)
+            .aria_selected(selected)
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(GroupBarEvent::SelectRange(range))))
             .into_any_element()
     }
@@ -159,6 +161,8 @@ impl GroupBar {
             look(self.category == Some(kind)),
         )
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(GroupBarEvent::ToggleCategory(kind))))
+        .role(Role::Tab)
+        .aria_selected(self.category == Some(kind))
         .into_any_element()
     }
 
@@ -177,6 +181,8 @@ impl GroupBar {
             None,
             look(selected),
         )
+        .role(Role::Tab)
+        .aria_selected(selected)
         .on_click(cx.listener(move |_, _, _, cx| {
             cx.emit(GroupBarEvent::ToggleGroup(id.clone()));
         }));
@@ -346,6 +352,8 @@ impl Render for GroupBar {
 
         div()
             .id("clipboard-group-bar")
+            .role(Role::TabList)
+            .aria_label(t("clipboard:accessibility.groupBar"))
             .flex()
             .flex_none()
             .items_center()

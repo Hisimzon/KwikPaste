@@ -8,6 +8,7 @@
 
 use std::{
     cell::RefCell,
+    path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -268,6 +269,14 @@ impl Driver {
         }
         let all = self.read(cx, |list, _| list.total());
 
+        // AccessKit only retains a tree when a platform accessibility client is
+        // connected (for example Narrator/UIA on Windows). Keep this probe
+        // opt-in so the regular UI selftest remains deterministic in headless
+        // development runs, while a connected client can export and verify the
+        // same tree that it receives.
+        self.pause(cx, 50).await;
+        self.accessibility_tree(cx).await;
+
         // 方向键：从第一个可见的非置顶项往下走一行。
         let before = self.active_index(cx);
         self.key(cx, "down");
@@ -358,6 +367,74 @@ impl Driver {
         self.drag_out(cx).await;
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
+    }
+
+    /// Export the last AccessKit tree and verify the first-release list nodes.
+    /// The tree is available only while a screen-reader/UIA client is attached;
+    /// absence of a client is therefore reported as a skipped probe, not a
+    /// product failure.
+    async fn accessibility_tree(&mut self, cx: &mut AsyncApp) {
+        let tree = self
+            .window
+            .update(cx, |_, window, _| window.debug_a11y_tree_json())
+            .ok()
+            .flatten();
+        let Some(tree) = tree else {
+            log::info!("panel ui selftest: a11y tree probe skipped (no AccessKit client)");
+            return;
+        };
+
+        if let Some(path) = std::env::var_os("KWIKPASTE_A11Y_DUMP").map(PathBuf::from) {
+            let write_result = std::fs::write(&path, &tree);
+            let write_ok = write_result.is_ok();
+            let write_error = write_result
+                .as_ref()
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+            self.check("exports the accessibility tree", write_ok, || {
+                format!("{}: {write_error}", path.display())
+            });
+            if write_ok {
+                log::info!(
+                    "panel ui selftest: a11y tree exported to {}",
+                    path.display()
+                );
+            }
+        } else {
+            log::info!("panel ui selftest: a11y tree captured (set KWIKPASTE_A11Y_DUMP to export)");
+        }
+
+        let parsed = serde_json::from_str::<serde_json::Value>(&tree);
+        let Ok(parsed) = parsed else {
+            self.check("accessibility tree is valid JSON", false, || {
+                "debug_a11y_tree_json returned invalid JSON".into()
+            });
+            return;
+        };
+
+        let list_named = tree_has_node(&parsed, "ListBox", |aria| {
+            matches!(
+                aria.get("label").and_then(serde_json::Value::as_str),
+                Some("剪贴板历史" | "Clipboard history")
+            )
+        });
+        self.check(
+            "accessibility list has a localized name",
+            list_named,
+            || "missing ListBox label 剪贴板历史 / Clipboard history".into(),
+        );
+
+        let option_named = tree_has_node(&parsed, "ListBoxOption", |aria| {
+            aria.get("label")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|label| !label.trim().is_empty())
+        });
+        self.check(
+            "accessibility option has a readable name",
+            option_named,
+            || "missing non-empty ListBoxOption label".into(),
+        );
     }
 
     /// 在窗口里的某个位置按下再松开右键。
@@ -1543,6 +1620,28 @@ impl Driver {
         self.filtered(cx, "showing resets the range to all", ListFilter::default())
             .await;
     }
+}
+
+fn tree_has_node<F>(value: &serde_json::Value, role: &str, predicate: F) -> bool
+where
+    F: Fn(&serde_json::Map<String, serde_json::Value>) -> bool + Copy,
+{
+    let serde_json::Value::Object(map) = value else {
+        return false;
+    };
+
+    if let Some(serde_json::Value::Object(aria)) = map.get("aria") {
+        let role_matches = aria
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value == role);
+        if role_matches && predicate(aria) {
+            return true;
+        }
+    }
+
+    map.values()
+        .any(|child| tree_has_node(child, role, predicate))
 }
 
 /// 截图用的演示状态（`KP_PANEL_DEMO`）：`hover`、`hints`、`selection`、`search-empty`、`group`、

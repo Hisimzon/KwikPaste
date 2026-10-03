@@ -8,6 +8,7 @@
       "confirmPassword": "Confirm password",
       "confirmRequired": "Enter the backup password again",
       "encryptedHint": "The backup will be encrypted with this password. KwikPaste will not save it, and forgotten passwords cannot be recovered.",
+      "mode": "Backup mode",
       "modeEncrypted": "Encrypted backup (Recommended)",
       "modePlain": "Plain backup",
       "ok": "Choose Save Location",

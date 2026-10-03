@@ -31,7 +31,7 @@ use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, ClickEvent, Context, DispatchPhase, Entity,
     EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
     ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, Role, ScrollDelta, ScrollWheelEvent,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, canvas, div, list,
     prelude::FluentBuilder as _, px,
 };
@@ -1098,6 +1098,8 @@ impl ClipboardList {
             checkbox,
             on_snippet,
             on_link,
+            position: index + 1,
+            set_size: self.model.total(),
         };
         let id = item.id.clone();
         let pressed = item.clone();
@@ -1274,6 +1276,8 @@ impl Render for ClipboardList {
 
         let root = div()
             .id("clipboard-list")
+            .role(Role::ListBox)
+            .aria_label(crate::i18n::t("clipboard:accessibility.list"))
             .track_focus(&self.focus)
             .on_mouse_move(cx.listener(|list, event: &MouseMoveEvent, window, cx| {
                 list.pointer_moved(event.position, cx);

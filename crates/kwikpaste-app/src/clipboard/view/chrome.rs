@@ -3,7 +3,8 @@
 
 use gpui::{
     AnyElement, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, Rems,
-    SharedString, Stateful, Styled as _, div, prelude::FluentBuilder as _, svg,
+    Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
+    prelude::FluentBuilder as _, svg,
 };
 use kwikpaste_ui::{
     Icon, IconName, KeyHint, TooltipExt as _,
@@ -60,9 +61,13 @@ pub fn icon_button(
         ),
     };
     let hinted = hint.is_some();
+    let keyshortcuts = hint.clone();
 
     div()
         .id(id)
+        .role(Role::Button)
+        .aria_label(label.clone())
+        .when_some(keyshortcuts, |button, key| button.aria_keyshortcuts(key))
         .relative()
         .flex()
         .flex_none()

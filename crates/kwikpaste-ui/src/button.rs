@@ -55,6 +55,8 @@ type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 pub struct Button {
     id: ElementId,
     label: Option<SharedString>,
+    accessibility_label: Option<SharedString>,
+    role: Option<gpui::Role>,
     icon: Option<IconName>,
     icon_only: bool,
     kind: ButtonKind,
@@ -72,6 +74,8 @@ impl Button {
         Self {
             id: id.into(),
             label: Some(label.into()),
+            accessibility_label: None,
+            role: None,
             icon: None,
             icon_only: false,
             kind: ButtonKind::Default,
@@ -157,6 +161,18 @@ impl Button {
         self
     }
 
+    /// 覆盖控件向辅助技术暴露的名称；可见文字仍保持不变。
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
+
+    /// 覆盖默认的 Button 角色（例如偏好设置侧栏的 Tab）。
+    pub fn accessibility_role(mut self, role: gpui::Role) -> Self {
+        self.role = Some(role);
+        self
+    }
+
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
@@ -178,6 +194,10 @@ impl Button {
     fn render_danger_outline(self, cx: &App) -> AnyElement {
         let tokens = crate::theme::tokens(cx);
         let label = self.label.unwrap_or_default();
+        let accessibility_label = self
+            .accessibility_label
+            .clone()
+            .unwrap_or_else(|| label.clone());
         let disabled = self.disabled || self.loading;
         let (height, padding) = match self.size {
             ButtonSize::XSmall => (control_height::XS, rems(0.25)),
@@ -191,6 +211,8 @@ impl Button {
         let on_click = self.on_click;
         let button = div()
             .id(self.id.clone())
+            .role(self.role.unwrap_or(gpui::Role::Button))
+            .aria_label(accessibility_label)
             .flex()
             .flex_none()
             .items_center()
@@ -247,6 +269,10 @@ impl RenderOnce for Button {
         }
 
         let label = self.label.unwrap_or_default();
+        let accessibility_label = self
+            .accessibility_label
+            .clone()
+            .unwrap_or_else(|| label.clone());
         let button = KitButton::new(self.id.clone())
             .map(|button| match self.kind {
                 ButtonKind::Default | ButtonKind::DangerOutline => button,
@@ -276,17 +302,21 @@ impl RenderOnce for Button {
                 ))
             })
             .map(|button| {
-                if self.icon_only {
-                    button.accessibility_label(label.clone())
+                let button = if self.icon_only {
+                    button.accessibility_label(accessibility_label.clone())
                 } else {
                     button.label(label.clone())
-                }
+                };
+                button.when_some(self.accessibility_label.clone(), |button, label| {
+                    button.accessibility_label(label)
+                })
             })
             .loading(self.loading)
             .disabled(self.disabled)
             .when_some(self.selected, |button, selected| {
                 button.selected(selected).toggled(selected)
             })
+            .when_some(self.role, |button, role| button.role(role))
             .when_some(self.on_click, |button, on_click| {
                 button.on_click(move |event, window, cx| on_click(event, window, cx))
             });

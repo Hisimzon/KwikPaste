@@ -8,6 +8,7 @@
       "confirmPassword": "确认密码",
       "confirmRequired": "请再次输入备份密码",
       "encryptedHint": "备份会用你输入的密码加密。快贴 不会保存密码，忘记后无法恢复。",
+      "mode": "备份方式",
       "modeEncrypted": "加密备份（推荐）",
       "modePlain": "明文备份",
       "ok": "选择保存位置",

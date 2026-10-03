@@ -1,4 +1,8 @@
 {
+  "accessibility": {
+    "groupBar": "剪贴板分组",
+    "list": "剪贴板历史"
+  },
   "empty": {
     "categories": {
       "files": "文件",

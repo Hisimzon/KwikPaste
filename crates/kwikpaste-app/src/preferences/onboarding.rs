@@ -410,6 +410,9 @@ impl Onboarding {
             let accessibility =
                 Button::new("onboarding-accessibility", i18n::t("common:actions.open"))
                     .small()
+                    .accessibility_label(i18n::t(
+                        "preferences:schema.settings.permissions.accessibility.title",
+                    ))
                     .on_click(|_, _, _| {
                         if let Err(error) = kwikpaste_os::keystroke::ensure_accessibility_trusted()
                         {
@@ -427,6 +430,9 @@ impl Onboarding {
             );
             let disk = Button::new("onboarding-full-disk", i18n::t("common:actions.open"))
                 .small()
+                .accessibility_label(i18n::t(
+                    "preferences:schema.settings.permissions.fullDiskAccess.title",
+                ))
                 .on_click(|_, _, _| {
                     if let Err(error) =
                         kwikpaste_os::mac::permissions::open_full_disk_access_settings()
@@ -448,6 +454,9 @@ impl Onboarding {
         {
             let admin = Button::new("onboarding-admin", i18n::t("common:actions.open"))
                 .small()
+                .accessibility_label(i18n::t(
+                    "preferences:schema.settings.permissions.runAsAdministrator.title",
+                ))
                 .on_click(|_, _, cx| {
                     if let Err(error) = crate::platform::autostart::restart_as_admin(cx) {
                         log::warn!("administrator restart was not started: {error:#}");
@@ -506,6 +515,7 @@ impl Onboarding {
                             &self.settings,
                             self.recording == Some(id),
                         )
+                        .accessibility_label(text::setting_title(&setting))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.begin_recording(id, window, cx)
                         }))
@@ -514,6 +524,7 @@ impl Onboarding {
                     Control::Switch => {
                         let entity = cx.entity().downgrade();
                         Switch::new(id)
+                            .accessibility_label(text::setting_title(&setting))
                             .checked(value.and_then(serde_json::Value::as_bool).unwrap_or(false))
                             .on_change(move |checked, _, cx| {
                                 let _ = entity.update(cx, |this, cx| {
@@ -540,6 +551,7 @@ impl Onboarding {
                             .map(|(value, _)| value.to_string());
                         Button::new(format!("choice-{id}"), label)
                             .ghost()
+                            .accessibility_label(text::setting_title(&setting))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(next) = &next {
                                     this.update_settings(values::patch(path, json!(next)), cx);
@@ -645,6 +657,7 @@ impl Onboarding {
                     i18n::t("common:actions.open"),
                 )
                 .small()
+                .accessibility_label(i18n::t("onboarding:ignoreApps.title"))
                 .on_click(|_, _, cx| {
                     if let Err(error) = crate::preferences::open(cx) {
                         log::warn!("could not open preferences from onboarding: {error:#}");
