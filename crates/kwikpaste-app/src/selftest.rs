@@ -44,6 +44,13 @@ pub const HANDOFF: &str = "--selftest-handoff=";
 pub const COUNT: &str = "--selftest-count";
 /// 平台探针的面板放正式的列表（UI 的 `build_panel`），不放平台自测视图；验证列表的粘贴意图用。
 pub const UI_PANEL: &str = "--selftest-ui-panel";
+/// 崩溃重启自测：自测进程崩溃时默认只记录不重启，带这个开关才按正式策略重启
+/// （`tools/platform-probes/crash-restart.ps1`）。
+pub const CRASH_RESTART: &str = "--selftest-crash-restart";
+/// `--selftest-panic=main|thread`：在主线程（前台任务里）或一个新线程上 panic。
+pub const PANIC: &str = "--selftest-panic=";
+/// 让看门狗认为 vsync 线程已死，下一次显示面板时有序重启。
+pub const VSYNC_DEAD: &str = "--selftest-vsync-dead";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
 pub const GALLERY: &str = "--selftest-gallery";
 /// 列表跑分：1 万行合成数据，附录 D §3.7 的门槛与锚定场景（见 `clipboard::view::bench`）。
@@ -95,8 +102,9 @@ pub fn kind() -> Option<&'static str> {
 
 /// 本进程是平台探针本身（`--selftest-platform`）或者给它转交命令的后启动实例。
 fn platform_probe() -> bool {
-    const COMMANDS: [&str; 12] = [
+    const COMMANDS: [&str; 13] = [
         COUNT,
+        VSYNC_DEAD,
         PLATFORM,
         SHOW,
         HIDE,
@@ -116,6 +124,7 @@ fn platform_probe() -> bool {
                 || arg.starts_with(SETTINGS)
                 || arg.starts_with(COPY_ITEM)
                 || arg.starts_with(HANDOFF)
+                || arg.starts_with(PANIC)
         })
 }
 

@@ -332,3 +332,13 @@ pub fn handoff_rehearsed() {
 pub fn quitting() {
     write("quit", "");
 }
+
+/// 启动时的崩溃重启状态：第几次重启、是否降级、DirectComposition 是否被关掉。
+pub fn health(relaunch: u32, degraded: bool, direct_composition_disabled: bool) {
+    write(
+        "health",
+        &format!(
+            r#","relaunch":{relaunch},"degraded":{degraded},"direct_composition_disabled":{direct_composition_disabled}"#
+        ),
+    );
+}

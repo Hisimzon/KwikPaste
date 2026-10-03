@@ -49,7 +49,8 @@ fn read() -> SystemSignals {
             .unwrap_or(settings.text_scale)
             .clamp(1.0, 2.25),
         high_contrast: settings.high_contrast,
-        reduce_motion: settings.reduce_motion,
+        // 崩溃重启的降级模式关掉动画。
+        reduce_motion: settings.reduce_motion || crate::health::degraded(),
     }
 }
 

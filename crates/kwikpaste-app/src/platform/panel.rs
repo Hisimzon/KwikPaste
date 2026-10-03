@@ -323,6 +323,10 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
 }
 
 fn show(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
+    // vsync 线程死了面板只会出一帧、之后不再重绘：不显示，有序重启。
+    if !super::watchdog::render_thread_ok("panel show") {
+        return;
+    }
     let native = &parts.native;
     let layout = cx.update(|cx| window_state::layout(cx));
     let placement = native

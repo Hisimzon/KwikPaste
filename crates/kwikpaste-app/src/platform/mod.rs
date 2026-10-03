@@ -1,9 +1,10 @@
 //! 平台层的 GPUI 接线：创建平台、单实例、core、剪贴板面板、键盘与鼠标钩子、编辑态、
 //! 粘贴链路、全局热键、托盘和系统设置信号。
 //!
-//! 启动顺序（附录 C §4.3 的子集）：[`launch`] 在创建 GPU 设备之前判重（第二实例把参数转交给
-//! 主实例后直接退出）并启动 core；[`create`] 创建 GPUI 平台；[`start`] 在 `Application::run`
-//! 回调里设全局行为、预创建隐藏的面板、注册热键和托盘、接上 core 的设置事件。
+//! 启动顺序（附录 C §4.3 的子集）：`main` 先装日志和 panic hook（`crate::health`）；[`launch`] 在
+//! 创建 GPU 设备之前判重（第二实例把参数转交给主实例后直接退出；崩溃重启的子进程改为等前一个
+//! 实例退出后接管）并启动 core；[`create`] 创建 GPUI 平台；[`start`] 在 `Application::run`
+//! 回调里设全局行为、开看门狗、预创建隐藏的面板、注册热键和托盘、接上 core 的设置事件。
 //!
 //! 只需要原生句柄的部分在 `kwikpaste-os`，这里只放要碰 `gpui::*` 的胶水。所有原生窗口调用
 //! 都在 `cx.spawn` 的任务体里、GPUI 借用之外进行。
@@ -38,6 +39,7 @@ mod settings;
 mod system;
 mod tray;
 mod updater;
+mod watchdog;
 mod window_state;
 
 #[cfg(target_os = "macos")]
@@ -54,7 +56,7 @@ use gpui::{App, AppContext as _, CursorHideMode, Entity, Platform, QuitMode, Ren
 use kwikpaste_os::single_instance::{self, Claim, Invocation, PrimaryInstance};
 
 use crate::core_host::{self, StartedCore};
-use crate::selftest;
+use crate::{health, selftest};
 
 #[allow(unused_imports, reason = "UI 接线用的接口，见本模块文档")]
 pub use editing::EditTrigger;
@@ -63,7 +65,17 @@ pub use panel::{Panel, PanelCommand, PanelEvent, Trigger, TriggerSource, rendere
 pub use settings::{CoreEvents, core_events};
 #[allow(unused_imports, reason = "UI 接线用的接口，见本模块文档")]
 pub use system::SystemSignals;
-pub use updater::exit_code;
+
+/// 崩溃重启的子进程最多等前一个实例退出这么久。
+const TAKE_OVER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 退出码：有序重启时为 70，更新交接要求的退出码次之，否则为 0。
+pub fn exit_code() -> i32 {
+    match health::exit_code() {
+        0 => updater::exit_code(),
+        code => code,
+    }
+}
 
 /// 判重通过后带进 GPUI 的启动状态。
 pub struct Launch {
@@ -76,13 +88,23 @@ pub struct Launch {
 ///
 /// 必须在 [`create`] 之前调用：第二实例不初始化 GPU，也不碰数据库。
 pub fn launch() -> anyhow::Result<Option<Launch>> {
-    selftest::init_logging();
-
     let identifier = crate::identity::identifier();
     let (sender, invocations) = async_channel::unbounded();
-    let claim = single_instance::claim(identifier, move |invocation| {
+    let on_invocation = move |invocation| {
         let _ = sender.try_send(invocation);
-    })
+    };
+    // 崩溃重启的子进程不把参数转交给正在死去的前一个实例，而是等它退出后接管。
+    let claim = if health::relaunch_count() > 0 {
+        match single_instance::take_over(identifier, on_invocation, TAKE_OVER_TIMEOUT) {
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                log::error!("the crashed instance did not exit in time ({err}); giving up");
+                return Ok(None);
+            }
+            claim => claim,
+        }
+    } else {
+        single_instance::claim(identifier, on_invocation)
+    }
     .with_context(|| format!("single instance check for {identifier}"))?;
 
     let instance = match claim {
@@ -92,6 +114,7 @@ pub fn launch() -> anyhow::Result<Option<Launch>> {
             return Ok(None);
         }
     };
+    health::after_claim();
     let core = core_host::start()?;
 
     Ok(Some(Launch {
@@ -134,6 +157,7 @@ pub fn start<V: Render>(
     // 钩子派发的按键会命中 action，默认模式会因此隐藏停在面板上的鼠标指针。
     cx.set_cursor_hide_mode(CursorHideMode::Never);
     probe::init();
+    watchdog::serve(cx);
 
     let StartedCore { host, events } = launch.core;
     cx.set_global(host);

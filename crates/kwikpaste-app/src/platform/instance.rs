@@ -6,7 +6,7 @@ use kwikpaste_os::single_instance::{Invocation, PrimaryInstance};
 
 use super::editing::EditTrigger;
 use super::panel::{PanelCommand, Trigger, TriggerSource};
-use super::{paste, probe, updater};
+use super::{paste, probe, updater, watchdog};
 use crate::{core_host, selftest};
 
 /// 开机自启带的参数：第二实例带它时静默退出，主实例什么也不做（与 1.x 相同）。
@@ -94,8 +94,11 @@ async fn handle_selftest(
                 probe::quitting();
                 cx.update(|cx| cx.quit());
             }
+            selftest::VSYNC_DEAD => watchdog::simulate_dead_render_thread(),
             _ => {
-                if let Some(patch) = arg.strip_prefix(selftest::SETTINGS) {
+                if let Some(place) = arg.strip_prefix(selftest::PANIC) {
+                    selftest_panic(place);
+                } else if let Some(patch) = arg.strip_prefix(selftest::SETTINGS) {
                     update_settings(patch, cx).await;
                 } else if let Some(code) = arg.strip_prefix(selftest::HANDOFF) {
                     let code = code.parse().unwrap_or(0);
@@ -114,6 +117,22 @@ async fn handle_selftest(
     }
 
     false
+}
+
+/// `--selftest-panic=main|thread`：故意 panic，验证 panic hook 和崩溃重启。`main` 在这个前台任务里
+/// （主线程的窗口过程内，进程随即 abort），`thread` 在一个新线程上（进程活着，走有序重启）。
+fn selftest_panic(place: &str) {
+    log::warn!("selftest: panicking on {place}");
+    if place == "thread" {
+        let spawned = std::thread::Builder::new()
+            .name("selftest-panic".to_owned())
+            .spawn(|| panic!("selftest panic on a worker thread"));
+        if let Err(err) = spawned {
+            log::error!("selftest panic thread did not start: {err}");
+        }
+        return;
+    }
+    panic!("selftest panic on the main thread");
 }
 
 /// `--selftest-read-now`：手动读取一次剪贴板，结果写进探针日志。

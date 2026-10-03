@@ -4,6 +4,7 @@
 mod clipboard;
 mod core_host;
 mod gallery;
+mod health;
 mod i18n;
 mod identity;
 mod platform;
@@ -12,6 +13,8 @@ mod selftest;
 use gpui::{App, Application};
 
 fn main() -> anyhow::Result<()> {
+    // 第一步：日志与 panic hook（崩溃记录、崩溃重启），见 `health`。
+    health::install();
     let Some(launch) = platform::launch()? else {
         return Ok(());
     };
@@ -57,7 +60,7 @@ fn main() -> anyhow::Result<()> {
             selftest::schedule(cx);
         });
 
-    // 更新交接要求的退出码（例如安装包没能启动、已重启当前版本时）。
+    // 有序重启（70）或更新交接要求的退出码（例如安装包没能启动、已重启当前版本时）。
     let code = platform::exit_code();
     if code != 0 {
         std::process::exit(code);
