@@ -87,6 +87,8 @@ if ($Action -eq 'Prepare') {
     $running = Get-Installed
     if ($running.Count -eq 0) { Write-Host 'the installed app is not running'; exit 0 }
     $process = $running[0]
+    # Open the handle now: ExitCode is only readable when it was opened before the exit.
+    $null = $process.Handle
     $userForeground = [Probe]::GetForegroundWindow()
     $tray = [InstalledTray]::Find([uint32]$process.Id, 'tray_icon_app', $false)
     if ($tray -eq [IntPtr]::Zero) { throw 'The installed app has no tray window.' }
