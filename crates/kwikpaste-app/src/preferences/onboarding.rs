@@ -1,14 +1,15 @@
 //! 首次启动引导窗：步骤和设置契约与 1.x `src/pages/Onboarding` 保持一致。
 
 use gpui::{
-    AnyWindowHandle, App, AppContext as _, Context, Div, Entity, FocusHandle, Global,
+    AnyWindowHandle, App, AppContext as _, Context, Div, Entity, FocusHandle, Global, ImageSource,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
-    SharedString, Styled as _, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, rems,
-    size,
+    SharedString, Styled as _, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    div, img, px, rems, size,
 };
 use kwikpaste_core::settings::Settings;
 use kwikpaste_ui::{
-    Button, ButtonSize, Checkbox, KpStyled as _, ScrollArea, Switch,
+    Button, ButtonSize, Checkbox, KpStyled as _, ScrollArea, Select, SelectOption, SelectState,
+    Switch,
     theme::{self, TextSize, space},
 };
 use serde_json::json;
@@ -19,7 +20,8 @@ use super::{
 };
 use crate::{core_host, i18n, platform::hotkey};
 
-const WINDOW_SIZE: gpui::Size<gpui::Pixels> = size(px(760.), px(600.));
+const WINDOW_SIZE: gpui::Size<gpui::Pixels> = size(px(880.), px(640.));
+const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(760.), px(560.));
 const WELCOME: usize = 0;
 const PERMISSIONS: usize = 1;
 const SHORTCUTS: usize = 2;
@@ -43,6 +45,7 @@ pub fn open(cx: &mut App) -> anyhow::Result<()> {
     }
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(WINDOW_SIZE, cx)),
+        window_min_size: Some(WINDOW_MIN_SIZE),
         titlebar: Some(TitlebarOptions {
             title: Some(i18n::t("onboarding:welcome.title")),
             ..Default::default()
@@ -75,6 +78,8 @@ struct Onboarding {
     recording: Option<&'static str>,
     focus: FocusHandle,
     scroll: ScrollHandle,
+    language: SelectState,
+    _subscriptions: Vec<Subscription>,
     finishing: bool,
 }
 
@@ -97,6 +102,14 @@ impl Onboarding {
             }
         });
         let steps: usize = if has_permissions { 5 } else { 4 };
+        let initial_step = if crate::selftest::active() {
+            std::env::var("KP_ONBOARDING_STEP")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0)
+        } else {
+            usize::try_from(settings.onboarding.last_step).unwrap_or(0)
+        };
         let entity = cx.entity().downgrade();
         if let Some(core) = core_host::core(cx).cloned() {
             cx.spawn(async move |_, cx| match core.list_all_apps().await {
@@ -110,16 +123,39 @@ impl Onboarding {
             })
             .detach();
         }
+        let language = SelectState::new(
+            vec![
+                SelectOption::new(
+                    "zh-CN",
+                    i18n::t("preferences:schema.settings.appearance.language.options.zh-CN"),
+                ),
+                SelectOption::new(
+                    "en-US",
+                    i18n::t("preferences:schema.settings.appearance.language.options.en-US"),
+                ),
+            ],
+            Some(match settings.appearance.language {
+                kwikpaste_core::settings::Language::ZhCN => "zh-CN",
+                kwikpaste_core::settings::Language::EnUS => "en-US",
+            }),
+            _window,
+            cx,
+        );
+        let language_subscription = language.on_change(cx, |this, value, cx| {
+            if let Some(value) = value {
+                this.update_settings(json!({ "appearance": { "language": value.as_ref() } }), cx);
+            }
+        });
         Self {
-            step: usize::try_from(settings.onboarding.last_step)
-                .unwrap_or(0)
-                .min(steps.saturating_sub(1)),
+            step: initial_step.min(steps.saturating_sub(1)),
             settings,
             has_permissions,
             source_apps: Vec::new(),
             recording: None,
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
+            language,
+            _subscriptions: vec![language_subscription],
             finishing: false,
         }
     }
@@ -335,6 +371,14 @@ impl Onboarding {
                             ),
                     ),
             )
+            .child(
+                Select::new(&self.language)
+                    .small()
+                    .width(rems(8.))
+                    .accessibility_label(i18n::t(
+                        "preferences:schema.settings.appearance.language.title",
+                    )),
+            )
     }
 
     fn render_card(
@@ -367,6 +411,7 @@ impl Onboarding {
             .flex_col()
             .items_center()
             .gap(space(3.))
+            .child(img(ImageSource::Image(view::logo())).size(rems(2.5)))
             .child(
                 div()
                     .kp_text(TextSize::Lg)
@@ -742,6 +787,7 @@ impl Render for Onboarding {
             }))
             .flex()
             .flex_col()
+            .overflow_hidden()
             .bg(theme::tokens(cx).bg_container)
             .text_color(theme::tokens(cx).text)
             .child(self.render_header(cx))

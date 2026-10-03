@@ -1088,5 +1088,6 @@
     "resetConfirmContent": "将把当前历史数据库、设置文件和资源缓存迁回默认数据目录，并在迁移成功后删除当前自定义数据目录。",
     "resetConfirmTitle": "还原默认数据目录"
   },
-  "title": "快贴 偏好设置"
+  "title": "快贴 偏好设置",
+  "windowTitle": "偏好设置"
 }

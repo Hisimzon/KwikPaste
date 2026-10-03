@@ -1,8 +1,8 @@
 use gpui::{
-    App, AppContext as _, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
-    Keystroke, ParentElement as _, Render, Role, ScrollHandle, Styled as _, Subscription,
-    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div,
-    prelude::FluentBuilder as _, px, rems, size,
+    App, AppContext as _, Context, FocusHandle, Image, ImageSource, InteractiveElement as _,
+    IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Render, Role, ScrollHandle,
+    StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, WeakEntity,
+    Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
     CoreEvent,
@@ -23,6 +23,7 @@ use serde_json::json;
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use super::{
+    icons::PrefIcon,
     schema::{self, Control, PermissionKind, Setting, TabId},
     text, values,
 };
@@ -32,13 +33,53 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
-const WINDOW_SIZE: gpui::Size<gpui::Pixels> = size(px(980.), px(700.));
+const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(960.), px(600.));
+
+pub(crate) fn logo() -> Arc<Image> {
+    static LOGO: std::sync::LazyLock<Arc<Image>> = std::sync::LazyLock::new(|| {
+        let bytes: &[u8] = if cfg!(target_os = "macos") {
+            include_bytes!("../../assets/logo-mac.png")
+        } else {
+            include_bytes!("../../assets/logo.png")
+        };
+        Arc::new(Image::from_bytes(gpui::ImageFormat::Png, bytes.to_vec()))
+    });
+    LOGO.clone()
+}
+
+fn window_size(cx: &App) -> gpui::Size<gpui::Pixels> {
+    let scale = cx
+        .try_global::<crate::platform::SystemSignals>()
+        .map_or(1.0, |signals| signals.text_scale as f32);
+    size(px(980. * scale), px(700. * scale))
+}
+
+fn initial_tab() -> TabId {
+    if crate::selftest::active() {
+        match std::env::var("KP_PREFERENCES_TAB").ok().as_deref() {
+            Some("shortcuts") => TabId::Shortcuts,
+            Some("appearance") => TabId::Appearance,
+            Some("capture") => TabId::Capture,
+            Some("window") => TabId::Window,
+            Some("paste") => TabId::Paste,
+            Some("items") => TabId::Items,
+            Some("sync") => TabId::Sync,
+            Some("overview") => TabId::Overview,
+            Some("data") => TabId::Data,
+            Some("about") => TabId::About,
+            _ => TabId::General,
+        }
+    } else {
+        TabId::General
+    }
+}
 
 pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(WINDOW_SIZE, cx)),
+        window_bounds: Some(WindowBounds::centered(window_size(cx), cx)),
+        window_min_size: Some(WINDOW_MIN_SIZE),
         titlebar: Some(TitlebarOptions {
-            title: Some(i18n::t("preferences:title")),
+            title: Some(i18n::t("preferences:windowTitle")),
             ..Default::default()
         }),
         focus: false,
@@ -46,6 +87,7 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     };
     kwikpaste_ui::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
+        view.update(cx, |this, cx| this.refresh_storage_overview(cx));
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         bring_window_to_front(window);
         view
@@ -56,9 +98,10 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
 
 pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(WINDOW_SIZE, cx)),
+        window_bounds: Some(WindowBounds::centered(window_size(cx), cx)),
+        window_min_size: Some(WINDOW_MIN_SIZE),
         titlebar: Some(TitlebarOptions {
-            title: Some(i18n::t("preferences:title")),
+            title: Some(i18n::t("preferences:windowTitle")),
             ..Default::default()
         }),
         focus: false,
@@ -66,6 +109,7 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     };
     kwikpaste_ui::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
+        view.update(cx, |this, cx| this.refresh_storage_overview(cx));
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         bring_window_to_front(window);
         Preferences::show_import_confirmation(path.clone(), window, cx);
@@ -102,6 +146,8 @@ struct Preferences {
     _subscriptions: Vec<Subscription>,
     appearance: SelectState,
     language: SelectState,
+    selects: std::collections::HashMap<&'static str, SelectState>,
+    number_inputs: std::collections::HashMap<&'static str, NumberInputState>,
     scroll: ScrollHandle,
     focus: FocusHandle,
     recording: Option<&'static str>,
@@ -186,6 +232,125 @@ impl Preferences {
         let lan_max_image_sub = lan_max_image.on_commit(window, cx, |this, value, _, cx| {
             this.update("sync.lan.maxImageMb", json!(value), cx);
         });
+        let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
+        let mut selects = std::collections::HashMap::new();
+        let mut number_inputs = std::collections::HashMap::new();
+        let mut setting_subscriptions = Vec::new();
+        let settings_json = values::to_json(&settings);
+        for tab in schema::tabs(portable) {
+            for section in tab.sections {
+                for setting in section.settings {
+                    match setting.control {
+                        Control::Select(kind) => {
+                            let numeric = matches!(kind, schema::Options::Numbers(_));
+                            let options = text::options(&setting)
+                                .into_iter()
+                                .map(|(value, label)| SelectOption::new(value, label))
+                                .collect();
+                            let selected =
+                                values::get_choice(&settings_json, setting.path.unwrap_or(""));
+                            let state = SelectState::new(options, selected.as_deref(), window, cx);
+                            let path = setting.path;
+                            let subscription = state.on_change(cx, move |this, value, cx| {
+                                if let (Some(path), Some(value)) = (path, value) {
+                                    this.apply_patch(
+                                        values::choice_patch(path, &value, numeric),
+                                        cx,
+                                    );
+                                }
+                            });
+                            setting_subscriptions.push(subscription);
+                            selects.insert(setting.id, state);
+                        }
+                        Control::Tiles(kind) => {
+                            let options = kind
+                                .values()
+                                .iter()
+                                .map(|value| {
+                                    SelectOption::new(
+                                        *value,
+                                        i18n::t(&format!(
+                                            "preferences:schema.settings.{}.options.{}",
+                                            setting.id, value
+                                        )),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            let selected =
+                                values::get_choice(&settings_json, setting.path.unwrap_or(""));
+                            let state = SelectState::new(options, selected.as_deref(), window, cx);
+                            let path = setting.path;
+                            let subscription = state.on_change(cx, move |this, value, cx| {
+                                if let (Some(path), Some(value)) = (path, value) {
+                                    this.update(path, json!(value.as_ref()), cx);
+                                }
+                            });
+                            setting_subscriptions.push(subscription);
+                            selects.insert(setting.id, state);
+                        }
+                        Control::Number { min, max, .. } => {
+                            let value = values::get(&settings_json, setting.path.unwrap_or(""))
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(min);
+                            let state = NumberInputState::new(value, min, max, window, cx);
+                            let path = setting.path;
+                            let subscription =
+                                state.on_commit(window, cx, move |this, value, _, cx| {
+                                    if let Some(path) = path {
+                                        this.update(path, json!(value), cx);
+                                    }
+                                });
+                            setting_subscriptions.push(subscription);
+                            number_inputs.insert(setting.id, state);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let retention_value = NumberInputState::new(
+            u64::from(settings.clipboard.history.retention.value),
+            0,
+            u64::from(u32::MAX),
+            window,
+            cx,
+        );
+        let retention_value_sub = retention_value.on_commit(window, cx, |this, value, _, cx| {
+            this.update("clipboard.history.retention.value", json!(value), cx);
+        });
+        number_inputs.insert("history.retention.value", retention_value);
+        let retention_unit = match settings.clipboard.history.retention.unit {
+            kwikpaste_core::settings::RetentionUnit::Minutes => "minutes",
+            kwikpaste_core::settings::RetentionUnit::Hours => "hours",
+            kwikpaste_core::settings::RetentionUnit::Days => "days",
+            kwikpaste_core::settings::RetentionUnit::Weeks => "weeks",
+            kwikpaste_core::settings::RetentionUnit::Months => "months",
+            kwikpaste_core::settings::RetentionUnit::Forever => "forever",
+        };
+        let retention_unit_state = SelectState::new(
+            ["minutes", "hours", "days", "weeks", "months", "forever"]
+                .into_iter()
+                .map(|value| {
+                    SelectOption::new(
+                        value,
+                        i18n::t(&format!("preferences:schema.retentionUnits.{value}")),
+                    )
+                })
+                .collect(),
+            Some(retention_unit),
+            window,
+            cx,
+        );
+        let retention_unit_sub = retention_unit_state.on_change(cx, |this, value, cx| {
+            if let Some(value) = value {
+                this.update(
+                    "clipboard.history.retention.unit",
+                    json!(value.as_ref()),
+                    cx,
+                );
+            }
+        });
+        selects.insert("history.retention.unit", retention_unit_state);
         let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
         let subscriptions = core_events(cx)
             .map(|events| {
@@ -207,15 +372,20 @@ impl Preferences {
                 language_sub,
                 lan_name_sub,
                 lan_max_image_sub,
+                retention_value_sub,
+                retention_unit_sub,
             ])
+            .chain(setting_subscriptions)
             .collect();
         Self {
-            tab: TabId::Overview,
+            tab: initial_tab(),
             settings,
             search,
             _subscriptions: subscriptions,
             appearance,
             language,
+            selects,
+            number_inputs,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             recording: None,
@@ -228,7 +398,18 @@ impl Preferences {
     }
 
     fn update(&mut self, path: &'static str, value: serde_json::Value, cx: &mut Context<Self>) {
-        let patch = values::patch(path, value);
+        let mut patch = values::patch(path, value.clone());
+        if path == "clipboard.display.density"
+            && value == "custom"
+            && let Some(seed) = values::custom_density_seed(&self.settings)
+        {
+            patch = values::merge(patch, seed);
+        }
+        self.apply_patch(patch, cx);
+    }
+
+    /// 所有控件共用同一条落盘路径，不把结构化设置误写成字符串。
+    fn apply_patch(&mut self, patch: serde_json::Value, cx: &mut Context<Self>) {
         if let Some(core) = core_host::core(cx).cloned() {
             let patch_for_task = patch.clone();
             cx.spawn(
@@ -239,7 +420,7 @@ impl Preferences {
                             cx.notify();
                         });
                     }
-                    Err(error) => log::error!("preferences update {path} failed: {error}"),
+                    Err(error) => log::error!("preferences update failed: {error}"),
                 },
             )
             .detach();
@@ -467,12 +648,19 @@ impl Preferences {
             i18n::t("preferences:schema.settings.organizing.customGroups.controlLabel")
         } else if id == "source.excludedApps" {
             i18n::t("preferences:schema.settings.source.excludedApps.controlLabel")
+        } else if id == "history.cleanupStatus" {
+            i18n::t("preferences:schema.settings.history.cleanupStatus.controlLabel")
+        } else if id == "capture.order" {
+            i18n::t("preferences:schema.settings.capture.order.title")
+        } else if id == "actions.visible" {
+            i18n::t("preferences:schema.settings.actions.visible.title")
+        } else if id == "history.rules" {
+            i18n::t("preferences:schema.settings.history.rules.title")
         } else {
             i18n::t("common:actions.open")
         };
         let entity = cx.entity().downgrade();
         Button::new(format!("action-{id}"), label)
-            .ghost()
             .on_click(move |_, window, cx| {
                 let Some(entity) = entity.upgrade() else {
                     return;
@@ -533,6 +721,26 @@ impl Preferences {
             "preferences:overview.space.reclaimable",
             &[("count", &reclaimable_count), ("size", &reclaimable_size)],
         );
+        let total_records = overview.history.totals.total;
+        let today_records = overview.history.daily.last().map_or(0, |day| day.count);
+        let reuse_count = overview.history.totals.reuses;
+        let oldest = overview
+            .history
+            .oldest_date
+            .map_or_else(|| "--".to_owned(), |date| date.to_string());
+        let total_hint = i18n::t_args(
+            "preferences:overview.tiles.total.today",
+            &[("value", &today_records.to_string())],
+        );
+        let recent_hint = i18n::t_args("preferences:overview.trend.subtitle", &[("count", "30")]);
+        let span_hint = if oldest == "--" {
+            i18n::t("preferences:overview.tiles.span.empty")
+        } else {
+            i18n::t_args(
+                "preferences:overview.tiles.span.since",
+                &[("date", &oldest)],
+            )
+        };
         let category_entity = entity.clone();
         let category_rows = overview
             .history
@@ -661,6 +869,51 @@ impl Preferences {
                     .kp_text(TextSize::Sm)
                     .child(i18n::t("preferences:overview.space.title")),
             )
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .gap(space(1.))
+                    .child(
+                        div()
+                            .kp_text(TextSize::Lg)
+                            .child(format_bytes(usage.total_bytes)),
+                    )
+                    .child(
+                        div()
+                            .kp_text(TextSize::Xs)
+                            .text_color(theme::tokens(cx).secondary)
+                            .child(format!(
+                                "/ {}",
+                                format_bytes(
+                                    self.settings.clipboard.history.storage_limit_mb as u64
+                                        * 1024
+                                        * 1024,
+                                ),
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(8.))
+                    .w_full()
+                    .rounded(theme::radius::SM)
+                    .bg(theme::tokens(cx).fill_secondary)
+                    .child(
+                        div()
+                            .h_full()
+                            .rounded(theme::radius::SM)
+                            .w(rems(
+                                (usage.total_bytes as f32
+                                    / (self.settings.clipboard.history.storage_limit_mb as f32
+                                        * 1024.
+                                        * 1024.))
+                                    .clamp(0.01, 1.0)
+                                    * 40.0,
+                            ))
+                            .bg(theme::tokens(cx).primary),
+                    ),
+            )
             .children([
                 format_storage_row(
                     i18n::t("preferences:overview.space.segments.database"),
@@ -710,6 +963,32 @@ impl Preferences {
                         })),
                     ),
             )
+            .child(div().grid_cols(4).gap(space(2.)).children([
+                overview_metric_card(
+                    i18n::t("preferences:overview.tiles.total.label"),
+                    total_records.to_string(),
+                    total_hint,
+                    cx,
+                ),
+                overview_metric_card(
+                    i18n::t("preferences:overview.tiles.recent.label"),
+                    today_records.to_string(),
+                    recent_hint,
+                    cx,
+                ),
+                overview_metric_card(
+                    i18n::t("preferences:overview.tiles.reuses.label"),
+                    reuse_count.to_string(),
+                    i18n::t("preferences:overview.tiles.reuses.hint"),
+                    cx,
+                ),
+                overview_metric_card(
+                    i18n::t("preferences:overview.tiles.span.label"),
+                    oldest,
+                    span_hint,
+                    cx,
+                ),
+            ]))
             .child(
                 div()
                     .flex()
@@ -795,9 +1074,17 @@ impl Preferences {
             .copied()
             .unwrap_or("all")
             .to_owned();
+        let label = match selected.as_str() {
+            "preserve" => {
+                i18n::t("preferences:schema.settings.window.selectGroupOnOpen.options.preserve")
+            }
+            "missingGroup" => {
+                i18n::t("preferences:schema.settings.window.selectGroupOnOpen.options.missingGroup")
+            }
+            _ => i18n::t("preferences:schema.settings.window.selectGroupOnOpen.options.all"),
+        };
         let entity = cx.entity().downgrade();
-        Button::new("group-select", selected.clone())
-            .ghost()
+        Button::new("group-select", label)
             .on_click(move |_, _, cx| {
                 if let Some(path) = path
                     && let Some(entity) = entity.upgrade()
@@ -805,6 +1092,79 @@ impl Preferences {
                     entity.update(cx, |this, cx| this.update(path, json!(next), cx));
                 }
             })
+            .into_any_element()
+    }
+
+    /// 采集类型使用与 1.x 相同的五项多选控件，并一次性提交对象补丁。
+    fn render_capture_kinds(
+        &self,
+        value: Option<serde_json::Value>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let capture = value.unwrap_or_default();
+        let entity = cx.entity().downgrade();
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(space(2.))
+            .children(values::CAPTURE_KINDS.into_iter().map(|kind| {
+                let checked = capture
+                    .get(kind)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                let label = i18n::t(&format!("preferences:schema.captureKinds.{kind}"));
+                let callback_entity = entity.clone();
+                Checkbox::new(format!("capture-kind-{kind}"))
+                    .label(label.clone())
+                    .accessibility_label(label)
+                    .checked(checked)
+                    .on_change(move |checked, _, cx| {
+                        if let Some(entity) = callback_entity.upgrade() {
+                            entity.update(cx, |this, cx| {
+                                let current = values::to_json(&this.settings);
+                                let selected: Vec<&str> = values::CAPTURE_KINDS
+                                    .into_iter()
+                                    .filter(|candidate| {
+                                        if *candidate == kind {
+                                            checked
+                                        } else {
+                                            values::get(
+                                                &current,
+                                                &format!("clipboard.capture.{candidate}"),
+                                            )
+                                            .and_then(serde_json::Value::as_bool)
+                                            .unwrap_or(false)
+                                        }
+                                    })
+                                    .collect();
+                                this.apply_patch(values::capture_kinds_patch(&selected), cx);
+                            });
+                        }
+                    })
+            }))
+            .into_any_element()
+    }
+
+    fn render_retention(&self) -> gpui::AnyElement {
+        let Some(value_state) = self.number_inputs.get("history.retention.value") else {
+            return div().into_any_element();
+        };
+        let Some(unit_state) = self.selects.get("history.retention.unit") else {
+            return div().into_any_element();
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(space(1.))
+            .child(NumberInput::new(value_state).width(rems(7.)))
+            .child(
+                Select::new(unit_state)
+                    .small()
+                    .width(rems(8.))
+                    .accessibility_label(i18n::t(
+                        "preferences:schema.settings.history.retention.title",
+                    )),
+            )
             .into_any_element()
     }
 
@@ -1704,28 +2064,142 @@ impl Preferences {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
-        div()
-            .flex()
-            .flex_col()
-            .w(rems(15.))
-            .gap(space(1.))
-            .p(space(3.))
-            .border_r_1()
-            .children(tabs.into_iter().map(|tab| {
-                let selected = tab.id == self.tab;
-                let id = tab.id;
-                Button::new(id.key(), text::tab_title_of(&tab))
-                    .when(selected, |button| button.primary())
-                    .selected(selected)
-                    .accessibility_role(Role::Tab)
+        let tokens = theme::tokens(cx);
+        let mut nav = div().flex().flex_col().gap(space(1.));
+        let mut group = None;
+        for tab in tabs {
+            if group != Some(tab.group) && group.is_some() {
+                nav = nav.child(div().h(px(1.)).my(space(1.)).bg(tokens.split));
+            }
+            group = Some(tab.group);
+            let selected = tab.id == self.tab;
+            let id = tab.id;
+            let title = text::tab_title_of(&tab);
+            nav = nav.child(
+                div()
+                    .id(id.key())
+                    .role(Role::Tab)
+                    .aria_label(title.clone())
+                    .flex()
+                    .items_center()
+                    .gap(space(2.))
+                    .w_full()
+                    .h(rems(2.25))
+                    .px(space(2.))
+                    .rounded(theme::radius::SM)
+                    .kp_text(TextSize::Sm)
+                    .when(selected, |item| {
+                        item.bg(tokens.fill_secondary).text_color(tokens.text)
+                    })
+                    .when(!selected, |item| {
+                        item.text_color(tokens.secondary)
+                            .hover(|style| style.bg(tokens.fill_tertiary))
+                    })
+                    .cursor_pointer()
+                    .child(tab.icon.view(
+                        rems(1.),
+                        if selected {
+                            tokens.primary
+                        } else {
+                            tokens.secondary
+                        },
+                    ))
+                    .child(title)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tab = id;
                         if id == TabId::Overview {
                             this.refresh_storage_overview(cx);
                         }
                         cx.notify();
-                    }))
-            }))
+                    })),
+            );
+        }
+        let usage = self
+            .storage_overview
+            .as_ref()
+            .map(|overview| overview.usage.total_bytes)
+            .unwrap_or(0);
+        let limit = self.settings.clipboard.history.storage_limit_mb as u64 * 1024 * 1024;
+        let ratio = if limit == 0 {
+            0.0
+        } else {
+            (usage as f32 / limit as f32).clamp(0.0, 1.0)
+        };
+        let storage_card = div()
+            .flex()
+            .flex_col()
+            .gap(space(1.))
+            .rounded(theme::radius::SM)
+            .border_1()
+            .border_color(tokens.border_secondary)
+            .bg(tokens.bg_elevated)
+            .p(space(2.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(space(1.))
+                    .kp_text(TextSize::Sm)
+                    .child(PrefIcon::HardDrive.view(rems(1.), tokens.success))
+                    .child(i18n::t("preferences:storage.title")),
+            )
+            .child(div().kp_text(TextSize::Xs).child(format!(
+                "{} / {}",
+                text::format_bytes(usage),
+                text::format_bytes(limit)
+            )))
+            .child(
+                div()
+                    .h(px(4.))
+                    .w_full()
+                    .rounded(theme::radius::SM)
+                    .bg(tokens.fill_secondary)
+                    .child(
+                        div()
+                            .h_full()
+                            .rounded(theme::radius::SM)
+                            .w(rems(10. * ratio))
+                            .bg(tokens.success),
+                    ),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .justify_between()
+            .h_full()
+            .w(rems(14.))
+            .p(space(2.))
+            .border_r_1()
+            .border_color(tokens.border_secondary)
+            .bg(tokens.bg_container)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(3.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(space(2.))
+                            .px(space(1.))
+                            .child(img(ImageSource::Image(logo())).size(rems(2.5)))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .child(div().kp_text(TextSize::Base).child("KwikPaste"))
+                                    .child(
+                                        div()
+                                            .kp_text(TextSize::Xs)
+                                            .text_color(tokens.secondary)
+                                            .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                                    ),
+                            ),
+                    )
+                    .child(nav),
+            )
+            .child(storage_card)
     }
 
     fn render_setting(&self, setting: &Setting, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -1770,53 +2244,29 @@ impl Preferences {
                     .into_any_element()
             }
             Control::Select(_) | Control::Tiles(_) => {
-                if setting.id == "appearance.theme" {
-                    Select::new(&self.appearance)
+                if let Some(state) = self.selects.get(setting.id) {
+                    Select::new(state)
                         .small()
                         .width(rems(12.))
-                        .accessibility_label(title.clone())
-                        .into_any_element()
-                } else if setting.id == "appearance.language" {
-                    Select::new(&self.language)
-                        .small()
-                        .width(rems(12.))
+                        .disabled(setting.is_disabled(&self.settings))
                         .accessibility_label(title.clone())
                         .into_any_element()
                 } else {
-                    let selected = value
-                        .as_ref()
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("auto");
-                    let options: Vec<String> = match setting.control {
-                        Control::Select(_) => text::options(setting)
-                            .into_iter()
-                            .map(|(value, _)| value.to_string())
-                            .collect(),
-                        Control::Tiles(kind) => kind
-                            .values()
-                            .iter()
-                            .map(|value| (*value).to_owned())
-                            .collect(),
-                        _ => Vec::new(),
-                    };
-                    let next = options
-                        .iter()
-                        .position(|option| option == selected)
-                        .and_then(|index| options.get((index + 1) % options.len().max(1)))
-                        .cloned()
-                        .unwrap_or_else(|| selected.to_owned());
-                    let entity = cx.entity().downgrade();
-                    Button::new(format!("choice-{}", setting.id), selected.to_owned())
-                        .ghost()
-                        .accessibility_label(title.clone())
-                        .on_click(move |_, _, cx| {
-                            if let Some(path) = path {
-                                let _ = entity.update(cx, |this, cx| {
-                                    this.update(path, json!(next.clone()), cx);
-                                });
-                            }
+                    div().into_any_element()
+                }
+            }
+            Control::Number { suffix, .. } => {
+                if let Some(state) = self.number_inputs.get(setting.id) {
+                    NumberInput::new(state)
+                        .width(rems(10.))
+                        .when_some(suffix, |input, suffix| {
+                            input.suffix(text::number_suffix(suffix))
                         })
+                        .disabled(setting.is_disabled(&self.settings))
+                        .accessibility_label(title.clone())
                         .into_any_element()
+                } else {
+                    div().into_any_element()
                 }
             }
             Control::ShortcutRecorder => {
@@ -1841,7 +2291,6 @@ impl Preferences {
                     i18n::t("common:actions.open")
                 };
                 Button::new("restart-as-admin", label)
-                    .ghost()
                     .accessibility_label(title.clone())
                     .on_click(move |_, _, cx| {
                         if let Err(error) = crate::platform::autostart::restart_as_admin(cx) {
@@ -1851,6 +2300,8 @@ impl Preferences {
                     .into_any_element()
             }
             Control::StorageOverview => self.render_storage_overview(cx),
+            Control::CaptureKinds => self.render_capture_kinds(value, cx),
+            Control::Retention => self.render_retention(),
             Control::AppExclusion => self.render_app_exclusion(value, cx),
             Control::GroupSelect => self.render_group_select(path, value, cx),
             Control::Action { .. } | Control::CleanupStatus => self.render_action(setting.id, cx),
@@ -1861,8 +2312,11 @@ impl Preferences {
             .items_center()
             .justify_between()
             .gap(space(3.))
-            .py(space(2.))
+            .px(space(4.))
+            .py(space(2.5))
+            .when(setting.parent.is_some(), |row| row.pl(space(8.)))
             .border_b_1()
+            .border_color(theme::tokens(cx).border_secondary)
             .child(
                 div()
                     .flex()
@@ -1888,52 +2342,75 @@ impl Preferences {
         let tabs = schema::tabs(portable);
         let tab = tabs.into_iter().find(|tab| tab.id == self.tab);
         let sections = tab.map(|tab| tab.sections).unwrap_or_default();
+        let show_titles = sections.len() > 1;
+        let tokens = theme::tokens(cx);
         let content = ScrollArea::new("preferences-scroll", &self.scroll)
-            .p(space(5.))
-            .gap(space(3.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(div().kp_text(TextSize::Lg).child(text::tab_title(self.tab)))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(space(3.))
-                            .when(self.tab == TabId::About, |row| {
-                                row.child(
-                                    div()
-                                        .kp_text(TextSize::Xs)
-                                        .text_color(theme::tokens(cx).secondary)
-                                        .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                                )
-                            })
-                            .child(Input::search(&self.search).small().width(rems(14.))),
-                    ),
-            )
+            .flex()
+            .flex_col()
+            .p(space(6.))
+            .gap(space(8.))
             .children(sections.into_iter().map(|section| {
-                div()
+                if self.tab == TabId::Overview {
+                    return self.render_storage_overview(cx);
+                }
+                let card = div()
                     .flex()
                     .flex_col()
-                    .gap(space(1.))
-                    .child(
-                        div()
-                            .kp_text(TextSize::Sm)
-                            .text_color(theme::tokens(cx).secondary)
-                            .child(text::section_title(&section)),
-                    )
+                    .rounded(theme::radius::MD)
+                    .border_1()
+                    .border_color(tokens.border_secondary)
+                    .bg(tokens.bg_container)
+                    .overflow_hidden()
                     .children(
                         section
                             .settings
                             .iter()
                             .filter(|setting| !setting.is_collapsed(&self.settings))
                             .map(|setting| self.render_setting(setting, cx)),
-                    )
+                    );
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(2.))
+                    .when(show_titles, |section_view| {
+                        section_view.child(
+                            div()
+                                .kp_text(TextSize::Sm)
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(text::section_title(&section)),
+                        )
+                    })
+                    .child(card)
+                    .into_any_element()
             }));
-
-        div().flex_1().min_h_0().child(content)
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .h_full()
+            .bg(tokens.bg_layout)
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_between()
+                    .h(rems(4.))
+                    .px(space(6.))
+                    .border_b_1()
+                    .border_color(tokens.border_secondary)
+                    .bg(tokens.bg_container)
+                    .child(
+                        div()
+                            .kp_text(TextSize::Lg)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(text::tab_title(self.tab)),
+                    )
+                    .child(Input::search(&self.search).small().width(rems(16.))),
+            )
+            .child(div().flex_1().min_h_0().overflow_hidden().child(content))
     }
 }
 
@@ -2417,6 +2894,37 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+fn overview_metric_card(
+    title: gpui::SharedString,
+    value: String,
+    hint: gpui::SharedString,
+    cx: &mut Context<Preferences>,
+) -> gpui::AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(space(1.))
+        .rounded(theme::radius::MD)
+        .border_1()
+        .border_color(theme::tokens(cx).border_secondary)
+        .bg(theme::tokens(cx).bg_container)
+        .p(space(3.))
+        .child(
+            div()
+                .kp_text(TextSize::Xs)
+                .text_color(theme::tokens(cx).secondary)
+                .child(title),
+        )
+        .child(div().kp_text(TextSize::Lg).child(value))
+        .child(
+            div()
+                .kp_text(TextSize::Xs)
+                .text_color(theme::tokens(cx).secondary)
+                .child(hint),
+        )
+        .into_any_element()
+}
+
 impl Render for Preferences {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -2426,7 +2934,8 @@ impl Render for Preferences {
                 this.capture_shortcut(event, window, cx);
             }))
             .flex()
-            .bg(theme::tokens(cx).bg_container)
+            .overflow_hidden()
+            .bg(theme::tokens(cx).bg_layout)
             .text_color(theme::tokens(cx).text)
             .child(self.render_sidebar(cx))
             .child(self.render_page(cx))
@@ -2575,7 +3084,6 @@ pub(crate) fn shortcut_recorder_button(
         text::format_shortcut(current).into()
     };
     Button::new(format!("shortcut-{id}"), label)
-        .ghost()
         .when(conflict && !recording, |button| button.danger())
         .tooltip(if recording {
             i18n::t("preferences:controls.recordShortcut")

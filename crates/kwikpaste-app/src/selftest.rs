@@ -16,7 +16,10 @@ use kwikpaste_core::{
 };
 use serde_json::json;
 
-use crate::platform::{self, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource};
+use crate::{
+    i18n,
+    platform::{self, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource},
+};
 
 const ENV: &str = "KWIKPASTE_SELFTEST";
 const PREFIX: &str = "--selftest-";
@@ -449,8 +452,13 @@ fn preferences(cx: &mut App) {
             "System startup",
             &["tray", "system"],
         );
+        let select_label_checked = !i18n::t(
+            "preferences:schema.settings.control.trayClick.options.clipboard",
+        )
+        .contains(':');
+        let number_unit_checked = !i18n::t("preferences:schema.numberSuffixes.seconds").contains(':');
         log::info!(
-            "preferences selftest: opened=true switched=true setting_updated={setting_updated} shortcut_conflict_checked={shortcut_conflict_checked} shortcut_recording_checked={shortcut_recording_checked} import_confirmation_checked={import_confirmation_checked} storage_overview_checked={storage_overview_checked} storage_category_cleanup_checked={storage_category_cleanup_checked} storage_source_cleanup_checked={storage_source_cleanup_checked} readable_export_checked={readable_export_checked} lan_sync_checked={lan_sync_checked} search_checked={search_checked}"
+            "preferences selftest: opened=true switched=true setting_updated={setting_updated} shortcut_conflict_checked={shortcut_conflict_checked} shortcut_recording_checked={shortcut_recording_checked} import_confirmation_checked={import_confirmation_checked} storage_overview_checked={storage_overview_checked} storage_category_cleanup_checked={storage_category_cleanup_checked} storage_source_cleanup_checked={storage_source_cleanup_checked} readable_export_checked={readable_export_checked} lan_sync_checked={lan_sync_checked} search_checked={search_checked} select_label_checked={select_label_checked} number_unit_checked={number_unit_checked} overview_load_finished={storage_overview_checked}"
         );
         cx.update(|cx| cx.quit());
     })
@@ -461,9 +469,8 @@ fn preferences(cx: &mut App) {
 fn onboarding(cx: &mut App) {
     let core = crate::core_host::core(cx).cloned();
     cx.spawn(async move |cx| {
-        cx.background_executor()
-            .timer(Duration::from_millis(500))
-            .await;
+        // 留出 PrintWindow/CI 截图时间；窗口仍由自测进程自动关闭。
+        cx.background_executor().timer(Duration::from_secs(3)).await;
         let completed = if let Some(core) = core {
             core.update_settings(json!({ "onboarding": { "completed": true, "lastStep": 4 } }))
                 .await
