@@ -4,6 +4,7 @@
 //! 的放这里。
 
 pub mod clock;
+pub mod drag_out;
 pub mod geometry;
 pub mod hook_keys;
 pub mod keystroke;

@@ -123,8 +123,10 @@ fn run_hook_thread(ready: mpsc::SyncSender<io::Result<u32>>) {
 }
 
 unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // 拖出期间不算窗外点击：拖拽结束前不能隐藏源窗口。
     if code >= 0
         && OUTSIDE_CLICK.load(Ordering::SeqCst)
+        && !crate::drag_out::is_active()
         && matches!(
             wparam.0 as u32,
             WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN

@@ -108,6 +108,10 @@ objc2-core-graphics = { version = "0.3", default-features = false }
 # kwikpaste-app 的 build.rs：给 Windows exe 嵌图标组（ID 1）和 VERSIONINFO。GPUI 也用它嵌 manifest，同一版本。
 embed-resource = "3"
 
+# kwikpaste-os 的 OLE 拖出自己实现 COM 接口：`#[implement]` 展开后引用 `windows_core`，要直接依赖它。
+# 与 windows 0.62 配套，GPUI 已经在用，不多编一份。
+windows-core = "0.62"
+
 [workspace.lints.rust]
 unexpected_cfgs = "deny"
 

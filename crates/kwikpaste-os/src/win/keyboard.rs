@@ -5,6 +5,7 @@
 //! - 编辑态（导航关闭）：面板已是前台窗口，键盘消息直接发给它，钩子只放行。
 //! - 取前台：注入一次带 [`OWN_INPUT_MARKER`] 的 Alt，由钩子吞掉，目标应用收不到
 //!   （见 [`swallow_marked_alt`]）。
+//! - 拖出中（[`crate::drag_out::is_active`]）：吞掉 Esc 并取消拖拽（见 `win::drag_out`）。
 //!
 //! 钩子跑在专用线程上，回调只查表、改原子量、调用不阻塞的出口。面板隐藏时 [`stop`]；
 //! 还有被吞的键没松开时线程等它们松开后再退出。
@@ -20,8 +21,8 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
     KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MapVirtualKeyW, SendInput,
-    VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RWIN,
-    VK_SHIFT,
+    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LWIN, VK_MENU, VK_RCONTROL,
+    VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, PeekMessageW,
@@ -245,6 +246,12 @@ fn handle_key(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
     let vk = (event.vkCode & 0xFF) as u16;
     let down = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
     let up = matches!(message, WM_KEYUP | WM_SYSKEYUP);
+
+    // 拖出中：面板不是前台，ole32 看不到 Esc。吞掉它（连同松开）并请求取消拖拽。
+    if down && vk == VK_ESCAPE.0 && super::drag_out::request_cancel() {
+        SWALLOWED[usize::from(vk)].store(true, Ordering::SeqCst);
+        return true;
+    }
 
     if up && SWALLOWED[usize::from(vk)].swap(false, Ordering::SeqCst) {
         if let Some(entry) = hook_keys::HOOK_KEYS.iter().find(|entry| entry.vk == vk)

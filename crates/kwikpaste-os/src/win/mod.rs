@@ -1,6 +1,7 @@
 //! Windows 集成。
 
 pub mod apps;
+pub mod drag_out;
 pub mod ime;
 pub mod keyboard;
 pub mod keystroke;

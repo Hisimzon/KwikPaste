@@ -51,6 +51,7 @@ const SUBCLASS_ID: usize = 0x4B50_4E4C;
 const STATE_PROPERTY: PCWSTR = w!("KwikPastePanelState");
 
 static PHANTOM_ACTIVATIONS: AtomicU32 = AtomicU32::new(0);
+static ACTIVATIONS: AtomicU32 = AtomicU32::new(0);
 static MOUSE_ACTIVATE_REPLIES: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
 static MOUSE_ACTIVATE_OVERRIDES: AtomicU32 = AtomicU32::new(0);
 
@@ -66,6 +67,8 @@ pub struct PanelOptions {
 /// 子类过程记下的计数，自测和日志用。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PanelCounters {
+    /// 收到的激活（`WM_ACTIVATE` 非 `WA_INACTIVE`）总数；只有编辑态取前台时才应增加。
+    pub activations: u32,
     /// 不在前台却收到激活的次数。正常应始终为 0。
     pub phantom_activations: u32,
     /// GPUI 对 `WM_MOUSEACTIVATE` 的回复，按值计数：下标 1–4 依次是 `MA_ACTIVATE`、
@@ -78,6 +81,7 @@ pub struct PanelCounters {
 /// 当前进程里面板子类过程的计数。
 pub fn counters() -> PanelCounters {
     PanelCounters {
+        activations: ACTIVATIONS.load(Ordering::Relaxed),
         phantom_activations: PHANTOM_ACTIVATIONS.load(Ordering::Relaxed),
         mouse_activate_replies: std::array::from_fn(|index| {
             MOUSE_ACTIVATE_REPLIES[index].load(Ordering::Relaxed)
@@ -302,6 +306,9 @@ unsafe extern "system" fn subclass_proc(
         WM_MOUSEACTIVATE => return mouse_activate(hwnd, msg, wparam, lparam),
         WM_ACTIVATE => {
             let activated = (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE;
+            if activated {
+                ACTIVATIONS.fetch_add(1, Ordering::Relaxed);
+            }
             if activated && unsafe { GetForegroundWindow() } != hwnd {
                 let count = PHANTOM_ACTIVATIONS.fetch_add(1, Ordering::Relaxed) + 1;
                 log::error!(
