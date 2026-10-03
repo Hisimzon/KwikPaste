@@ -1,8 +1,7 @@
 //! 偏好窗的结构：分类（侧栏）→ 分组 → 设置项，照 1.x `src/pages/Preference/config/preferenceSchema.ts`。
 //!
 //! 设置项 id 是 i18n key（`preferences:schema.settings.<id>.*`）与搜索跳转的目标，挪动分类时保持不变；
-//! `path` 是 `settings.json` 的点分 camelCase 路径，读值和写补丁都按它走。局域网同步与 1.x 一样不开放，
-//! 不出现在这里。
+//! `path` 是 `settings.json` 的点分 camelCase 路径，读值和写补丁都按它走。
 
 use super::icons::PrefIcon;
 use kwikpaste_core::settings::{ListDensity, ListStyle, Settings};
@@ -17,6 +16,7 @@ pub enum TabId {
     Window,
     Paste,
     Items,
+    Sync,
     Overview,
     Data,
     About,
@@ -32,6 +32,7 @@ impl TabId {
             Self::Window => "window",
             Self::Paste => "paste",
             Self::Items => "items",
+            Self::Sync => "sync",
             Self::Overview => "overview",
             Self::Data => "data",
             Self::About => "about",
@@ -130,6 +131,8 @@ pub enum Control {
     CleanupStatus,
     /// 数据概览。
     StorageOverview,
+    /// 局域网同步的设备、配对与连接控制面板。
+    LanSync,
     ShortcutRecorder,
 }
 
@@ -138,7 +141,7 @@ impl Control {
     pub fn full_width(self) -> bool {
         matches!(
             self,
-            Self::Tiles(_) | Self::CaptureKinds | Self::RetentionRules
+            Self::Tiles(_) | Self::CaptureKinds | Self::RetentionRules | Self::LanSync
         )
     }
 }
@@ -298,6 +301,18 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
             group: Group::Clipboard,
             icon: PrefIcon::Layers,
             sections: item_sections(),
+        },
+        Tab {
+            id: TabId::Sync,
+            group: Group::Data,
+            icon: PrefIcon::FolderSync,
+            sections: vec![Section {
+                id: "lanSync",
+                settings: vec![
+                    Setting::new("sync.lan.devices", Control::LanSync)
+                        .keywords(&["sync", "lan", "network", "pair", "device", "ipv4", "ipv6"]),
+                ],
+            }],
         },
         Tab {
             id: TabId::Overview,

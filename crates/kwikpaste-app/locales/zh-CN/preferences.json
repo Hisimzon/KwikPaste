@@ -69,6 +69,13 @@
     "shortcutConflict": "此快捷键与另一个全局快捷键冲突"
   },
   "lanSync": {
+    "connect": {
+      "addressPlaceholder": "例如 [fe80::1%12]:41573",
+      "manual": "按地址连接",
+      "ok": "连接",
+      "success": "已连接到 {{name}}",
+      "title": "连接已配对设备"
+    },
     "devices": {
       "empty": "还没有配对的设备",
       "lastSeen": "{{time}} 在线",
@@ -77,11 +84,13 @@
       "remove": "取消配对",
       "removeConfirmContent": "两台设备之后不再互相同步，已经收到的记录会保留。",
       "removeConfirmTitle": "取消与 {{name}} 的配对？",
+      "removed": "已取消配对",
       "title": "已配对设备"
     },
     "firewallHint": "其他设备搜不到或连不上本机时，请在 Windows 防火墙里允许快贴访问网络；家里的 Wi-Fi 被识别为「公用网络」时也需要勾选公用网络。",
     "nearby": {
       "empty": "正在搜索同一网络中开启了局域网同步的设备",
+      "incompatible": "版本不兼容",
       "manual": "手动添加",
       "pair": "配对",
       "title": "附近设备"
@@ -137,6 +146,7 @@
       "confirm": "清理",
       "content": "将删除 {{value}} 条记录，删除后无法恢复。",
       "contentWithKept": "将删除 {{value}} 条记录，另有 {{kept}} 条收藏或置顶记录会保留。删除后无法恢复。",
+      "done": "已清理 {{count}} 条记录",
       "nothing": "全部是收藏或置顶记录，无需清理",
       "sourceAppTitle": "清理来自「{{name}}」的记录",
       "tooltip": "清理这些记录"
@@ -245,6 +255,7 @@
     "pickDirectory": "选择导出文件夹的保存位置",
     "plainWarning": "导出文件不加密，拿到文件的人可以直接读取内容",
     "preview": "预览导出结果",
+    "previewRequired": "请先预览且确保有可导出的记录；包含敏感内容时还需确认风险",
     "range": "内容范围",
     "references": "其中 {{count}} 条图片或文件记录仅包含引用，换电脑后可能无法访问",
     "retryPreview": "请检查选项后重新预览，确认成功后再导出",

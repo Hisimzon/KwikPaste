@@ -69,6 +69,13 @@
     "shortcutConflict": "This shortcut conflicts with another global shortcut"
   },
   "lanSync": {
+    "connect": {
+      "addressPlaceholder": "e.g. [fe80::1%12]:41573",
+      "manual": "Connect by address",
+      "ok": "Connect",
+      "success": "Connected to {{name}}",
+      "title": "Connect Paired Device"
+    },
     "devices": {
       "empty": "No paired devices yet",
       "lastSeen": "Last online {{time}}",
@@ -77,11 +84,13 @@
       "remove": "Unpair",
       "removeConfirmContent": "The two devices stop syncing. Records already received are kept.",
       "removeConfirmTitle": "Unpair from {{name}}?",
+      "removed": "Device unpaired",
       "title": "Paired Devices"
     },
     "firewallHint": "If other devices can't find or reach this computer, allow KwikPaste through Windows Firewall. Check Public networks too if your home Wi-Fi is set as public.",
     "nearby": {
       "empty": "Looking for devices on this network with LAN sync on",
+      "incompatible": "Incompatible version",
       "manual": "Add manually",
       "pair": "Pair",
       "title": "Nearby Devices"
@@ -138,6 +147,7 @@
       "confirm": "Clean up",
       "content": "{{value}} records will be deleted. This can't be undone.",
       "contentWithKept": "{{value}} records will be deleted; {{kept}} favorites and pinned records are kept. This can't be undone.",
+      "done": "Cleaned up {{count}} records",
       "nothing": "All of these are favorites or pinned, nothing to clean up",
       "sourceAppTitle": "Clean up records from {{name}}",
       "tooltip": "Clean up these records"
@@ -246,6 +256,7 @@
     "pickDirectory": "Choose where to save the export folder",
     "plainWarning": "Exports are unencrypted. Anyone with the files can read their contents.",
     "preview": "Preview export",
+    "previewRequired": "Preview a non-empty export first; confirm the risk when including sensitive content",
     "range": "Content scope",
     "references": "{{count}} image or file records contain references only and may be unavailable on another computer",
     "retryPreview": "Check the options and preview again before exporting",

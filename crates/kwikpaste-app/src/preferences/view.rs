@@ -5,14 +5,17 @@ use gpui::{
     prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
+    CoreEvent,
     backup::{self, BackupContainerMode, BackupExportMode, BackupImportStrategy},
+    db::overview::{ClearScope, ContentCategory},
     ops::{PreferenceDirectory, StorageOverview},
-    readable_export::{ExportFormat, ExportOptions},
+    readable_export::{ExportFormat, ExportOptions, ExportPreview},
     settings::Settings,
+    sync::{LanDeviceView, LanNearbyView, LanSyncState, PairTarget},
 };
 use kwikpaste_ui::{
-    Button, Checkbox, DialogSpec, Input, KpStyled as _, ScrollArea, Select, SelectOption,
-    SelectState, Switch, TextInput, form_dialog,
+    Button, Checkbox, DialogSpec, Input, KpStyled as _, NumberInput, NumberInputState, ScrollArea,
+    Select, SelectOption, SelectState, Switch, TextInput, form_dialog,
     theme::{self, TextSize, space},
     toast::{self, Toast},
 };
@@ -26,7 +29,7 @@ use super::{
 use crate::{
     clipboard::{self, source::ClipboardSource, view::group_dialogs},
     core_host, i18n,
-    platform::hotkey,
+    platform::{core_events, hotkey},
 };
 
 const WINDOW_SIZE: gpui::Size<gpui::Pixels> = size(px(980.), px(700.));
@@ -103,6 +106,10 @@ struct Preferences {
     focus: FocusHandle,
     recording: Option<&'static str>,
     storage_overview: Option<StorageOverview>,
+    lan_state: Option<LanSyncState>,
+    lan_code_hidden: bool,
+    lan_name: TextInput,
+    lan_max_image: NumberInputState,
 }
 
 impl Preferences {
@@ -160,17 +167,63 @@ impl Preferences {
                 this.update("appearance.language", json!(value.as_ref()), cx);
             }
         });
+        let lan_name = TextInput::new(
+            i18n::t("preferences:schema.settings.sync.lan.deviceName.placeholder"),
+            window,
+            cx,
+        );
+        lan_name.set_value(settings.sync.lan.device_name.clone(), window, cx);
+        let lan_name_sub = lan_name.on_change(cx, |this, value, cx| {
+            this.update("sync.lan.deviceName", json!(value.to_string()), cx);
+        });
+        let lan_max_image = NumberInputState::new(
+            u64::from(settings.sync.lan.max_image_mb),
+            kwikpaste_core::settings::LAN_SYNC_MAX_IMAGE_MB_MIN.into(),
+            kwikpaste_core::settings::LAN_SYNC_MAX_IMAGE_MB_MAX.into(),
+            window,
+            cx,
+        );
+        let lan_max_image_sub = lan_max_image.on_commit(window, cx, |this, value, _, cx| {
+            this.update("sync.lan.maxImageMb", json!(value), cx);
+        });
+        let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
+        let subscriptions = core_events(cx)
+            .map(|events| {
+                cx.subscribe(&events, |this, _, event: &CoreEvent, cx| {
+                    if matches!(
+                        event,
+                        CoreEvent::LanSyncChanged | CoreEvent::LanDevicePaired { .. }
+                    ) && let Some(core) = core_host::core(cx)
+                    {
+                        this.lan_state = Some(core.lan_sync_state());
+                        cx.notify();
+                    }
+                })
+            })
+            .into_iter()
+            .chain([
+                search_subscription,
+                appearance_sub,
+                language_sub,
+                lan_name_sub,
+                lan_max_image_sub,
+            ])
+            .collect();
         Self {
             tab: TabId::Overview,
             settings,
             search,
-            _subscriptions: vec![search_subscription, appearance_sub, language_sub],
+            _subscriptions: subscriptions,
             appearance,
             language,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             recording: None,
             storage_overview: None,
+            lan_state,
+            lan_code_hidden: false,
+            lan_name,
+            lan_max_image,
         }
     }
 
@@ -342,6 +395,57 @@ impl Preferences {
         .detach();
     }
 
+    /// 打开确认框后按内容类别或来源应用清理普通记录；收藏与置顶由 core 保留。
+    fn clear_storage_scope(
+        &self,
+        scope: ClearScope,
+        title: gpui::SharedString,
+        content: gpui::SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let entity = cx.entity().downgrade();
+        let answer = form_dialog(
+            DialogSpec::new(title)
+                .ok_text(i18n::t("preferences:overview.clear.confirm"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            move |_, _| {
+                div()
+                    .kp_text(TextSize::Sm)
+                    .child(content.clone())
+                    .into_any_element()
+            },
+            window,
+            cx,
+        );
+        window
+            .spawn(cx, async move |cx| {
+                if !answer.await.unwrap_or(false) {
+                    return;
+                }
+                match core.clear_items_in_scope(scope).await {
+                    Ok(removed) => {
+                        let _ = entity.update_in(cx, |this, window, cx| {
+                            toast::show(
+                                Toast::success(i18n::t_args(
+                                    "preferences:overview.clear.done",
+                                    &[("count", &removed.to_string())],
+                                )),
+                                window,
+                                cx,
+                            );
+                            this.refresh_storage_overview(cx);
+                        });
+                    }
+                    Err(error) => log::warn!("scoped storage cleanup failed: {error:#}"),
+                }
+            })
+            .detach();
+    }
+
     fn open_directory(&self, target: PreferenceDirectory, cx: &mut Context<Self>) {
         let Some(core) = core_host::core(cx) else {
             return;
@@ -429,6 +533,122 @@ impl Preferences {
             "preferences:overview.space.reclaimable",
             &[("count", &reclaimable_count), ("size", &reclaimable_size)],
         );
+        let category_entity = entity.clone();
+        let category_rows = overview
+            .history
+            .categories
+            .iter()
+            .filter(|stat| stat.count > 0)
+            .map(|stat| {
+                let name = category_label(stat.category);
+                let count = stat.count.to_string();
+                let removable = stat.removable;
+                let entity = category_entity.clone();
+                let scope = ClearScope::Category {
+                    category: stat.category,
+                };
+                let title = i18n::t_args(
+                    "preferences:overview.clear.categoryTitle",
+                    &[("name", name.as_ref())],
+                );
+                let content = i18n::t_args(
+                    if removable == stat.count {
+                        "preferences:overview.clear.content"
+                    } else {
+                        "preferences:overview.clear.contentWithKept"
+                    },
+                    &[
+                        ("value", &removable.to_string()),
+                        ("kept", &(stat.count - removable).to_string()),
+                    ],
+                );
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(space(2.))
+                    .child(format!("{name}: {count}"))
+                    .child(
+                        Button::new(
+                            format!("storage-category-{:?}", stat.category),
+                            i18n::t("preferences:overview.clear.tooltip"),
+                        )
+                        .ghost()
+                        .disabled(removable == 0)
+                        .on_click(move |_, window, cx| {
+                            if let Some(entity) = entity.upgrade() {
+                                entity.update(cx, |this, cx| {
+                                    this.clear_storage_scope(
+                                        scope.clone(),
+                                        title.clone(),
+                                        content.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            }
+                        }),
+                    )
+                    .into_any_element()
+            });
+        let source_entity = entity.clone();
+        let source_rows = overview.history.source_apps.iter().map(|stat| {
+            let name = stat
+                .name
+                .clone()
+                .unwrap_or_else(|| i18n::t("preferences:overview.sources.unknown").to_string());
+            let removable = stat.removable;
+            let entity = source_entity.clone();
+            let scope = ClearScope::SourceApp {
+                app_id: stat.app_id.clone(),
+            };
+            let title = i18n::t_args(
+                "preferences:overview.clear.sourceAppTitle",
+                &[("name", &name)],
+            );
+            let content = i18n::t_args(
+                if removable == stat.count {
+                    "preferences:overview.clear.content"
+                } else {
+                    "preferences:overview.clear.contentWithKept"
+                },
+                &[
+                    ("value", &removable.to_string()),
+                    ("kept", &(stat.count - removable).to_string()),
+                ],
+            );
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(space(2.))
+                .child(format!("{}: {}", name, stat.count))
+                .child(
+                    Button::new(
+                        format!(
+                            "storage-source-{}",
+                            stat.app_id.as_deref().unwrap_or("unknown")
+                        ),
+                        i18n::t("preferences:overview.clear.tooltip"),
+                    )
+                    .ghost()
+                    .disabled(removable == 0)
+                    .on_click(move |_, window, cx| {
+                        if let Some(entity) = entity.upgrade() {
+                            entity.update(cx, |this, cx| {
+                                this.clear_storage_scope(
+                                    scope.clone(),
+                                    title.clone(),
+                                    content.clone(),
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }
+                    }),
+                )
+                .into_any_element()
+        });
         div()
             .flex()
             .flex_col()
@@ -512,6 +732,22 @@ impl Preferences {
                         overview.history.source_apps.len()
                     )),
             )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(1.))
+                    .child(i18n::t("preferences:overview.categories.title"))
+                    .children(category_rows),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(1.))
+                    .child(i18n::t("preferences:overview.sources.title"))
+                    .children(source_rows),
+            )
             .into_any_element()
     }
 
@@ -567,6 +803,513 @@ impl Preferences {
                     && let Some(entity) = entity.upgrade()
                 {
                     entity.update(cx, |this, cx| this.update(path, json!(next), cx));
+                }
+            })
+            .into_any_element()
+    }
+
+    fn refresh_lan_code(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                match core.refresh_lan_pairing_code().await {
+                    Ok(state) => {
+                        let _ = entity.update(cx, |this, cx| {
+                            this.lan_state = Some(state);
+                            cx.notify();
+                        });
+                    }
+                    Err(error) => log::warn!("refresh LAN pairing code failed: {error:#}"),
+                }
+            })
+            .detach();
+    }
+
+    /// 设备行的配对对话框；附近设备用 id，手动添加时改用地址。
+    fn open_lan_pair_dialog(
+        &self,
+        nearby: Option<LanNearbyView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let address = TextInput::new(
+            i18n::t("preferences:lanSync.pairModal.addressPlaceholder"),
+            window,
+            cx,
+        );
+        let code = TextInput::new(i18n::t("preferences:lanSync.pairModal.code"), window, cx);
+        let address_content = address.clone();
+        let code_content = code.clone();
+        let nearby_for_content = nearby.clone();
+        let title = nearby.as_ref().map_or_else(
+            || i18n::t("preferences:lanSync.pairModal.manualTitle"),
+            |device| {
+                i18n::t_args(
+                    "preferences:lanSync.pairModal.title",
+                    &[("name", &device.name)],
+                )
+            },
+        );
+        let answer = form_dialog(
+            DialogSpec::new(title)
+                .ok_text(i18n::t("preferences:lanSync.pairModal.ok"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            move |_, _| {
+                let mut body = div().flex().flex_col().gap(space(2.));
+                if nearby_for_content.is_none() {
+                    body = body.child(Input::new(&address_content));
+                }
+                body.child(Input::new(&code_content)).into_any_element()
+            },
+            window,
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if !answer.await.unwrap_or(false) {
+                    return;
+                }
+                let values = cx
+                    .update(|_, cx| (address.value(cx).to_string(), code.value(cx).to_string()))
+                    .unwrap_or_default();
+                let target = nearby.map_or_else(
+                    || PairTarget::Address(values.0.trim().to_owned()),
+                    |device| PairTarget::Device(device.id),
+                );
+                match core.pair_lan_device(target, values.1).await {
+                    Ok(name) => {
+                        let _ = entity.update_in(cx, |_, window, cx| {
+                            toast::show(
+                                Toast::success(i18n::t_args(
+                                    "preferences:lanSync.pairedByOther",
+                                    &[("name", &name)],
+                                )),
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+                    Err(error) => {
+                        let _ = entity.update_in(cx, |_, window, cx| {
+                            toast::show(Toast::error(error.to_string()), window, cx);
+                        });
+                    }
+                }
+            })
+            .detach();
+    }
+
+    fn open_lan_connect_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let address = TextInput::new(
+            i18n::t("preferences:lanSync.connect.addressPlaceholder"),
+            window,
+            cx,
+        );
+        let content = address.clone();
+        let answer = form_dialog(
+            DialogSpec::new(i18n::t("preferences:lanSync.connect.title"))
+                .ok_text(i18n::t("preferences:lanSync.connect.ok"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            move |_, _| div().child(Input::new(&content)).into_any_element(),
+            window,
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if !answer.await.unwrap_or(false) {
+                    return;
+                }
+                let address = cx
+                    .update(|_, cx| address.value(cx).to_string())
+                    .unwrap_or_default();
+                match core.connect_lan_device(address.trim().to_owned()).await {
+                    Ok(name) => {
+                        let _ = entity.update_in(cx, |_, window, cx| {
+                            toast::show(
+                                Toast::success(i18n::t_args(
+                                    "preferences:lanSync.connect.success",
+                                    &[("name", &name)],
+                                )),
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+                    Err(error) => {
+                        let _ = entity.update_in(cx, |_, window, cx| {
+                            toast::show(Toast::error(error.to_string()), window, cx);
+                        });
+                    }
+                }
+            })
+            .detach();
+    }
+
+    fn remove_lan_device(
+        &self,
+        device: LanDeviceView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let entity = cx.entity().downgrade();
+        let title = i18n::t_args(
+            "preferences:lanSync.devices.removeConfirmTitle",
+            &[("name", &device.name)],
+        );
+        let answer = form_dialog(
+            DialogSpec::new(title)
+                .ok_text(i18n::t("preferences:lanSync.devices.remove"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            move |_, _| {
+                div()
+                    .kp_text(TextSize::Sm)
+                    .child(i18n::t("preferences:lanSync.devices.removeConfirmContent"))
+                    .into_any_element()
+            },
+            window,
+            cx,
+        );
+        window
+            .spawn(cx, async move |cx| {
+                if !answer.await.unwrap_or(false) {
+                    return;
+                }
+                match core.remove_lan_device(device.id).await {
+                    Ok(()) => {
+                        let _ = entity.update_in(cx, |_, window, cx| {
+                            toast::show(
+                                Toast::success(i18n::t("preferences:lanSync.devices.removed")),
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+                    Err(error) => {
+                        let _ = entity.update_in(cx, |_, window, cx| {
+                            toast::show(Toast::error(error.to_string()), window, cx);
+                        });
+                    }
+                }
+            })
+            .detach();
+    }
+
+    fn render_lan_sync(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let entity = cx.entity().downgrade();
+        let lan = &self.settings.sync.lan;
+        let enabled = Switch::new("lan-sync-enabled")
+            .accessibility_label(i18n::t(
+                "preferences:schema.settings.sync.lan.enabled.title",
+            ))
+            .checked(lan.enabled)
+            .on_change({
+                let entity = entity.clone();
+                move |checked, _, cx| {
+                    if let Some(entity) = entity.upgrade() {
+                        entity.update(cx, |this, cx| {
+                            this.update("sync.lan.enabled", json!(checked), cx);
+                        });
+                    }
+                }
+            });
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .gap(space(2.))
+            .p(space(3.))
+            .rounded(theme::radius::MD)
+            .bg(theme::tokens(cx).bg_elevated)
+            .child(setting_row(
+                i18n::t("preferences:schema.settings.sync.lan.enabled.title"),
+                i18n::t("preferences:schema.settings.sync.lan.enabled.description"),
+                enabled.into_any_element(),
+            ))
+            .child(setting_row(
+                i18n::t("preferences:schema.settings.sync.lan.deviceName.title"),
+                i18n::t("preferences:schema.settings.sync.lan.deviceName.description"),
+                Input::new(&self.lan_name)
+                    .width(rems(16.))
+                    .into_any_element(),
+            ))
+            .child(setting_row(
+                i18n::t("preferences:schema.settings.sync.lan.text.title"),
+                gpui::SharedString::default(),
+                self.render_lan_switch("sync.lan.text", lan.text, cx),
+            ))
+            .child(setting_row(
+                i18n::t("preferences:schema.settings.sync.lan.image.title"),
+                gpui::SharedString::default(),
+                self.render_lan_switch("sync.lan.image", lan.image, cx),
+            ))
+            .child(setting_row(
+                i18n::t("preferences:schema.settings.sync.lan.writeClipboard.title"),
+                i18n::t("preferences:schema.settings.sync.lan.writeClipboard.description"),
+                self.render_lan_switch("sync.lan.writeClipboard", lan.write_clipboard, cx),
+            ))
+            .child(setting_row(
+                i18n::t("preferences:schema.settings.sync.lan.maxImageMb.title"),
+                i18n::t("preferences:schema.settings.sync.lan.maxImageMb.description"),
+                NumberInput::new(&self.lan_max_image)
+                    .suffix("MB")
+                    .width(rems(10.))
+                    .accessibility_label(i18n::t(
+                        "preferences:schema.settings.sync.lan.maxImageMb.title",
+                    ))
+                    .into_any_element(),
+            ));
+
+        if !lan.enabled {
+            return panel
+                .child(
+                    div()
+                        .kp_text(TextSize::Sm)
+                        .child(i18n::t("preferences:lanSync.off")),
+                )
+                .into_any_element();
+        }
+
+        let Some(state) = self.lan_state.as_ref() else {
+            return panel
+                .child(
+                    div()
+                        .kp_text(TextSize::Sm)
+                        .child(i18n::t("preferences:lanSync.starting")),
+                )
+                .into_any_element();
+        };
+        if !state.running {
+            return panel
+                .child(
+                    div()
+                        .kp_text(TextSize::Sm)
+                        .text_color(theme::tokens(cx).error)
+                        .child(state.error.clone().unwrap_or_else(|| {
+                            i18n::t("preferences:lanSync.starting").to_string()
+                        })),
+                )
+                .into_any_element();
+        }
+
+        let port = state.port.unwrap_or(kwikpaste_core::sync::DEFAULT_PORT);
+        let addresses = if state.addresses.is_empty() {
+            i18n::t("preferences:lanSync.thisDevice.noAddress").to_string()
+        } else {
+            state
+                .addresses
+                .iter()
+                .map(|address| format_socket_address(address, port))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        let code = state
+            .pairing_code
+            .as_deref()
+            .map_or_else(|| "".to_owned(), |value| value.to_owned());
+        let code_label = if code.is_empty() {
+            i18n::t("preferences:lanSync.pairingCode.exhausted")
+        } else if state.pairing_attempts_left == 1 {
+            i18n::t_args("preferences:lanSync.pairingCode.hint", &[("count", "1")])
+        } else {
+            i18n::t_args(
+                "preferences:lanSync.pairingCode.hint",
+                &[("count", &state.pairing_attempts_left.to_string())],
+            )
+        };
+        panel = panel
+            .child(
+                div()
+                    .kp_text(TextSize::Sm)
+                    .child(format!("{} · {}", state.device_name, addresses)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(space(2.))
+                    .child(i18n::t("preferences:lanSync.pairingCode.title"))
+                    .child(
+                        Button::new(
+                            "lan-code-toggle",
+                            if self.lan_code_hidden {
+                                "••••••"
+                            } else {
+                                &code
+                            },
+                        )
+                        .ghost()
+                        .disabled(code.is_empty())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.lan_code_hidden = !this.lan_code_hidden;
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        Button::new(
+                            "lan-code-refresh",
+                            i18n::t("preferences:lanSync.pairingCode.refresh"),
+                        )
+                        .ghost()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.refresh_lan_code(window, cx);
+                        })),
+                    )
+                    .child(code_label),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(space(2.))
+                    .child(i18n::t("preferences:lanSync.devices.title"))
+                    .child(
+                        Button::new("lan-connect", i18n::t("preferences:lanSync.connect.manual"))
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_lan_connect_dialog(window, cx);
+                            })),
+                    ),
+            );
+        if state.devices.is_empty() {
+            panel = panel.child(
+                div()
+                    .kp_text(TextSize::Sm)
+                    .child(i18n::t("preferences:lanSync.devices.empty")),
+            );
+        } else {
+            for device in state.devices.iter().cloned() {
+                let name = device.name.clone();
+                let address = device.address.as_deref().map_or_else(
+                    || i18n::t("preferences:lanSync.devices.offline").to_string(),
+                    |address| address.to_owned(),
+                );
+                let entity = entity.clone();
+                panel = panel.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(space(2.))
+                        .child(format!("{} · {}", name, address))
+                        .child(if device.online {
+                            i18n::t("preferences:lanSync.devices.online")
+                        } else {
+                            i18n::t("preferences:lanSync.devices.offline")
+                        })
+                        .child(
+                            Button::new(
+                                format!("lan-remove-{}", device.id),
+                                i18n::t("preferences:lanSync.devices.remove"),
+                            )
+                            .ghost()
+                            .on_click(move |_, window, cx| {
+                                if let Some(entity) = entity.upgrade() {
+                                    entity.update(cx, |this, cx| {
+                                        this.remove_lan_device(device.clone(), window, cx);
+                                    });
+                                }
+                            }),
+                        ),
+                );
+            }
+        }
+        panel = panel.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(space(2.))
+                .child(i18n::t("preferences:lanSync.nearby.title"))
+                .child(
+                    Button::new(
+                        "lan-manual-pair",
+                        i18n::t("preferences:lanSync.nearby.manual"),
+                    )
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_lan_pair_dialog(None, window, cx);
+                    })),
+                ),
+        );
+        if state.nearby.is_empty() {
+            panel = panel.child(
+                div()
+                    .kp_text(TextSize::Sm)
+                    .child(i18n::t("preferences:lanSync.nearby.empty")),
+            );
+        } else {
+            for device in state.nearby.iter().cloned() {
+                let entity = entity.clone();
+                let label = if device.compatible {
+                    i18n::t("preferences:lanSync.nearby.pair")
+                } else {
+                    i18n::t("preferences:lanSync.nearby.incompatible")
+                };
+                panel = panel.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(space(2.))
+                        .child(format!(
+                            "{} · {} · {}",
+                            device.name,
+                            device.address,
+                            platform_label(device.platform)
+                        ))
+                        .child(
+                            Button::new(format!("lan-pair-{}", device.id), label)
+                                .primary()
+                                .disabled(!device.compatible)
+                                .on_click(move |_, window, cx| {
+                                    if let Some(entity) = entity.upgrade() {
+                                        entity.update(cx, |this, cx| {
+                                            this.open_lan_pair_dialog(
+                                                Some(device.clone()),
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }),
+                        ),
+                );
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            panel = panel.child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .child(i18n::t("preferences:lanSync.firewallHint")),
+            );
+        }
+        panel.into_any_element()
+    }
+
+    fn render_lan_switch(
+        &self,
+        path: &'static str,
+        checked: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let entity = cx.entity().downgrade();
+        Switch::new(path)
+            .checked(checked)
+            .on_change(move |checked, _, cx| {
+                if let Some(entity) = entity.upgrade() {
+                    entity.update(cx, |this, cx| this.update(path, json!(checked), cx));
                 }
             })
             .into_any_element()
@@ -773,12 +1516,45 @@ impl Preferences {
         let Some(core) = core_host::core(cx).cloned() else {
             return;
         };
-        let dialog = cx.new(|cx| ReadableExportDialog::new(window, cx));
+        let dialog = cx.new(|cx| ReadableExportDialog::new(core.clone(), window, cx));
+        let groups_dialog = dialog.downgrade();
+        let groups_core = core.clone();
+        window
+            .spawn(cx, async move |cx| match groups_core.list_groups().await {
+                Ok(groups) => {
+                    let _ = groups_dialog.update(cx, |dialog, cx| {
+                        dialog.groups = groups;
+                        dialog.groups_ready = true;
+                        cx.notify();
+                    });
+                }
+                Err(error) => log::warn!("load readable export groups failed: {error:#}"),
+            })
+            .detach();
         let content = dialog.clone();
+        let validation_dialog = dialog.downgrade();
         let answer = form_dialog(
             DialogSpec::new(i18n::t("preferences:readableExport.title"))
                 .ok_text(i18n::t("preferences:readableExport.export"))
-                .cancel_text(i18n::t("common:actions.cancel")),
+                .cancel_text(i18n::t("common:actions.cancel"))
+                .validate(move |window, cx| {
+                    let Some(dialog) = validation_dialog.upgrade() else {
+                        return false;
+                    };
+                    let valid = dialog.read(cx).preview.as_ref().is_some_and(|preview| {
+                        preview.item_count > 0
+                            && (!dialog.read(cx).include_sensitive
+                                || dialog.read(cx).sensitive_confirmed)
+                    });
+                    if !valid {
+                        toast::show(
+                            Toast::error(i18n::t("preferences:readableExport.previewRequired")),
+                            window,
+                            cx,
+                        );
+                    }
+                    valid
+                }),
             move |_, _| content.clone().into_any_element(),
             window,
             cx,
@@ -788,54 +1564,69 @@ impl Preferences {
                 if !answer.await.unwrap_or(false) {
                     return;
                 }
-                let (format, favorites_only, include_sensitive) = cx
+                let (options, fingerprint) = cx
                     .update(|_, cx| {
                         let dialog = dialog.read(cx);
-                        let format = if dialog
-                            .format
-                            .selected_value(cx)
-                            .is_some_and(|format| format == "markdown")
-                        {
-                            ExportFormat::Markdown
-                        } else {
-                            ExportFormat::Xlsx
-                        };
-                        (format, dialog.favorites_only, dialog.include_sensitive)
+                        (
+                            dialog.export_options(cx),
+                            dialog
+                                .preview
+                                .as_ref()
+                                .map(|preview| preview.fingerprint.clone()),
+                        )
                     })
-                    .unwrap_or((ExportFormat::Xlsx, false, false));
-                let Ok(prompt) = cx.update(|_, cx| {
-                    let directory = core
-                        .preference_directory(PreferenceDirectory::Data)
-                        .unwrap_or_else(|_| std::env::temp_dir());
-                    let name = if format == ExportFormat::Markdown {
-                        "KwikPaste-readable.md"
-                    } else {
-                        "KwikPaste-readable.xlsx"
+                    .unwrap_or((
+                        ExportOptions {
+                            format: ExportFormat::Xlsx,
+                            favorites_only: false,
+                            group_ids: None,
+                            include_ungrouped: true,
+                            split_by_group: false,
+                            include_sensitive: false,
+                        },
+                        None,
+                    ));
+                let Some(fingerprint) = fingerprint else {
+                    log::warn!("readable export confirmed without a preview");
+                    return;
+                };
+                let path = if options.split_by_group {
+                    let Ok(prompt) = cx.update(|_, cx| {
+                        clipboard::view::pin::prompt_for_paths(
+                            gpui::PathPromptOptions {
+                                files: false,
+                                directories: true,
+                                multiple: false,
+                                prompt: None,
+                            },
+                            cx,
+                        )
+                    }) else {
+                        log::warn!("could not open readable export directory dialog");
+                        return;
                     };
-                    clipboard::view::pin::prompt_for_new_path(&directory, name, cx)
-                }) else {
-                    log::warn!("could not open readable export save dialog");
+                    prompt.await.and_then(|paths| paths.into_iter().next())
+                } else {
+                    let Ok(prompt) = cx.update(|_, cx| {
+                        let directory = core
+                            .preference_directory(PreferenceDirectory::Data)
+                            .unwrap_or_else(|_| std::env::temp_dir());
+                        let name = if options.format == ExportFormat::Markdown {
+                            "KwikPaste-readable.md"
+                        } else {
+                            "KwikPaste-readable.xlsx"
+                        };
+                        clipboard::view::pin::prompt_for_new_path(&directory, name, cx)
+                    }) else {
+                        log::warn!("could not open readable export save dialog");
+                        return;
+                    };
+                    prompt.await
+                };
+                let Some(path) = path else {
                     return;
                 };
-                let Some(path) = prompt.await else {
-                    return;
-                };
-                let options = ExportOptions {
-                    format,
-                    favorites_only,
-                    group_ids: None,
-                    include_ungrouped: true,
-                    split_by_group: false,
-                    include_sensitive,
-                };
-                let Ok(preview) = core.preview_readable_export(options.clone()).await else {
-                    log::warn!("readable export preview failed");
-                    return;
-                };
-                match core
-                    .export_readable_data(options, preview.fingerprint, path)
-                    .await
-                {
+                match core.export_readable_data(options, fingerprint, path).await {
                     Ok(result) => log::info!("readable export written: {}", result.path),
                     Err(error) => log::warn!("readable export failed: {error:#}"),
                 }
@@ -917,6 +1708,9 @@ impl Preferences {
             if !search_matches(&query, &title, setting.keywords) {
                 return div().into_any_element();
             }
+        }
+        if matches!(setting.control, Control::LanSync) {
+            return self.render_lan_sync(cx);
         }
         let title = text::setting_title(setting);
         let description = text::setting_description(setting);
@@ -1112,40 +1906,218 @@ impl Preferences {
 }
 
 struct ReadableExportDialog {
+    core: kwikpaste_core::Core,
     format: SelectState,
+    _subscriptions: Vec<Subscription>,
     favorites_only: bool,
     include_sensitive: bool,
+    sensitive_confirmed: bool,
+    groups: Vec<kwikpaste_core::db::models::ClipboardGroup>,
+    groups_ready: bool,
+    group_ids: Option<Vec<String>>,
+    include_ungrouped: bool,
+    split_by_group: bool,
+    preview: Option<ExportPreview>,
+    preview_failed: bool,
 }
 
 impl ReadableExportDialog {
-    fn new(window: &mut Window, cx: &mut App) -> Self {
+    fn new(core: kwikpaste_core::Core, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let format = SelectState::new(
+            vec![
+                SelectOption::new("xlsx", i18n::t("preferences:readableExport.formatXlsx")),
+                SelectOption::new(
+                    "markdown",
+                    i18n::t("preferences:readableExport.formatMarkdown"),
+                ),
+            ],
+            Some("xlsx"),
+            window,
+            cx,
+        );
+        let format_subscription = format.on_change(cx, |this, _, cx| {
+            this.invalidate_preview(cx);
+        });
         Self {
-            format: SelectState::new(
-                vec![
-                    SelectOption::new("xlsx", i18n::t("preferences:readableExport.formatXlsx")),
-                    SelectOption::new(
-                        "markdown",
-                        i18n::t("preferences:readableExport.formatMarkdown"),
-                    ),
-                ],
-                Some("xlsx"),
-                window,
-                cx,
-            ),
+            core,
+            format,
+            _subscriptions: vec![format_subscription],
             favorites_only: false,
             include_sensitive: false,
+            sensitive_confirmed: false,
+            groups: Vec::new(),
+            groups_ready: false,
+            group_ids: None,
+            include_ungrouped: true,
+            split_by_group: false,
+            preview: None,
+            preview_failed: false,
         }
+    }
+
+    fn export_options(&self, cx: &App) -> ExportOptions {
+        ExportOptions {
+            format: if self
+                .format
+                .selected_value(cx)
+                .is_some_and(|format| format == "markdown")
+            {
+                ExportFormat::Markdown
+            } else {
+                ExportFormat::Xlsx
+            },
+            favorites_only: self.favorites_only,
+            group_ids: self.group_ids.clone(),
+            include_ungrouped: self.include_ungrouped,
+            split_by_group: self.split_by_group,
+            include_sensitive: self.include_sensitive,
+        }
+    }
+
+    fn invalidate_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview = None;
+        self.preview_failed = false;
+        cx.notify();
+    }
+
+    fn prepare_preview(&mut self, cx: &mut Context<Self>) {
+        let options = self.export_options(cx);
+        let core = self.core.clone();
+        self.preview = None;
+        self.preview_failed = false;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = core.preview_readable_export(options).await;
+            let _ = this.update(cx, |dialog, cx| {
+                match result {
+                    Ok(preview) => dialog.preview = Some(preview),
+                    Err(error) => {
+                        dialog.preview_failed = true;
+                        log::warn!("readable export preview failed: {error:#}");
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
 impl Render for ReadableExportDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
+        let selected_groups = self.group_ids.clone();
+        let group_rows = selected_groups.map(|selected| {
+            let rows = self.groups.iter().map(|group| {
+                let id = group.id.clone();
+                let checked = selected.contains(&id);
+                let entity = entity.clone();
+                Checkbox::new(format!("readable-group-{id}"))
+                    .label(group.name.clone())
+                    .checked(checked)
+                    .disabled(!self.groups_ready)
+                    .on_change(move |checked, _, cx| {
+                        if let Some(entity) = entity.upgrade() {
+                            entity.update(cx, |dialog, cx| {
+                                let ids = dialog.group_ids.get_or_insert_with(Vec::new);
+                                if checked {
+                                    if !ids.contains(&id) {
+                                        ids.push(id.clone());
+                                    }
+                                } else {
+                                    ids.retain(|value| value != &id);
+                                }
+                                dialog.invalidate_preview(cx);
+                            });
+                        }
+                    })
+            });
+            div().flex().flex_col().gap(space(1.)).children(rows).child(
+                Checkbox::new("readable-ungrouped")
+                    .label(i18n::t("preferences:readableExport.ungrouped"))
+                    .checked(self.include_ungrouped)
+                    .on_change({
+                        let entity = entity.clone();
+                        move |checked, _, cx| {
+                            if let Some(entity) = entity.upgrade() {
+                                entity.update(cx, |dialog, cx| {
+                                    dialog.include_ungrouped = checked;
+                                    dialog.invalidate_preview(cx);
+                                });
+                            }
+                        }
+                    }),
+            )
+        });
+        let preview_summary = self.preview.as_ref().map(|preview| {
+            let summary = i18n::t_args(
+                "preferences:readableExport.summary",
+                &[
+                    ("groups", &preview.groups.len().to_string()),
+                    ("items", &preview.item_count.to_string()),
+                    ("files", &preview.file_count.to_string()),
+                ],
+            );
+            div()
+                .flex()
+                .flex_col()
+                .gap(space(1.))
+                .child(summary)
+                .child(i18n::t_args(
+                    "preferences:readableExport.excluded",
+                    &[("count", &preview.excluded_sensitive.to_string())],
+                ))
+                .children(
+                    preview
+                        .groups
+                        .iter()
+                        .map(|group| format!("{} · {}", group.name, group.count)),
+                )
+                .when(preview.item_count == 0, |element| {
+                    element.child(i18n::t("preferences:readableExport.empty"))
+                })
+        });
         div()
             .flex()
             .flex_col()
             .gap(space(2.))
             .child(Select::new(&self.format).width(rems(16.)))
+            .child(
+                Button::new(
+                    "readable-groups-mode",
+                    if self.group_ids.is_some() {
+                        i18n::t("preferences:readableExport.selectedGroups")
+                    } else {
+                        i18n::t("preferences:readableExport.allGroups")
+                    },
+                )
+                .ghost()
+                .on_click(cx.listener(|dialog, _, _, cx| {
+                    dialog.group_ids = if dialog.group_ids.is_some() {
+                        None
+                    } else {
+                        Some(Vec::new())
+                    };
+                    dialog.invalidate_preview(cx);
+                })),
+            )
+            .when_some(group_rows, |element, rows| element.child(rows))
+            .child(
+                Checkbox::new("readable-split")
+                    .label(i18n::t("preferences:readableExport.split"))
+                    .checked(self.split_by_group)
+                    .on_change({
+                        let entity = entity.clone();
+                        move |checked, _, cx| {
+                            if let Some(entity) = entity.upgrade() {
+                                entity.update(cx, |dialog, cx| {
+                                    dialog.split_by_group = checked;
+                                    dialog.invalidate_preview(cx);
+                                });
+                            }
+                        }
+                    }),
+            )
             .child(
                 Checkbox::new("readable-favorites")
                     .label(i18n::t("preferences:readableExport.favorites"))
@@ -1153,10 +2125,12 @@ impl Render for ReadableExportDialog {
                     .on_change({
                         let entity = entity.clone();
                         move |checked, _, cx| {
-                            let _ = entity.update(cx, |dialog, cx| {
-                                dialog.favorites_only = checked;
-                                cx.notify();
-                            });
+                            if let Some(entity) = entity.upgrade() {
+                                entity.update(cx, |dialog, cx| {
+                                    dialog.favorites_only = checked;
+                                    dialog.invalidate_preview(cx);
+                                });
+                            }
                         }
                     }),
             )
@@ -1164,13 +2138,49 @@ impl Render for ReadableExportDialog {
                 Checkbox::new("readable-sensitive")
                     .label(i18n::t("preferences:readableExport.includeSensitive"))
                     .checked(self.include_sensitive)
-                    .on_change(move |checked, _, cx| {
-                        let _ = entity.update(cx, |dialog, cx| {
-                            dialog.include_sensitive = checked;
-                            cx.notify();
-                        });
+                    .on_change({
+                        let entity = entity.clone();
+                        move |checked, _, cx| {
+                            if let Some(entity) = entity.upgrade() {
+                                entity.update(cx, |dialog, cx| {
+                                    dialog.include_sensitive = checked;
+                                    dialog.sensitive_confirmed = false;
+                                    dialog.invalidate_preview(cx);
+                                });
+                            }
+                        }
                     }),
             )
+            .when(self.include_sensitive, |element| {
+                let entity = entity.clone();
+                element.child(
+                    Checkbox::new("readable-sensitive-confirm")
+                        .label(i18n::t("preferences:readableExport.confirmSensitive"))
+                        .checked(self.sensitive_confirmed)
+                        .on_change(move |checked, _, cx| {
+                            if let Some(entity) = entity.upgrade() {
+                                entity.update(cx, |dialog, cx| {
+                                    dialog.sensitive_confirmed = checked;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+            })
+            .child(
+                Button::new(
+                    "readable-preview",
+                    i18n::t("preferences:readableExport.preview"),
+                )
+                .primary()
+                .on_click(cx.listener(|dialog, _, _, cx| {
+                    dialog.prepare_preview(cx);
+                })),
+            )
+            .when(self.preview_failed, |element| {
+                element.child(i18n::t("preferences:readableExport.retryPreview"))
+            })
+            .when_some(preview_summary, |element, summary| element.child(summary))
     }
 }
 
@@ -1298,6 +2308,61 @@ fn format_storage_row(name: gpui::SharedString, bytes: u64) -> gpui::AnyElement 
         .child(name.to_owned())
         .child(format_bytes(bytes))
         .into_any_element()
+}
+
+fn setting_row(
+    title: gpui::SharedString,
+    description: gpui::SharedString,
+    control: gpui::AnyElement,
+) -> gpui::AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(space(3.))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(space(1.))
+                .flex_1()
+                .child(div().kp_text(TextSize::Sm).child(title))
+                .when(!description.is_empty(), |row| {
+                    row.child(div().kp_text(TextSize::Xs).child(description))
+                }),
+        )
+        .child(control)
+        .into_any_element()
+}
+
+fn category_label(category: ContentCategory) -> gpui::SharedString {
+    let key = match category {
+        ContentCategory::Text => "text",
+        ContentCategory::Html => "html",
+        ContentCategory::Rtf => "rtf",
+        ContentCategory::Url => "url",
+        ContentCategory::Email => "email",
+        ContentCategory::Color => "color",
+        ContentCategory::Path => "path",
+        ContentCategory::Image => "image",
+        ContentCategory::Files => "files",
+    };
+    i18n::t(&format!("preferences:overview.categories.names.{key}"))
+}
+
+fn format_socket_address(address: &str, port: u16) -> String {
+    if address.starts_with('[') || !address.contains(':') {
+        format!("{address}:{port}")
+    } else {
+        format!("[{address}]:{port}")
+    }
+}
+
+fn platform_label(platform: kwikpaste_core::db::models::Platform) -> &'static str {
+    match platform {
+        kwikpaste_core::db::models::Platform::Windows => "Windows",
+        kwikpaste_core::db::models::Platform::Macos => "macOS",
+    }
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -1501,7 +2566,8 @@ mod tests {
     use kwikpaste_core::backup::BackupContainerMode;
 
     use super::{
-        backup_confirmation_required, search_matches, shortcut_conflicts, shortcut_from_keystroke,
+        backup_confirmation_required, format_socket_address, search_matches, shortcut_conflicts,
+        shortcut_from_keystroke,
     };
 
     #[test]
@@ -1523,6 +2589,19 @@ mod tests {
             "System startup",
             &["tray", "system"]
         ));
+    }
+
+    #[test]
+    fn socket_addresses_keep_ipv6_literals_parseable() {
+        assert_eq!(format_socket_address("127.0.0.1", 41573), "127.0.0.1:41573");
+        assert_eq!(
+            format_socket_address("fe80::1%12", 41573),
+            "[fe80::1%12]:41573"
+        );
+        assert_eq!(
+            format_socket_address("[fe80::1%12]", 41573),
+            "[fe80::1%12]:41573"
+        );
     }
 
     #[test]

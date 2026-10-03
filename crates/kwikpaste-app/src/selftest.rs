@@ -9,6 +9,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{App, Keystroke};
+use kwikpaste_core::{
+    db::overview::{ClearScope, ContentCategory},
+    readable_export::{ExportFormat, ExportOptions},
+    sync::LanSyncNetwork,
+};
 use serde_json::json;
 
 use crate::platform::{self, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource};
@@ -310,10 +315,63 @@ fn preferences(cx: &mut App) {
         let import_confirmation_checked = crate::preferences::view::backup_confirmation_required(
             kwikpaste_core::backup::BackupContainerMode::Plain,
         );
-        let storage_overview_checked = if let Some(core) = core {
-            core.storage_overview().await.is_ok()
+        let (
+            storage_overview_checked,
+            storage_category_cleanup_checked,
+            storage_source_cleanup_checked,
+            readable_export_checked,
+            lan_sync_checked,
+        ) = if let Some(core) = core {
+            let storage_overview_checked = core.storage_overview().await.is_ok();
+            let storage_category_cleanup_checked = core
+                .clear_items_in_scope(ClearScope::Category {
+                    category: ContentCategory::Text,
+                })
+                .await
+                .is_ok();
+            let storage_source_cleanup_checked = core
+                .clear_items_in_scope(ClearScope::SourceApp { app_id: None })
+                .await
+                .is_ok();
+            let readable_export_checked = core
+                .preview_readable_export(ExportOptions {
+                    format: ExportFormat::Markdown,
+                    favorites_only: false,
+                    group_ids: None,
+                    include_ungrouped: true,
+                    split_by_group: false,
+                    include_sensitive: false,
+                })
+                .await
+                .is_ok();
+            let lan_sync_checked = core
+                .update_settings(json!({ "sync": { "lan": { "enabled": true } } }))
+                .await
+                .is_ok();
+            let _ = core.start_lan_sync(LanSyncNetwork::loopback()).await;
+            let mut state = core.lan_sync_state();
+            for _ in 0..20 {
+                if state.running {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+                state = core.lan_sync_state();
+            }
+            let lan_sync_checked = lan_sync_checked && state.running;
+            let _ = core
+                .update_settings(json!({ "sync": { "lan": { "enabled": false } } }))
+                .await;
+            (
+                storage_overview_checked,
+                storage_category_cleanup_checked,
+                storage_source_cleanup_checked,
+                readable_export_checked,
+                lan_sync_checked,
+            )
         } else {
-            false
+            (false, false, false, false, false)
         };
         let search_checked = crate::preferences::view::search_matches(
             "tray",
@@ -321,7 +379,7 @@ fn preferences(cx: &mut App) {
             &["tray", "system"],
         );
         log::info!(
-            "preferences selftest: opened=true switched=true setting_updated={setting_updated} shortcut_conflict_checked={shortcut_conflict_checked} shortcut_recording_checked={shortcut_recording_checked} import_confirmation_checked={import_confirmation_checked} storage_overview_checked={storage_overview_checked} search_checked={search_checked}"
+            "preferences selftest: opened=true switched=true setting_updated={setting_updated} shortcut_conflict_checked={shortcut_conflict_checked} shortcut_recording_checked={shortcut_recording_checked} import_confirmation_checked={import_confirmation_checked} storage_overview_checked={storage_overview_checked} storage_category_cleanup_checked={storage_category_cleanup_checked} storage_source_cleanup_checked={storage_source_cleanup_checked} readable_export_checked={readable_export_checked} lan_sync_checked={lan_sync_checked} search_checked={search_checked}"
         );
         cx.update(|cx| cx.quit());
     })

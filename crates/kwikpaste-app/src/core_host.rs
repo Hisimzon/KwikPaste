@@ -11,7 +11,9 @@ use anyhow::Context as _;
 use async_channel::Receiver;
 use gpui::{App, Global};
 use kwikpaste_core::clipboard::MemoryClipboard;
-use kwikpaste_core::{AppInfo, Core, CoreEvent, CoreOptions, CorePaths, CoreRuntime};
+use kwikpaste_core::{
+    AppInfo, Core, CoreEvent, CoreOptions, CorePaths, CoreRuntime, sync::LanSyncNetwork,
+};
 use kwikpaste_os::services::NativeServices;
 
 /// 运行中的 core 与它的 runtime。作为 GPUI 全局保存，界面经 [`core`] 取用。
@@ -75,6 +77,18 @@ pub fn start() -> anyhow::Result<StartedCore> {
         }
     } else {
         core.set_clipboard_provider(Arc::new(MemoryClipboard::new()));
+    }
+    let lan_network = if crate::selftest::active() {
+        LanSyncNetwork::loopback()
+    } else {
+        LanSyncNetwork::default()
+    };
+    let lan_state = futures::executor::block_on(core.start_lan_sync(lan_network));
+    if core.settings().sync.lan.enabled && !lan_state.running {
+        log::warn!(
+            "LAN sync is enabled but did not start: {}",
+            lan_state.error.as_deref().unwrap_or("unknown error")
+        );
     }
     log::info!(
         "core started: {} {:?}, data in {}",
