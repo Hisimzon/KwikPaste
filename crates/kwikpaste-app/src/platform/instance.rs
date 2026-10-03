@@ -150,20 +150,25 @@ async fn handle_selftest(
     false
 }
 
-/// `--selftest-panic=main|thread`：故意 panic，验证 panic hook 和崩溃重启。`main` 在这个前台任务里
-/// （主线程的窗口过程内，进程随即 abort），`thread` 在一个新线程上（进程活着，走有序重启）。
+/// `--selftest-panic=main|thread|native`：故意崩溃，验证 panic hook、原生崩溃处理和崩溃重启。
+/// `main` 在这个前台任务里 panic（主线程的窗口过程内，进程随即 abort）；`thread` 在一个新线程上
+/// panic（`panic = "unwind"` 时进程活着，走有序重启；`abort` 时进程结束）；`native` 在主线程上抛
+/// 一个没人处理的访问冲突（Windows）。
 fn selftest_panic(place: &str) {
-    log::warn!("selftest: panicking on {place}");
-    if place == "thread" {
-        let spawned = std::thread::Builder::new()
-            .name("selftest-panic".to_owned())
-            .spawn(|| panic!("selftest panic on a worker thread"));
-        if let Err(err) = spawned {
-            log::error!("selftest panic thread did not start: {err}");
+    log::warn!("selftest: crashing on {place}");
+    match place {
+        "thread" => {
+            let spawned = std::thread::Builder::new()
+                .name("selftest-panic".to_owned())
+                .spawn(|| panic!("selftest panic on a worker thread"));
+            if let Err(err) = spawned {
+                log::error!("selftest panic thread did not start: {err}");
+            }
         }
-        return;
+        #[cfg(target_os = "windows")]
+        "native" => kwikpaste_os::win::crash::raise_access_violation(),
+        _ => panic!("selftest panic on the main thread"),
     }
-    panic!("selftest panic on the main thread");
 }
 
 /// `--selftest-read-now`：手动读取一次剪贴板，结果写进探针日志。

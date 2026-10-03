@@ -153,6 +153,7 @@ async fn run(
 ) -> anyhow::Result<DragReport> {
     let started = kwikpaste_os::clock::now_ticks();
     probe::drag_started(&data);
+    let phase = super::enter_phase(crate::health::Phase::DragOut);
 
     #[cfg(target_os = "windows")]
     let report = kwikpaste_os::win::drag_out::run(target.native, &data, preview_png.as_deref())
@@ -164,6 +165,7 @@ async fn run(
     };
 
     let returned = kwikpaste_os::clock::now_ticks();
+    drop(phase);
     clear_pending_mouse_down(target.handle, cx);
     match &report {
         Ok(report) => {

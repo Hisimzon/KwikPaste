@@ -43,6 +43,7 @@ pub fn paste(cx: &mut App, id: String, plain: bool, keep_visible: bool) -> Task<
     };
 
     cx.spawn(async move |cx: &mut AsyncApp| {
+        let _phase = super::enter_phase(crate::health::Phase::Paste);
         let started = Instant::now();
         core.prepare_paste(&id, plain).await?;
         let report = yield_and_inject(cx, keep_visible).await?;
@@ -63,6 +64,7 @@ pub fn paste_fragment(
     };
 
     cx.spawn(async move |cx: &mut AsyncApp| {
+        let _phase = super::enter_phase(crate::health::Phase::Paste);
         let started = Instant::now();
         core.prepare_paste_fragment(&id, fragment).await?;
         let report = yield_and_inject(cx, keep_visible).await?;
@@ -132,6 +134,7 @@ pub fn quick_paste(cx: &mut App, offset: i64) -> Task<()> {
 }
 
 async fn run_quick_paste(core: &Core, offset: i64, cx: &mut AsyncApp) -> Result<()> {
+    let _phase = super::enter_phase(crate::health::Phase::Paste);
     let started = Instant::now();
     let Some(ticket) = core.prepare_quick_paste(offset).await? else {
         return Ok(());

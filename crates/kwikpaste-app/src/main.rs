@@ -60,6 +60,7 @@ fn main() -> anyhow::Result<()> {
             selftest::schedule(cx);
         });
 
+    health::clean_exit();
     // 有序重启（70）或更新交接要求的退出码（例如安装包没能启动、已重启当前版本时）。
     let code = platform::exit_code();
     if code != 0 {

@@ -5,7 +5,7 @@
 //! `WM_SHOWWINDOW` 会当场画出首帧，改位置、改尺寸、激活的回调也不会因为借用冲突被丢掉。
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::Context as _;
 use async_channel::{Receiver, Sender};
@@ -177,6 +177,13 @@ thread_local! {
 }
 
 static RENDERED_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// 面板当前是否显示着（崩溃记录的阶段用）。
+static SHOWN: AtomicBool = AtomicBool::new(false);
+
+/// 面板当前是否显示着。
+pub fn is_shown() -> bool {
+    SHOWN.load(Ordering::SeqCst)
+}
 
 /// 面板根视图渲染过的帧数。
 pub fn rendered_frames() -> u64 {
@@ -351,6 +358,8 @@ fn show(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
     let first_frame = arm_first_frame();
     let show_started = clock::now_ticks();
     native.show();
+    SHOWN.store(true, Ordering::SeqCst);
+    crate::health::set_phase(crate::health::Phase::Panel);
     let show_returned = clock::now_ticks();
     // 列表自测（跑分、截图、交互脚本）期间不装全局键鼠钩子，免得吞掉本机其它程序（包括同时在跑的
     // 平台探针）的方向键、回车和外部点击；它们的按键由自测自己派发给面板窗口。
@@ -383,6 +392,8 @@ fn hide(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
     native.end_editing(false);
     native.stop_hooks();
     let geometry = native.hide();
+    SHOWN.store(false, Ordering::SeqCst);
+    crate::health::set_phase(crate::health::Phase::Idle);
 
     cx.update(|cx| {
         if let Some(geometry) = geometry {

@@ -65,7 +65,11 @@ pub fn start() -> anyhow::Result<StartedCore> {
     // 自测进程不读写本机剪贴板，也不监听；只有真机剪贴板探针（`--selftest-real-clipboard`）例外。
     let real_clipboard =
         !crate::selftest::active() || crate::selftest::enabled(crate::selftest::REAL_CLIPBOARD);
-    if real_clipboard {
+    if real_clipboard && crate::health::capture_disabled() {
+        log::warn!(
+            "degraded mode after crashes on the clipboard watcher: clipboard capture stays off until the next normal start"
+        );
+    } else if real_clipboard {
         if let Err(err) = core.start_watcher() {
             log::error!("the clipboard watcher did not start: {err}");
         }

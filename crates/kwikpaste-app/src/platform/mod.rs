@@ -127,6 +127,12 @@ pub fn launch() -> anyhow::Result<Option<Launch>> {
         }
     };
     health::after_claim();
+    // 崩溃重启自测：模拟「一启动就崩」的毒输入（子进程继承环境变量，每次启动都崩）。
+    if selftest::enabled(selftest::CRASH_RESTART)
+        && std::env::var_os("KWIKPASTE_SELFTEST_PANIC_AT_STARTUP").is_some_and(|value| value == "1")
+    {
+        panic!("selftest panic during startup");
+    }
     let core = core_host::start()?;
 
     Ok(Some(Launch {
@@ -216,8 +222,27 @@ pub fn start<V: Render>(
     {
         core.remove_legacy_webview_data();
     }
+    health::set_phase(health::Phase::Idle);
 
     Ok(())
+}
+
+/// 进入一个短暂的阶段（粘贴、拖出），守卫丢弃时按面板是否显示回到 `Panel` 或 `Idle`。
+pub(crate) fn enter_phase(phase: health::Phase) -> PhaseGuard {
+    health::set_phase(phase);
+    PhaseGuard
+}
+
+pub(crate) struct PhaseGuard;
+
+impl Drop for PhaseGuard {
+    fn drop(&mut self) {
+        health::set_phase(if panel::is_shown() {
+            health::Phase::Panel
+        } else {
+            health::Phase::Idle
+        });
+    }
 }
 
 /// 请求显示、隐藏、切换面板或进出编辑态。

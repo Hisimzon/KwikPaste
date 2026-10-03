@@ -1,5 +1,6 @@
 //! panic hook：记录、按重启策略处理，再交给原来的 hook。不 catch、不改变 panic 的去向：
-//! 主线程上的 panic 照样让进程退出（窗口过程里是 `0xC0000409`），其它线程上的照样结束该线程。
+//! 主线程上的 panic 照样让进程退出（窗口过程里是 `0xC0000409`），其它线程上的照样结束该线程；
+//! `panic = "abort"` 构建里 hook 返回后进程即 abort（`0xC0000409`），日志在 hook 里已经落盘。
 
 use std::any::Any;
 use std::backtrace::Backtrace;
@@ -31,7 +32,8 @@ fn handle(info: &PanicHookInfo<'_>) {
     let location = info.location().map(ToString::to_string).unwrap_or_default();
     let message = payload_text(info.payload());
     logger::write_crash(&format!(
-        "panic on thread '{thread}' at {location}: {message}\n{}",
+        "panic on thread '{thread}' in phase {} at {location}: {message}\n{}",
+        super::phase().name(),
         Backtrace::force_capture()
     ));
 
