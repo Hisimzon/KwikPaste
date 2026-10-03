@@ -36,6 +36,9 @@ const SYNC_DIR: &str = "sync";
 /// 安装版的日志目录名，挂在 `<app_local_data>` 下（Windows）。
 #[cfg(not(target_os = "macos"))]
 const LOGS_DIR: &str = "logs";
+/// 1.x 的 WebView2 用户数据目录名（2.0 不用 WebView），见 [`CorePaths::legacy_webview_dir`]。
+#[cfg(target_os = "windows")]
+const LEGACY_WEBVIEW_DIR: &str = "EBWebView";
 /// 固定留在 `<app_local_data>/<env>` 的 bootstrap manifest 文件名。
 const STORAGE_MANIFEST_FILENAME: &str = "storage.json";
 /// 写入真实数据根的 identity manifest 文件名，用于识别 KwikPaste 数据目录。
@@ -329,6 +332,16 @@ impl CorePaths {
     /// `<app_data_dir>/state`：窗口位置等本机运行状态目录。
     pub fn state_dir(&self) -> Result<PathBuf> {
         Ok(self.app_data_dir()?.join(STATE_DIR))
+    }
+
+    /// 1.x 的 WebView2 用户数据目录：安装版 `<app_local_data>\EBWebView`，便携版 `<exe 目录>\data\EBWebView`
+    /// （与 1.x 的位置一致，同 `<env>`、`logs` 同级）。2.0 不用，见 [`crate::legacy`]。
+    #[cfg(target_os = "windows")]
+    pub fn legacy_webview_dir(&self) -> PathBuf {
+        self.portable_root
+            .as_deref()
+            .unwrap_or(&self.local_data_root)
+            .join(LEGACY_WEBVIEW_DIR)
     }
 
     /// `<bootstrap>/sync`：局域网同步的设备密钥与已配对设备。

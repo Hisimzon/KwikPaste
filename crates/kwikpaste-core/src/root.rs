@@ -202,6 +202,21 @@ impl Core {
         Ok(())
     }
 
+    /// 2.0 正常启动后调用：在后台删掉 1.x 留下的 WebView2 数据目录（只删一次，见 [`crate::legacy`]）。
+    /// 不阻塞调用方，失败只记日志、下次启动再试。
+    pub fn remove_legacy_webview_data(&self) {
+        let paths = self.0.paths.clone();
+        self.0.rt.spawn_blocking(
+            move || match crate::legacy::remove_webview_data_once(&paths) {
+                Ok(crate::legacy::WebviewCleanup::Removed) => {
+                    log::info!("removed the WebView2 data left by 1.x");
+                }
+                Ok(_) => {}
+                Err(err) => log::warn!("the WebView2 data left by 1.x was not removed: {err}"),
+            },
+        );
+    }
+
     /// 暂停或恢复采集。暂停期间监听收到的变化直接丢弃（切换存储位置、覆盖导入备份时用）。
     pub fn set_capture_paused(&self, paused: bool) {
         self.0.watcher_pause.set_paused(paused);

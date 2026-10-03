@@ -170,6 +170,12 @@ pub fn start<V: Render>(
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
     updater::start(cx);
+    // 面板起来了才算正常启动：这时再在后台清掉 1.x 的 WebView2 数据（只清一次，不挡启动）。
+    if !selftest::active()
+        && let Some(core) = core_host::core(cx)
+    {
+        core.remove_legacy_webview_data();
+    }
 
     Ok(())
 }
