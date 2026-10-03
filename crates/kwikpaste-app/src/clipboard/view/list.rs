@@ -31,7 +31,7 @@ use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, ClickEvent, Context, DispatchPhase, Entity,
     EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
     ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, canvas, div, list,
     prelude::FluentBuilder as _, px,
 };
@@ -63,7 +63,7 @@ use crate::{
         },
         source::{ClipboardSource, Group, ListQuery, core_source::item_kind},
     },
-    platform::{CoreEvents, Panel, PanelEvent},
+    platform::{CoreEvents, Panel, PanelEvent, drag_out::DragTracker},
 };
 
 /// 列表上下各多排版的距离（px）。
@@ -95,6 +95,10 @@ pub enum ListIntent {
         id: Arc<str>,
     },
     ShowShortcuts,
+    /// 已交给宿主拖出（通知，自测据此核对拖的是哪一条）。
+    DragOut {
+        id: Arc<str>,
+    },
 }
 
 /// 指针相对面板显示时的状态。面板出现在静止的光标下时，光标下的卡片不算被悬停选中：
@@ -236,6 +240,8 @@ pub struct ClipboardList {
     pointer: Pointer,
     /// 预览窗（见 `previewing`）。
     previewing: previewing::Previewing,
+    /// 卡片上按下左键后拖动多远算拖出（平台层的拖出接口）。
+    drag: DragTracker,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -308,6 +314,7 @@ impl ClipboardList {
             activation_timeout: None,
             pointer: Pointer::Moved,
             previewing: previewing::Previewing::default(),
+            drag: DragTracker::default(),
             _subscriptions: subscriptions,
         };
         let request = list.model.reset_and_reload();
@@ -869,8 +876,8 @@ impl ClipboardList {
         }
     }
 
-    /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选；否则左键选中并按
-    /// “单击粘贴 / 复制”设置执行，中键按中键设置执行。
+    /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选；否则左键选中、记下拖出的
+    /// 起点（1.x 卡片 `draggable={!selecting}`），并按“单击粘贴 / 复制”设置执行，中键按中键设置执行。
     fn press_card(
         &mut self,
         item: Arc<ListItem>,
@@ -895,6 +902,7 @@ impl ClipboardList {
         match event.button {
             MouseButton::Left => {
                 self.controller.select(&id);
+                self.drag.press(id.to_string(), event.position);
                 match self.settings.clipboard.content.auto_paste {
                     AutoPaste::SingleClickPaste => self.paste_item(id, false, cx),
                     AutoPaste::SingleClickCopy => self.copy(id, false, None, window, cx),
@@ -1262,9 +1270,17 @@ impl Render for ClipboardList {
         let root = div()
             .id("clipboard-list")
             .track_focus(&self.focus)
-            .on_mouse_move(cx.listener(|list, event: &MouseMoveEvent, _, cx| {
+            .on_mouse_move(cx.listener(|list, event: &MouseMoveEvent, window, cx| {
                 list.pointer_moved(event.position, cx);
+                // 在卡片上按住左键拖过系统阈值：拖出这条记录。
+                if let Some(id) = list.drag.moved(event, window) {
+                    list.drag_out(Arc::from(id), window, cx);
+                }
             }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|list, _: &MouseUpEvent, _, _| list.drag.release()),
+            )
             // 按住空格预览当前项（钩子转来的空格按下、松开）。
             .on_key_down(cx.listener(|list, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "space" && !event.keystroke.modifiers.modified() {

@@ -1,4 +1,4 @@
-//! 列表交给宿主的动作：粘贴、粘贴片段、复制、复制片段。面板固定时（[`super::pin`]）粘贴、复制之后
+//! 列表交给宿主的动作：粘贴、粘贴片段、复制、复制片段、拖出。面板固定时（[`super::pin`]）粘贴、复制之后
 //! 面板留着。
 //!
 //! 数据来自平台层的 core 时走 [`crate::platform::paste`]（写回剪贴板、让出前台、注入粘贴键，复制后
@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use gpui::{App, Task};
+use gpui::{App, Task, Window};
 use kwikpaste_core::clipboard::ClipboardFragment;
 
 use super::{pin, request_panel};
@@ -35,6 +35,9 @@ pub trait ItemHost {
         fragment: ClipboardFragment,
         cx: &mut App,
     ) -> Task<anyhow::Result<()>>;
+
+    /// 把记录拖到别的应用（`window` 是拖出源窗口）。任务在拖放结束后完成。
+    fn drag_out(&self, id: Arc<str>, window: &Window, cx: &mut App) -> Task<anyhow::Result<()>>;
 }
 
 /// 平台层的粘贴链路（数据来自宿主的 core）。
@@ -80,6 +83,15 @@ impl ItemHost for PlatformHost {
         let keep_visible = pin::pinned(cx);
         let task = platform::paste::copy_fragment(cx, id.to_string(), fragment, keep_visible);
         ok_or_anyhow(task, cx)
+    }
+
+    fn drag_out(&self, id: Arc<str>, window: &Window, cx: &mut App) -> Task<anyhow::Result<()>> {
+        let task = platform::drag_out::start_item(id.to_string(), window, cx);
+        cx.foreground_executor().spawn(async move {
+            let report = task.await?;
+            log::debug!("drag-out of {id}: {report:?}");
+            Ok(())
+        })
     }
 }
 
@@ -131,6 +143,11 @@ impl ItemHost for SourceHost {
         _: &mut App,
     ) -> Task<anyhow::Result<()>> {
         log::info!("fragment of {id} not copied: the data is not the host core's");
+        Task::ready(Ok(()))
+    }
+
+    fn drag_out(&self, id: Arc<str>, _: &Window, _: &mut App) -> Task<anyhow::Result<()>> {
+        log::info!("no drag-out for {id}: the data is not the host core's");
         Task::ready(Ok(()))
     }
 }

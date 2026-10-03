@@ -353,6 +353,7 @@ impl Driver {
         self.pin(cx).await;
         self.groups(cx).await;
         self.preview(cx).await;
+        self.drag_out(cx).await;
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
     }
@@ -808,6 +809,77 @@ impl Driver {
         self.check("scrolling closes a hover preview", closed, || {
             "still open".into()
         });
+        self.pointer_at(cx, 20., 20.);
+    }
+
+    /// 在卡片上按下左键再移动（`pressed_button` 为左键）。
+    fn press_and_move(&self, cx: &mut AsyncApp, from: (f32, f32), to: (f32, f32)) {
+        self.window
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: point(px(from.0), px(from.1)),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(px(to.0), px(to.1)),
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::default(),
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Left,
+                        position: point(px(to.0), px(to.1)),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                    }),
+                    cx,
+                );
+            })
+            .ok();
+    }
+
+    /// 拖出：按住卡片拖过系统阈值交给宿主拖出那张卡片；只挪 1 px 不算拖；多选时不拖。
+    async fn drag_out(&mut self, cx: &mut AsyncApp) {
+        self.focus_list(cx);
+        let Some(item) = self.hover_row(cx).await else {
+            return;
+        };
+        let dragged = |intents: &[ListIntent]| {
+            intents.iter().find_map(|intent| match intent {
+                ListIntent::DragOut { id } => Some(id.clone()),
+                _ => None,
+            })
+        };
+
+        self.intents.borrow_mut().clear();
+        self.press_and_move(cx, (180., 360.), (181., 360.));
+        let nudged = dragged(&self.intents.borrow());
+        self.press_and_move(cx, (180., 360.), (230., 380.));
+        let pulled = dragged(&self.intents.borrow());
+        self.check(
+            "dragging a card past the threshold drags that card out, a nudge does not",
+            nudged.is_none() && pulled.as_ref() == Some(&item.id),
+            || format!("nudge {nudged:?}, drag {pulled:?}"),
+        );
+
+        self.key(cx, "secondary-a");
+        self.settle(cx, |list, _| list.selecting()).await;
+        self.intents.borrow_mut().clear();
+        self.press_and_move(cx, (180., 360.), (230., 380.));
+        let selecting = dragged(&self.intents.borrow());
+        self.check("no drag-out while selecting", selecting.is_none(), || {
+            format!("{selecting:?}")
+        });
+        self.key(cx, "escape");
         self.pointer_at(cx, 20., 20.);
     }
 

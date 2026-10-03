@@ -644,6 +644,16 @@ impl ClipboardList {
         cx.notify();
     }
 
+    /// 卡片按住拖过系统阈值：把这条记录拖到别的应用（1.x `startDragClipboardItem`）。拖出期间面板
+    /// 不激活；失败（文件已不存在等）时提示原因。
+    pub(super) fn drag_out(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
+        log::info!("drag-out requested for {id}");
+        self.close_preview(cx);
+        let task = self.host.drag_out(id.clone(), window, cx);
+        self.report_host_failure("commands:labels.drag", task, cx);
+        cx.emit(ListIntent::DragOut { id });
+    }
+
     /// 按住修饰键点了链接、邮箱卡片的正文（1.x `openItemLink`）：关掉预览，打开链接或写邮件。
     pub fn open_link(&mut self, item: &ListItem, window: &mut Window, cx: &mut Context<Self>) {
         self.close_preview(cx);

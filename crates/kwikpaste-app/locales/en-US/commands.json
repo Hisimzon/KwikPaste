@@ -13,6 +13,7 @@
     "copy": "Copy",
     "delete": "Delete",
     "deleteClipboardGroup": "Delete group",
+    "drag": "Drag",
     "importClipboardGroupSvg": "Import SVG icon",
     "moveToGroup": "Move to Group",
     "openLink": "Open link",
