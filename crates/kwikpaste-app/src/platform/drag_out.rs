@@ -136,7 +136,7 @@ pub fn start(
         } {
             drop(phase);
             log::error!("drag-out failed: {error:#}");
-            return Task::ready(Err(error));
+            return Task::ready(Err(error.into()));
         }
         return cx.spawn(async move |cx| {
             finish_mac_drag(target.handle, receiver, started, phase, cx).await

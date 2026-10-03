@@ -9,7 +9,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::time::Duration;
 
 use async_channel::Sender;
 use futures::channel::oneshot;
@@ -393,7 +392,9 @@ fn raise_update_window(handle: gpui::AnyWindowHandle, cx: &mut App) {
             let RawWindowHandle::Win32(handle) = handle.as_raw() else {
                 return;
             };
-            if !kwikpaste_os::win::keyboard::swallow_marked_alt(Duration::from_millis(50)) {
+            if !kwikpaste_os::win::keyboard::swallow_marked_alt(std::time::Duration::from_millis(
+                50,
+            )) {
                 log::debug!(
                     "the keyboard hook did not confirm the marked Alt for the update window"
                 );

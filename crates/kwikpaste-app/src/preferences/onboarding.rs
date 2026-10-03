@@ -88,6 +88,7 @@ impl Onboarding {
             }
             #[cfg(target_os = "macos")]
             {
+                let _ = core;
                 true
             }
             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
