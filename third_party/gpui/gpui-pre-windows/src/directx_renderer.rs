@@ -54,6 +54,10 @@ pub(crate) struct DirectXRenderer {
     /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
     /// meaning we lost all the allocated gpu textures and scene resources.
     skip_draws: bool,
+
+    /// [kwikpaste patch 0003] The last device-loss recovery failed: the devices and resources are
+    /// gone, so nothing may draw until a later recovery succeeds.
+    suspended: bool,
 }
 
 /// Direct3D objects
@@ -194,6 +198,7 @@ impl DirectXRenderer {
             width: 1,
             height: 1,
             skip_draws: false,
+            suspended: false,
         })
     }
 
@@ -254,10 +259,16 @@ impl DirectXRenderer {
     }
 
     pub(crate) fn handle_device_lost(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
-        try_to_recover_from_device_lost(|| {
+        let result = try_to_recover_from_device_lost(|| {
             self.handle_device_lost_impl(directx_devices)
                 .context("DirectXRenderer handling device lost")
-        })
+        });
+        // [kwikpaste patch 0003] On failure the old resources are already dropped: stay suspended.
+        self.suspended = result.is_err();
+        if self.suspended {
+            self.skip_draws = true;
+        }
+        result
     }
 
     fn handle_device_lost_impl(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
@@ -332,9 +343,10 @@ impl DirectXRenderer {
         scene: &Scene,
         background_appearance: WindowBackgroundAppearance,
     ) -> Result<()> {
-        if self.skip_draws {
+        if self.skip_draws || self.suspended {
             // skip drawing this frame, we just recovered from a device lost event
             // and so likely do not have the textures anymore that are required for drawing
+            // ([kwikpaste patch 0003] or the recovery failed and there is nothing to draw with)
             return Ok(());
         }
         self.render(scene, background_appearance)?;
@@ -866,7 +878,8 @@ impl DirectXRenderer {
     }
 
     pub(crate) fn mark_drawable(&mut self) {
-        self.skip_draws = false;
+        // [kwikpaste patch 0003] A suspended renderer stays undrawable until it recovers.
+        self.skip_draws = self.suspended;
     }
 }
 

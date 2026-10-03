@@ -1319,7 +1319,11 @@ impl WindowsWindowInner {
             .borrow_mut()
             .handle_device_lost(&devices)
         {
-            panic!("Device lost: {err}");
+            // [kwikpaste patch 0003] A panic here aborts the process (window procedure). Leave
+            // the renderer suspended and let the vsync thread retry the whole recovery.
+            log::error!("window renderer could not recover from the lost device: {err:#}");
+            crate::directx_devices::note_window_recovery_failed();
+            return Some(0);
         }
         // Make sure the first `draw_window` after recovery (whether it comes
         // from the forced WM_GPUI_FORCE_UPDATE_WINDOW or a stray WM_PAINT in

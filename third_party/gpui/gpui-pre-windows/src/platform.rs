@@ -382,6 +382,8 @@ impl WindowsPlatform {
             .spawn(move || {
                 let _alive = crate::vsync::VSyncThreadAlive::mark(); // [kwikpaste patch 0001]
                 let vsync_provider = VSyncProvider::new();
+                // [kwikpaste patch 0003] (detected at, attempts made) while recovering.
+                let mut recovery: Option<(std::time::Instant, usize)> = None;
                 loop {
                     // [kwikpaste patch 0001] No visible window: park (device-lost is still
                     // polled once per second) instead of waking at the refresh rate.
@@ -391,22 +393,65 @@ impl WindowsPlatform {
                             .iter()
                             .any(|hwnd| unsafe { IsWindowVisible(hwnd.as_raw()) }.as_bool())
                     });
-                    if any_visible {
+                    if let Some((since, attempt)) = recovery {
+                        // [kwikpaste patch 0003] Recovering: wait for the next scheduled attempt.
+                        let due = since
+                            + std::time::Duration::from_millis(
+                                crate::directx_devices::recovery_deadline_ms(attempt),
+                            );
+                        let now = std::time::Instant::now();
+                        if due > now {
+                            std::thread::sleep(due - now);
+                        }
+                    } else if any_visible {
                         vsync_provider.wait_for_vsync();
                     } else {
                         crate::vsync::park_vsync_thread(std::time::Duration::from_secs(1));
                     }
-                    if check_device_lost(&directx_device.device)
+                    let lost = check_device_lost(&directx_device.device)
                         || invalidate_devices.fetch_and(false, Ordering::Acquire)
-                    {
-                        if let Err(err) = handle_gpu_device_lost(
+                        || crate::directx_devices::take_recheck_request();
+                    if lost && recovery.is_none() {
+                        crate::directx_devices::note_device_lost();
+                        recovery = Some((std::time::Instant::now(), 0));
+                    }
+                    // [kwikpaste patch 0003] No panic when recovery fails: try again on the
+                    // schedule, then once a second, and report `failing` for the app's watchdog.
+                    if let Some((since, attempt)) = recovery.as_mut() {
+                        let result = handle_gpu_device_lost(
                             &mut directx_device,
                             platform_window.as_raw(),
                             validation_number,
                             &all_windows,
                             &text_system,
-                        ) {
-                            panic!("Device lost: {err}");
+                        );
+                        let window_failed = crate::directx_devices::take_window_recovery_failed();
+                        match result {
+                            Ok(()) if !window_failed => {
+                                log::info!(
+                                    "recovered from the lost device after {} attempt(s) in {:?}",
+                                    *attempt + 1,
+                                    since.elapsed()
+                                );
+                                crate::directx_devices::note_recovered(since.elapsed());
+                                recovery = None;
+                            }
+                            result => {
+                                let reason = match result {
+                                    Err(err) => format!("{err:#}"),
+                                    Ok(()) => "a window renderer was not rebuilt".to_owned(),
+                                };
+                                log::error!(
+                                    "device-loss recovery attempt {} failed: {reason}",
+                                    *attempt + 1
+                                );
+                                *attempt += 1;
+                                if *attempt
+                                    >= crate::directx_devices::RECOVERY_SCHEDULE_MS.len()
+                                {
+                                    crate::directx_devices::note_recovery_failing();
+                                }
+                            }
                         }
                     }
                     let Some(all_windows) = all_windows.upgrade() else {
@@ -1524,10 +1569,8 @@ fn handle_gpu_device_lost(
     all_windows: &std::sync::Weak<RwLock<SmallVec<[SafeHwnd; 4]>>>,
     text_system: &std::sync::Weak<DirectWriteTextSystem>,
 ) -> Result<()> {
-    // Here we wait a bit to ensure the system has time to recover from the device lost state.
-    // If we don't wait, the final drawing result will be blank.
-    std::thread::sleep(std::time::Duration::from_millis(350));
-
+    // [kwikpaste patch 0003] No fixed 350 ms sleep here: the caller retries on a schedule, and the
+    // windows are force-redrawn 200 ms after a successful recovery (below).
     *directx_devices = try_to_recover_from_device_lost(|| {
         DirectXDevices::new().context("Failed to recreate new DirectX devices after device lost")
     })?;

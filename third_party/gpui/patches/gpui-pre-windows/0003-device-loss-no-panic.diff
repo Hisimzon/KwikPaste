@@ -1,0 +1,327 @@
+--- a/src/directx_devices.rs
++++ b/src/directx_devices.rs
+@@ -1,6 +1,6 @@
+ use anyhow::{Context, Result};
+ use gpui_util::ResultExt;
+-use itertools::Itertools;
++// [kwikpaste patch 0003] itertools no longer needed: one attempt per call.
+ use windows::Win32::{
+     Foundation::HMODULE,
+     Graphics::{
+@@ -21,18 +21,102 @@ use windows::Win32::{
+ };
+ use windows::core::Interface;
+ 
++// [kwikpaste patch 0003] One attempt per call: the vsync thread retries the whole recovery on the
++// deadline schedule below instead of sleeping inside here (the old 5 tries x ~110 ms ran out in
++// about 850 ms, then panicked).
+ pub(crate) fn try_to_recover_from_device_lost<T>(mut f: impl FnMut() -> Result<T>) -> Result<T> {
+-    (0..5)
+-        .map(|i| {
+-            if i > 0 {
+-                // Add a small delay before retrying
+-                std::thread::sleep(std::time::Duration::from_millis(100 + i * 10));
+-            }
+-            f()
+-        })
+-        .find_or_last(Result::is_ok)
+-        .unwrap()
+-        .context("DirectXRenderer failed to recover from lost device after multiple attempts")
++    f().context("DirectXRenderer failed to recover from lost device")
++}
++
++// [kwikpaste patch 0003] Device-loss recovery that never panics, its health signal, and selftest
++// hooks. After a loss the vsync thread tries again at these offsets from the detection; after the
++// last one it keeps trying once a second and reports `failing`.
++pub(crate) const RECOVERY_SCHEDULE_MS: [u64; 8] = [0, 100, 250, 500, 1000, 2000, 4000, 8000];
++
++static DEVICE_LOSSES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++static DEVICE_RECOVERIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++static LAST_RECOVERY_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++static RECOVERY_FAILING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++static RECHECK_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++static WINDOW_RECOVERY_FAILED: std::sync::atomic::AtomicBool =
++    std::sync::atomic::AtomicBool::new(false);
++static SIMULATED_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++
++/// [kwikpaste patch 0003] Device-loss counters for the app's health checks.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct DeviceLossStatus {
++    /// Device losses detected (real, requested rechecks and simulated ones).
++    pub losses: u32,
++    /// Losses recovered from.
++    pub recoveries: u32,
++    /// Detection to recovered, for the latest recovery.
++    pub last_recovery_ms: u32,
++    /// Every scheduled attempt failed; the vsync thread keeps trying once a second.
++    pub failing: bool,
++}
++
++/// [kwikpaste patch 0003] Current device-loss counters.
++pub fn device_loss_status() -> DeviceLossStatus {
++    use std::sync::atomic::Ordering::Acquire;
++    DeviceLossStatus {
++        losses: DEVICE_LOSSES.load(Acquire),
++        recoveries: DEVICE_RECOVERIES.load(Acquire),
++        last_recovery_ms: LAST_RECOVERY_MS.load(Acquire),
++        failing: RECOVERY_FAILING.load(Acquire),
++    }
++}
++
++/// [kwikpaste patch 0003] Rebuild the devices on the next vsync-thread tick (after a system wake,
++/// a session switch, or to simulate a loss in selftests), as if the device had been lost.
++pub fn request_device_recheck() {
++    RECHECK_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
++    crate::vsync::wake_vsync_thread();
++}
++
++/// [kwikpaste patch 0003] Selftest: simulate a device loss whose first `failed_attempts`
++/// recreations of the global device fail.
++pub fn simulate_device_lost(failed_attempts: u32) {
++    SIMULATED_FAILURES.store(failed_attempts, std::sync::atomic::Ordering::Release);
++    request_device_recheck();
++}
++
++pub(crate) fn take_recheck_request() -> bool {
++    RECHECK_REQUESTED.swap(false, std::sync::atomic::Ordering::AcqRel)
++}
++
++pub(crate) fn note_device_lost() {
++    DEVICE_LOSSES.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
++}
++
++pub(crate) fn note_recovered(elapsed: std::time::Duration) {
++    use std::sync::atomic::Ordering::Release;
++    LAST_RECOVERY_MS.store(elapsed.as_millis().min(u32::MAX as u128) as u32, Release);
++    RECOVERY_FAILING.store(false, Release);
++    DEVICE_RECOVERIES.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
++}
++
++pub(crate) fn note_recovery_failing() {
++    RECOVERY_FAILING.store(true, std::sync::atomic::Ordering::Release);
++}
++
++/// A window renderer could not be rebuilt on the new device; the vsync thread retries.
++pub(crate) fn note_window_recovery_failed() {
++    WINDOW_RECOVERY_FAILED.store(true, std::sync::atomic::Ordering::Release);
++}
++
++pub(crate) fn take_window_recovery_failed() -> bool {
++    WINDOW_RECOVERY_FAILED.swap(false, std::sync::atomic::Ordering::AcqRel)
++}
++
++/// Offset from the detection of the `attempt`-th recovery attempt.
++pub(crate) fn recovery_deadline_ms(attempt: usize) -> u64 {
++    match RECOVERY_SCHEDULE_MS.get(attempt) {
++        Some(ms) => *ms,
++        None => {
++            let last = RECOVERY_SCHEDULE_MS[RECOVERY_SCHEDULE_MS.len() - 1];
++            last + 1000 * (attempt + 1 - RECOVERY_SCHEDULE_MS.len()) as u64
++        }
++    }
+ }
+ 
+ #[derive(Clone)]
+@@ -45,6 +129,17 @@ pub(crate) struct DirectXDevices {
+ 
+ impl DirectXDevices {
+     pub(crate) fn new() -> Result<Self> {
++        // [kwikpaste patch 0003] selftest: the adapter is gone for a few attempts.
++        if SIMULATED_FAILURES
++            .fetch_update(
++                std::sync::atomic::Ordering::AcqRel,
++                std::sync::atomic::Ordering::Acquire,
++                |left| left.checked_sub(1),
++            )
++            .is_ok()
++        {
++            anyhow::bail!("simulated device loss: no adapter available");
++        }
+         let debug_layer_available = check_debug_layer_available();
+         let dxgi_factory =
+             get_dxgi_factory(debug_layer_available).context("Creating DXGI factory")?;
+--- a/src/platform.rs
++++ b/src/platform.rs
+@@ -382,6 +382,8 @@ impl WindowsPlatform {
+             .spawn(move || {
+                 let _alive = crate::vsync::VSyncThreadAlive::mark(); // [kwikpaste patch 0001]
+                 let vsync_provider = VSyncProvider::new();
++                // [kwikpaste patch 0003] (detected at, attempts made) while recovering.
++                let mut recovery: Option<(std::time::Instant, usize)> = None;
+                 loop {
+                     // [kwikpaste patch 0001] No visible window: park (device-lost is still
+                     // polled once per second) instead of waking at the refresh rate.
+@@ -391,22 +393,65 @@ impl WindowsPlatform {
+                             .iter()
+                             .any(|hwnd| unsafe { IsWindowVisible(hwnd.as_raw()) }.as_bool())
+                     });
+-                    if any_visible {
++                    if let Some((since, attempt)) = recovery {
++                        // [kwikpaste patch 0003] Recovering: wait for the next scheduled attempt.
++                        let due = since
++                            + std::time::Duration::from_millis(
++                                crate::directx_devices::recovery_deadline_ms(attempt),
++                            );
++                        let now = std::time::Instant::now();
++                        if due > now {
++                            std::thread::sleep(due - now);
++                        }
++                    } else if any_visible {
+                         vsync_provider.wait_for_vsync();
+                     } else {
+                         crate::vsync::park_vsync_thread(std::time::Duration::from_secs(1));
+                     }
+-                    if check_device_lost(&directx_device.device)
++                    let lost = check_device_lost(&directx_device.device)
+                         || invalidate_devices.fetch_and(false, Ordering::Acquire)
+-                    {
+-                        if let Err(err) = handle_gpu_device_lost(
++                        || crate::directx_devices::take_recheck_request();
++                    if lost && recovery.is_none() {
++                        crate::directx_devices::note_device_lost();
++                        recovery = Some((std::time::Instant::now(), 0));
++                    }
++                    // [kwikpaste patch 0003] No panic when recovery fails: try again on the
++                    // schedule, then once a second, and report `failing` for the app's watchdog.
++                    if let Some((since, attempt)) = recovery.as_mut() {
++                        let result = handle_gpu_device_lost(
+                             &mut directx_device,
+                             platform_window.as_raw(),
+                             validation_number,
+                             &all_windows,
+                             &text_system,
+-                        ) {
+-                            panic!("Device lost: {err}");
++                        );
++                        let window_failed = crate::directx_devices::take_window_recovery_failed();
++                        match result {
++                            Ok(()) if !window_failed => {
++                                log::info!(
++                                    "recovered from the lost device after {} attempt(s) in {:?}",
++                                    *attempt + 1,
++                                    since.elapsed()
++                                );
++                                crate::directx_devices::note_recovered(since.elapsed());
++                                recovery = None;
++                            }
++                            result => {
++                                let reason = match result {
++                                    Err(err) => format!("{err:#}"),
++                                    Ok(()) => "a window renderer was not rebuilt".to_owned(),
++                                };
++                                log::error!(
++                                    "device-loss recovery attempt {} failed: {reason}",
++                                    *attempt + 1
++                                );
++                                *attempt += 1;
++                                if *attempt
++                                    >= crate::directx_devices::RECOVERY_SCHEDULE_MS.len()
++                                {
++                                    crate::directx_devices::note_recovery_failing();
++                                }
++                            }
+                         }
+                     }
+                     let Some(all_windows) = all_windows.upgrade() else {
+@@ -1524,10 +1569,8 @@ fn handle_gpu_device_lost(
+     all_windows: &std::sync::Weak<RwLock<SmallVec<[SafeHwnd; 4]>>>,
+     text_system: &std::sync::Weak<DirectWriteTextSystem>,
+ ) -> Result<()> {
+-    // Here we wait a bit to ensure the system has time to recover from the device lost state.
+-    // If we don't wait, the final drawing result will be blank.
+-    std::thread::sleep(std::time::Duration::from_millis(350));
+-
++    // [kwikpaste patch 0003] No fixed 350 ms sleep here: the caller retries on a schedule, and the
++    // windows are force-redrawn 200 ms after a successful recovery (below).
+     *directx_devices = try_to_recover_from_device_lost(|| {
+         DirectXDevices::new().context("Failed to recreate new DirectX devices after device lost")
+     })?;
+--- a/src/events.rs
++++ b/src/events.rs
+@@ -1319,7 +1319,11 @@ impl WindowsWindowInner {
+             .borrow_mut()
+             .handle_device_lost(&devices)
+         {
+-            panic!("Device lost: {err}");
++            // [kwikpaste patch 0003] A panic here aborts the process (window procedure). Leave
++            // the renderer suspended and let the vsync thread retry the whole recovery.
++            log::error!("window renderer could not recover from the lost device: {err:#}");
++            crate::directx_devices::note_window_recovery_failed();
++            return Some(0);
+         }
+         // Make sure the first `draw_window` after recovery (whether it comes
+         // from the forced WM_GPUI_FORCE_UPDATE_WINDOW or a stray WM_PAINT in
+--- a/src/directx_renderer.rs
++++ b/src/directx_renderer.rs
+@@ -54,6 +54,10 @@ pub(crate) struct DirectXRenderer {
+     /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
+     /// meaning we lost all the allocated gpu textures and scene resources.
+     skip_draws: bool,
++
++    /// [kwikpaste patch 0003] The last device-loss recovery failed: the devices and resources are
++    /// gone, so nothing may draw until a later recovery succeeds.
++    suspended: bool,
+ }
+ 
+ /// Direct3D objects
+@@ -194,6 +198,7 @@ impl DirectXRenderer {
+             width: 1,
+             height: 1,
+             skip_draws: false,
++            suspended: false,
+         })
+     }
+ 
+@@ -254,10 +259,16 @@ impl DirectXRenderer {
+     }
+ 
+     pub(crate) fn handle_device_lost(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
+-        try_to_recover_from_device_lost(|| {
++        let result = try_to_recover_from_device_lost(|| {
+             self.handle_device_lost_impl(directx_devices)
+                 .context("DirectXRenderer handling device lost")
+-        })
++        });
++        // [kwikpaste patch 0003] On failure the old resources are already dropped: stay suspended.
++        self.suspended = result.is_err();
++        if self.suspended {
++            self.skip_draws = true;
++        }
++        result
+     }
+ 
+     fn handle_device_lost_impl(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
+@@ -332,9 +343,10 @@ impl DirectXRenderer {
+         scene: &Scene,
+         background_appearance: WindowBackgroundAppearance,
+     ) -> Result<()> {
+-        if self.skip_draws {
++        if self.skip_draws || self.suspended {
+             // skip drawing this frame, we just recovered from a device lost event
+             // and so likely do not have the textures anymore that are required for drawing
++            // ([kwikpaste patch 0003] or the recovery failed and there is nothing to draw with)
+             return Ok(());
+         }
+         self.render(scene, background_appearance)?;
+@@ -866,7 +878,8 @@ impl DirectXRenderer {
+     }
+ 
+     pub(crate) fn mark_drawable(&mut self) {
+-        self.skip_draws = false;
++        // [kwikpaste patch 0003] A suspended renderer stays undrawable until it recovers.
++        self.skip_draws = self.suspended;
+     }
+ }
+ 
+--- a/src/gpui_windows.rs
++++ b/src/gpui_windows.rs
+@@ -40,5 +40,9 @@ pub(crate) use wrapper::*;
+ 
+ pub use platform::WindowsPlatform;
+ pub use vsync::vsync_thread_alive; // [kwikpaste patch 0001]
++// [kwikpaste patch 0003]
++pub use directx_devices::{
++    DeviceLossStatus, device_loss_status, request_device_recheck, simulate_device_lost,
++};
+ 
+ pub(crate) use windows::Win32::Foundation::HWND;

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gpui_util::ResultExt;
-use itertools::Itertools;
+// [kwikpaste patch 0003] itertools no longer needed: one attempt per call.
 use windows::Win32::{
     Foundation::HMODULE,
     Graphics::{
@@ -21,18 +21,102 @@ use windows::Win32::{
 };
 use windows::core::Interface;
 
+// [kwikpaste patch 0003] One attempt per call: the vsync thread retries the whole recovery on the
+// deadline schedule below instead of sleeping inside here (the old 5 tries x ~110 ms ran out in
+// about 850 ms, then panicked).
 pub(crate) fn try_to_recover_from_device_lost<T>(mut f: impl FnMut() -> Result<T>) -> Result<T> {
-    (0..5)
-        .map(|i| {
-            if i > 0 {
-                // Add a small delay before retrying
-                std::thread::sleep(std::time::Duration::from_millis(100 + i * 10));
-            }
-            f()
-        })
-        .find_or_last(Result::is_ok)
-        .unwrap()
-        .context("DirectXRenderer failed to recover from lost device after multiple attempts")
+    f().context("DirectXRenderer failed to recover from lost device")
+}
+
+// [kwikpaste patch 0003] Device-loss recovery that never panics, its health signal, and selftest
+// hooks. After a loss the vsync thread tries again at these offsets from the detection; after the
+// last one it keeps trying once a second and reports `failing`.
+pub(crate) const RECOVERY_SCHEDULE_MS: [u64; 8] = [0, 100, 250, 500, 1000, 2000, 4000, 8000];
+
+static DEVICE_LOSSES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static DEVICE_RECOVERIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static LAST_RECOVERY_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static RECOVERY_FAILING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RECHECK_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static WINDOW_RECOVERY_FAILED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static SIMULATED_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// [kwikpaste patch 0003] Device-loss counters for the app's health checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceLossStatus {
+    /// Device losses detected (real, requested rechecks and simulated ones).
+    pub losses: u32,
+    /// Losses recovered from.
+    pub recoveries: u32,
+    /// Detection to recovered, for the latest recovery.
+    pub last_recovery_ms: u32,
+    /// Every scheduled attempt failed; the vsync thread keeps trying once a second.
+    pub failing: bool,
+}
+
+/// [kwikpaste patch 0003] Current device-loss counters.
+pub fn device_loss_status() -> DeviceLossStatus {
+    use std::sync::atomic::Ordering::Acquire;
+    DeviceLossStatus {
+        losses: DEVICE_LOSSES.load(Acquire),
+        recoveries: DEVICE_RECOVERIES.load(Acquire),
+        last_recovery_ms: LAST_RECOVERY_MS.load(Acquire),
+        failing: RECOVERY_FAILING.load(Acquire),
+    }
+}
+
+/// [kwikpaste patch 0003] Rebuild the devices on the next vsync-thread tick (after a system wake,
+/// a session switch, or to simulate a loss in selftests), as if the device had been lost.
+pub fn request_device_recheck() {
+    RECHECK_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
+    crate::vsync::wake_vsync_thread();
+}
+
+/// [kwikpaste patch 0003] Selftest: simulate a device loss whose first `failed_attempts`
+/// recreations of the global device fail.
+pub fn simulate_device_lost(failed_attempts: u32) {
+    SIMULATED_FAILURES.store(failed_attempts, std::sync::atomic::Ordering::Release);
+    request_device_recheck();
+}
+
+pub(crate) fn take_recheck_request() -> bool {
+    RECHECK_REQUESTED.swap(false, std::sync::atomic::Ordering::AcqRel)
+}
+
+pub(crate) fn note_device_lost() {
+    DEVICE_LOSSES.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+pub(crate) fn note_recovered(elapsed: std::time::Duration) {
+    use std::sync::atomic::Ordering::Release;
+    LAST_RECOVERY_MS.store(elapsed.as_millis().min(u32::MAX as u128) as u32, Release);
+    RECOVERY_FAILING.store(false, Release);
+    DEVICE_RECOVERIES.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+pub(crate) fn note_recovery_failing() {
+    RECOVERY_FAILING.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// A window renderer could not be rebuilt on the new device; the vsync thread retries.
+pub(crate) fn note_window_recovery_failed() {
+    WINDOW_RECOVERY_FAILED.store(true, std::sync::atomic::Ordering::Release);
+}
+
+pub(crate) fn take_window_recovery_failed() -> bool {
+    WINDOW_RECOVERY_FAILED.swap(false, std::sync::atomic::Ordering::AcqRel)
+}
+
+/// Offset from the detection of the `attempt`-th recovery attempt.
+pub(crate) fn recovery_deadline_ms(attempt: usize) -> u64 {
+    match RECOVERY_SCHEDULE_MS.get(attempt) {
+        Some(ms) => *ms,
+        None => {
+            let last = RECOVERY_SCHEDULE_MS[RECOVERY_SCHEDULE_MS.len() - 1];
+            last + 1000 * (attempt + 1 - RECOVERY_SCHEDULE_MS.len()) as u64
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -45,6 +129,17 @@ pub(crate) struct DirectXDevices {
 
 impl DirectXDevices {
     pub(crate) fn new() -> Result<Self> {
+        // [kwikpaste patch 0003] selftest: the adapter is gone for a few attempts.
+        if SIMULATED_FAILURES
+            .fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |left| left.checked_sub(1),
+            )
+            .is_ok()
+        {
+            anyhow::bail!("simulated device loss: no adapter available");
+        }
         let debug_layer_available = check_debug_layer_available();
         let dxgi_factory =
             get_dxgi_factory(debug_layer_available).context("Creating DXGI factory")?;

@@ -103,7 +103,7 @@
          // We do not use the OS title bar, so the default `DefWindowProcW` will only register a 1px edge for resizes
          // We need to calculate the frame thickness ourselves and do the hit test manually.
          let frame_y = get_frame_thicknessx(dpi);
-@@ -1780,14 +1780,14 @@ pub(crate) fn current_capslock() -> Capslock {
+@@ -1784,14 +1784,14 @@ pub(crate) fn current_capslock() -> Capslock {
  // - SM_CXSIZEFRAME: The resize handle.
  // - SM_CXPADDEDBORDER: Additional border space that isn't part of the resize handle.
  fn get_frame_thicknessx(dpi: u32) -> i32 {
