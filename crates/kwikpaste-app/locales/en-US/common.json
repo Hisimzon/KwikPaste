@@ -11,6 +11,12 @@
   "app": {
     "tagline": "Cross-platform clipboard manager"
   },
+  "shortcutRecorder": {
+    "clear": "Clear shortcut",
+    "click": "Click to record",
+    "conflict": "{{shortcut}} is already used by \"{{label}}\"",
+    "press": "Press shortcut"
+  },
   "ui": {
     "ok": "OK",
     "selectPlaceholder": "Please select"

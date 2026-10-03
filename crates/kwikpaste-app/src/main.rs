@@ -8,6 +8,7 @@ mod health;
 mod i18n;
 mod identity;
 mod platform;
+mod preferences;
 mod selftest;
 
 use gpui::{App, Application};

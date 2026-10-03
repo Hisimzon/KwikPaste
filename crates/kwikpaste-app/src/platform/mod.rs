@@ -31,7 +31,7 @@
 //! - 偏好设置、引导、备份导入：第二次启动、托盘、偏好快捷键和带 `.kwikpastebak` 的启动都变成
 //!   [`host::HostRequest`]，UI 用 [`host::set_handler`] 接手，见 [`host`] 模块文档。
 
-mod autostart;
+pub(crate) mod autostart;
 pub mod drag_out;
 mod editing;
 pub mod host;
@@ -220,6 +220,14 @@ pub fn start<V: Render>(
     }
     settings::follow(cx);
     autostart::sync_at_startup(cx);
+
+    // Host 请求（托盘、快捷键、第二次启动和备份文件）统一交给偏好窗口。
+    // 注册必须先于 `queue_launch_arguments`，这样冷启动携带的备份文件不会退回面板。
+    host::set_handler(cx, |request, cx| {
+        if let Err(err) = crate::preferences::open_request(cx, request.clone()) {
+            log::error!("could not handle host request {request:?}: {err:#}");
+        }
+    });
     host::queue_launch_arguments(cx);
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);

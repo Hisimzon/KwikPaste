@@ -6,7 +6,7 @@
 use async_channel::Receiver;
 use gpui::{App, AppContext as _, Entity, EventEmitter, Global};
 use kwikpaste_core::CoreEvent;
-use kwikpaste_core::settings::Language;
+use kwikpaste_core::settings::{Language, Theme};
 
 use super::{autostart, hotkey, material, mouse, tray};
 use crate::core_host;
@@ -38,6 +38,7 @@ pub fn serve(cx: &mut App, events: Receiver<CoreEvent>) {
     })
     .detach();
 
+    apply_appearance(cx);
     cx.on_app_quit(|cx| {
         let core = core_host::core(cx)
             .filter(|_| !core_host::is_shut_down())
@@ -62,12 +63,18 @@ pub fn follow(cx: &mut App) {
         let CoreEvent::SettingsUpdated { settings, delta } = event else {
             return;
         };
-        if delta.touches("shortcuts.openClipboard") || delta.touches("shortcuts.quickPaste") {
+        if delta.touches("shortcuts.openClipboard")
+            || delta.touches("shortcuts.openPreference")
+            || delta.touches("shortcuts.quickPaste")
+        {
             hotkey::apply(&settings.shortcuts, cx);
         }
         let language_changed = delta.touches("appearance.language");
         if language_changed {
             apply_language(cx);
+        }
+        if delta.touches("appearance.theme") {
+            apply_appearance_value(settings.appearance.theme, cx);
         }
         if language_changed || delta.touches("general.trayIcon") {
             tray::apply(settings, cx);
@@ -81,6 +88,22 @@ pub fn follow(cx: &mut App) {
         }
     })
     .detach();
+}
+
+fn apply_appearance(cx: &mut App) {
+    let Some(core) = core_host::core(cx) else {
+        return;
+    };
+    apply_appearance_value(core.settings().appearance.theme, cx);
+}
+
+fn apply_appearance_value(theme: Theme, cx: &mut App) {
+    let preference = match theme {
+        Theme::Auto => kwikpaste_ui::theme::ThemePreference::System,
+        Theme::Light => kwikpaste_ui::theme::ThemePreference::Light,
+        Theme::Dark => kwikpaste_ui::theme::ThemePreference::Dark,
+    };
+    kwikpaste_ui::theme::set_preference(preference, cx);
 }
 
 /// 界面语言跟随设置 `appearance.language`。

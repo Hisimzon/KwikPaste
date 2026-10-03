@@ -1,13 +1,546 @@
 {
+  "about": {
+    "checkUpdates": "Check for updates",
+    "portable": "Portable"
+  },
+  "backup": {
+    "export": {
+      "confirmPassword": "Confirm password",
+      "confirmRequired": "Enter the backup password again",
+      "encryptedHint": "The backup will be encrypted with this password. KwikPaste will not save it, and forgotten passwords cannot be recovered.",
+      "modeEncrypted": "Encrypted backup (Recommended)",
+      "modePlain": "Plain backup",
+      "ok": "Choose Save Location",
+      "okReadConfirm": "Read the warning and check",
+      "okReadCountdown": "Read and check ({{seconds}}s)",
+      "password": "Backup password",
+      "passwordMin": "Backup password must be at least 8 characters",
+      "passwordMismatch": "The two passwords do not match",
+      "passwordRequired": "Enter a backup password",
+      "plainConfirm": "I have read the warning and confirm exporting an unencrypted backup",
+      "plainConfirmRequired": "Confirm the plain backup risk",
+      "plainWarning": "Anyone with the file can read the backup contents directly.",
+      "plainWarningTitle": "Plain backups are not password protected",
+      "title": "Export KwikPaste Backup"
+    },
+    "fileFilter": "KwikPaste Backup",
+    "import": {
+      "fileFallback": "KwikPaste backup file",
+      "ok": "Import",
+      "overwriteConfirm": "I have read the warning and confirm overwriting current data",
+      "overwriteConfirmRequired": "Confirm the overwrite import risk",
+      "overwriteOkConfirm": "Read the warning and check",
+      "overwriteOkCountdown": "Read and check ({{seconds}}s)",
+      "overwriteWarning": "Overwrite import replaces the selected current data immediately. Merge import is safer for everyday recovery; use overwrite only when the backup should become the source of truth.",
+      "password": "Backup password",
+      "passwordRequired": "Enter the backup password",
+      "pickTitle": "Choose KwikPaste Backup",
+      "strategy": "Import mode",
+      "strategyMerge": "Merge Import",
+      "strategyOverwrite": "Overwrite Import",
+      "title": "Import KwikPaste Backup",
+      "typeEncrypted": "Encrypted backup, password required",
+      "typePlain": "Unencrypted backup"
+    },
+    "received": {
+      "encrypted": "Encrypted backup recognized. Import requires the backup password.",
+      "plain": "Plain backup recognized."
+    }
+  },
+  "cleanupConfirm": {
+    "breakdown": "Past retention: {{expired}} · Over max count: {{overCount}} · Over storage limit: {{overStorage}}",
+    "content": "Favorites, pinned, grouped and noted records are not affected. Cleaned records can't be restored.",
+    "freed": "About {{size}} will be freed.",
+    "ok": "Save and Clean Up",
+    "title": "Saving will clean up {{count}} records now",
+    "unknownContent": "The impact can't be estimated right now. Favorites, pinned, grouped and noted records are not affected.",
+    "unknownTitle": "Saving may clean up some records now"
+  },
+  "cleanupStatus": {
+    "lastRun": "{{time}}: cleaned {{count}}",
+    "lastRunDetail": "Freed about {{size}}. Past retention: {{expired}}, over max count: {{overCount}}, over storage limit: {{overStorage}}",
+    "never": "Nothing cleaned up since launch",
+    "storageBlocked": "Storage is still over the limit: regular records can't free enough space, most of it is protected records",
+    "today": "Today {{time}}"
+  },
+  "controls": {
+    "saving": "Saving…",
+    "recordShortcut": "Record shortcut",
+    "shortcutConflict": "This shortcut conflicts with another global shortcut"
+  },
+  "lanSync": {
+    "devices": {
+      "empty": "No paired devices yet",
+      "lastSeen": "Last online {{time}}",
+      "offline": "Offline",
+      "online": "Online",
+      "remove": "Unpair",
+      "removeConfirmContent": "The two devices stop syncing. Records already received are kept.",
+      "removeConfirmTitle": "Unpair from {{name}}?",
+      "title": "Paired Devices"
+    },
+    "firewallHint": "If other devices can't find or reach this computer, allow KwikPaste through Windows Firewall. Check Public networks too if your home Wi-Fi is set as public.",
+    "nearby": {
+      "empty": "Looking for devices on this network with LAN sync on",
+      "manual": "Add manually",
+      "pair": "Pair",
+      "title": "Nearby Devices"
+    },
+    "off": "Turn on LAN sync to pair devices on the same network with a pairing code.",
+    "pairedByOther": "{{name}} paired with this device",
+    "pairingCode": {
+      "exhausted": "This code has expired. Refresh it",
+      "hide": "Hide pairing code",
+      "hint_one": "Pick this device on the other one and enter the code. {{count}} attempt left",
+      "hint_other": "Pick this device on the other one and enter the code. {{count}} attempts left",
+      "refresh": "Refresh pairing code",
+      "show": "Show pairing code",
+      "title": "Pairing Code"
+    },
+    "pairModal": {
+      "address": "Address",
+      "addressPlaceholder": "e.g. 192.168.1.8:41573",
+      "code": "Pairing code shown on the other device",
+      "codeHint": "Find the 6-digit code on the Sync page of the other device.",
+      "manualTitle": "Add a Device",
+      "ok": "Pair",
+      "title": "Pair with {{name}}"
+    },
+    "startFailed": "LAN sync couldn't start",
+    "starting": "Starting LAN sync",
+    "thisDevice": {
+      "noAddress": "No network connection",
+      "title": "This Device"
+    }
+  },
+  "overview": {
+    "categories": {
+      "byBytes": "Size",
+      "byCount": "Count",
+      "bytesNote": "Measured by the content itself, without the search index or thumbnails.",
+      "names": {
+        "color": "Colors",
+        "email": "Emails",
+        "files": "Files",
+        "html": "HTML",
+        "image": "Images",
+        "path": "Paths",
+        "rtf": "RTF",
+        "text": "Text",
+        "url": "Links"
+      },
+      "title": "Content Types",
+      "tooltip": "{{value}} records · {{size}} · {{share}}"
+    },
+    "clear": {
+      "ariaLabel": "Clean up {{name}} records",
+      "categoryTitle": "Clean up {{name}} records",
+      "confirm": "Clean up",
+      "content": "{{value}} records will be deleted. This can't be undone.",
+      "contentWithKept": "{{value}} records will be deleted; {{kept}} favorites and pinned records are kept. This can't be undone.",
+      "nothing": "All of these are favorites or pinned, nothing to clean up",
+      "sourceAppTitle": "Clean up records from {{name}}",
+      "tooltip": "Clean up these records"
+    },
+    "empty": "No records yet",
+    "loadError": "Couldn't load the data overview",
+    "openDirectory": "Open data directory",
+    "organize": {
+      "favorites": "Favorites",
+      "groups": "Custom groups",
+      "hidden": "Hidden group",
+      "manageGroups": "Manage groups",
+      "marks": "Marks",
+      "noGroups": "No custom groups yet",
+      "noted": "With notes",
+      "pinned": "Pinned",
+      "sensitive": "Sensitive",
+      "title": "Groups & Marks",
+      "ungrouped": "Ungrouped"
+    },
+    "refresh": "Refresh",
+    "retry": "Retry",
+    "sources": {
+      "others": "{{apps}} more apps with {{value}} records",
+      "title": "Source Apps",
+      "tooltip": "{{name}} · {{value}} records · {{size}}",
+      "unknown": "Unknown source"
+    },
+    "space": {
+      "adjustLimit": "Adjust",
+      "cacheClean": "No cache to clean",
+      "cleanCache": "Clean",
+      "hints": {
+        "database": "Text records, search index and groups",
+        "icon": "Source app and file type icons",
+        "image": "Original images and thumbnails",
+        "other": "Settings, window state and other files"
+      },
+      "limit": "/ {{limit}} limit",
+      "limitAction": {
+        "cleanup": "Over the limit, the least recently used regular records are cleaned up first. Favorites, pinned, grouped and noted records are always kept",
+        "remind": "Beyond the limit you only get a reminder; nothing is deleted automatically"
+      },
+      "limitMarker": "Storage limit",
+      "reclaimable": "{{count}} unreferenced cache files, {{size}} in total",
+      "segments": {
+        "database": "Database",
+        "icon": "Icon cache",
+        "image": "Images",
+        "other": "Other"
+      },
+      "status": {
+        "ok": "{{percent}}% used",
+        "over": "Over the limit ({{percent}}%)",
+        "warning": "{{percent}}% used, near the limit"
+      },
+      "title": "Storage"
+    },
+    "tiles": {
+      "recent": {
+        "average": "{{value}} per day on average",
+        "label": "Added in 30 days"
+      },
+      "reuses": {
+        "hint": "Copied or pasted again",
+        "label": "Reuses"
+      },
+      "span": {
+        "empty": "No records yet",
+        "label": "History span",
+        "since": "Since {{date}}",
+        "value": "{{days}} days"
+      },
+      "total": {
+        "label": "Total records",
+        "today": "{{value}} added today"
+      }
+    },
+    "trend": {
+      "empty": "No new records in the last {{count}} days",
+      "peak": "Peak {{date}} · {{value}}",
+      "subtitle": "Last {{count}} days",
+      "title": "Daily Additions",
+      "today": "Today",
+      "tooltip": "{{date}} · {{value}} records"
+    }
+  },
+  "readableExport": {
+    "allGroups": "All groups",
+    "allRecords": "All records",
+    "confirmSensitive": "I confirm exporting sensitive content to unencrypted files",
+    "empty": "No records to export in the selected scope",
+    "excluded": "Excluded {{count}} sensitive records; empty groups produce no files",
+    "export": "Choose location and export",
+    "favorites": "Favorites only",
+    "format": "File format",
+    "groups": "Group scope",
+    "includeSensitive": "Include sensitive content (excluded by default)",
+    "merged": "Merge into one file",
+    "newFolder": "A new export folder will be created inside the selected folder. Existing files will not be overwritten.",
+    "noGroups": "Choose at least one group or include ungrouped records",
+    "notBackup": "For reading, organizing and sharing, not full restoration. Settings are not included. HTML / RTF retain original markup; images and files contain references only, not resources.",
+    "output": "Output layout",
+    "pickDirectory": "Choose where to save the export folder",
+    "plainWarning": "Exports are unencrypted. Anyone with the files can read their contents.",
+    "preview": "Preview export",
+    "range": "Content scope",
+    "references": "{{count}} image or file records contain references only and may be unavailable on another computer",
+    "retryPreview": "Check the options and preview again before exporting",
+    "selectedGroups": "Selected groups",
+    "selectGroups": "Choose groups to export",
+    "split": "Split by group",
+    "summary": "Export {{groups}} groups and {{items}} records to {{files}} files",
+    "title": "Export to files",
+    "ungrouped": "Include ungrouped records"
+  },
+  "retentionRules": {
+    "add": "Add Rule",
+    "addCustom": "Custom rule…",
+    "delete": "Delete",
+    "disabled": "Off",
+    "durations": {
+      "days_one": "{{count}} day",
+      "days_other": "{{count}} days",
+      "hours_one": "{{count}} hour",
+      "hours_other": "{{count}} hours",
+      "minutes_one": "{{count}} minute",
+      "minutes_other": "{{count}} minutes",
+      "months_one": "{{count}} month",
+      "months_other": "{{count}} months",
+      "weeks_one": "{{count}} week",
+      "weeks_other": "{{count}} weeks"
+    },
+    "edit": "Edit",
+    "empty": "No custom rules yet. All regular records follow the default retention.",
+    "expired": "{{count}} due for cleanup",
+    "fallback": "Everything else",
+    "form": {
+      "apps": "Source apps",
+      "appsPlaceholder": "All apps",
+      "categories": "Content types",
+      "categoriesPlaceholder": "All types",
+      "conditions": "Other conditions",
+      "filesNoSize": "File records have no size, so a size condition never matches files.",
+      "keep": "Keep for",
+      "keepHint": "Records matching this rule are cleaned up once they go unused for this long. Maximum Items and the storage limit still apply to all regular records.",
+      "minSize": "Larger than",
+      "minSizePlaceholder": "Any size",
+      "preview": "{{matched}} regular records match right now; {{expired}} of them are past the retention.",
+      "previewNone": "No regular records match right now.",
+      "sensitiveOnly": "Only content detected as a secret or token",
+      "titleCreate": "Add Cleanup Rule",
+      "titleEdit": "Edit Cleanup Rule",
+      "unusedOnly": "Only records never used again after copying"
+    },
+    "matched": "{{count}} matched",
+    "moveDown": "Move down",
+    "moveUp": "Move up",
+    "order": "Rules match from top to bottom and the first match decides. New rules go on top.",
+    "presets": {
+      "images": "Keep images for 30 days",
+      "largeImages": "Keep images over 5 MB for 3 days",
+      "secrets": "Keep sensitive content for 1 hour",
+      "title": "Common rules",
+      "unusedText": "Keep text copied only once for 7 days"
+    },
+    "summary": {
+      "all": "All records",
+      "allText": "All text",
+      "apps": "From {{apps}}",
+      "keep": "Keep {{duration}}",
+      "keepForever": "Keep forever",
+      "larger": "Over {{size}}",
+      "moreApps": "{{first}} and {{count}} more",
+      "sensitive": "Sensitive",
+      "unused": "Copied only once"
+    }
+  },
   "schema": {
-    "settings": {
+    "captureKinds": {
+      "files": "Files and Folders",
+      "html": "HTML Content",
+      "image": "Image",
+      "rtf": "RTF Content",
+      "text": "Plain Text"
+    },
+    "numberSuffixes": {
+      "files": "files",
+      "gb": "GB",
+      "hours": "hours",
+      "items": "items",
+      "lines": "lines",
+      "mb": "MB",
+      "px": "px",
+      "seconds": "seconds"
+    },
+    "retentionUnits": {
+      "days": "Days",
+      "forever": "Forever",
+      "hours": "Hours",
+      "minutes": "Minutes",
+      "months": "Months",
+      "weeks": "Weeks"
+    },
+    "sections": {
+      "about": {
+        "title": "App Info"
+      },
+      "actions": {
+        "title": "Quick Actions"
+      },
       "appearance": {
+        "title": "Theme & Language"
+      },
+      "backup": {
+        "description": "Export or import KwikPaste backup packages.",
+        "title": "Backup & Migration"
+      },
+      "capture": {
+        "title": "Content Types"
+      },
+      "captureRules": {
+        "title": "Capture Rules"
+      },
+      "cards": {
+        "title": "List Display"
+      },
+      "cleanup": {
+        "title": "Auto Cleanup"
+      },
+      "click": {
+        "title": "Click Actions"
+      },
+      "deleteProtection": {
+        "title": "Delete Protection"
+      },
+      "diagnostics": {
+        "title": "Diagnostics & Recovery"
+      },
+      "format": {
+        "title": "Default Format"
+      },
+      "globalShortcuts": {
+        "title": "Global Shortcuts"
+      },
+      "lanContent": {
+        "title": "What to Sync"
+      },
+      "lanDevices": {
+        "title": "Devices"
+      },
+      "lanSync": {
+        "title": "LAN Sync"
+      },
+      "localData": {
+        "title": "Data Management"
+      },
+      "organizing": {
+        "title": "Favorites & Groups"
+      },
+      "overview": {
+        "title": "Overview"
+      },
+      "performance": {
+        "title": "Performance"
+      },
+      "permissions": {
+        "title": "System Permissions"
+      },
+      "preview": {
+        "title": "Content Preview"
+      },
+      "sensitive": {
+        "title": "Privacy"
+      },
+      "sort": {
+        "title": "Sorting"
+      },
+      "startup": {
+        "title": "Startup & Icons"
+      },
+      "updates": {
+        "title": "Updates"
+      },
+      "window": {
+        "title": "When Opening"
+      }
+    },
+    "settings": {
+      "about": {
+        "checkUpdates": {
+          "controlLabel": "Check",
+          "title": "Check for Updates"
+        },
+        "github": {
+          "controlLabel": "Open",
+          "title": "Source Code"
+        },
+        "website": {
+          "controlLabel": "Open",
+          "title": "Website"
+        }
+      },
+      "actions": {
+        "deleteConfirm": {
+          "description": "Favorited and pinned records follow their own switches below.",
+          "title": "Confirm Regular Deletes"
+        },
+        "deleteFavoriteConfirm": {
+          "title": "Confirm Favorite Deletes"
+        },
+        "deleteFavoriteItems": {
+          "description": "When off, favorited records can't be deleted.",
+          "title": "Allow Favorite Deletes"
+        },
+        "deleteFavoriteItemsOnlyInFavoriteGroup": {
+          "description": "Hide the delete action for favorites outside the Favorites group.",
+          "title": "Delete Favorites Only in Favorites"
+        },
+        "deletePinnedConfirm": {
+          "title": "Confirm Pinned Deletes"
+        },
+        "deletePinnedItems": {
+          "description": "When off, pinned records can't be deleted.",
+          "title": "Allow Pinned Deletes"
+        },
+        "visible": {
+          "controlLabel": "Manage",
+          "title": "Visible Quick Actions"
+        }
+      },
+      "appearance": {
+        "fileMaxCount": {
+          "title": "Maximum Files Shown"
+        },
+        "headerRow": {
+          "description": "Show source, type, and time above the content. Turn off for shorter records.",
+          "title": "Show Header Row"
+        },
+        "imageMaxHeight": {
+          "title": "Maximum Image Height"
+        },
+        "itemGap": {
+          "options": {
+            "0": "0 px",
+            "2": "2 px",
+            "4": "4 px",
+            "6": "6 px",
+            "8": "8 px",
+            "12": "12 px"
+          },
+          "title": "Record Spacing"
+        },
+        "itemPadding": {
+          "options": {
+            "2": "2 px",
+            "4": "4 px",
+            "6": "6 px",
+            "8": "8 px"
+          },
+          "title": "Vertical Padding"
+        },
         "language": {
           "options": {
             "en-US": "English",
             "zh-CN": "简体中文"
           },
           "title": "Language"
+        },
+        "listDensity": {
+          "description": "Choose Custom to fine-tune spacing and padding.",
+          "options": {
+            "comfortable": "Comfortable",
+            "compact": "Compact",
+            "custom": "Custom",
+            "standard": "Standard"
+          },
+          "title": "List Density"
+        },
+        "listStyle": {
+          "description": "Cards draws each record as its own rounded card. Seamless lines records up edge to edge with dividers.",
+          "options": {
+            "card": "Cards",
+            "seamless": "Seamless"
+          },
+          "title": "List Style"
+        },
+        "material": {
+          "description": "Falls back to a solid color when unsupported or when reduced transparency is on.",
+          "options": {
+            "acrylic": "Acrylic",
+            "default": "Default",
+            "mica": "Mica"
+          },
+          "title": "Window Material",
+          "unsupported": "Not supported on this system; a solid background is used."
+        },
+        "showOriginalPreview": {
+          "description": "Records with notes show the note by default, then temporarily reveal original content when hovering over the card.",
+          "title": "Show Original on Hover"
+        },
+        "textMaxLines": {
+          "title": "Maximum Text Lines"
         },
         "theme": {
           "options": {
@@ -16,6 +549,300 @@
             "light": "Light"
           },
           "title": "Theme"
+        }
+      },
+      "backup": {
+        "exportHistory": {
+          "controlLabel": "Export",
+          "description": "Export a .kwikpastebak backup, encrypted with a password by default.",
+          "title": "Export Backup"
+        },
+        "exportReadable": {
+          "controlLabel": "Export to files",
+          "description": "Export Excel or Markdown with favorites, group and split options.",
+          "title": "Export to files"
+        },
+        "importHistory": {
+          "controlLabel": "Import",
+          "description": "Import a .kwikpastebak backup, with merge or overwrite recovery.",
+          "title": "Import Backup"
+        }
+      },
+      "capture": {
+        "kinds": {
+          "description": "Unchecked types are not saved to history.",
+          "title": "Content Types to Save"
+        },
+        "maxImageMb": {
+          "description": "0 means no limit.",
+          "title": "Maximum Image Capture Size"
+        },
+        "maxTextMb": {
+          "description": "Includes HTML and RTF. 0 means no limit.",
+          "title": "Maximum Text Capture Size"
+        },
+        "order": {
+          "controlLabel": "Manage",
+          "description": "When the clipboard holds several formats, save the first one in this order.",
+          "title": "Capture Order"
+        }
+      },
+      "control": {
+        "autoStart": {
+          "macos": {
+            "title": "Launch at Login"
+          },
+          "title": "Launch at Login",
+          "windows": {
+            "title": "Launch at Startup"
+          }
+        },
+        "dockIcon": {
+          "macos": {
+            "title": "Dock Icon"
+          },
+          "title": "Desktop Bar Icon",
+          "windows": {
+            "title": "Taskbar Icon"
+          }
+        },
+        "reopenOnboarding": {
+          "controlLabel": "Open",
+          "description": "View the first-time onboarding again without resetting your current settings or history.",
+          "title": "Reopen Onboarding"
+        },
+        "trayClick": {
+          "options": {
+            "clipboard": "Clipboard Window",
+            "preference": "Preferences"
+          },
+          "title": "Tray Icon Click Opens"
+        },
+        "trayIcon": {
+          "macos": {
+            "title": "Menu Bar Icon"
+          },
+          "title": "Status Area Icon",
+          "windows": {
+            "title": "System Tray Icon"
+          }
+        }
+      },
+      "copy": {
+        "hideWindow": {
+          "title": "Hide Window After Copy"
+        },
+        "plainDefault": {
+          "description": "Strip HTML and RTF formatting.",
+          "title": "Copy as Plain Text by Default"
+        },
+        "sound": {
+          "preview": "Preview sound",
+          "title": "Copy Sound"
+        },
+        "updateOnReuse": {
+          "description": "Refresh a record's last-used time and use count when you copy or paste it again.",
+          "title": "Update Record on Reuse"
+        }
+      },
+      "diagnostics": {
+        "resetPreferences": {
+          "confirmContent": "This restores every preference to its default value, but keeps clipboard history records.",
+          "confirmTitle": "Reset all preferences?",
+          "controlLabel": "Reset",
+          "description": "Restore all preference defaults while keeping history records.",
+          "title": "Reset All Preferences"
+        },
+        "windowLifecycle": {
+          "columns": {
+            "generation": "Visible generation",
+            "label": "Window",
+            "locks": "Destroy guards",
+            "phase": "Phase",
+            "timing": "Timing"
+          },
+          "controlLabel": "View",
+          "description": "Inspect window lifecycle, destroy protection, and lightweight-mode state for troubleshooting hidden-window resource usage.",
+          "durationSeparator": " ",
+          "durationUnits": {
+            "days": "{{count}}d",
+            "hours": "{{count}}h",
+            "minutes": "{{count}}m",
+            "seconds": "{{count}}s"
+          },
+          "empty": "No window lifecycle data yet",
+          "generationHint": "Adds 1 when moving from non-visible to visible; re-showing an already visible window does not add.",
+          "hiddenFor": "Hidden for {{duration}}",
+          "lastActive": "Active {{duration}} ago",
+          "locksHint": "Shown as dirty owners / keepalive leases; any nonzero value delays destroy.",
+          "modalTitle": "Window Lifecycle",
+          "phases": {
+            "created": "Created",
+            "destroyed": "Destroyed",
+            "destroyPending": "Destroy pending",
+            "dormant": "Dormant",
+            "hiddenWarm": "Hidden warm",
+            "notCreated": "Not created",
+            "ready": "Ready",
+            "visible": "Visible"
+          },
+          "title": "Window Lifecycle",
+          "windows": {
+            "clipboard": "Clipboard Window",
+            "contextMenu": "Context Menu Window",
+            "contextSubmenu": "Context Submenu Window",
+            "onboarding": "Onboarding Window",
+            "preference": "Preferences Window",
+            "preview": "Clipboard Preview Window",
+            "update": "Software Update Window"
+          }
+        }
+      },
+      "history": {
+        "cleanupStatus": {
+          "controlLabel": "Clean Up Now",
+          "description": "Favorites, pinned records, records in groups, and records with notes are always kept.",
+          "title": "Cleanup Status"
+        },
+        "maxCount": {
+          "description": "When regular records exceed this number, the least recently used ones are cleaned up. 0 means no limit.",
+          "title": "Maximum Items"
+        },
+        "retention": {
+          "description": "Regular records that match no custom rule are cleaned up once they go unused for this long.",
+          "title": "Default Retention"
+        },
+        "rules": {
+          "description": "Set separate retention by content type, size, source app and more. Rules match from top to bottom, and a record follows the first rule it matches.",
+          "title": "Custom Rules"
+        }
+      },
+      "localData": {
+        "cleanCache": {
+          "confirmContent": "Images, thumbnails and icons no longer referenced by history will be deleted, and the database file will be compacted. Resources in use are kept. This can take a few seconds with a large history.",
+          "confirmTitle": "Clean Resource Cache",
+          "controlLabel": "Clean Cache",
+          "description": "Remove images, thumbnails and icons no longer referenced by history, and compact the database file.",
+          "title": "Clean Cache"
+        },
+        "clearHistory": {
+          "controlLabel": "Clear Records",
+          "description": "Delete all clipboard history. Favorite and pinned records are kept by default.",
+          "title": "Clear Records"
+        },
+        "dataDirectory": {
+          "controlLabel": "Open",
+          "description": "Open the directory containing the history database, settings, and resource cache.",
+          "title": "Data Directory"
+        },
+        "logDirectory": {
+          "controlLabel": "Open",
+          "title": "Log Directory"
+        },
+        "storageLimit": {
+          "description": "The storage meter in the sidebar is full at this size. What happens beyond it is set below.",
+          "title": "Storage Limit"
+        },
+        "storageLimitAction": {
+          "description": "Auto cleanup removes the least recently used regular records until usage is back under the limit.",
+          "options": {
+            "cleanup": "Auto clean",
+            "remind": "Remind only"
+          },
+          "title": "When Over Limit"
+        }
+      },
+      "organizing": {
+        "autoFavorite": {
+          "title": "Auto-Favorite When Noted"
+        },
+        "customGroups": {
+          "controlLabel": "Manage",
+          "title": "Custom Groups"
+        }
+      },
+      "overview": {
+        "dashboard": {
+          "description": "See storage usage, record counts, daily additions, content types and source apps, and clean up records by type or source.",
+          "title": "Data Overview"
+        }
+      },
+      "paste": {
+        "autoPaste": {
+          "options": {
+            "disabled": "Disabled",
+            "doubleClickCopy": "Double-click to copy",
+            "doubleClickPaste": "Double-click to paste",
+            "singleClickCopy": "Single-click to copy",
+            "singleClickPaste": "Single-click to paste"
+          },
+          "title": "Left Mouse Button"
+        },
+        "fileMode": {
+          "description": "Paste the path instead of the file itself.",
+          "title": "Paste File Paths by Default"
+        },
+        "middleClick": {
+          "options": {
+            "disabled": "Disabled",
+            "singleClickCopy": "Copy",
+            "singleClickCopyPlain": "Copy as Plain Text",
+            "singleClickPaste": "Paste",
+            "singleClickPastePlain": "Paste as Plain Text"
+          },
+          "title": "Middle Mouse Button"
+        },
+        "plainDefault": {
+          "description": "Strip HTML and RTF formatting.",
+          "title": "Paste as Plain Text by Default"
+        },
+        "quickSnippets": {
+          "description": "List codes, numbers, and links found in text records below each item. Click one to paste or copy just that part.",
+          "title": "Extract Quick Info"
+        }
+      },
+      "permissions": {
+        "accessibility": {
+          "description": "Used for quick paste, window control, and more reliable system interactions.",
+          "title": "Accessibility Permission"
+        },
+        "adminRestartConfirm": {
+          "content": "KwikPaste needs to restart with administrator privileges for this change to take effect. Windows may show a User Account Control prompt.",
+          "ok": "Restart",
+          "title": "Restart required"
+        },
+        "fullDiskAccess": {
+          "description": "Used to read required local data and access system-protected app resources.",
+          "title": "Full Disk Access Permission"
+        },
+        "runAsAdministrator": {
+          "description": "Used to restart KwikPaste with administrator privileges and keep future launches elevated when needed.",
+          "title": "Run as Administrator"
+        }
+      },
+      "preview": {
+        "delay": {
+          "options": {
+            "ms300": "300ms",
+            "ms500": "500ms",
+            "ms1000": "1000ms"
+          },
+          "title": "Hover Delay"
+        },
+        "hover": {
+          "title": "Hover Preview"
+        },
+        "space": {
+          "description": "Hold Space to preview the currently selected record.",
+          "title": "Space Preview"
+        },
+        "textView": {
+          "description": "Show previewed text as written, or split into words to pick from.",
+          "options": {
+            "plain": "Default",
+            "words": "Words"
+          },
+          "title": "Text Preview Style"
         }
       },
       "search": {
@@ -33,7 +860,225 @@
           },
           "title": "Default Sort Order"
         }
+      },
+      "sensitive": {
+        "collectSecrets": {
+          "description": "Choose whether high-confidence keys, tokens, and similar secrets are saved to history.",
+          "title": "Save Sensitive Content"
+        },
+        "redactSecrets": {
+          "description": "Show saved sensitive content with only the first and last characters visible, replacing the middle with *.",
+          "title": "Redacted Display"
+        }
+      },
+      "shortcuts": {
+        "mouseTrigger": {
+          "description": "Click the chosen button to open or hide the clipboard window. Its usual click action, like opening a new tab or going back, is turned off.",
+          "options": {
+            "back": "Side Button (Back)",
+            "disabled": "Disabled",
+            "forward": "Side Button (Forward)",
+            "middle": "Middle Button"
+          },
+          "title": "Open with Mouse Button"
+        },
+        "openClipboard": {
+          "description": "Open or hide the clipboard window.",
+          "placeholder": "Alt+C",
+          "title": "Open Clipboard Window"
+        },
+        "openPreference": {
+          "description": "Open or hide the preferences window.",
+          "placeholder": "Alt+X",
+          "title": "Open Preferences Window"
+        },
+        "quickPaste": {
+          "description": "Hold the modifier keys and press 1–9 or 0 to paste the first 10 items of the All list without opening the window.",
+          "title": "Quick Paste"
+        },
+        "quickPasteModifiers": {
+          "description": "Modifier keys to hold with the number key. The item is pasted when you release the keys.",
+          "title": "Modifier Keys"
+        },
+        "winV": {
+          "description": "Press Win+V to summon KwikPaste instead of the Windows clipboard history panel.",
+          "title": "Take Over Win+V"
+        }
+      },
+      "source": {
+        "appTransfer": {
+          "addApp": "Add App",
+          "allTitle": "Available Apps",
+          "appFileFilter": "Application files",
+          "ignoredTitle": "Ignored Apps",
+          "itemsUnit": "items",
+          "itemUnit": "item",
+          "refreshApps": "Refresh Available Apps",
+          "searchPlaceholder": "Search apps"
+        },
+        "excludedApps": {
+          "controlLabel": "Manage",
+          "count_one": "{{count}} app",
+          "count_other": "{{count}} apps",
+          "description": "Content copied from these apps will not be saved to history.",
+          "title": "Ignored Apps"
+        }
+      },
+      "sync": {
+        "lan": {
+          "deviceName": {
+            "description": "The name other devices see.",
+            "placeholder": "Computer name when empty",
+            "title": "Device Name"
+          },
+          "devices": {
+            "title": "Paired Devices"
+          },
+          "enabled": {
+            "description": "Text and images you copy reach your paired devices on the same network right away.",
+            "title": "LAN Sync"
+          },
+          "image": {
+            "title": "Sync Images"
+          },
+          "maxImageMb": {
+            "description": "Larger images are neither sent nor received.",
+            "title": "Image Size Limit"
+          },
+          "text": {
+            "title": "Sync Text"
+          },
+          "writeClipboard": {
+            "description": "When off, received items only go to history.",
+            "title": "Copy Received Items to Clipboard"
+          }
+        }
+      },
+      "updates": {
+        "autoCheck": {
+          "title": "Automatically Check for Updates"
+        },
+        "beta": {
+          "title": "Receive Beta Updates"
+        },
+        "frequency": {
+          "options": {
+            "daily": "Daily",
+            "monthly": "Monthly",
+            "weekly": "Weekly"
+          },
+          "title": "Update Check Frequency"
+        },
+        "nightly": {
+          "title": "Receive Nightly Updates"
+        }
+      },
+      "window": {
+        "idleDestroySeconds": {
+          "description": "Release hidden windows such as Preferences and Preview after this long. They rebuild on next use.",
+          "title": "Secondary Window Idle Release"
+        },
+        "lightweightMode": {
+          "description": "Pause unnecessary refresh work after the clipboard window hides, and release secondary rendering resources after they become idle.",
+          "title": "Lightweight Mode"
+        },
+        "position": {
+          "options": {
+            "center": "Center of Screen",
+            "followCursor": "Follow Cursor",
+            "remember": "Remember Position"
+          },
+          "title": "Window Position"
+        },
+        "scrollToTopOnOpen": {
+          "title": "Scroll to Top"
+        },
+        "selectCategoryOnOpen": {
+          "options": {
+            "all": "All",
+            "files": "Files",
+            "image": "Image",
+            "preserve": "Keep Last Selection",
+            "text": "Text"
+          },
+          "title": "Category"
+        },
+        "selectGroupOnOpen": {
+          "options": {
+            "all": "All",
+            "missingGroup": "Deleted Group",
+            "preserve": "Keep Last Selection"
+          },
+          "title": "Group"
+        },
+        "selectRangeOnOpen": {
+          "options": {
+            "all": "All",
+            "favorite": "Favorites",
+            "preserve": "Keep Last Selection"
+          },
+          "title": "Range"
+        }
+      }
+    },
+    "tabs": {
+      "about": {
+        "title": "About"
+      },
+      "appearance": {
+        "title": "Appearance"
+      },
+      "capture": {
+        "title": "Capture"
+      },
+      "data": {
+        "title": "Data"
+      },
+      "general": {
+        "title": "General"
+      },
+      "items": {
+        "title": "Items"
+      },
+      "overview": {
+        "title": "Overview"
+      },
+      "paste": {
+        "title": "Paste & Copy"
+      },
+      "shortcuts": {
+        "title": "Shortcuts"
+      },
+      "sync": {
+        "title": "Sync"
+      },
+      "window": {
+        "title": "Clipboard Window"
       }
     }
+  },
+  "search": {
+    "empty": "No matching settings",
+    "placeholder": "Search settings"
+  },
+  "status": {
+    "alwaysOn": "Default",
+    "comingSoon": "Coming soon",
+    "experimental": "Experimental",
+    "requiresBackend": "Pending"
+  },
+  "storage": {
+    "error": "Calculation failed",
+    "loading": "Calculating",
+    "title": "Local Storage",
+    "usage": "{{total}} / {{target}}"
+  },
+  "storageLocation": {
+    "change": "Change data directory",
+    "open": "Open data directory",
+    "pickTitle": "Choose New Data Directory Location",
+    "reset": "Reset to default directory",
+    "resetConfirmContent": "KwikPaste will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
+    "resetConfirmTitle": "Reset Data Directory"
   }
 }

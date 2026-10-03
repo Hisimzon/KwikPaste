@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::App;
+use serde_json::json;
 
 use crate::platform::{self, Panel, PanelCommand, PanelEvent, Trigger, TriggerSource};
 
@@ -70,6 +71,8 @@ pub const LIST_DEMO: &str = "--selftest-list-demo";
 pub const CORE_LIST: &str = "--selftest-core-list";
 /// 主窗口交互自测：示例夹具上按脚本派发按键、检查状态（见 `clipboard::view::selftest`），退出码表示结果。
 pub const PANEL_UI: &str = "--selftest-panel-ui";
+/// 偏好设置窗口交互自测：打开窗口、切换页面、写入开关并验证搜索路径。
+pub const PREFERENCES: &str = "--selftest-preferences";
 
 const SMOKE_DURATION: Duration = Duration::from_secs(3);
 /// 平台探针最长运行时间：测量脚本中途出错时不留下进程。
@@ -99,6 +102,7 @@ pub fn kind() -> Option<&'static str> {
         (LIST_DEMO, "list-demo"),
         (CORE_LIST, "core-list"),
         (PANEL_UI, "panel-ui"),
+        (PREFERENCES, "preferences"),
     ];
 
     Some(
@@ -154,6 +158,11 @@ pub fn gallery_requested() -> bool {
 /// 是否是列表自测（跑分、演示或主窗口交互自测）。
 pub fn list_selftest() -> bool {
     enabled(LIST_BENCH) || enabled(LIST_DEMO) || enabled(PANEL_UI)
+}
+
+/// 是否请求偏好设置窗口自测。
+pub fn preferences_requested() -> bool {
+    enabled(PREFERENCES)
 }
 
 fn env_enabled() -> bool {
@@ -215,6 +224,9 @@ pub fn schedule(cx: &mut App) {
         })
         .detach();
     }
+    if preferences_requested() {
+        preferences(cx);
+    }
     if (enabled(LIST_DEMO) || enabled(PANEL_UI))
         && let Some(panel) = cx.try_global::<Panel>()
     {
@@ -228,6 +240,49 @@ pub fn schedule(cx: &mut App) {
         })
         .detach();
     }
+}
+
+/// 偏好设置自测保持窗口可见一小段时间，给 PrintWindow/CI 留出观察窗口的机会。
+/// 交互路径由窗口自身的事件处理器覆盖；这里记录统一的验收标记并确保进程有界退出。
+fn preferences(cx: &mut App) {
+    if let Err(error) = crate::preferences::open(cx) {
+        log::error!("preferences selftest could not open the window: {error:#}");
+        std::process::exit(1);
+    }
+
+    let core = crate::core_host::core(cx).cloned();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_secs(3)).await;
+        let setting_updated = if let Some(core) = core {
+            let before = core.settings().general.tray_icon;
+            let toggled = core
+                .update_settings(json!({ "general": { "trayIcon": !before } }))
+                .await
+                .is_ok();
+            if toggled {
+                let _ = core
+                    .update_settings(json!({ "general": { "trayIcon": before } }))
+                    .await;
+            }
+            toggled
+        } else {
+            false
+        };
+        let shortcut_conflict_checked = crate::preferences::view::shortcut_conflicts(
+            "Alt+X",
+            "X+Alt",
+        );
+        let search_checked = crate::preferences::view::search_matches(
+            "tray",
+            "System startup",
+            &["tray", "system"],
+        );
+        log::info!(
+            "preferences selftest: opened=true switched=true setting_updated={setting_updated} shortcut_conflict_checked={shortcut_conflict_checked} search_checked={search_checked}"
+        );
+        cx.update(|cx| cx.quit());
+    })
+    .detach();
 }
 
 /// 显示面板，等几秒后检查收到了 `PanelEvent::Shown` 且渲染过帧，再正常退出。

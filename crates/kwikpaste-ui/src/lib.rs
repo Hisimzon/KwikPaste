@@ -20,7 +20,9 @@ mod icon;
 mod input;
 mod kinsoku;
 mod menu;
+mod number_input;
 mod overlay;
+mod scroll_area;
 mod scrollbar;
 mod select;
 mod strings;
@@ -44,6 +46,8 @@ pub use input::{
 pub use menu::{
     MenuEntry, MenuIcon, MenuItem, MenuTrigger, Submenu, context_menu, dismiss_menu, menu_open,
 };
+pub use number_input::{NumberInput, NumberInputState};
+pub use scroll_area::ScrollArea;
 pub use scrollbar::ListScrollbar;
 pub use select::{Select, SelectOption, SelectState};
 pub use strings::{UiLocale, UiStrings, set_ui_strings, ui_strings};
