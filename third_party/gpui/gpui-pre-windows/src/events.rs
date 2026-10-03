@@ -9,7 +9,7 @@ use windows::{
         System::SystemServices::*,
         UI::{
             Controls::*,
-            HiDpi::*,
+            // [kwikpaste patch 0004] HiDpi::* dropped: see util::dpi_for_window.
             Input::{Ime::*, KeyboardAndMouse::*},
             WindowsAndMessaging::*,
         },
@@ -801,7 +801,7 @@ impl WindowsWindowInner {
             let result = DefWindowProcW(handle, WM_NCCALCSIZE, wparam, lparam);
             (*params).rgrc[0].top = saved_top;
             if self.state.is_maximized() {
-                let dpi = GetDpiForWindow(handle);
+                let dpi = dpi_for_window(handle); // [kwikpaste patch 0004]
                 (*params).rgrc[0].top += get_frame_thicknessx(dpi);
             }
             Some(result.0 as isize)
@@ -1000,7 +1000,7 @@ impl WindowsWindowInner {
             return drag_area;
         }
 
-        let dpi = unsafe { GetDpiForWindow(handle) };
+        let dpi = dpi_for_window(handle); // [kwikpaste patch 0004]
         // We do not use the OS title bar, so the default `DefWindowProcW` will only register a 1px edge for resizes
         // We need to calculate the frame thickness ourselves and do the hit test manually.
         let frame_y = get_frame_thicknessx(dpi);
@@ -1780,14 +1780,14 @@ pub(crate) fn current_capslock() -> Capslock {
 // - SM_CXSIZEFRAME: The resize handle.
 // - SM_CXPADDEDBORDER: Additional border space that isn't part of the resize handle.
 fn get_frame_thicknessx(dpi: u32) -> i32 {
-    let resize_frame_thickness = unsafe { GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) };
-    let padding_thickness = unsafe { GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) };
+    let resize_frame_thickness = system_metrics_for_dpi(SM_CXSIZEFRAME, dpi); // [kwikpaste patch 0004]
+    let padding_thickness = system_metrics_for_dpi(SM_CXPADDEDBORDER, dpi); // [kwikpaste patch 0004]
     resize_frame_thickness + padding_thickness
 }
 
 fn get_frame_thicknessy(dpi: u32) -> i32 {
-    let resize_frame_thickness = unsafe { GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) };
-    let padding_thickness = unsafe { GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) };
+    let resize_frame_thickness = system_metrics_for_dpi(SM_CYSIZEFRAME, dpi); // [kwikpaste patch 0004]
+    let padding_thickness = system_metrics_for_dpi(SM_CXPADDEDBORDER, dpi); // [kwikpaste patch 0004]
     resize_frame_thickness + padding_thickness
 }
 

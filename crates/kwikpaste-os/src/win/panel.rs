@@ -23,7 +23,6 @@ use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPA
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture};
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -190,7 +189,7 @@ impl Panel {
 
     /// 窗口当前所在显示器的 DPI。
     pub fn dpi(&self) -> u32 {
-        unsafe { GetDpiForWindow(self.hwnd) }.max(1)
+        super::monitor::window_dpi(self.hwnd)
     }
 
     /// 外框矩形（含不可见的拉伸边），屏幕坐标。
@@ -488,8 +487,8 @@ fn apply_min_size(hwnd: HWND, state: &SubclassState, lparam: LPARAM) {
         return;
     };
     let insets = client.insets_within(outer);
-    let scale = f64::from(unsafe { GetDpiForWindow(hwnd) }.max(1)) / f64::from(BASE_DPI)
-        * state.text_scale.get();
+    let scale =
+        f64::from(super::monitor::window_dpi(hwnd)) / f64::from(BASE_DPI) * state.text_scale.get();
     let mut width = (state.min_logical_size.0 * scale).round() as i32;
     let mut height = (state.min_logical_size.1 * scale).round() as i32;
     // 文本放得很大、屏幕又小时，最小尺寸不能超过所在显示器的工作区，否则窗口放不下。

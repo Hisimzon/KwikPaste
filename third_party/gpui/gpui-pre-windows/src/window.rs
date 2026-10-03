@@ -23,7 +23,7 @@ use windows::{
         System::{
             Com::*, Diagnostics::Debug::MessageBeep, LibraryLoader::*, Ole::*, SystemServices::*,
         },
-        UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
+        UI::{Controls::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*}, // [kwikpaste patch 0004] no HiDpi::*
     },
     core::*,
 };
@@ -124,7 +124,7 @@ impl WindowsWindowState {
         draw_coordinator: Rc<DrawCoordinator>,
     ) -> Result<Self> {
         let scale_factor = {
-            let monitor_dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
+            let monitor_dpi = dpi_for_window(hwnd) as f32; // [kwikpaste patch 0004]
             monitor_dpi / USER_DEFAULT_SCREEN_DPI as f32
         };
         let origin = logical_point(window_params.x as f32, window_params.y as f32, scale_factor);

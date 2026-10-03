@@ -174,6 +174,53 @@ fn is_color_light(color: &Color) -> bool {
     ((5 * color.G as u32) + (2 * color.R as u32) + color.B as u32) > (8 * 128)
 }
 
+// [kwikpaste patch 0004] GetDpiForWindow / GetSystemMetricsForDpi appeared in Windows 10 1607.
+// Importing them statically stops the loader from starting the exe on older builds, so the app
+// never gets to explain its minimum version. Resolve them at run time and fall back to the
+// system-DPI equivalents.
+type GetDpiForWindowFn = unsafe extern "system" fn(HWND) -> u32;
+type GetSystemMetricsForDpiFn = unsafe extern "system" fn(SYSTEM_METRICS_INDEX, u32) -> i32;
+
+fn user32_proc(name: PCSTR) -> Option<unsafe extern "system" fn() -> isize> {
+    let module = unsafe {
+        windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::s!("user32.dll"))
+    }
+    .ok()?;
+    unsafe { windows::Win32::System::LibraryLoader::GetProcAddress(module, name) }
+}
+
+/// [kwikpaste patch 0004] `GetDpiForWindow`, or the window DC's DPI before Windows 10 1607.
+pub(crate) fn dpi_for_window(hwnd: HWND) -> u32 {
+    static PROC: OnceLock<Option<GetDpiForWindowFn>> = OnceLock::new();
+    let proc = PROC.get_or_init(|| {
+        user32_proc(windows::core::s!("GetDpiForWindow"))
+            .map(|proc| unsafe { std::mem::transmute::<_, GetDpiForWindowFn>(proc) })
+    });
+    if let Some(proc) = proc {
+        return unsafe { proc(hwnd) };
+    }
+    use windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC};
+    unsafe {
+        let dc = GetDC(Some(hwnd));
+        let dpi = GetDeviceCaps(Some(dc), LOGPIXELSX);
+        ReleaseDC(Some(hwnd), dc);
+        if dpi > 0 { dpi as u32 } else { USER_DEFAULT_SCREEN_DPI }
+    }
+}
+
+/// [kwikpaste patch 0004] `GetSystemMetricsForDpi`, or `GetSystemMetrics` before Windows 10 1607.
+pub(crate) fn system_metrics_for_dpi(index: SYSTEM_METRICS_INDEX, dpi: u32) -> i32 {
+    static PROC: OnceLock<Option<GetSystemMetricsForDpiFn>> = OnceLock::new();
+    let proc = PROC.get_or_init(|| {
+        user32_proc(windows::core::s!("GetSystemMetricsForDpi"))
+            .map(|proc| unsafe { std::mem::transmute::<_, GetSystemMetricsForDpiFn>(proc) })
+    });
+    match proc {
+        Some(proc) => unsafe { proc(index, dpi) },
+        None => unsafe { GetSystemMetrics(index) },
+    }
+}
+
 pub(crate) fn with_dll_library<R, F>(dll_name: PCSTR, f: F) -> Result<R>
 where
     F: FnOnce(HMODULE) -> Result<R>,

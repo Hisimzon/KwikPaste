@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use windows::{
     Win32::{
         Foundation::PROPERTYKEY,
-        Globalization::u_strlen,
+        // [kwikpaste patch 0004] no icuuc.dll import (Windows 10 1703+): find the NUL ourselves.
         System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, StructuredStorage::PROPVARIANT},
         UI::{
             Controls::INFOTIPSIZE,
@@ -100,7 +100,7 @@ fn create_destination_list() -> anyhow::Result<(ICustomDestinationList, Vec<Smal
             // see https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishelllinkw-getdescription
             let mut buffer = [0u16; INFOTIPSIZE as usize];
             unsafe { shell_link.GetDescription(&mut buffer)? };
-            let len = unsafe { u_strlen(buffer.as_ptr()) };
+            let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len()); // [kwikpaste patch 0004]
             String::from_utf16_lossy(&buffer[..len as usize])
         };
         let args = description.split('\n').map(PathBuf::from).collect();

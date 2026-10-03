@@ -1,0 +1,144 @@
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -174,6 +174,53 @@ fn is_color_light(color: &Color) -> bool {
+     ((5 * color.G as u32) + (2 * color.R as u32) + color.B as u32) > (8 * 128)
+ }
+ 
++// [kwikpaste patch 0004] GetDpiForWindow / GetSystemMetricsForDpi appeared in Windows 10 1607.
++// Importing them statically stops the loader from starting the exe on older builds, so the app
++// never gets to explain its minimum version. Resolve them at run time and fall back to the
++// system-DPI equivalents.
++type GetDpiForWindowFn = unsafe extern "system" fn(HWND) -> u32;
++type GetSystemMetricsForDpiFn = unsafe extern "system" fn(SYSTEM_METRICS_INDEX, u32) -> i32;
++
++fn user32_proc(name: PCSTR) -> Option<unsafe extern "system" fn() -> isize> {
++    let module = unsafe {
++        windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::s!("user32.dll"))
++    }
++    .ok()?;
++    unsafe { windows::Win32::System::LibraryLoader::GetProcAddress(module, name) }
++}
++
++/// [kwikpaste patch 0004] `GetDpiForWindow`, or the window DC's DPI before Windows 10 1607.
++pub(crate) fn dpi_for_window(hwnd: HWND) -> u32 {
++    static PROC: OnceLock<Option<GetDpiForWindowFn>> = OnceLock::new();
++    let proc = PROC.get_or_init(|| {
++        user32_proc(windows::core::s!("GetDpiForWindow"))
++            .map(|proc| unsafe { std::mem::transmute::<_, GetDpiForWindowFn>(proc) })
++    });
++    if let Some(proc) = proc {
++        return unsafe { proc(hwnd) };
++    }
++    use windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC};
++    unsafe {
++        let dc = GetDC(Some(hwnd));
++        let dpi = GetDeviceCaps(Some(dc), LOGPIXELSX);
++        ReleaseDC(Some(hwnd), dc);
++        if dpi > 0 { dpi as u32 } else { USER_DEFAULT_SCREEN_DPI }
++    }
++}
++
++/// [kwikpaste patch 0004] `GetSystemMetricsForDpi`, or `GetSystemMetrics` before Windows 10 1607.
++pub(crate) fn system_metrics_for_dpi(index: SYSTEM_METRICS_INDEX, dpi: u32) -> i32 {
++    static PROC: OnceLock<Option<GetSystemMetricsForDpiFn>> = OnceLock::new();
++    let proc = PROC.get_or_init(|| {
++        user32_proc(windows::core::s!("GetSystemMetricsForDpi"))
++            .map(|proc| unsafe { std::mem::transmute::<_, GetSystemMetricsForDpiFn>(proc) })
++    });
++    match proc {
++        Some(proc) => unsafe { proc(index, dpi) },
++        None => unsafe { GetSystemMetrics(index) },
++    }
++}
++
+ pub(crate) fn with_dll_library<R, F>(dll_name: PCSTR, f: F) -> Result<R>
+ where
+     F: FnOnce(HMODULE) -> Result<R>,
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -23,7 +23,7 @@ use windows::{
+         System::{
+             Com::*, Diagnostics::Debug::MessageBeep, LibraryLoader::*, Ole::*, SystemServices::*,
+         },
+-        UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
++        UI::{Controls::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*}, // [kwikpaste patch 0004] no HiDpi::*
+     },
+     core::*,
+ };
+@@ -124,7 +124,7 @@ impl WindowsWindowState {
+         draw_coordinator: Rc<DrawCoordinator>,
+     ) -> Result<Self> {
+         let scale_factor = {
+-            let monitor_dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
++            let monitor_dpi = dpi_for_window(hwnd) as f32; // [kwikpaste patch 0004]
+             monitor_dpi / USER_DEFAULT_SCREEN_DPI as f32
+         };
+         let origin = logical_point(window_params.x as f32, window_params.y as f32, scale_factor);
+--- a/src/events.rs
++++ b/src/events.rs
+@@ -9,7 +9,7 @@ use windows::{
+         System::SystemServices::*,
+         UI::{
+             Controls::*,
+-            HiDpi::*,
++            // [kwikpaste patch 0004] HiDpi::* dropped: see util::dpi_for_window.
+             Input::{Ime::*, KeyboardAndMouse::*},
+             WindowsAndMessaging::*,
+         },
+@@ -801,7 +801,7 @@ impl WindowsWindowInner {
+             let result = DefWindowProcW(handle, WM_NCCALCSIZE, wparam, lparam);
+             (*params).rgrc[0].top = saved_top;
+             if self.state.is_maximized() {
+-                let dpi = GetDpiForWindow(handle);
++                let dpi = dpi_for_window(handle); // [kwikpaste patch 0004]
+                 (*params).rgrc[0].top += get_frame_thicknessx(dpi);
+             }
+             Some(result.0 as isize)
+@@ -1000,7 +1000,7 @@ impl WindowsWindowInner {
+             return drag_area;
+         }
+ 
+-        let dpi = unsafe { GetDpiForWindow(handle) };
++        let dpi = dpi_for_window(handle); // [kwikpaste patch 0004]
+         // We do not use the OS title bar, so the default `DefWindowProcW` will only register a 1px edge for resizes
+         // We need to calculate the frame thickness ourselves and do the hit test manually.
+         let frame_y = get_frame_thicknessx(dpi);
+@@ -1780,14 +1780,14 @@ pub(crate) fn current_capslock() -> Capslock {
+ // - SM_CXSIZEFRAME: The resize handle.
+ // - SM_CXPADDEDBORDER: Additional border space that isn't part of the resize handle.
+ fn get_frame_thicknessx(dpi: u32) -> i32 {
+-    let resize_frame_thickness = unsafe { GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) };
+-    let padding_thickness = unsafe { GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) };
++    let resize_frame_thickness = system_metrics_for_dpi(SM_CXSIZEFRAME, dpi); // [kwikpaste patch 0004]
++    let padding_thickness = system_metrics_for_dpi(SM_CXPADDEDBORDER, dpi); // [kwikpaste patch 0004]
+     resize_frame_thickness + padding_thickness
+ }
+ 
+ fn get_frame_thicknessy(dpi: u32) -> i32 {
+-    let resize_frame_thickness = unsafe { GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) };
+-    let padding_thickness = unsafe { GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) };
++    let resize_frame_thickness = system_metrics_for_dpi(SM_CYSIZEFRAME, dpi); // [kwikpaste patch 0004]
++    let padding_thickness = system_metrics_for_dpi(SM_CXPADDEDBORDER, dpi); // [kwikpaste patch 0004]
+     resize_frame_thickness + padding_thickness
+ }
+ 
+--- a/src/destination_list.rs
++++ b/src/destination_list.rs
+@@ -5,7 +5,7 @@ use smallvec::SmallVec;
+ use windows::{
+     Win32::{
+         Foundation::PROPERTYKEY,
+-        Globalization::u_strlen,
++        // [kwikpaste patch 0004] no icuuc.dll import (Windows 10 1703+): find the NUL ourselves.
+         System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, StructuredStorage::PROPVARIANT},
+         UI::{
+             Controls::INFOTIPSIZE,
+@@ -100,7 +100,7 @@ fn create_destination_list() -> anyhow::Result<(ICustomDestinationList, Vec<Smal
+             // see https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishelllinkw-getdescription
+             let mut buffer = [0u16; INFOTIPSIZE as usize];
+             unsafe { shell_link.GetDescription(&mut buffer)? };
+-            let len = unsafe { u_strlen(buffer.as_ptr()) };
++            let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len()); // [kwikpaste patch 0004]
+             String::from_utf16_lossy(&buffer[..len as usize])
+         };
+         let args = description.split('\n').map(PathBuf::from).collect();

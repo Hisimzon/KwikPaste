@@ -96,6 +96,19 @@ pub fn all() -> Vec<MonitorInfo> {
         .collect()
 }
 
+/// 窗口所在显示器的有效 DPI。不用 `GetDpiForWindow`：它从 Windows 10 1607 才有，静态导入会让
+/// exe 在更早的系统上加载失败（见补丁 0004）；本进程是逐显示器 DPI 感知，两者结果相同。
+pub fn window_dpi(hwnd: windows::Win32::Foundation::HWND) -> u32 {
+    use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
+
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let (mut dpi_x, mut dpi_y) = (0, 0);
+    match unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) } {
+        Ok(()) => dpi_x.max(1),
+        Err(_) => BASE_DPI,
+    }
+}
+
 fn describe(monitor: HMONITOR, cursor: POINT) -> io::Result<MonitorInfo> {
     let mut info = MONITORINFO {
         cbSize: size_of::<MONITORINFO>() as u32,

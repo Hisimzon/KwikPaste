@@ -4,7 +4,8 @@
       "name": "gpui-pre-windows",
       "patches": [
         "0001-vsync-park-and-visible-filter.diff",
-        "0002-honor-ws-ex-noactivate.diff"
+        "0002-honor-ws-ex-noactivate.diff",
+        "0004-load-on-windows-10-rtm.diff"
       ],
       "sha256": "f05592a6f9e3e6bb7a9f2a0d4779271cf747a948db1c07b02448de777ffff8f3",
       "version": "0.3.7",
