@@ -4253,6 +4253,7 @@ dependencies = [
  "kwikpaste-ui",
  "kwikpaste-updater",
  "log",
+ "objc2-app-kit 0.3.2",
  "raw-window-handle",
  "semver",
  "serde",

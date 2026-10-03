@@ -51,5 +51,9 @@ gpui_windows.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_platform.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
+workspace = true
+features = ["std", "NSRunningApplication", "NSWindow"]
+
 [lints]
 workspace = true
