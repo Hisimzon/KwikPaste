@@ -690,21 +690,34 @@ impl Driver {
         };
 
         let started = Instant::now();
-        let wanted = item.id.clone();
+        // 前面的用例留下的异步刷新可能让指针下换成相邻的卡片：核对的是“预览的就是指针下的那张”。
         let opened = self
-            .settle(cx, move |list, _| {
+            .settle(cx, |list, _| {
                 list.preview_visible()
                     && list.preview_session().is_some_and(|(id, trigger)| {
-                        id == wanted && trigger == PreviewTrigger::Hover
+                        Some(&id) == list.hovered.as_ref() && trigger == PreviewTrigger::Hover
                     })
             })
             .await;
         let waited = started.elapsed();
-        let foreground = self.read(cx, |list, _| list.preview_foreground());
+        let (foreground, visible, session, hovered) = self.read(cx, |list, _| {
+            (
+                list.preview_foreground(),
+                list.preview_visible(),
+                list.preview_session(),
+                list.hovered.clone(),
+            )
+        });
         self.check(
             "hovering a card opens its preview after the delay, without the foreground",
             opened && waited >= Duration::from_millis(450) && !foreground,
-            || format!("opened {opened} after {waited:?}, foreground {foreground}"),
+            || {
+                format!(
+                    "opened {opened} after {waited:?}, foreground {foreground}, visible {visible}, \
+                     session {session:?}, hovered {hovered:?}, wanted {}",
+                    item.id
+                )
+            },
         );
 
         let requests = cx.update(|cx| cx.global::<RequestLog>().commands.len());
@@ -742,6 +755,42 @@ impl Driver {
             "preview did not follow".into()
         });
         self.list.update(cx, |list, cx| list.close_preview(cx));
+
+        // 打开“按住空格预览”：钩子转来的空格按下打开当前项的预览，松开关上。
+        self.list.update(cx, |list, cx| {
+            let mut settings = list.settings().clone();
+            settings.clipboard.preview.space_enabled = true;
+            list.apply_settings(settings, cx);
+        });
+        self.key(cx, "space");
+        let held = self
+            .settle(cx, |list, _| {
+                list.preview_visible()
+                    && list
+                        .preview_session()
+                        .is_some_and(|(_, trigger)| trigger == PreviewTrigger::Keyboard)
+            })
+            .await;
+        self.window
+            .update(cx, |_, window, cx| {
+                if let Ok(keystroke) = Keystroke::parse("space") {
+                    window.dispatch_event(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }), cx);
+                }
+            })
+            .ok();
+        let released = self
+            .settle(cx, |list, _| list.preview_session().is_none())
+            .await;
+        self.check(
+            "holding space previews the active row, releasing closes it",
+            held && released,
+            || format!("held {held}, released {released}"),
+        );
+        self.list.update(cx, |list, cx| {
+            let mut settings = list.settings().clone();
+            settings.clipboard.preview.space_enabled = false;
+            list.apply_settings(settings, cx);
+        });
 
         let Some(item) = self.hover_row(cx).await else {
             return;

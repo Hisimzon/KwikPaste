@@ -591,7 +591,7 @@ impl ClipboardList {
         .detach();
     }
 
-    /// 拆词：core 没给出拆词动作（非文本、脱敏展示的敏感内容）时不响应。拆词面板在 U2 第二部分，
+    /// 拆词：core 没给出拆词动作（非文本、脱敏展示的敏感内容）时不响应。拆词面板还没做，
     /// 这里先发意图。
     pub fn split(&mut self, item: &ListItem, cx: &mut Context<Self>) {
         if !is_available(QuickAction::SplitWords, item) {

@@ -78,7 +78,7 @@ const MAX_HEIGHT_SAMPLES: u64 = 5000;
 /// 缩略图路径缓存的上限（1.x `useImageThumbnail` 的 512）。
 const THUMBNAIL_PATHS_MAX: usize = 512;
 
-/// 列表发出的事件：粘贴类是已交给宿主的通知；拆词面板与快捷键列表在 U2 第二部分，先只发事件。
+/// 列表发出的事件：粘贴类是已交给宿主的通知；拆词面板与快捷键列表还没做，先只发事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListIntent {
     /// 已交给宿主粘贴（通知，自测和探针据此核对粘贴的是哪一条）。
