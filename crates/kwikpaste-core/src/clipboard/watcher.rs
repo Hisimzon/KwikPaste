@@ -11,7 +11,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use clipboard_rs::{ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext, WatcherShutdown};
@@ -27,6 +27,9 @@ use crate::root::CoreInner;
 /// macOS 轮询 `changeCount` 的间隔。clipboard-rs 默认 500ms，对复制响应（尤其图片）偏慢；
 /// 120ms 跟手且 CPU 开销可忽略。Windows 走事件驱动（`WM_CLIPBOARDUPDATE`），此值被忽略。
 const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(120);
+
+/// 同一次复制的重复通知窗口，见 [`RepeatFilter`]。
+const REPEAT_WINDOW: Duration = Duration::from_secs(1);
 
 /// 别的剪贴板监听程序可能短暂占着 Windows 剪贴板，读取失败时在有界时间内重试。
 const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 3] = [
@@ -75,6 +78,31 @@ impl WatcherPause {
     }
 }
 
+/// 一次复制可能触发好几次剪贴板通知：.NET 的 `Clipboard.SetText` 先 `OleSetClipboard` 再
+/// `OleFlushClipboard`，两次 `WM_CLIPBOARDUPDATE` 相隔十几毫秒；macOS 上两次写入也可能落在两次轮询里。
+/// 内容与上一次采集相同、间隔不到窗口的通知算同一次复制，不再入库：否则去重入库会再发一个同步序号、
+/// 再放一次提示音、再推一次给同步设备。中间复制过别的内容、或者隔了窗口再复制，都是真的再次复制。
+pub(crate) struct RepeatFilter {
+    window: Duration,
+    last: Option<(String, Instant)>,
+}
+
+impl RepeatFilter {
+    pub(crate) fn new(window: Duration) -> Self {
+        Self { window, last: None }
+    }
+
+    /// 记下这次采集的内容；它是上一次采集的重复通知时返回 `true`。连续的重复通知顺延窗口。
+    fn is_repeat(&mut self, content_hash: &str, now: Instant) -> bool {
+        let repeat = matches!(
+            &self.last,
+            Some((hash, at)) if hash == content_hash && now.saturating_duration_since(*at) < self.window
+        );
+        self.last = Some((content_hash.to_owned(), now));
+        repeat
+    }
+}
+
 /// [`WatcherPause::pause_scoped`] 的恢复 guard。
 pub(crate) struct PauseGuard {
     pause: WatcherPause,
@@ -88,7 +116,7 @@ impl Drop for PauseGuard {
 }
 
 /// 处理一次剪贴板变化的同步部分：识别来源 → 过滤忽略的应用 → 读取（带重试）→ 转成记录
-/// （图片在这里落盘）→ 自身写回则跳过 → 补齐来源应用。返回 `None` 表示这次不入库。
+/// （图片在这里落盘）→ 同一次复制的重复通知、自身写回则跳过 → 补齐来源应用。返回 `None` 表示这次不入库。
 ///
 /// **先**抓前台应用：等异步入库再问，前台早就切回别的窗口了。自身写回的事件会在 guard 处丢弃，
 /// 但顺序换不得：guard 判定依赖 content_hash，必须先把内容读出来才能判，而读取期间用户可能已经切走前台。
@@ -96,6 +124,7 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
     core: &CoreInner,
     reader: &ClipboardReader<B>,
     retry_delays: &[Duration],
+    repeats: &mut RepeatFilter,
 ) -> Option<(ClipboardItem, Option<ClipboardApp>)> {
     if core.watcher_pause.is_paused() {
         return None;
@@ -143,6 +172,9 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         }
     };
 
+    if repeats.is_repeat(&item.content_hash, Instant::now()) {
+        return None;
+    }
     // 自身写回触发的变更：跳过入库，避免回环。
     if core.guard.should_skip(&item.content_hash) {
         return None;
@@ -194,7 +226,11 @@ pub(crate) fn spawn(core: &Arc<CoreInner>) -> Result<WatcherShutdown> {
                     }
                 };
 
-            watcher.add_handler(ClipboardChangeHandler { reader, core: weak });
+            watcher.add_handler(ClipboardChangeHandler {
+                reader,
+                core: weak,
+                repeats: RepeatFilter::new(REPEAT_WINDOW),
+            });
             if ready_tx.send(Ok(watcher.get_shutdown_channel())).is_err() {
                 return;
             }
@@ -214,6 +250,7 @@ pub(crate) fn spawn(core: &Arc<CoreInner>) -> Result<WatcherShutdown> {
 struct ClipboardChangeHandler {
     reader: ClipboardReader<SystemClipboard>,
     core: Weak<CoreInner>,
+    repeats: RepeatFilter,
 }
 
 impl ClipboardHandler for ClipboardChangeHandler {
@@ -222,9 +259,12 @@ impl ClipboardHandler for ClipboardChangeHandler {
             return;
         };
 
-        if let Some((item, source_app)) =
-            capture_change(&core, &self.reader, &CLIPBOARD_READ_RETRY_DELAYS)
-        {
+        if let Some((item, source_app)) = capture_change(
+            &core,
+            &self.reader,
+            &CLIPBOARD_READ_RETRY_DELAYS,
+            &mut self.repeats,
+        ) {
             persist_captured(core, item, source_app);
         }
     }
@@ -237,6 +277,22 @@ mod tests {
     use super::*;
 
     const ZERO_DELAY_RETRIES: [Duration; 3] = [Duration::ZERO; 3];
+
+    #[test]
+    fn repeat_filter_merges_notifications_of_one_copy() {
+        let mut repeats = RepeatFilter::new(Duration::from_secs(1));
+        let start = Instant::now();
+
+        assert!(!repeats.is_repeat("a", start));
+        assert!(repeats.is_repeat("a", start + Duration::from_millis(17)));
+        // 连续的重复通知顺延窗口。
+        assert!(repeats.is_repeat("a", start + Duration::from_millis(900)));
+        assert!(repeats.is_repeat("a", start + Duration::from_millis(1800)));
+        // 隔了窗口、或者中间复制过别的内容，都是真的再次复制。
+        assert!(!repeats.is_repeat("a", start + Duration::from_millis(2800)));
+        assert!(!repeats.is_repeat("b", start + Duration::from_millis(2810)));
+        assert!(!repeats.is_repeat("a", start + Duration::from_millis(2820)));
+    }
 
     #[test]
     fn clipboard_read_retry_returns_immediate_success() {

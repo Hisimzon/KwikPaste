@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{ClipboardGroupInput, ClipboardGroupLayoutInput};
+use crate::clipboard::watcher::RepeatFilter;
 use crate::clipboard::{
     ClipboardBackend, ClipboardFragment, ClipboardReader, MemoryClipboard, MemoryState,
 };
@@ -18,9 +19,16 @@ use crate::testing::{block_on, sample_png, Fixture};
 const NO_RETRY: [Duration; 0] = [];
 
 /// 让「别的应用」往内存剪贴板里复制一次，再按监听路径入库，返回生效行 id。
+/// 每次都是一次独立的复制（不合并重复通知），合并见 [`notify_in`]。
 fn copy_in(core: &Core, state: MemoryState) -> Option<String> {
+    notify_in(core, state, &mut RepeatFilter::new(Duration::ZERO))
+}
+
+/// 一次剪贴板通知按监听路径入库；`repeats` 跨调用保留时，同一次复制的重复通知会被合并。
+fn notify_in(core: &Core, state: MemoryState, repeats: &mut RepeatFilter) -> Option<String> {
     let reader = ClipboardReader::with_backend(MemoryClipboard::with_state(state));
-    let (item, source) = crate::clipboard::watcher::capture_change(&core.0, &reader, &NO_RETRY)?;
+    let (item, source) =
+        crate::clipboard::watcher::capture_change(&core.0, &reader, &NO_RETRY, repeats)?;
     let result = block_on(core.hop({
         let core = core.clone();
         async move {
@@ -77,6 +85,53 @@ fn capture_records_source_app_plays_sound_and_dedups() {
         })
         .collect();
     assert_eq!(upserts, [false, true]);
+}
+
+/// 同步计数器的当前值与某条记录的序号。
+fn sync_numbers(core: &Core, id: &str) -> (i64, Option<i64>) {
+    block_on(core.hop({
+        let core = core.clone();
+        let id = id.to_owned();
+        async move {
+            let pool = core.0.db.pool().await;
+            let seq: Option<i64> =
+                sqlx::query_scalar("SELECT sync_seq FROM clipboard_items WHERE id = ?")
+                    .bind(&id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            Ok((crate::db::sync::sync_counter(&pool).await?, seq))
+        }
+    }))
+    .unwrap()
+}
+
+#[test]
+fn one_copy_takes_one_sync_number() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    block_on(core.update_settings(json!({"clipboard": {"feedback": {"copySound": true}}})))
+        .unwrap();
+    let mut repeats = RepeatFilter::new(Duration::from_secs(60));
+
+    // .NET 的 Clipboard.SetText 这类写法：一次复制，两次剪贴板通知。
+    let first = notify_in(&core, text("copied once"), &mut repeats).unwrap();
+    assert_eq!(notify_in(&core, text("copied once"), &mut repeats), None);
+    assert_eq!(sync_numbers(&core, &first), (1, Some(1)));
+    assert_eq!(use_count(&core, &first), 1);
+    assert_eq!(fixture.platform.sounds(), 1);
+
+    let other = notify_in(&core, text("something else"), &mut repeats).unwrap();
+    assert_eq!(sync_numbers(&core, &other), (2, Some(2)));
+
+    // 中间复制过别的内容，再复制一次是真的再次复制：重新编号。
+    assert_eq!(
+        notify_in(&core, text("copied once"), &mut repeats),
+        Some(first.clone())
+    );
+    assert_eq!(sync_numbers(&core, &first), (3, Some(3)));
+    assert_eq!(use_count(&core, &first), 2);
+    assert_eq!(fixture.platform.sounds(), 3);
 }
 
 #[test]
