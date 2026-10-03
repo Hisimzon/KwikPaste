@@ -1,6 +1,6 @@
 --- a/src/vsync.rs
 +++ b/src/vsync.rs
-@@ -22,6 +22,27 @@
+@@ -22,6 +22,53 @@ static QPC_TICKS_PER_SECOND: LazyLock<u64> = LazyLock::new(|| {
  const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);
  const DEFAULT_VSYNC_INTERVAL: Duration = Duration::from_micros(16_666); // ~60Hz
  
@@ -25,13 +25,42 @@
 +    *guard = false;
 +}
 +
++// [kwikpaste patch 0001] Health signal: true while the vsync thread runs its loop. Its guard drops
++// when the thread exits or unwinds (e.g. the "Device lost" panic), so a dead thread reads false.
++static VSYNC_THREAD_ALIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++
++/// Whether the vsync thread is running. `false` before the platform starts it and after it exited
++/// or panicked; without it no window ever redraws.
++pub fn vsync_thread_alive() -> bool {
++    VSYNC_THREAD_ALIVE.load(std::sync::atomic::Ordering::Acquire)
++}
++
++/// Marks the vsync thread alive until dropped.
++pub(crate) struct VSyncThreadAlive;
++
++impl VSyncThreadAlive {
++    pub(crate) fn mark() -> Self {
++        VSYNC_THREAD_ALIVE.store(true, std::sync::atomic::Ordering::Release);
++        Self
++    }
++}
++
++impl Drop for VSyncThreadAlive {
++    fn drop(&mut self) {
++        VSYNC_THREAD_ALIVE.store(false, std::sync::atomic::Ordering::Release);
++    }
++}
++
  pub(crate) struct VSyncProvider {
      interval: Duration,
      f: Box<dyn Fn() -> bool>,
 --- a/src/platform.rs
 +++ b/src/platform.rs
-@@ -382,7 +382,19 @@
+@@ -380,9 +380,22 @@ impl WindowsPlatform {
+         std::thread::Builder::new()
+             .name("VSyncProvider".to_owned())
              .spawn(move || {
++                let _alive = crate::vsync::VSyncThreadAlive::mark(); // [kwikpaste patch 0001]
                  let vsync_provider = VSyncProvider::new();
                  loop {
 -                    vsync_provider.wait_for_vsync();
@@ -51,7 +80,7 @@
                      if check_device_lost(&directx_device.device)
                          || invalidate_devices.fetch_and(false, Ordering::Acquire)
                      {
-@@ -400,6 +412,10 @@
+@@ -400,6 +413,10 @@ impl WindowsPlatform {
                          break;
                      };
                      for hwnd in all_windows.read().iter() {
@@ -72,3 +101,12 @@
              self.draw_window(handle, false);
          }
          None
+--- a/src/gpui_windows.rs
++++ b/src/gpui_windows.rs
+@@ -39,5 +39,6 @@ pub(crate) use window::*;
+ pub(crate) use wrapper::*;
+ 
+ pub use platform::WindowsPlatform;
++pub use vsync::vsync_thread_alive; // [kwikpaste patch 0001]
+ 
+ pub(crate) use windows::Win32::Foundation::HWND;

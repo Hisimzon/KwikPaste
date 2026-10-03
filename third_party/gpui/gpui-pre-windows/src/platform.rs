@@ -380,6 +380,7 @@ impl WindowsPlatform {
         std::thread::Builder::new()
             .name("VSyncProvider".to_owned())
             .spawn(move || {
+                let _alive = crate::vsync::VSyncThreadAlive::mark(); // [kwikpaste patch 0001]
                 let vsync_provider = VSyncProvider::new();
                 loop {
                     // [kwikpaste patch 0001] No visible window: park (device-lost is still

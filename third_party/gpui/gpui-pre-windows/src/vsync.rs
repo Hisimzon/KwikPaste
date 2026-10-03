@@ -43,6 +43,32 @@ pub(crate) fn park_vsync_thread(timeout: Duration) {
     *guard = false;
 }
 
+// [kwikpaste patch 0001] Health signal: true while the vsync thread runs its loop. Its guard drops
+// when the thread exits or unwinds (e.g. the "Device lost" panic), so a dead thread reads false.
+static VSYNC_THREAD_ALIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the vsync thread is running. `false` before the platform starts it and after it exited
+/// or panicked; without it no window ever redraws.
+pub fn vsync_thread_alive() -> bool {
+    VSYNC_THREAD_ALIVE.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Marks the vsync thread alive until dropped.
+pub(crate) struct VSyncThreadAlive;
+
+impl VSyncThreadAlive {
+    pub(crate) fn mark() -> Self {
+        VSYNC_THREAD_ALIVE.store(true, std::sync::atomic::Ordering::Release);
+        Self
+    }
+}
+
+impl Drop for VSyncThreadAlive {
+    fn drop(&mut self) {
+        VSYNC_THREAD_ALIVE.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 pub(crate) struct VSyncProvider {
     interval: Duration,
     f: Box<dyn Fn() -> bool>,

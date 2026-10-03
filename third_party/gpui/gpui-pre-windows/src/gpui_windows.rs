@@ -39,5 +39,6 @@ pub(crate) use window::*;
 pub(crate) use wrapper::*;
 
 pub use platform::WindowsPlatform;
+pub use vsync::vsync_thread_alive; // [kwikpaste patch 0001]
 
 pub(crate) use windows::Win32::Foundation::HWND;
