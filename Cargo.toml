@@ -112,6 +112,9 @@ embed-resource = "3"
 # 与 windows 0.62 配套，GPUI 已经在用，不多编一份。
 windows-core = "0.62"
 
+# 开机自启，与 src-tauri 相同（2.0 覆盖安装 1.x 后接管同一个启动项）。
+auto-launch = "0.6"
+
 [workspace.lints.rust]
 unexpected_cfgs = "deny"
 

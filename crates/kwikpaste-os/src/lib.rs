@@ -3,6 +3,7 @@
 //! 判定规则：代码要引用 `gpui::*` 就放 `kwikpaste-app`；只用到 `HWND` / `NSView*` / Win32 / AppKit
 //! 的放这里。
 
+pub mod autostart;
 pub mod clock;
 pub mod drag_out;
 pub mod geometry;

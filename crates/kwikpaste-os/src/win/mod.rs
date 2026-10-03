@@ -1,6 +1,9 @@
 //! Windows 集成。
 
+pub mod admin;
 pub mod apps;
+pub mod args;
+pub mod autostart;
 pub mod drag_out;
 pub mod ime;
 pub mod keyboard;
