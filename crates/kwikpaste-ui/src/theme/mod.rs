@@ -12,7 +12,7 @@ mod tokens;
 
 use std::sync::LazyLock;
 
-use gpui::{App, Global, Window, WindowAppearance, px};
+use gpui::{App, Global, Hsla, Window, WindowAppearance, px};
 use gpui_component::{Theme, ThemeMode};
 
 pub use css_color::css_color;
@@ -67,6 +67,11 @@ impl KpTheme {
     fn appearance(&self) -> Appearance {
         resolve(self.preference, self.system)
     }
+}
+
+/// 完全透明。有系统材质的窗口让 `Root` 不画底色时用。
+pub fn transparent() -> Hsla {
+    gpui::transparent_black()
 }
 
 /// 设置的明暗与系统明暗合成实际生效的明暗。

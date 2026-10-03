@@ -94,7 +94,7 @@ pub fn set_root_translucent(window: &mut Window, translucent: bool, cx: &mut App
     };
     root.update(cx, |root, cx| {
         use gpui::Styled as _;
-        root.style().background = translucent.then(|| gpui::transparent_black().into());
+        root.style().background = translucent.then(|| theme::transparent().into());
         cx.notify();
     });
 }
