@@ -71,10 +71,15 @@ pub struct CardState {
     pub checkbox: Option<AnyElement>,
     /// 点卡片下方的快捷信息；多选时为空，快捷信息不响应点击。
     pub on_snippet: Option<SnippetHandler>,
+    /// 按住修饰键时链接、邮箱卡片的正文是可点的链接（1.x `isLinkActive`）：点了打开。
+    pub on_link: Option<LinkHandler>,
 }
 
 /// 快捷信息被点了：参数是那段文字。
 pub type SnippetHandler = Rc<dyn Fn(Arc<str>, &mut Window, &mut App)>;
+
+/// 链接正文被点了。
+pub type LinkHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// 超过这个长度的片段（多为链接）大概率会被截断，悬停时补一个完整内容的提示（1.x 同）。
 const SNIPPET_TOOLTIP_MIN_CHARS: usize = 32;
@@ -88,7 +93,14 @@ pub fn card(
 ) -> gpui::Stateful<Div> {
     let tokens = env.tokens;
     let layout = env.layout;
-    let body = content(env, item, index, state.image, state.show_original);
+    let body = content(
+        env,
+        item,
+        index,
+        state.image,
+        state.show_original,
+        state.on_link,
+    );
     let pinned = item.is_pinned;
     let sensitive = item.shows_sensitive_mark();
     let hint = state.hint;
@@ -475,6 +487,7 @@ fn content(
     index: usize,
     image: Option<Visual>,
     show_original: bool,
+    on_link: Option<LinkHandler>,
 ) -> AnyElement {
     // 有备注时显示备注；悬停且开了“显示原文”时换回原内容（1.x `NoteContentSwitcher`）。
     if let Some(note) = &item.note
@@ -484,7 +497,7 @@ fn content(
     }
 
     match item.kind {
-        ItemKind::Text => text_body(env, item),
+        ItemKind::Text => text_body(env, item, on_link),
         ItemKind::Image => image_body(env, item, index, image),
         ItemKind::Files if item.files_preview_kind == Some(FilesPreview::ImagePreview) => {
             image_body(env, item, index, image)
@@ -502,7 +515,7 @@ fn shared(text: &Arc<str>) -> SharedString {
     SharedString::from(text)
 }
 
-fn text_body(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
+fn text_body(env: &CardEnv<'_>, item: &ListItem, on_link: Option<LinkHandler>) -> AnyElement {
     let tokens = env.tokens;
     if item.sub_kind == Some(SubKind::Color)
         && let Some(value) = &item.color_preview
@@ -527,12 +540,32 @@ fn text_body(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
     }
 
     let summary = item.summary.as_ref().map(shared).unwrap_or_default();
+    let link = on_link.filter(|_| matches!(item.sub_kind, Some(SubKind::Url | SubKind::Email)));
+    let Some(on_link) = link else {
+        return div()
+            .w_full()
+            .kp_text(TextSize::Sm)
+            .line_clamp(env.layout.text_max_lines)
+            .text_ellipsis()
+            .child(summary)
+            .into_any_element();
+    };
 
+    // 按住修饰键：主色、下划线，点了打开；按下不冒泡给卡片（不选中、不触发单击粘贴）。
     div()
+        .id("card-link")
         .w_full()
         .kp_text(TextSize::Sm)
         .line_clamp(env.layout.text_max_lines)
         .text_ellipsis()
+        .text_color(tokens.primary)
+        .underline()
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            on_link(window, cx);
+        })
         .child(summary)
         .into_any_element()
 }

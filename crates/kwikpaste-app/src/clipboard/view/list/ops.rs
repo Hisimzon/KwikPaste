@@ -23,7 +23,7 @@ use crate::{
             actions::{DeletePolicy, OpenTarget, QuickAction, is_available, is_copy, open_target},
             filter::ListFilter,
             freshness::Activation,
-            item::ListItem,
+            item::{ListItem, SubKind},
         },
         source::Group,
         view::editing::{self, EditTarget},
@@ -642,6 +642,17 @@ impl ClipboardList {
             QuickAction::Delete => self.delete(id, window, cx),
         }
         cx.notify();
+    }
+
+    /// 按住修饰键点了链接、邮箱卡片的正文（1.x `openItemLink`）：关掉预览，打开链接或写邮件。
+    pub fn open_link(&mut self, item: &ListItem, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_preview(cx);
+        let target = if item.sub_kind == Some(SubKind::Email) {
+            OpenTarget::Email
+        } else {
+            OpenTarget::Link
+        };
+        self.open(item.id.clone(), target, window, cx);
     }
 
     /// Mod+O：按 core 声明的动作打开当前项（1.x `getOpenClipboardAction`）。

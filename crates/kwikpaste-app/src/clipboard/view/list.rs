@@ -43,7 +43,7 @@ use kwikpaste_ui::{ListScrollbar, TextAreaInput, close_dialog, context_menu, dis
 
 use super::{
     bench::Bench,
-    card::{self, CardEnv, CardState, SnippetHandler, Visual, dp},
+    card::{self, CardEnv, CardState, LinkHandler, SnippetHandler, Visual, dp},
     editing::{self, EditTarget},
     frame::{FrameTimer, FrameTiming, ListFrame, PaintedCallback, Snapshot, WidthHint},
     host::ItemHost,
@@ -1064,6 +1064,17 @@ impl ClipboardList {
             });
             handler
         });
+        // 按住修饰键时链接、邮箱卡片的正文可点（1.x `isLinkActive = isModifierPressed && !selecting`）。
+        let on_link = (self.key_hints && !selecting).then(|| {
+            let entity = cx.entity().downgrade();
+            let target = item.clone();
+            let handler: LinkHandler = Rc::new(move |window, cx| {
+                entity
+                    .update(cx, |list, cx| list.open_link(&target, window, cx))
+                    .ok();
+            });
+            handler
+        });
         let state = CardState {
             active,
             image,
@@ -1073,6 +1084,7 @@ impl ClipboardList {
             actions,
             checkbox,
             on_snippet,
+            on_link,
         };
         let id = item.id.clone();
         let pressed = item.clone();
