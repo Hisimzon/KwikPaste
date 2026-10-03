@@ -446,7 +446,10 @@ jobs:
       - name: Drag-out selftest on macOS
         if: runner.os == 'macOS'
         run: |
-          output="$(KWIKPASTE_SELFTEST=1 ./KwikPaste --selftest-platform --selftest-dragout --selftest-drag-payload='{"plain":"native-dragout"}' 2>&1)"
-          printf '%s\n' "$output"
+          status=0
+          output="$(KWIKPASTE_SELFTEST=1 RUST_LOG=info ./KwikPaste --selftest-platform --selftest-dragout --selftest-drag-payload='{"plain":"native-dragout"}' 2>&1)" || status=$?
+          printf '%s\n' "$output" | tail -n 120
+          echo "exit status: $status"
+          test "$status" -eq 0
           grep -q 'dragout selftest: armed=true' <<<"$output"
           grep -q 'dragout selftest: armed=true created=1 ended=1 unregistered=1' <<<"$output"
