@@ -5,11 +5,12 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WAIT_ABANDONED,
+    WAIT_OBJECT_0, WPARAM,
 };
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex};
+use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
     FindWindowW, GWL_STYLE, GWLP_USERDATA, GetWindowLongPtrW, MSGFLT_ALLOW, RegisterClassExW,
@@ -81,7 +82,32 @@ pub(crate) fn claim(identifier: &str, sink: Sink) -> io::Result<Claim> {
         );
     }
 
-    match create_message_window(&names, sink) {
+    become_primary(&names, mutex, sink)
+}
+
+/// 崩溃重启的子进程用：不转交参数，等前一个实例释放互斥量（有序重启）或因进程结束遗弃它
+/// （`WAIT_ABANDONED`），然后成为主实例。超过 `timeout` 返回 `TimedOut`。
+pub(crate) fn take_over(identifier: &str, sink: Sink, timeout: Duration) -> io::Result<Claim> {
+    let names = Names::new(identifier);
+    let mutex = unsafe { CreateMutexW(None, true, &names.mutex) }.map_err(io::Error::other)?;
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        let waited = unsafe { WaitForSingleObject(mutex, millis) };
+        if waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED {
+            let _ = unsafe { CloseHandle(mutex) };
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the previous instance still holds the single instance mutex",
+            ));
+        }
+    }
+
+    become_primary(&names, mutex, sink)
+}
+
+/// 已持有互斥量：建收参数的窗口，失败时放掉互斥量。
+fn become_primary(names: &Names, mutex: HANDLE, sink: Sink) -> io::Result<Claim> {
+    match create_message_window(names, sink) {
         Ok(window) => Ok(Claim::Primary(PrimaryInstance { mutex, window })),
         Err(err) => {
             unsafe {
@@ -280,6 +306,45 @@ mod tests {
         let (sender, _receiver) = mpsc::channel();
         let again = primary(&identifier, sender);
         drop(again);
+    }
+
+    /// 在另一个线程上做主实例（互斥量按线程持有），`hold` 之后丢弃。
+    fn primary_on_thread(identifier: &str, hold: Duration) -> std::thread::JoinHandle<()> {
+        let identifier = identifier.to_owned();
+        let (ready, started) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let (sender, _receiver) = mpsc::channel();
+            let guard = primary(&identifier, sender);
+            let _ = ready.send(());
+            std::thread::sleep(hold);
+            drop(guard);
+        });
+        started.recv().expect("primary started");
+        thread
+    }
+
+    #[test]
+    fn take_over_waits_for_the_previous_instance_to_let_go() {
+        let identifier = unique_identifier("take-over");
+        let previous = primary_on_thread(&identifier, Duration::from_millis(300));
+
+        let started = Instant::now();
+        let claim =
+            take_over(&identifier, Box::new(|_| {}), Duration::from_secs(5)).expect("take over");
+        assert!(matches!(claim, Claim::Primary(_)));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        previous.join().expect("previous instance thread");
+        drop(claim);
+    }
+
+    #[test]
+    fn take_over_gives_up_while_the_previous_instance_is_alive() {
+        let identifier = unique_identifier("take-over-timeout");
+        let previous = primary_on_thread(&identifier, Duration::from_millis(1500));
+
+        let result = take_over(&identifier, Box::new(|_| {}), Duration::from_millis(200));
+        assert!(matches!(result, Err(err) if err.kind() == io::ErrorKind::TimedOut));
+        previous.join().expect("previous instance thread");
     }
 
     #[test]

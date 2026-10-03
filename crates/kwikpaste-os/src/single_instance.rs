@@ -46,6 +46,18 @@ pub fn claim(
     platform::claim(identifier, Box::new(on_invocation))
 }
 
+/// 崩溃重启的子进程（`--relaunched-after-crash`）用来代替 [`claim`]：不把参数转交给正在死去的
+/// 前一个实例，而是等它退出后成为主实例，最多等 `timeout`。Windows 上超时返回 `TimedOut` 错误；
+/// macOS 上超时后按普通流程判重，前一个实例还活着时返回 [`Claim::Forwarded`]。两种情况调用方都
+/// 应直接退出。
+pub fn take_over(
+    identifier: &str,
+    on_invocation: impl Fn(Invocation) + Send + 'static,
+    timeout: std::time::Duration,
+) -> io::Result<Claim> {
+    platform::take_over(identifier, Box::new(on_invocation), timeout)
+}
+
 /// 当前进程的工作目录和参数，按对方协议的取法（取不到工作目录时为空串）。
 pub(crate) fn current_invocation() -> Invocation {
     let cwd = std::env::current_dir()
