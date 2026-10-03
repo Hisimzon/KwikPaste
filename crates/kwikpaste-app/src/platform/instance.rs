@@ -116,7 +116,10 @@ async fn handle_selftest(
             }
             selftest::VSYNC_DEAD => watchdog::simulate_dead_render_thread(),
             _ => {
-                if let Some(place) = arg.strip_prefix(selftest::PANIC) {
+                if let Some(attempts) = arg.strip_prefix(selftest::DEVICE_LOST) {
+                    let attempts = attempts.parse().unwrap_or(0);
+                    cx.update(|cx| watchdog::simulate_device_lost(attempts, cx));
+                } else if let Some(place) = arg.strip_prefix(selftest::PANIC) {
                     selftest_panic(place);
                 } else if let Some(count) = arg.strip_prefix(selftest::SEED) {
                     seed_history(count, cx).await;

@@ -2,8 +2,11 @@
 //!
 //! - 有序重启：其它线程 panic 或看门狗判定后，请求经 channel 送到这里：释放单实例、拉起带
 //!   `--relaunched-after-crash <n>` 的子进程、退出（退出码 70）。
-//! - 看门狗：显示面板前、以及每 30 s 检查 vsync 线程（补丁 0001 的 `vsync_thread_alive`）；
-//!   它死了窗口就再也不会重绘，按崩溃处理。macOS 没有这个线程，恒为正常。
+//! - 看门狗：显示面板前、以及每 10 s 检查渲染：vsync 线程（补丁 0001 的 `vsync_thread_alive`）死了
+//!   窗口就再也不会重绘；GPU 设备丢失后按计划重试都失败（补丁 0003 的 `device_loss_status().failing`，
+//!   约 8 s）说明进程内恢复不了。两者都按崩溃处理、有序重启（10 分钟内第 3 次降级重启时关掉
+//!   DirectComposition）。macOS 没有这两项，恒为正常。
+//! - 设备丢失恢复：系统唤醒后主动请求一次重建（`request_device_recheck`），不等驱动报错。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -13,12 +16,12 @@ use gpui::{App, AsyncApp};
 use super::{instance, probe};
 use crate::health::{self, Restart};
 
-const CHECK_INTERVAL: Duration = Duration::from_secs(30);
+const CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 /// 自测模拟 vsync 线程已死（`--selftest-vsync-dead`）。
 static SIMULATED_DEAD: AtomicBool = AtomicBool::new(false);
 
-/// 在 `Application::run` 回调里调用：开始处理有序重启请求并定时检查渲染线程。
+/// 在 `Application::run` 回调里调用：开始处理有序重启请求并定时检查渲染。
 pub fn serve(cx: &mut App) {
     probe::health(
         health::relaunch_count(),
@@ -37,23 +40,33 @@ pub fn serve(cx: &mut App) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         loop {
             cx.background_executor().timer(CHECK_INTERVAL).await;
-            if !render_thread_ok("periodic check") {
+            if !render_ok("periodic check") {
                 break;
             }
         }
     })
     .detach();
+
+    // 睡眠、唤醒两个都要注册：只注册一个时 GPUI 在 Windows 上收不到电源通知。
+    cx.on_system_sleep(|_| log::info!("system is going to sleep"))
+        .detach();
+    cx.on_system_wake(|_| {
+        log::info!("system woke up; rechecking the GPU device");
+        recheck_device();
+    })
+    .detach();
 }
 
-/// 渲染线程是否正常；不正常时要求有序重启并返回 `false`（调用方不要再显示面板）。
-pub fn render_thread_ok(source: &str) -> bool {
-    if render_thread_alive() {
+/// 渲染是否正常；不正常时要求有序重启并返回 `false`（调用方不要再显示面板）。
+pub fn render_ok(source: &str) -> bool {
+    let problem = if !render_thread_alive() {
+        "the vsync thread is not running"
+    } else if device_recovery_failing() {
+        "the GPU device was lost and could not be recovered"
+    } else {
         return true;
-    }
-    health::request_restart(
-        "watchdog",
-        format!("{source}: the vsync thread is not running"),
-    );
+    };
+    health::request_restart("watchdog", format!("{source}: {problem}"));
 
     false
 }
@@ -68,10 +81,73 @@ fn render_thread_alive() -> bool {
     !SIMULATED_DEAD.load(Ordering::SeqCst)
 }
 
+#[cfg(target_os = "windows")]
+fn device_recovery_failing() -> bool {
+    gpui_windows::device_loss_status().failing
+}
+
+#[cfg(target_os = "macos")]
+fn device_recovery_failing() -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn recheck_device() {
+    gpui_windows::request_device_recheck();
+}
+
+#[cfg(target_os = "macos")]
+fn recheck_device() {}
+
 /// 自测：让看门狗认为渲染线程已死。
 pub fn simulate_dead_render_thread() {
     log::warn!("selftest: the watchdog now treats the vsync thread as dead");
     SIMULATED_DEAD.store(true, Ordering::SeqCst);
+}
+
+/// 自测（`--selftest-device-lost=<n>`）：模拟一次 GPU 设备丢失，前 `n` 次重建全局设备失败；
+/// 恢复（或判定恢复不了）后写探针事件 `device_recovered` / `device_failing`。
+pub fn simulate_device_lost(failed_attempts: u32, cx: &mut App) {
+    #[cfg(target_os = "windows")]
+    {
+        let before = gpui_windows::device_loss_status();
+        let frames = super::rendered_frames();
+        log::warn!("selftest: simulating a GPU device loss ({failed_attempts} failed attempts)");
+        gpui_windows::simulate_device_lost(failed_attempts);
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            for _ in 0..300 {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let status = gpui_windows::device_loss_status();
+                if status.recoveries > before.recoveries {
+                    // 恢复后的强制重绘在 200 ms 之后。
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    let drawn = super::rendered_frames().saturating_sub(frames);
+                    probe::device(
+                        "device_recovered",
+                        status.losses,
+                        status.recoveries,
+                        status.last_recovery_ms,
+                        drawn,
+                    );
+                    return;
+                }
+                if status.failing {
+                    probe::device("device_failing", status.losses, status.recoveries, 0, 0);
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (failed_attempts, cx);
+        log::warn!("selftest: GPU device loss is not simulated on macOS");
+    }
 }
 
 fn restart_now(cx: &mut App, restart: &Restart) {

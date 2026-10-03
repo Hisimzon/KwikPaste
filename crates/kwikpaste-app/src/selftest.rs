@@ -56,6 +56,8 @@ pub const DRAG_PAYLOAD: &str = "--selftest-drag-payload=";
 pub const SEED: &str = "--selftest-seed=";
 /// 让看门狗认为 vsync 线程已死，下一次显示面板时有序重启。
 pub const VSYNC_DEAD: &str = "--selftest-vsync-dead";
+/// `--selftest-device-lost=<n>`：模拟一次 GPU 设备丢失，前 n 次重建全局设备失败（补丁 0003 的注入点）。
+pub const DEVICE_LOST: &str = "--selftest-device-lost=";
 /// 组件展示窗：代替面板打开 gallery，不启动托盘、热键和面板。
 pub const GALLERY: &str = "--selftest-gallery";
 /// 列表跑分：1 万行合成数据，附录 D §3.7 的门槛与锚定场景（见 `clipboard::view::bench`）。
@@ -132,6 +134,7 @@ fn platform_probe() -> bool {
                 || arg.starts_with(PANIC)
                 || arg.starts_with(DRAG_PAYLOAD)
                 || arg.starts_with(SEED)
+                || arg.starts_with(DEVICE_LOST)
         })
 }
 

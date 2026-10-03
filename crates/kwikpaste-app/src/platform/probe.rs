@@ -391,6 +391,17 @@ pub fn view_event(event: &str, detail: &str) {
     write(event, &format!(r#","detail":{}"#, json_string(detail)));
 }
 
+/// GPU 设备丢失自测的结果：累计丢失、恢复次数，最近一次恢复用时，恢复后画了几帧。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn device(event: &str, losses: u32, recoveries: u32, recovery_ms: u32, frames: u64) {
+    write(
+        event,
+        &format!(
+            r#","losses":{losses},"recoveries":{recoveries},"recovery_ms":{recovery_ms},"frames_after":{frames}"#
+        ),
+    );
+}
+
 /// 启动时的崩溃重启状态：第几次重启、是否降级、DirectComposition 是否被关掉。
 pub fn health(relaunch: u32, degraded: bool, direct_composition_disabled: bool) {
     write(

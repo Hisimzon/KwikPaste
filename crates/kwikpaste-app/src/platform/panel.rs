@@ -343,8 +343,8 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
 }
 
 fn show(parts: &Parts, trigger: Trigger, cx: &mut AsyncApp) {
-    // vsync 线程死了面板只会出一帧、之后不再重绘：不显示，有序重启。
-    if !super::watchdog::render_thread_ok("panel show") {
+    // vsync 线程死了、或 GPU 设备恢复不了，面板只会出一帧或黑屏：不显示，有序重启。
+    if !super::watchdog::render_ok("panel show") {
         return;
     }
     let native = &parts.native;
