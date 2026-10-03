@@ -439,28 +439,25 @@ mod tests {
             .collect()
     }
 
-    /// 代码里写出的 key 在两种语言里都存在：展示窗的全部 `"ns:…"` 字面量，以及加载器自己用的 key。
+    /// 代码里写出的 key 在两种语言里都存在：扫描原生 app 的全部 Rust 源码，避免新窗口漏掉翻译。
     #[test]
     fn literal_keys_exist() {
-        let mut literals = string_literals(include_str!("gallery.rs"));
-        literals.extend(translated_literals(include_str!("i18n.rs")));
-        for source in [
-            include_str!("clipboard/view/card.rs"),
-            include_str!("clipboard/view/list.rs"),
-            include_str!("clipboard/view/list/ops.rs"),
-            include_str!("clipboard/view/list/parts.rs"),
-            include_str!("clipboard/view/list/selecting.rs"),
-            include_str!("clipboard/view/header.rs"),
-            include_str!("clipboard/view/group_bar.rs"),
-            include_str!("clipboard/view/panel.rs"),
-            include_str!("clipboard/view/group_dialogs.rs"),
-            include_str!("clipboard/view/preview.rs"),
-            include_str!("clipboard/view/list/menu.rs"),
-            include_str!("clipboard/view/list/previewing.rs"),
-            include_str!("clipboard/model/menu.rs"),
-            include_str!("clipboard/model/empty_state.rs"),
-        ] {
+        let mut pending = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut sources = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).expect("read the app source directory") {
+                let path = entry.expect("read a source entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    sources.push(std::fs::read_to_string(path).expect("read a Rust source"));
+                }
+            }
+        }
+        let mut literals = Vec::new();
+        for source in &sources {
             literals.extend(string_literals(source));
+            literals.extend(translated_literals(source));
         }
 
         let mut checked = 0;
@@ -479,12 +476,13 @@ mod tests {
 
             for language in Language::ALL {
                 let found = catalogs().get(language, key).is_some()
+                    || catalogs().get(language, &format!("{key}_one")).is_some()
                     || catalogs().get(language, &format!("{key}_other")).is_some();
                 assert!(found, "{} is missing {key}", language.tag());
             }
             checked += 1;
         }
-        assert!(checked > 40, "the scan found the gallery keys ({checked})");
+        assert!(checked > 300, "the scan found the app keys ({checked})");
     }
 
     fn fixture() -> Catalogs {

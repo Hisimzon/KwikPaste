@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, Context, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _,
+    Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    WindowControlArea, div, prelude::FluentBuilder as _,
 };
 use kwikpaste_ui::{
     IconName, MenuEntry, MenuItem, MenuTrigger, context_menu, group_icon_path, theme,
@@ -356,6 +356,7 @@ impl Render for GroupBar {
             .aria_label(t("clipboard:accessibility.groupBar"))
             .flex()
             .flex_none()
+            .w_full()
             .items_center()
             .gap(dp(GAP))
             .overflow_hidden()
@@ -367,6 +368,12 @@ impl Render for GroupBar {
             .child(separator(tokens))
             .when(!customs.is_empty(), |bar| bar.children(customs))
             .child(action)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .window_control_area(WindowControlArea::Drag),
+            )
     }
 }
 

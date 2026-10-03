@@ -12,8 +12,8 @@ use gpui::{
     FontWeight, ImageSource, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
     MouseMoveEvent, ParentElement as _, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, Window, WindowBounds,
-    WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
-    uniform_list,
+    WindowControlArea, WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px,
+    size, uniform_list,
 };
 use kwikpaste_core::db::models::{ClipboardKind, ClipboardSubKind};
 use kwikpaste_ui::{
@@ -211,6 +211,7 @@ impl PreviewPanel {
                             .truncate()
                             .kp_text(TextSize::Sm)
                             .font_weight(FontWeight::MEDIUM)
+                            .window_control_area(WindowControlArea::Drag)
                             .child(title),
                     )
                     .child(
@@ -715,7 +716,7 @@ impl PreviewWindow {
             focus: false,
             show: false,
             kind: WindowKind::PopUp,
-            is_movable: false,
+            is_movable: true,
             is_resizable: false,
             is_minimizable: false,
             inactive_frame_interval: None,

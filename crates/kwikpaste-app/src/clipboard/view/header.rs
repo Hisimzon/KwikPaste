@@ -9,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 use gpui::{
     Context, EventEmitter, ImageSource, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, div, img,
+    Styled as _, Subscription, Task, Window, WindowControlArea, div, img,
 };
 use kwikpaste_ui::{IconName, Input, TextInput, TextInputEvent, theme};
 
@@ -147,12 +147,24 @@ impl Render for Header {
         div()
             .flex()
             .flex_none()
+            .w_full()
             .items_center()
             .justify_between()
             .px(dp(12.))
             .pt(dp(12.))
             .pb(dp(8.))
-            .child(img(ImageSource::Image(logo())).flex_none().size(dp(20.)))
+            .child(
+                div()
+                    .flex_none()
+                    .window_control_area(WindowControlArea::Drag)
+                    .child(img(ImageSource::Image(logo())).size(dp(20.))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .window_control_area(WindowControlArea::Drag),
+            )
             .child(
                 div()
                     .flex()

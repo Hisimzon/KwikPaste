@@ -29,10 +29,11 @@ use self::{
         synthetic::{self, AssetSet},
     },
     view::{
-        ClipboardPanel,
+        ClipboardPanel, PanelIntent,
         host::{ItemHost, PlatformHost, SourceHost},
     },
 };
+use crate::platform::host::{self, HostRequest, RequestSource};
 use crate::{core_host, platform, selftest};
 
 pub use view::init;
@@ -182,6 +183,15 @@ pub fn build_panel(
         Rc::new(SourceHost::new(source.clone()))
     };
     let panel = cx.new(|cx| ClipboardPanel::new(source, host, window, cx));
+    cx.subscribe(&panel, |_, intent: &PanelIntent, cx| match intent {
+        PanelIntent::OpenPreferences => host::dispatch(
+            cx,
+            HostRequest::OpenPreferences {
+                source: RequestSource::Panel,
+            },
+        ),
+    })
+    .detach();
     if host_core && let Some(events) = platform::core_events(cx) {
         panel.update(cx, |panel, cx| panel.follow_core_events(&events, cx));
     }

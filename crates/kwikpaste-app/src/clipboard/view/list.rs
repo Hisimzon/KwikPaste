@@ -1219,7 +1219,12 @@ impl Render for ClipboardList {
             .collect();
 
         let content: AnyElement = if empty {
-            self.render_empty(cx)
+            div()
+                .flex_1()
+                .min_h_0()
+                .window_control_area(gpui::WindowControlArea::Drag)
+                .child(self.render_empty(cx))
+                .into_any_element()
         } else {
             let list_element = list(
                 self.state.clone(),

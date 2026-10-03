@@ -1094,5 +1094,6 @@
     "reset": "Reset to default directory",
     "resetConfirmContent": "KwikPaste will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
     "resetConfirmTitle": "Reset Data Directory"
-  }
+  },
+  "title": "KwikPaste Preferences"
 }

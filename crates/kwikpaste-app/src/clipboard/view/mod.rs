@@ -26,7 +26,7 @@ use gpui::{Action, App, KeyBinding, actions};
 use kwikpaste_ui::INPUT_KEY_CONTEXT;
 
 pub use editing::request_panel;
-pub use panel::ClipboardPanel;
+pub use panel::{ClipboardPanel, PanelIntent};
 
 /// 主窗口的 key context。Windows 上面板收不到键盘消息，平台层的钩子用 `Window::dispatch_keystroke`
 /// 把按键注入面板窗口，按焦点所在的路径匹配这里的绑定；列表和搜索框都在这个 context 之下。

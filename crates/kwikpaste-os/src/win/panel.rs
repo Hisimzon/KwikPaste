@@ -27,8 +27,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, Se
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetCursorPos, GetForegroundWindow, GetPropW,
-    GetWindowLongPtrW, GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT,
-    HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_TOPMOST, IsWindowVisible, MA_NOACTIVATE,
+    GetWindowLongPtrW, GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
+    HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_TOPMOST, IsWindowVisible, MA_NOACTIVATE,
     MA_NOACTIVATEANDEAT, MINMAXINFO, RemovePropW, SC_MAXIMIZE, SC_MOVE, SC_SIZE, SW_HIDE,
     SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SendMessageW, SetPropW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE, WM_ACTIVATE,
@@ -385,6 +385,11 @@ fn mouse_activate(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESU
 
 fn is_drag_hit(hit: u32) -> bool {
     hit == HTCAPTION || (HTLEFT..=HTBOTTOMRIGHT).contains(&hit)
+}
+
+/// 返回面板子类对拖动命中值的判定，供 Windows 交互自测复用。
+pub fn selftest_drag_hit_regions() -> (bool, bool) {
+    (is_drag_hit(HTCAPTION), is_drag_hit(HTCLIENT))
 }
 
 fn begin_drag(hwnd: HWND, state: &SubclassState, hit: u32) {
@@ -816,6 +821,12 @@ mod tests {
 
         assert_eq!(rect.size(), START.size());
         assert_eq!((rect.left, rect.top), (160, 70));
+    }
+
+    #[test]
+    fn gpui_drag_regions_use_the_caption_hit_without_treating_client_clicks_as_drag() {
+        assert!(is_drag_hit(HTCAPTION));
+        assert!(!is_drag_hit(HTCLIENT));
     }
 
     #[test]

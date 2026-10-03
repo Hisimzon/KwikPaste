@@ -50,10 +50,16 @@ const SETTLE: Duration = Duration::from_secs(5);
 pub fn run(panel: Entity<ClipboardPanel>, store: Arc<Mutex<FixtureStore>>, cx: &mut App) {
     cx.set_global(RequestLog::default());
     let intents: Rc<RefCell<Vec<ListIntent>>> = Rc::default();
+    let panel_intents: Rc<RefCell<Vec<super::panel::PanelIntent>>> = Rc::default();
     let list = panel.read(cx).list().clone();
     let sink = intents.clone();
     cx.subscribe(&list, move |_, intent: &ListIntent, _| {
         sink.borrow_mut().push(intent.clone());
+    })
+    .detach();
+    let panel_sink = panel_intents.clone();
+    cx.subscribe(&panel, move |_, intent: &super::panel::PanelIntent, _| {
+        panel_sink.borrow_mut().push(intent.clone());
     })
     .detach();
 
@@ -64,6 +70,7 @@ pub fn run(panel: Entity<ClipboardPanel>, store: Arc<Mutex<FixtureStore>>, cx: &
             list,
             window,
             intents,
+            panel_intents,
             store: Some(store),
             passed: 0,
             failed: Vec::new(),
@@ -86,6 +93,7 @@ struct Driver {
     list: Entity<ClipboardList>,
     window: AnyWindowHandle,
     intents: Rc<RefCell<Vec<ListIntent>>>,
+    panel_intents: Rc<RefCell<Vec<super::panel::PanelIntent>>>,
     /// 夹具后端：模拟 core 在面板隐藏、显示前后存入新记录。
     store: Option<Arc<Mutex<FixtureStore>>>,
     passed: usize,
@@ -257,6 +265,42 @@ impl Driver {
         })
     }
 
+    /// 头部齿轮应和托盘复用同一个偏好设置宿主意图。
+    async fn header_actions(&mut self, cx: &mut AsyncApp) {
+        self.panel_intents.borrow_mut().clear();
+        cx.update(|cx| {
+            let header = self.panel.read(cx).header().clone();
+            header.update(cx, |_, cx| {
+                cx.emit(super::header::HeaderEvent::OpenPreferences);
+            });
+        });
+        let opened = self
+            .panel_intents
+            .borrow()
+            .iter()
+            .any(|intent| matches!(intent, super::panel::PanelIntent::OpenPreferences));
+        let intents = self.panel_intents.borrow().clone();
+        self.check(
+            "header settings emits the preferences intent",
+            opened,
+            || format!("intents {intents:?}"),
+        );
+    }
+
+    /// Windows 原生子类把 GPUI 的 Drag 区作为标题命中，按钮仍留在客户区。
+    #[cfg(target_os = "windows")]
+    async fn drag_regions(&mut self, _cx: &mut AsyncApp) {
+        let (caption, client) = kwikpaste_os::win::panel::selftest_drag_hit_regions();
+        self.check("drag region uses the native caption hit", caption, || {
+            "HTCAPTION was not accepted by the panel subclass".into()
+        });
+        self.check(
+            "drag region leaves client buttons clickable",
+            !client,
+            || "HTCLIENT was treated as a drag".into(),
+        );
+    }
+
     async fn script(&mut self, cx: &mut AsyncApp) {
         let loaded = self
             .settle(cx, |list, _| {
@@ -276,6 +320,8 @@ impl Driver {
         // same tree that it receives.
         self.pause(cx, 50).await;
         self.accessibility_tree(cx).await;
+        #[cfg(target_os = "windows")]
+        self.drag_regions(cx).await;
 
         // 方向键：从第一个可见的非置顶项往下走一行。
         let before = self.active_index(cx);
@@ -367,6 +413,7 @@ impl Driver {
         self.drag_out(cx).await;
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
+        self.header_actions(cx).await;
     }
 
     /// Export the last AccessKit tree and verify the first-release list nodes.
@@ -1660,6 +1707,7 @@ pub fn stage_demo(panel: Entity<ClipboardPanel>, cx: &mut App) {
             list,
             window,
             intents: Rc::default(),
+            panel_intents: Rc::default(),
             store: None,
             passed: 0,
             failed: Vec::new(),
