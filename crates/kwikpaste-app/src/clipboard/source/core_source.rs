@@ -19,7 +19,7 @@ use kwikpaste_core::{
 };
 
 use super::{
-    ClipboardSource, Group, GroupInput, ImageSave, ListQuery, NoteSaved,
+    ClipboardSource, Group, GroupInput, ImageSave, ListQuery, NoteSaved, Preview, PreviewTextView,
     synthetic::{self, AssetSet, GenerateOptions},
 };
 use crate::clipboard::model::{
@@ -297,6 +297,33 @@ impl ClipboardSource for CoreSource {
         let core = self.core.clone();
 
         async move { Ok(core.import_group_svg(&path)?) }.boxed()
+    }
+
+    fn preview(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<Option<Preview>>> {
+        let core = self.core.clone();
+
+        async move {
+            let (payload, metrics) =
+                futures::try_join!(core.preview_payload(&id), core.preview_metrics(&id))?;
+            Ok(payload
+                .zip(metrics)
+                .map(|(payload, metrics)| Preview { payload, metrics }))
+        }
+        .boxed()
+    }
+
+    fn set_preview_text_view(
+        &self,
+        view: PreviewTextView,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+        let patch = serde_json::json!({ "clipboard": { "preview": { "textView": view } } });
+
+        async move {
+            core.update_settings(patch).await?;
+            Ok(())
+        }
+        .boxed()
     }
 }
 

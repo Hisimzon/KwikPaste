@@ -17,7 +17,8 @@ use serde::Deserialize;
 use kwikpaste_core::settings::Settings;
 
 use super::{
-    ClipboardSource, Group, GroupInput, ImageSave, ListQuery, NoteSaved, synthetic::AssetSet,
+    ClipboardSource, Group, GroupInput, ImageSave, ListQuery, NoteSaved, Preview,
+    PreviewContentMetrics, PreviewPayload, PreviewTextView, synthetic::AssetSet,
 };
 use crate::clipboard::model::{
     actions::OpenTarget,
@@ -233,11 +234,111 @@ impl FixtureStore {
     }
 }
 
+/// 预览数据：按 core `preview_payload` / `preview_metrics` 的规则从夹具记录算出（文本取摘要，图片的
+/// “原图”用缩略图，文件没有大小）。
+fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextView) -> Preview {
+    use kwikpaste_core::{
+        clipboard::{split_words, word_spans},
+        db::models::{ClipboardKind, ClipboardSubKind},
+        presenter::{ClipboardPreviewFileEntry, PreviewWordChip},
+    };
+
+    use crate::clipboard::model::{
+        item::{ItemKind, SubKind},
+        preview::text_rows,
+    };
+
+    let text = (item.kind == ItemKind::Text)
+        .then(|| item.summary.as_deref().unwrap_or_default().to_owned());
+    let (words, words_truncated) = match &text {
+        Some(text) if !item.is_sensitive => word_spans(text),
+        _ => (Vec::new(), false),
+    };
+    let files: Vec<ClipboardPreviewFileEntry> = item
+        .file_rows()
+        .iter()
+        .map(|row| ClipboardPreviewFileEntry {
+            path: row.path.to_string(),
+            name: row.name.to_string(),
+            is_dir: row.is_dir,
+            is_image: row.is_image,
+            exists: row.exists,
+            size: None,
+            icon_path: row.icon_path.as_deref().map(str::to_owned),
+        })
+        .collect();
+    let metrics = match item.kind {
+        ItemKind::Image => PreviewContentMetrics::Image {
+            width: item.width.map(f64::from),
+            height: item.height.map(f64::from),
+        },
+        ItemKind::Files => PreviewContentMetrics::Files {
+            shown: u32::try_from(files.len()).unwrap_or(u32::MAX),
+            total: u32::try_from(files.len()).unwrap_or(u32::MAX),
+        },
+        ItemKind::Text => {
+            let text = text.as_deref().unwrap_or_default();
+            if text_view == PreviewTextView::Words && !words.is_empty() {
+                PreviewContentMetrics::Words {
+                    chips: split_words(text)
+                        .tokens
+                        .iter()
+                        .map(|token| PreviewWordChip::new(&token.text, token.line_break))
+                        .collect(),
+                }
+            } else {
+                PreviewContentMetrics::Text {
+                    rows: u32::try_from(text_rows(text).len()).unwrap_or(u32::MAX),
+                }
+            }
+        }
+    };
+    let image_path = (item.kind == ItemKind::Image)
+        .then(|| thumbnails.join(&*item.content))
+        .filter(|path| path.exists());
+
+    Preview {
+        payload: PreviewPayload {
+            id: item.id.to_string(),
+            kind: match item.kind {
+                ItemKind::Text => ClipboardKind::Text,
+                ItemKind::Image => ClipboardKind::Image,
+                ItemKind::Files => ClipboardKind::Files,
+            },
+            sub_kind: item.sub_kind.map(|sub_kind| match sub_kind {
+                SubKind::Rtf => ClipboardSubKind::Rtf,
+                SubKind::Html => ClipboardSubKind::Html,
+                SubKind::Url => ClipboardSubKind::Url,
+                SubKind::Email => ClipboardSubKind::Email,
+                SubKind::Color => ClipboardSubKind::Color,
+                SubKind::Path => ClipboardSubKind::Path,
+            }),
+            updated_at: item.created_at,
+            size: text
+                .as_deref()
+                .map(|text| i64::try_from(text.encode_utf16().count()).unwrap_or(i64::MAX)),
+            text,
+            image_exists: image_path.is_some(),
+            image_path: image_path.map(|path| path.to_string_lossy().into_owned()),
+            image_width: item.width.map(i64::from),
+            image_height: item.height.map(i64::from),
+            is_sensitive: item.is_sensitive,
+            total_files: files.len(),
+            files,
+            words,
+            words_truncated,
+        },
+        metrics,
+    }
+}
+
 /// 以 [`FixtureStore`] 为后端的数据源。
 pub struct FixtureSource {
     store: Arc<Mutex<FixtureStore>>,
     thumbnails: PathBuf,
     latency: Duration,
+    /// 预览的文本方式（夹具没有设置文件，改了就记在这里）。
+    text_view: Arc<Mutex<PreviewTextView>>,
 }
 
 impl FixtureSource {
@@ -246,6 +347,7 @@ impl FixtureSource {
             store: Arc::new(Mutex::new(store)),
             thumbnails: assets.thumbnails_dir(),
             latency: Duration::ZERO,
+            text_view: Arc::new(Mutex::new(Settings::default().clipboard.preview.text_view)),
         }
     }
 
@@ -318,7 +420,11 @@ impl ClipboardSource for FixtureSource {
     }
 
     fn settings(&self) -> Settings {
-        Settings::default()
+        let mut settings = Settings::default();
+        if let Ok(view) = self.text_view.lock() {
+            settings.clipboard.preview.text_view = *view;
+        }
+        settings
     }
 
     fn groups(&self) -> BoxFuture<'static, anyhow::Result<Vec<Group>>> {
@@ -470,6 +576,31 @@ impl ClipboardSource for FixtureSource {
     ) -> BoxFuture<'static, anyhow::Result<()>> {
         self.with_store(move |store| {
             store.update_layout(&order, &visible);
+            Ok(())
+        })
+    }
+
+    fn preview(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<Option<Preview>>> {
+        let thumbnails = self.thumbnails.clone();
+        let text_view = self.text_view.lock().map(|view| *view).unwrap_or_default();
+
+        self.with_store(move |store| {
+            Ok(store
+                .find(&id)
+                .map(|item| fixture_preview(item, &thumbnails, text_view)))
+        })
+    }
+
+    fn set_preview_text_view(
+        &self,
+        view: PreviewTextView,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        let text_view = self.text_view.clone();
+
+        self.respond(move || {
+            *text_view
+                .lock()
+                .map_err(|_| anyhow::anyhow!("fixture settings are poisoned"))? = view;
             Ok(())
         })
     }

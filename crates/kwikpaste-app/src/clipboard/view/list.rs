@@ -14,6 +14,8 @@
 mod menu;
 mod ops;
 mod parts;
+mod previewing;
+pub use previewing::PreviewTrigger;
 mod selecting;
 
 use std::{
@@ -27,10 +29,11 @@ use std::{
 use chrono::{DateTime, Local};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, ClickEvent, Context, DispatchPhase, Entity,
-    EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, ListAlignment, ListOffset,
-    ListState, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Point,
-    Render, ScrollDelta, ScrollWheelEvent, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, Window, canvas, div, list, prelude::FluentBuilder as _, px,
+    EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
+    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, canvas, div, list,
+    prelude::FluentBuilder as _, px,
 };
 use kwikpaste_core::{
     CoreEvent,
@@ -231,6 +234,8 @@ pub struct ClipboardList {
     pending_activation: Option<Activation>,
     activation_timeout: Option<Task<()>>,
     pointer: Pointer,
+    /// 预览窗（见 `previewing`）。
+    previewing: previewing::Previewing,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -302,6 +307,7 @@ impl ClipboardList {
             pending_activation: None,
             activation_timeout: None,
             pointer: Pointer::Moved,
+            previewing: previewing::Previewing::default(),
             _subscriptions: subscriptions,
         };
         let request = list.model.reset_and_reload();
@@ -416,10 +422,11 @@ impl ClipboardList {
                 self.motion.reveal = None;
                 self.motion.wheel = 0.;
                 self.hovered = None;
-                // 面板已经隐藏，还挂着的 Enter 不再执行，开着的右键菜单收起。
+                // 面板已经隐藏，还挂着的 Enter 不再执行，开着的右键菜单、预览收起。
                 self.pending_activation = None;
                 self.activation_timeout = None;
                 dismiss_menu(window, cx);
+                self.close_preview(cx);
                 // 隐藏时退出多选（1.x `exitClipboardSelection`），收起备注框（当作取消）。
                 self.selection.exit();
                 if self.note.is_some() {
@@ -800,7 +807,20 @@ impl ClipboardList {
             // 置顶块不滚动，只有列表里的行需要露出。
             self.motion.reveal = Some(index - self.rows.pinned);
         }
+        if matches!(outcome, NavOutcome::Moved { .. }) {
+            self.preview_follow_active(cx);
+        }
         cx.notify();
+    }
+
+    /// 把一条记录滚进视口（截图摆场景用）。
+    pub(super) fn reveal_item(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(index) = self.model.index_of(id)
+            && index >= self.rows.pinned
+        {
+            self.motion.reveal = Some(index - self.rows.pinned);
+            cx.notify();
+        }
     }
 
     /// ↑ / ↓（主窗口的按键转来）。
@@ -822,12 +842,14 @@ impl ClipboardList {
         } else if self.hovered.as_ref() == Some(id) {
             self.hovered = None;
         }
+        self.preview_hover(id, hovered, cx);
         cx.notify();
     }
 
     /// 指针移动：显示后第一次移动只记下位置（可能是系统补发的），离开它超过 [`POINTER_SLOP`]
     /// 才算动过，这时光标下的卡片成为当前项。
     fn pointer_moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.previewing.pointer = Some(position);
         match self.pointer {
             Pointer::Moved => {}
             Pointer::Waiting => self.pointer = Pointer::Resting(position),
@@ -840,6 +862,7 @@ impl ClipboardList {
                 self.pointer = Pointer::Moved;
                 if let Some(id) = self.hovered.clone() {
                     self.controller.hover(&id);
+                    self.preview_hover(&id, true, cx);
                     cx.notify();
                 }
             }
@@ -918,6 +941,7 @@ impl ClipboardList {
     }
 
     pub(super) fn on_wheel_lines(&mut self, lines: f32, cx: &mut Context<Self>) {
+        self.close_pointer_preview(cx);
         let distance = -lines * dp(WHEEL_LINE).to_pixels(self.rem).as_f32();
         if self.reduce_motion(cx) {
             self.state.scroll_by(px(distance));
@@ -1055,8 +1079,12 @@ impl ClipboardList {
         let clicked = item.clone();
         let middle = self.settings.clipboard.content.middle_click != MiddleClickAction::Disabled
             || selecting;
+        let anchor = self
+            .wants_anchor(&item.id, active)
+            .then(|| previewing::anchor_canvas(item.id.clone(), self.previewing.anchors.clone()));
 
         card::card(env, &item, index, state)
+            .children(anchor)
             .on_hover(cx.listener(move |list, hovered: &bool, _, cx| {
                 list.hover_card(&id, *hovered, cx);
             }))
@@ -1143,6 +1171,8 @@ impl Render for ClipboardList {
 
         self.consume_snapshot(cx);
         self.placeholders.borrow_mut().clear();
+        // 卡片位置每帧重记，滚出视口的卡片不留旧位置。
+        self.previewing.anchors.borrow_mut().clear();
         self.apply_hints();
         self.run_motion(window, cx);
         self.consume_reload_at_top(cx);
@@ -1222,6 +1252,19 @@ impl Render for ClipboardList {
             .track_focus(&self.focus)
             .on_mouse_move(cx.listener(|list, event: &MouseMoveEvent, _, cx| {
                 list.pointer_moved(event.position, cx);
+            }))
+            // 按住空格预览当前项（钩子转来的空格按下、松开）。
+            .on_key_down(cx.listener(|list, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "space" && !event.keystroke.modifiers.modified() {
+                    list.preview_space(true, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .on_key_up(cx.listener(|list, event: &KeyUpEvent, _, cx| {
+                if event.keystroke.key == "space" {
+                    list.preview_space(false, cx);
+                    cx.stop_propagation();
+                }
             }))
             .flex()
             .flex_col()

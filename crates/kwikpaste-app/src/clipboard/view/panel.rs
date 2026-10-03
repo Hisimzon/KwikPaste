@@ -510,8 +510,11 @@ impl ClipboardPanel {
 
     // ------------------------------------------------------------ 按键
 
-    /// Esc 按多选、分组、分类、窗口的顺序逐层退出（1.x `closeTopEscapeLayer`；预览在第二部分）。
+    /// Esc 按预览、多选、分组、分类、窗口的顺序逐层退出（1.x `closeTopEscapeLayer`）。
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if self.list.update(cx, |list, cx| list.close_preview(cx)) {
+            return;
+        }
         if self.list.read(cx).selecting() {
             self.list.update(cx, |list, cx| list.exit_selection(cx));
             return;
@@ -589,7 +592,10 @@ impl Render for ClipboardPanel {
             .on_action(
                 cx.listener(unless_menu(|panel, _: &PasteSelected, window, cx| {
                     panel.list.update(cx, |list, cx| {
-                        if !list.selecting() {
+                        if list.preview_words(cx).is_some() {
+                            // 预览里选了词：Enter 粘贴选中的词（1.x `enterPastePreviewWords`）。
+                            list.use_preview_words(true, cx);
+                        } else if !list.selecting() {
                             list.paste_active(false, cx);
                         } else if let Some(item) = list.active_item() {
                             // 多选时 Enter 勾选 / 取消当前项（1.x `handleSelectionKeyDown`）。
@@ -631,6 +637,12 @@ impl Render for ClipboardPanel {
             })))
             .on_action(
                 cx.listener(unless_menu(|panel, _: &CopySelected, window, cx| {
+                    if panel.list.read(cx).preview_words(cx).is_some() {
+                        panel
+                            .list
+                            .update(cx, |list, cx| list.use_preview_words(false, cx));
+                        return;
+                    }
                     panel.with_active(cx, |list, item, cx| {
                         list.copy(item.id.clone(), false, None, window, cx)
                     });

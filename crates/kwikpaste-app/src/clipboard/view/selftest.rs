@@ -23,7 +23,7 @@ use kwikpaste_ui::{MenuEntry, close_dialog, has_dialog, menu_open};
 use super::{
     editing::{self, RequestLog},
     group_dialogs::{self, GroupEditor, GroupManager},
-    list::{ClipboardList, ListIntent},
+    list::{ClipboardList, ListIntent, PreviewTrigger},
     panel::ClipboardPanel,
     pin,
 };
@@ -37,7 +37,7 @@ use crate::{
             item::{ItemKind, ListItem},
             menu::{MenuAction, menu_groups},
         },
-        source::{ClipboardSource, FixtureStore, ListQuery},
+        source::{ClipboardSource, FixtureStore, ListQuery, PreviewTextView},
     },
     platform::{EditTrigger, Panel, PanelCommand, PanelEvent},
 };
@@ -352,6 +352,7 @@ impl Driver {
         self.move_to_group(cx).await;
         self.pin(cx).await;
         self.groups(cx).await;
+        self.preview(cx).await;
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
     }
@@ -675,6 +676,90 @@ impl Driver {
             || format!("{layout:?}, order {order:?}, stored {stored:?}"),
         );
         self.panel.update(cx, |panel, cx| panel.reload_groups(cx));
+    }
+
+    /// 预览窗：指针停在卡片上 500 ms 后打开（窗口可见、不是前台窗口），Esc 先关预览而不隐藏面板；
+    /// 键盘预览随 ↓ 换到新的当前项；滚轮关掉悬停预览。
+    async fn preview(&mut self, cx: &mut AsyncApp) {
+        self.focus_list(cx);
+        let Some(item) = self.hover_row(cx).await else {
+            self.check("preview: a card under the pointer", false, || {
+                "nothing hovered".into()
+            });
+            return;
+        };
+
+        let started = Instant::now();
+        let wanted = item.id.clone();
+        let opened = self
+            .settle(cx, move |list, _| {
+                list.preview_visible()
+                    && list.preview_session().is_some_and(|(id, trigger)| {
+                        id == wanted && trigger == PreviewTrigger::Hover
+                    })
+            })
+            .await;
+        let waited = started.elapsed();
+        let foreground = self.read(cx, |list, _| list.preview_foreground());
+        self.check(
+            "hovering a card opens its preview after the delay, without the foreground",
+            opened && waited >= Duration::from_millis(450) && !foreground,
+            || format!("opened {opened} after {waited:?}, foreground {foreground}"),
+        );
+
+        let requests = cx.update(|cx| cx.global::<RequestLog>().commands.len());
+        self.key(cx, "escape");
+        let closed = self
+            .settle(cx, |list, _| {
+                list.preview_session().is_none() && !list.preview_visible()
+            })
+            .await;
+        let after = cx.update(|cx| cx.global::<RequestLog>().commands.len());
+        self.check(
+            "escape closes the preview before anything else",
+            closed && after == requests,
+            || format!("closed {closed}, requests {requests} -> {after}"),
+        );
+
+        self.pointer_at(cx, 20., 20.);
+        let active = self.read(cx, |list, _| list.active_item().map(|item| item.id.clone()));
+        if let Some(active) = active {
+            self.list.update(cx, |list, cx| {
+                list.open_preview(active, PreviewTrigger::Keyboard, cx);
+            });
+        }
+        self.key(cx, "down");
+        let moved = self
+            .settle(cx, |list, _| {
+                let active = list.active_item().map(|item| item.id.clone());
+                list.preview_visible()
+                    && list
+                        .preview_session()
+                        .is_some_and(|(id, _)| Some(id) == active)
+            })
+            .await;
+        self.check("a keyboard preview follows the active row", moved, || {
+            "preview did not follow".into()
+        });
+        self.list.update(cx, |list, cx| list.close_preview(cx));
+
+        let Some(item) = self.hover_row(cx).await else {
+            return;
+        };
+        let wanted = item.id.clone();
+        self.settle(cx, move |list, _| {
+            list.preview_session().is_some_and(|(id, _)| id == wanted)
+        })
+        .await;
+        self.list
+            .update(cx, |list, cx| list.on_wheel_lines(-1., cx));
+        let closed = self
+            .settle(cx, |list, _| list.preview_session().is_none())
+            .await;
+        self.check("scrolling closes a hover preview", closed, || {
+            "still open".into()
+        });
+        self.pointer_at(cx, 20., 20.);
     }
 
     /// Mod+P 固定窗口：点外部不再隐藏（平台开关关掉），再按一次恢复。
@@ -1355,6 +1440,44 @@ impl Driver {
             "delete" => {
                 self.select_where(cx, |item| !item.is_pinned && !item.is_favorite);
                 self.key(cx, "secondary-backspace");
+            }
+            "preview-words" | "preview-text" | "preview-image" | "preview-files"
+            | "preview-html" => {
+                let source = self.list.read_with(cx, |list, _| list.source.clone());
+                if stage == "preview-text" {
+                    source
+                        .set_preview_text_view(PreviewTextView::Plain)
+                        .await
+                        .ok();
+                    let settings = source.settings();
+                    self.list
+                        .update(cx, |list, cx| list.apply_settings(settings, cx));
+                }
+                let wanted: fn(&ListItem) -> bool = match stage {
+                    "preview-image" => |item: &ListItem| item.kind == ItemKind::Image,
+                    "preview-files" => {
+                        |item: &ListItem| item.kind == ItemKind::Files && item.file_rows().len() > 1
+                    }
+                    "preview-html" => |item: &ListItem| {
+                        item.sub_kind == Some(crate::clipboard::model::item::SubKind::Html)
+                    },
+                    _ => |item: &ListItem| {
+                        item.kind == ItemKind::Text
+                            && item.sub_kind.is_none()
+                            && !item.is_sensitive
+                            && item.summary.as_deref().is_some_and(|text| text.len() > 40)
+                    },
+                };
+                let Some(id) = self.select_where(cx, |item| !item.is_pinned && wanted(item)) else {
+                    log::warn!("no record for demo stage {stage}");
+                    return;
+                };
+                self.list.update(cx, |list, cx| list.reveal_item(&id, cx));
+                // 面板刚显示后 vsync 线程最多停 1 秒（见报告），等它醒来出帧，卡片位置才记得下。
+                self.pause(cx, 1200).await;
+                self.list.update(cx, |list, cx| {
+                    list.open_preview(id, PreviewTrigger::Keyboard, cx);
+                });
             }
             "group-new" => {
                 self.key(cx, "secondary-n");

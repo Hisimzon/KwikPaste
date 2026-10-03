@@ -39,6 +39,18 @@ pub struct Group {
     pub is_hidden: bool,
 }
 
+pub use kwikpaste_core::presenter::{
+    ClipboardPreviewPayload as PreviewPayload, PreviewContentMetrics,
+};
+pub use kwikpaste_core::settings::PreviewTextView;
+
+/// 预览窗的数据（core `preview_payload`）与定尺寸用的内容度量（core `preview_metrics`）。
+#[derive(Clone, Debug)]
+pub struct Preview {
+    pub payload: PreviewPayload,
+    pub metrics: PreviewContentMetrics,
+}
+
 /// 新建或编辑分组的输入（core `ClipboardGroupInput`）：`icon` 是预设图标的类名或 SVG 源码。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupInput {
@@ -143,4 +155,13 @@ pub trait ClipboardSource: Send + Sync + 'static {
 
     /// 读取用户选的 SVG 文件作为分组图标（扩展名、大小、内容经过校验），返回 SVG 源码。
     fn import_group_svg(&self, path: PathBuf) -> BoxFuture<'static, anyhow::Result<String>>;
+
+    /// 预览窗的数据与内容度量；记录已经不在时为 `None`。
+    fn preview(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<Option<Preview>>>;
+
+    /// 改预览文本的展示方式（设置 `clipboard.preview.textView`）。
+    fn set_preview_text_view(
+        &self,
+        view: PreviewTextView,
+    ) -> BoxFuture<'static, anyhow::Result<()>>;
 }

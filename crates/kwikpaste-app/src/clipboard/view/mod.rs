@@ -18,6 +18,7 @@ mod image_cache;
 mod list;
 mod panel;
 pub mod pin;
+mod preview;
 pub mod selftest;
 
 use gpui::{Action, App, KeyBinding, actions};
@@ -157,7 +158,7 @@ mod tests {
     use super::*;
 
     /// 钩子吞下的每个键都有绑定（不然按下去什么也不发生，目标应用也收不到）。空格是按住预览，
-    /// 预览窗在 U2 第二部分。
+    /// 由列表的按下、松开监听处理，不走绑定。
     #[test]
     fn every_hooked_key_is_bound() {
         let bound: Vec<String> = bindings()

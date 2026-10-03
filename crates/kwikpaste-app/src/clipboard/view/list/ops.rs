@@ -62,6 +62,7 @@ impl ClipboardList {
             return;
         }
 
+        self.close_preview(cx);
         self.controller.set_filter(filter);
         self.selection.reset();
         self.hovered = None;
@@ -78,8 +79,12 @@ impl ClipboardList {
         let new = &settings.clipboard;
         let resort = old.content.sort != new.content.sort;
         let refresh = old.display != new.display || old.sensitive != new.sensitive;
+        let preview_changed = old.preview != new.preview;
         self.delete_policy = DeletePolicy::from_settings(&settings.clipboard.content);
         self.settings = settings;
+        if preview_changed {
+            self.preview_settings_changed(cx);
+        }
 
         if resort {
             self.reload_from_scratch(cx);
@@ -125,7 +130,7 @@ impl ClipboardList {
     }
 
     /// 等宿主动作做完；失败时在面板上提示（宿主动作可能在面板隐藏之后才失败，提示照样留在面板里）。
-    fn report_host_failure(
+    pub(super) fn report_host_failure(
         &self,
         label: &'static str,
         task: Task<anyhow::Result<()>>,
@@ -160,6 +165,7 @@ impl ClipboardList {
     /// 粘贴一条记录：交给宿主（写回剪贴板、让出前台、注入粘贴键），同时发 `ListIntent::Paste` 通知。
     pub fn paste_item(&mut self, id: Arc<str>, plain: bool, cx: &mut Context<Self>) {
         log::info!("paste requested for {id} (plain: {plain})");
+        self.close_preview(cx);
         let task = self.host.paste(id.clone(), plain, cx);
         self.report_host_failure("commands:labels.paste", task, cx);
         cx.emit(ListIntent::Paste { id, plain });
@@ -255,6 +261,7 @@ impl ClipboardList {
         );
 
         if copy {
+            self.close_preview_of(&item.id, cx);
             let task = self.host.copy_fragment(item.id.clone(), fragment, cx);
             cx.spawn_in(window, async move |_, cx| {
                 let result = task.await;
@@ -269,6 +276,7 @@ impl ClipboardList {
             .detach();
         } else {
             log::info!("snippet paste requested for {}", item.id);
+            self.close_preview(cx);
             let task = self.host.paste_fragment(item.id.clone(), fragment, cx);
             self.report_host_failure("commands:labels.paste", task, cx);
             cx.emit(ListIntent::PasteSnippet {
@@ -291,6 +299,7 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_preview_of(&id, cx);
         let task = self.host.copy(id.clone(), plain, cx);
 
         cx.spawn_in(window, async move |list, cx| {
@@ -405,6 +414,7 @@ impl ClipboardList {
         let Some(item) = self.model.find(&id).cloned() else {
             return;
         };
+        self.close_preview_of(&id, cx);
         if self.note.is_some() {
             return;
         }
@@ -495,6 +505,7 @@ impl ClipboardList {
         let Some(item) = self.model.find(&id).cloned() else {
             return;
         };
+        self.close_preview_of(&id, cx);
         if !self.can_delete(item.is_favorite, item.is_pinned) {
             return;
         }
@@ -551,6 +562,7 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_preview_of(&id, cx);
         let future = self.source.open_target(id, target);
 
         cx.spawn_in(window, async move |_, cx| {
@@ -587,6 +599,7 @@ impl ClipboardList {
         }
 
         self.controller.select(&item.id);
+        self.close_preview(cx);
         log::info!("split words requested for {}", item.id);
         cx.emit(ListIntent::SplitWords {
             id: item.id.clone(),

@@ -8,6 +8,7 @@
 //! - [`empty_state`]：空列表的 16 种提示；
 //! - [`actions`]：悬停快捷动作、删除保护；
 //! - [`menu`]：卡片右键菜单；
+//! - [`preview`]：预览窗的几何、文本行与选词；
 //! - [`shortcut`]：快捷键的显示文案；
 //! - [`selection`]：多选；
 //! - [`layout`]：密度换算、图片显示尺寸预测；
@@ -22,6 +23,7 @@ pub mod item;
 pub mod layout;
 pub mod list_model;
 pub mod menu;
+pub mod preview;
 pub mod selection;
 pub mod shortcut;
 pub mod time_label;

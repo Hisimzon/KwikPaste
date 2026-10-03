@@ -84,6 +84,11 @@ const SOURCES: &[(Language, &str, &str)] = &[
     ),
     (
         Language::ZhCn,
+        "preview",
+        include_str!("../locales/zh-CN/preview.json"),
+    ),
+    (
+        Language::ZhCn,
         "gallery",
         include_str!("../locales/zh-CN/gallery.json"),
     ),
@@ -106,6 +111,11 @@ const SOURCES: &[(Language, &str, &str)] = &[
         Language::EnUs,
         "preferences",
         include_str!("../locales/en-US/preferences.json"),
+    ),
+    (
+        Language::EnUs,
+        "preview",
+        include_str!("../locales/en-US/preview.json"),
     ),
     (
         Language::EnUs,
@@ -300,7 +310,14 @@ mod tests {
 
     use super::*;
 
-    const NAMESPACES: &[&str] = &["common", "commands", "clipboard", "preferences", "gallery"];
+    const NAMESPACES: &[&str] = &[
+        "common",
+        "commands",
+        "clipboard",
+        "preferences",
+        "preview",
+        "gallery",
+    ];
 
     fn catalogs() -> &'static Catalogs {
         &CATALOGS
@@ -425,6 +442,11 @@ mod tests {
             include_str!("clipboard/view/header.rs"),
             include_str!("clipboard/view/group_bar.rs"),
             include_str!("clipboard/view/panel.rs"),
+            include_str!("clipboard/view/group_dialogs.rs"),
+            include_str!("clipboard/view/preview.rs"),
+            include_str!("clipboard/view/list/menu.rs"),
+            include_str!("clipboard/view/list/previewing.rs"),
+            include_str!("clipboard/model/menu.rs"),
             include_str!("clipboard/model/empty_state.rs"),
         ] {
             literals.extend(string_literals(source));

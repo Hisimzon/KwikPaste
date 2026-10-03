@@ -126,7 +126,10 @@ impl ClipboardList {
             MenuAction::Paste => self.paste_item(id, false, cx),
             MenuAction::PasteAsPlainText | MenuAction::PasteAsPath => self.paste_item(id, true, cx),
             MenuAction::Copy => self.copy(id, false, None, window, cx),
-            MenuAction::SaveImage => self.save_image(id, window, cx),
+            MenuAction::SaveImage => {
+                self.close_preview_of(&id, cx);
+                self.save_image(id, window, cx);
+            }
             MenuAction::SplitWords => self.split(&item, cx),
             MenuAction::OpenLink => self.open(id, OpenTarget::Link, window, cx),
             MenuAction::SendEmail => self.open(id, OpenTarget::Email, window, cx),
@@ -161,6 +164,7 @@ impl ClipboardList {
         cx: &mut Context<Self>,
     ) {
         self.controller.select(&item.id);
+        self.close_preview_of(&item.id, cx);
         let future = self
             .source
             .set_item_group(item.id.clone(), group_id.clone());
