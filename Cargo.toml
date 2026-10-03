@@ -125,6 +125,7 @@ unexpected_cfgs = "deny"
 [patch.crates-io]
 gpui-pre-windows = { path = "third_party/gpui/gpui-pre-windows" }
 gpui-pre-macos = { path = "third_party/gpui/gpui-pre-macos" }
+gpui-pre = { path = "third_party/gpui/gpui-pre" }
 
 [profile.dev]
 debug = "line-tables-only"

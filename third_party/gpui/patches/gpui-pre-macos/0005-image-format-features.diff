@@ -1,0 +1,23 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -118,19 +118,12 @@
+ [target.'cfg(target_os = "macos")'.dependencies.image]
+ version = "0.25.1"
+ features = [
++    # [kwikpaste patch M0005] Keep only formats used by KwikPaste 1.x/core.
+     "bmp",
+-    "dds",
+-    "exr",
+-    "ff",
+     "gif",
+-    "hdr",
+     "ico",
+     "jpeg",
+     "png",
+-    "pnm",
+-    "qoi",
+-    "rayon",
+-    "tga",
+     "tiff",
+     "webp",
+ ]

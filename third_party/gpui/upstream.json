@@ -6,7 +6,8 @@
         "0001-vsync-park-and-visible-filter.diff",
         "0002-honor-ws-ex-noactivate.diff",
         "0003-device-loss-no-panic.diff",
-        "0004-load-on-windows-10-rtm.diff"
+        "0004-load-on-windows-10-rtm.diff",
+        "0005-image-format-features.diff"
       ],
       "sha256": "f05592a6f9e3e6bb7a9f2a0d4779271cf747a948db1c07b02448de777ffff8f3",
       "version": "0.3.7",
@@ -16,9 +17,17 @@
       "name": "gpui-pre-macos",
       "patches": [
         "0001-ime-shared-application-before-keyboard-layout.diff",
-        "0004-panel-cannot-become-main.diff"
+        "0004-panel-cannot-become-main.diff",
+        "0005-image-format-features.diff"
       ],
       "sha256": "5a43af845b260b09393e923c4f1e1a67a10fcfc847b4815192bbfd02ed9fe725",
+      "version": "0.3.7",
+      "zedRev": "1a28cff4b409169bac058bca40dfbfeb7621d19b"
+    },
+    {
+      "name": "gpui-pre",
+      "patches": ["0001-image-format-features.diff"],
+      "sha256": "0e87a42bb37c7cb4e76dd1ac0ce88851e46e976e0373a47ab3e0757abffee54d",
       "version": "0.3.7",
       "zedRev": "1a28cff4b409169bac058bca40dfbfeb7621d19b"
     }

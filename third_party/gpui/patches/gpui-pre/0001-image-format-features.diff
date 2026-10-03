@@ -1,0 +1,23 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -348,19 +348,12 @@
+ [dependencies.image]
+ version = "0.25.1"
+ features = [
++    # [kwikpaste patch 0001] Keep only formats used by KwikPaste 1.x/core.
+     "bmp",
+-    "dds",
+-    "exr",
+-    "ff",
+     "gif",
+-    "hdr",
+     "ico",
+     "jpeg",
+     "png",
+-    "pnm",
+-    "qoi",
+-    "rayon",
+-    "tga",
+     "tiff",
+     "webp",
+ ]

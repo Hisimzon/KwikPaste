@@ -82,19 +82,12 @@ package = "gpui-pre-util"
 [target.'cfg(target_os = "windows")'.dependencies.image]
 version = "0.25.1"
 features = [
+    # [kwikpaste patch 0005] Keep only formats used by KwikPaste 1.x/core.
     "bmp",
-    "dds",
-    "exr",
-    "ff",
     "gif",
-    "hdr",
     "ico",
     "jpeg",
     "png",
-    "pnm",
-    "qoi",
-    "rayon",
-    "tga",
     "tiff",
     "webp",
 ]
