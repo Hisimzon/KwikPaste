@@ -4,15 +4,20 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement,
-    ParentElement as _, RenderOnce, SharedString, Styled as _, Window, div,
-    prelude::FluentBuilder as _, rems,
+    ParentElement as _, RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Window, div, prelude::FluentBuilder as _, rems,
 };
 use gpui_component::{
     Disableable as _, Selectable as _, Sizable as _,
     button::{Button as KitButton, ButtonVariants as _},
 };
 
-use crate::{icon::IconName, theme::control_height, tooltip::TooltipExt as _};
+use crate::{
+    icon::IconName,
+    styled::KpStyled as _,
+    theme::{TextSize, control_height, radius},
+    tooltip::TooltipExt as _,
+};
 
 /// 按钮类型，对应 antd 的 `type` / `danger`。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -24,6 +29,8 @@ pub enum ButtonKind {
     Primary,
     /// antd `type="primary" danger`：危险操作的确认按钮。
     Danger,
+    /// antd 默认按钮加 `danger`：容器底色，错误色描边和文字（1.x 多选栏的“删除”）。
+    DangerOutline,
     /// antd `type="text"`：无底无边，悬停出现填充色；图标按钮多用它。
     Ghost,
     /// antd `type="link"`。
@@ -108,6 +115,10 @@ impl Button {
         self.kind(ButtonKind::Danger)
     }
 
+    pub fn danger_outline(self) -> Self {
+        self.kind(ButtonKind::DangerOutline)
+    }
+
     pub fn ghost(self) -> Self {
         self.kind(ButtonKind::Ghost)
     }
@@ -160,12 +171,85 @@ impl Button {
     }
 }
 
+impl Button {
+    /// antd 默认危险按钮。gpui-component 的描边按钮底色带一层错误色，悬停又回到默认按钮的描边，
+    /// 对不上 antd，所以自己画：底色 `colorBgContainer`，描边和文字 `colorError`，悬停换
+    /// `colorErrorHover`；禁用时与 antd 默认按钮的禁用态相同。
+    fn render_danger_outline(self, cx: &App) -> AnyElement {
+        let tokens = crate::theme::tokens(cx);
+        let label = self.label.unwrap_or_default();
+        let disabled = self.disabled || self.loading;
+        let (height, padding) = match self.size {
+            ButtonSize::XSmall => (control_height::XS, rems(0.25)),
+            ButtonSize::Small => (control_height::SM, rems(0.4375)),
+            ButtonSize::Medium => (control_height::MD, rems(0.9375)),
+        };
+        let text_size = match self.size {
+            ButtonSize::XSmall => TextSize::Xs,
+            ButtonSize::Small | ButtonSize::Medium => TextSize::Sm,
+        };
+        let on_click = self.on_click;
+        let button = div()
+            .id(self.id.clone())
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .gap(rems(0.5))
+            .h(height)
+            .px(padding)
+            .rounded(match self.size {
+                ButtonSize::Medium => radius::MD,
+                _ => radius::SM,
+            })
+            .border_1()
+            .kp_text(text_size)
+            .whitespace_nowrap()
+            .map(|button| {
+                if disabled {
+                    button
+                        .border_color(tokens.border)
+                        .bg(tokens.fill_tertiary)
+                        .text_color(tokens.quaternary)
+                } else {
+                    button
+                        .cursor_pointer()
+                        .border_color(tokens.error)
+                        .bg(tokens.bg_container)
+                        .text_color(tokens.error)
+                        .hover(|style| {
+                            style
+                                .border_color(tokens.error_hover)
+                                .text_color(tokens.error_hover)
+                        })
+                }
+            })
+            .when_some(self.icon, |button, icon| {
+                button.child(crate::Icon::new(icon).size(rems(0.875)))
+            })
+            .child(label)
+            .when_some(on_click.filter(|_| !disabled), |button, on_click| {
+                button.on_click(move |event, window, cx| on_click(event, window, cx))
+            })
+            .into_any_element();
+
+        match self.tooltip {
+            Some(tooltip) => tooltip_host(self.id, button, tooltip),
+            None => button,
+        }
+    }
+}
+
 impl RenderOnce for Button {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        if self.kind == ButtonKind::DangerOutline {
+            return self.render_danger_outline(cx);
+        }
+
         let label = self.label.unwrap_or_default();
         let button = KitButton::new(self.id.clone())
             .map(|button| match self.kind {
-                ButtonKind::Default => button,
+                ButtonKind::Default | ButtonKind::DangerOutline => button,
                 ButtonKind::Primary => button.primary(),
                 ButtonKind::Danger => button.danger(),
                 ButtonKind::Ghost => button.ghost(),

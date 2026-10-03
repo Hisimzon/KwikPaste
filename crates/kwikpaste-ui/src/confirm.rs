@@ -6,13 +6,15 @@ use std::{cell::RefCell, rc::Rc};
 
 use futures::channel::oneshot;
 use gpui::{
-    App, IntoElement, ParentElement as _, RenderOnce, SharedString, Styled as _, Window, rems, svg,
+    App, IntoElement, ParentElement as _, Rems, RenderOnce, SharedString, Styled as _, Window,
+    rems, svg,
 };
 use gpui_base::{h_flex, v_flex};
 use gpui_component::WindowExt as _;
 
 use crate::{
     button::Button,
+    kinsoku::kinsoku_wrap,
     strings::ui_strings,
     styled::KpStyled as _,
     theme::{self, TextSize, radius, space},
@@ -146,9 +148,21 @@ impl ConfirmBody {
     }
 }
 
+/// 内容区宽度：416 px 减去左右内边距 24 px、图标 22 px 和间隔 12 px。
+const CONTENT_WIDTH: Rems = Rems(20.875);
+
 impl RenderOnce for ConfirmBody {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = theme::tokens(cx);
+        let rem_size = window.rem_size();
+        let content = self.spec.content.as_ref().map(|content| {
+            kinsoku_wrap(
+                content,
+                CONTENT_WIDTH.to_pixels(rem_size),
+                TextSize::Sm.font_size().to_pixels(rem_size),
+                cx,
+            )
+        });
         let ok_answer = self.answer.clone();
         let cancel_answer = self.answer;
         let ok = Button::new("kp-confirm-ok", self.ok_text)
@@ -198,7 +212,7 @@ impl RenderOnce for ConfirmBody {
                                     .text_color(tokens.text)
                                     .child(self.spec.title),
                             )
-                            .children(self.spec.content.map(|content| {
+                            .children(content.map(|content| {
                                 gpui::div()
                                     .kp_text(TextSize::Sm)
                                     .line_height(rems(1.375))
