@@ -4,12 +4,12 @@
 //!   `HotKey::try_from` 解析，与 1.x 一致）。
 //! - 快速粘贴：`shortcuts.quickPaste` 打开时注册「修饰键 + 1…9、0」，粘贴「全部」视图里的第 1…10 条
 //!   （见 [`super::paste::quick_paste`]）。
+//! - 偏好设置：`shortcuts.openPreference`（默认 Alt+X），发 [`HostRequest::OpenPreferences`]，由 UI
+//!   打开偏好窗（见 [`super::host`]）。
 //!
 //! 设置变更时重新注册。管理器在主线程创建，`WM_HOTKEY` / Carbon 事件由 GPUI 的消息循环顺带派发；
 //! 事件经「专用线程阻塞 `recv()` → `async_channel` → 主线程」送回，不轮询。线程里只转发、不碰 GPUI，
 //! 唯一的例外是快速粘贴按下时立刻屏蔽 Alt / Win 的单独松开：这一步必须趁修饰键还按着做。
-//!
-//! TODO：`shortcuts.openPreference` 等偏好窗建好后再注册。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -20,6 +20,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use gpui::{App, AsyncApp, Global};
 use kwikpaste_core::settings::Shortcuts;
 
+use super::host::{self, HostRequest, RequestSource};
 use super::panel::{PanelCommand, Trigger, TriggerSource};
 use super::paste;
 use crate::core_host;
@@ -27,6 +28,8 @@ use crate::core_host;
 /// 开发构建在设置仍是出厂默认值时改用的热键。出厂默认的 Alt+C 属于本机正在运行的 1.x，
 /// 开发版抢先注册会让 1.x 重启后注册失败；Ctrl+Alt+Shift+F9 两边都不用。
 const DEVELOPMENT_TOGGLE: &str = "Control+Alt+Shift+F9";
+/// 同理，偏好快捷键出厂默认的 Alt+X 在开发构建里换成它。
+const DEVELOPMENT_PREFERENCE: &str = "Control+Alt+Shift+F8";
 
 /// 快速粘贴的数字键与条目序号（从 0 起），与 1.x 相同：1…9 是第 1…9 条，0 是第 10 条。
 const QUICK_PASTE_KEYS: [(&str, i64); 10] = [
@@ -47,6 +50,7 @@ const QUICK_PASTE_KEYS: [(&str, i64); 10] = [
 enum Action {
     TogglePanel,
     QuickPaste(i64),
+    OpenPreference,
 }
 
 /// 当前注册的热键 id → 动作，事件桥线程据此分发。
@@ -56,6 +60,7 @@ type Actions = Arc<Mutex<HashMap<u32, Action>>>;
 struct Hotkeys {
     manager: GlobalHotKeyManager,
     toggle: Option<HotKey>,
+    preference: Option<HotKey>,
     quick_paste: Vec<HotKey>,
     actions: Actions,
 }
@@ -67,6 +72,7 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
     let manager = GlobalHotKeyManager::new()?;
     let actions = Actions::default();
     let (quick_sender, quick_receiver) = async_channel::unbounded();
+    let (preference_sender, preference_receiver) = async_channel::unbounded();
 
     let bridge_actions = actions.clone();
     std::thread::Builder::new()
@@ -91,6 +97,7 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
                         }
                         quick_sender.send_blocking(offset).is_ok()
                     }
+                    Some(Action::OpenPreference) => preference_sender.send_blocking(()).is_ok(),
                     None => true,
                 };
                 if !delivered {
@@ -106,9 +113,24 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
     })
     .detach();
 
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while preference_receiver.recv().await.is_ok() {
+            cx.update(|cx| {
+                host::dispatch(
+                    cx,
+                    HostRequest::OpenPreferences {
+                        source: RequestSource::Hotkey,
+                    },
+                );
+            });
+        }
+    })
+    .detach();
+
     cx.set_global(Hotkeys {
         manager,
         toggle: None,
+        preference: None,
         quick_paste: Vec::new(),
         actions,
     });
@@ -120,12 +142,13 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
     Ok(())
 }
 
-/// 按设置重新注册切换面板与快速粘贴的热键；与当前相同时什么也不做。
+/// 按设置重新注册切换面板、偏好设置与快速粘贴的热键；与当前相同时什么也不做。
 pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
     if !cx.has_global::<Hotkeys>() {
         return;
     }
     let toggle = wanted_toggle(shortcuts);
+    let preference = wanted_preference(shortcuts);
     let quick_paste = wanted_quick_paste(shortcuts);
 
     let hotkeys = cx.global_mut::<Hotkeys>();
@@ -138,6 +161,17 @@ pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
         {
             hotkeys.toggle = Some(hotkey);
             log::info!("panel hotkey registered: {hotkey}");
+        }
+    }
+    if hotkeys.preference != preference {
+        if let Some(previous) = hotkeys.preference.take() {
+            hotkeys.unregister(previous);
+        }
+        if let Some(hotkey) = preference
+            && hotkeys.register(hotkey, Action::OpenPreference)
+        {
+            hotkeys.preference = Some(hotkey);
+            log::info!("preference hotkey registered: {hotkey}");
         }
     }
 
@@ -175,6 +209,7 @@ pub fn unregister_all(cx: &mut App) {
         .toggle
         .take()
         .into_iter()
+        .chain(hotkeys.preference.take())
         .chain(hotkeys.quick_paste.drain(..))
         .collect();
     for hotkey in all {
@@ -211,11 +246,30 @@ fn lock(actions: &Actions) -> MutexGuard<'_, HashMap<u32, Action>> {
 }
 
 fn wanted_toggle(shortcuts: &Shortcuts) -> Option<HotKey> {
-    let accelerator = effective_accelerator(shortcuts);
+    let accelerator = effective(
+        &shortcuts.open_clipboard,
+        &Shortcuts::default().open_clipboard,
+        DEVELOPMENT_TOGGLE,
+    );
     match parse(&accelerator) {
         Ok(hotkey) => hotkey,
         Err(err) => {
             log::error!("panel hotkey {accelerator:?} is invalid: {err}");
+            None
+        }
+    }
+}
+
+fn wanted_preference(shortcuts: &Shortcuts) -> Option<HotKey> {
+    let accelerator = effective(
+        &shortcuts.open_preference,
+        &Shortcuts::default().open_preference,
+        DEVELOPMENT_PREFERENCE,
+    );
+    match parse(&accelerator) {
+        Ok(hotkey) => hotkey,
+        Err(err) => {
+            log::error!("preference hotkey {accelerator:?} is invalid: {err}");
             None
         }
     }
@@ -251,14 +305,14 @@ fn parse(accelerator: &str) -> Result<Option<HotKey>, global_hotkey::hotkey::Hot
     HotKey::try_from(accelerator).map(Some)
 }
 
-/// 实际注册的快捷键：正式版就是设置值；开发版在设置仍是出厂默认值时换成 [`DEVELOPMENT_TOGGLE`]。
-fn effective_accelerator(shortcuts: &Shortcuts) -> String {
-    let default = Shortcuts::default().open_clipboard;
-    if cfg!(feature = "production-identity") || shortcuts.open_clipboard != default {
-        return shortcuts.open_clipboard.clone();
+/// 实际注册的快捷键：正式版就是设置值；开发版在设置仍是出厂默认值时换成开发用的组合
+/// （出厂默认值属于本机已安装的应用，开发版抢先注册会让它注册失败）。
+fn effective(configured: &str, default: &str, development: &str) -> String {
+    if cfg!(feature = "production-identity") || configured != default {
+        return configured.to_owned();
     }
 
-    DEVELOPMENT_TOGGLE.to_owned()
+    development.to_owned()
 }
 
 #[cfg(test)]
@@ -277,6 +331,10 @@ mod tests {
             HotKey::new(Some(Modifiers::ALT), Code::KeyC)
         );
         assert_eq!(
+            parsed("Alt+X"),
+            HotKey::new(Some(Modifiers::ALT), Code::KeyX)
+        );
+        assert_eq!(
             parsed(DEVELOPMENT_TOGGLE),
             HotKey::new(
                 Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
@@ -291,10 +349,25 @@ mod tests {
     #[test]
     fn development_builds_never_take_the_shipped_default() {
         let mut shortcuts = Shortcuts::default();
-        assert_eq!(effective_accelerator(&shortcuts), DEVELOPMENT_TOGGLE);
+        assert_eq!(
+            wanted_toggle(&shortcuts),
+            parse(DEVELOPMENT_TOGGLE).expect("valid")
+        );
+        assert_eq!(
+            wanted_preference(&shortcuts),
+            parse(DEVELOPMENT_PREFERENCE).expect("valid")
+        );
 
-        shortcuts.open_clipboard = "Control+Shift+F8".to_owned();
-        assert_eq!(effective_accelerator(&shortcuts), "Control+Shift+F8");
+        shortcuts.open_clipboard = "Control+Shift+F7".to_owned();
+        shortcuts.open_preference = "Alt+P".to_owned();
+        assert_eq!(
+            wanted_toggle(&shortcuts),
+            parse("Control+Shift+F7").expect("valid")
+        );
+        assert_eq!(
+            wanted_preference(&shortcuts),
+            parse("Alt+P").expect("valid")
+        );
     }
 
     #[test]

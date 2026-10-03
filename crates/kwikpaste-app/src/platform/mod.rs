@@ -27,10 +27,13 @@
 //! - 拖出：卡片按下记 [`drag_out::DragTracker`]，越过阈值后 [`drag_out::start_item`]，接法见
 //!   [`drag_out`] 模块文档。
 //! - core：`crate::core_host::core(cx)` 取 `Core`；[`CoreEvents`] 转发 core 的全部事件。
+//! - 偏好设置、引导、备份导入：第二次启动、托盘、偏好快捷键和带 `.kwikpastebak` 的启动都变成
+//!   [`host::HostRequest`]，UI 用 [`host::set_handler`] 接手，见 [`host`] 模块文档。
 
 mod autostart;
 pub mod drag_out;
 mod editing;
+pub mod host;
 mod hotkey;
 mod instance;
 mod keyboard;
@@ -214,6 +217,7 @@ pub fn start<V: Render>(
     }
     settings::follow(cx);
     autostart::sync_at_startup(cx);
+    host::queue_launch_arguments(cx);
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
     updater::start(cx);

@@ -6,11 +6,8 @@ use kwikpaste_os::single_instance::{self, Claim, Invocation, PrimaryInstance};
 
 use super::editing::EditTrigger;
 use super::panel::{PanelCommand, Trigger, TriggerSource};
-use super::{paste, probe, updater, watchdog};
+use super::{host, paste, probe, updater, watchdog};
 use crate::{core_host, selftest};
-
-/// 开机自启带的参数：第二实例带它时静默退出，主实例什么也不做（与 1.x 相同）。
-const AUTO_LAUNCH: &str = "--auto-launch";
 
 /// 持有主实例守卫：退出前丢弃，释放单实例名字。`sender` 是转交参数的入口，重新占回单实例时用。
 struct Instance {
@@ -81,13 +78,10 @@ async fn handle(invocation: &Invocation, commands: &Sender<PanelCommand>, cx: &m
     if selftest::enabled(selftest::PLATFORM) && handle_selftest(args, commands, cx).await {
         return;
     }
-    if args.iter().any(|arg| arg == AUTO_LAUNCH) {
-        return;
+    // 备份文件 → 导入，重复的自启 → 忽略，其它 → 偏好设置（与 1.x 相同），交给 UI。
+    if let Some(request) = host::request_for_invocation(args, &invocation.cwd) {
+        cx.update(|cx| host::dispatch(cx, request));
     }
-
-    // TODO：未完成引导开引导窗、否则开偏好窗（与 1.x 相同）；这两个窗口建好之前先唤起面板。
-    let trigger = Trigger::now(TriggerSource::SecondInstance);
-    let _ = commands.try_send(PanelCommand::Show(trigger));
 }
 
 /// 平台自测的远程命令（主实例本身也处于 `--selftest-platform` 时才接受）；处理了返回 `true`。

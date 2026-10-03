@@ -5,7 +5,8 @@
 //! 打开窗口，macOS 左键弹菜单。事件经专用线程阻塞 `recv()` 转进 `async_channel`，
 //! 线程里只转发、不碰 GPUI。
 //!
-//! TODO：偏好窗建好之前，「偏好设置」和 `trayClick = preference` 先唤起面板。
+//! 「偏好设置」和 `trayClick = preference` 发 [`HostRequest::OpenPreferences`]，由 UI 打开偏好窗
+//! （见 [`super::host`]；UI 还没注册时回退为唤起面板）。
 
 use async_channel::Sender;
 use gpui::{App, AsyncApp, Global};
@@ -14,6 +15,7 @@ use kwikpaste_core::settings::{Settings, TrayClick};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
+use super::host::{self, HostRequest, RequestSource};
 use super::panel::{PanelCommand, Trigger, TriggerSource};
 use crate::core_host;
 
@@ -86,16 +88,28 @@ pub fn create(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()
         while let Ok(action) = receiver.recv().await {
             match action {
                 TrayAction::Exit => cx.update(|cx| cx.quit()),
-                TrayAction::Preference | TrayAction::LeftClick => {
-                    if matches!(action, TrayAction::LeftClick) {
-                        let click = cx.update(|cx| {
-                            core_host::core(cx).map(|core| core.settings().general.tray_click)
-                        });
-                        if click == Some(TrayClick::Preference) {
-                            log::debug!(
-                                "trayClick = preference; the preference window is not built yet"
+                TrayAction::Preference => cx.update(|cx| {
+                    host::dispatch(
+                        cx,
+                        HostRequest::OpenPreferences {
+                            source: RequestSource::TrayMenu,
+                        },
+                    );
+                }),
+                TrayAction::LeftClick => {
+                    let click = cx.update(|cx| {
+                        core_host::core(cx).map(|core| core.settings().general.tray_click)
+                    });
+                    if click == Some(TrayClick::Preference) {
+                        cx.update(|cx| {
+                            host::dispatch(
+                                cx,
+                                HostRequest::OpenPreferences {
+                                    source: RequestSource::TrayClick,
+                                },
                             );
-                        }
+                        });
+                        continue;
                     }
                     let trigger = Trigger::now(TriggerSource::Tray);
                     let _ = commands.send(PanelCommand::Show(trigger)).await;
