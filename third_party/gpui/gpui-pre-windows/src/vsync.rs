@@ -23,24 +23,43 @@ const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);
 const DEFAULT_VSYNC_INTERVAL: Duration = Duration::from_micros(16_666); // ~60Hz
 
 // [kwikpaste patch 0001] Park the vsync thread while no GPUI window is visible.
-static VSYNC_WAKE: LazyLock<(std::sync::Mutex<bool>, std::sync::Condvar)> =
-    LazyLock::new(|| (std::sync::Mutex::new(false), std::sync::Condvar::new()));
+//
+// WM_SHOWWINDOW(TRUE) wakes the thread before the window is actually visible, so right after a wake
+// the thread must not park for the full timeout again (frames for async updates would then wait up to
+// a second for input). For `WAKE_GRACE` after a wake it only naps one ~60 Hz interval per park.
+const WAKE_GRACE: Duration = Duration::from_millis(500);
+
+#[derive(Default)]
+struct WakeState {
+    woken: bool,
+    grace_until: Option<Instant>,
+}
+
+static VSYNC_WAKE: LazyLock<(std::sync::Mutex<WakeState>, std::sync::Condvar)> =
+    LazyLock::new(|| (std::sync::Mutex::new(WakeState::default()), std::sync::Condvar::new()));
 
 /// Wake the vsync thread, e.g. because a window became visible.
 pub(crate) fn wake_vsync_thread() {
-    let (flag, condvar) = &*VSYNC_WAKE;
-    *flag.lock().unwrap() = true;
+    let (state, condvar) = &*VSYNC_WAKE;
+    let mut state = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.woken = true;
+    state.grace_until = Some(Instant::now() + WAKE_GRACE);
     condvar.notify_all();
 }
 
-/// Block until [`wake_vsync_thread`] is called or `timeout` elapses.
+/// Block until [`wake_vsync_thread`] is called or `timeout` elapses; shortly after a wake, only
+/// for one ~60 Hz interval.
 pub(crate) fn park_vsync_thread(timeout: Duration) {
-    let (flag, condvar) = &*VSYNC_WAKE;
-    let guard = flag.lock().unwrap();
+    let (state, condvar) = &*VSYNC_WAKE;
+    let guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let timeout = match guard.grace_until {
+        Some(until) if Instant::now() < until => DEFAULT_VSYNC_INTERVAL,
+        _ => timeout,
+    };
     let (mut guard, _) = condvar
-        .wait_timeout_while(guard, timeout, |woken| !*woken)
-        .unwrap();
-    *guard = false;
+        .wait_timeout_while(guard, timeout, |state| !state.woken)
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.woken = false;
 }
 
 // [kwikpaste patch 0001] Health signal: true while the vsync thread runs its loop. Its guard drops
