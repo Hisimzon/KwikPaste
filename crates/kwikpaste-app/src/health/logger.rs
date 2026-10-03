@@ -1,7 +1,12 @@
-//! 普通启动的日志文件：`<日志目录>/KwikPaste.log`，与 1.x（tauri-plugin-log）同一个文件，追加写。
+//! 普通启动的日志文件，与 1.x（tauri-plugin-log 2 的默认设置）相同：
 //!
-//! 本 workspace 的 crate 记到 info（debug 构建到 debug），其余 crate 只记 warn 以上。文件超过
-//! [`MAX_BYTES`] 时改名为 `KwikPaste.old.log`（覆盖上一份）再重新开始，最多占两份的空间。
+//! - 位置：`<日志目录>/KwikPaste.log`（`CorePaths::log_dir`：安装版 `%LOCALAPPDATA%\<id>\logs`，
+//!   便携版 `data\logs`），追加写，1.x 留下的内容接着用；
+//! - 大小与轮换：上限 40 000 字节，再写一行就会超过时删掉整个文件重新开始（`KeepOne`），打开时已经
+//!   超过也一样；
+//! - 格式：`[2026-10-03][04:05:06][target][LEVEL] message`，UTC；
+//! - 级别：本 workspace 的 crate（应用、core、updater、os）记到 info，debug 构建到 debug；其余 crate
+//!   只记 warn 以上，免得 GPUI 等库的日志把 40 KB 挤满。
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
@@ -9,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 const FILE_NAME: &str = "KwikPaste.log";
-const OLD_FILE_NAME: &str = "KwikPaste.old.log";
-const MAX_BYTES: u64 = 2 * 1024 * 1024;
+/// tauri-plugin-log 的 `DEFAULT_MAX_FILE_SIZE`。
+const MAX_BYTES: u64 = 40_000;
 
 struct FileLogger {
     path: PathBuf,
@@ -19,7 +24,7 @@ struct FileLogger {
 
 struct Sink {
     file: Option<File>,
-    written: u64,
+    size: u64,
 }
 
 static LOGGER: OnceLock<FileLogger> = OnceLock::new();
@@ -33,12 +38,7 @@ pub fn init(dir: PathBuf) {
         );
         return;
     }
-    let path = dir.join(FILE_NAME);
-    let (file, written) = open(&path);
-    let logger = LOGGER.get_or_init(|| FileLogger {
-        path,
-        sink: Mutex::new(Sink { file, written }),
-    });
+    let logger = LOGGER.get_or_init(|| FileLogger::open(dir.join(FILE_NAME)));
     if log::set_logger(logger).is_ok() {
         log::set_max_level(if cfg!(debug_assertions) {
             log::LevelFilter::Debug
@@ -48,17 +48,12 @@ pub fn init(dir: PathBuf) {
     }
 }
 
-/// 打开（必要时先轮换）日志文件，返回文件和已有的字节数。
-fn open(path: &Path) -> (Option<File>, u64) {
-    let size = std::fs::metadata(path).map_or(0, |meta| meta.len());
-    let size = if size > MAX_BYTES {
-        rotate(path);
-        0
-    } else {
-        size
-    };
+fn open_append(path: &Path) -> (Option<File>, u64) {
     match OpenOptions::new().create(true).append(true).open(path) {
-        Ok(file) => (Some(file), size),
+        Ok(file) => {
+            let size = file.metadata().map_or(0, |meta| meta.len());
+            (Some(file), size)
+        }
         Err(err) => {
             eprintln!("log file {} could not be opened: {err}", path.display());
             (None, 0)
@@ -66,16 +61,51 @@ fn open(path: &Path) -> (Option<File>, u64) {
     }
 }
 
-fn rotate(path: &Path) {
-    let old = path.with_file_name(OLD_FILE_NAME);
-    let _ = std::fs::remove_file(&old);
-    let _ = std::fs::rename(path, old);
+/// 1.x 的时间戳格式（UTC）。
+fn timestamp() -> String {
+    chrono::Utc::now()
+        .format("[%Y-%m-%d][%H:%M:%S]")
+        .to_string()
 }
 
-fn timestamp() -> String {
-    chrono::Local::now()
-        .format("%Y-%m-%d %H:%M:%S%.3f")
-        .to_string()
+fn line(target: &str, level: log::Level, message: &std::fmt::Arguments<'_>) -> String {
+    format!("{}[{target}][{level}] {message}\n", timestamp())
+}
+
+impl FileLogger {
+    fn open(path: PathBuf) -> Self {
+        let (file, size) = open_append(&path);
+        let (file, size) = if size >= MAX_BYTES {
+            // 先关掉句柄再删。
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            open_append(&path)
+        } else {
+            (file, size)
+        };
+
+        Self {
+            path,
+            sink: Mutex::new(Sink { file, size }),
+        }
+    }
+
+    fn append(&self, sink: &mut Sink, text: &str) {
+        let len = text.len() as u64;
+        if sink.file.is_none() || (sink.size != 0 && sink.size + len > MAX_BYTES) {
+            sink.file = None;
+            if sink.size != 0 {
+                let _ = std::fs::remove_file(&self.path);
+            }
+            (sink.file, sink.size) = open_append(&self.path);
+        }
+        if let Some(file) = &mut sink.file
+            && file.write_all(text.as_bytes()).is_ok()
+        {
+            let _ = file.flush();
+            sink.size += len;
+        }
+    }
 }
 
 impl log::Log for FileLogger {
@@ -100,14 +130,10 @@ impl log::Log for FileLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
-        let line = format!(
-            "[{}][{}][{}] {}\n",
-            timestamp(),
-            record.level(),
-            record.target(),
-            record.args()
-        );
-        self.append(&line);
+        let text = line(record.target(), record.level(), record.args());
+        if let Ok(mut sink) = self.sink.lock() {
+            self.append(&mut sink, &text);
+        }
     }
 
     fn flush(&self) {
@@ -119,43 +145,27 @@ impl log::Log for FileLogger {
     }
 }
 
-impl FileLogger {
-    fn append(&self, text: &str) {
-        let Ok(mut sink) = self.sink.lock() else {
-            return;
-        };
-        if sink.written > MAX_BYTES {
-            sink.file = None;
-            rotate(&self.path);
-            let (file, written) = open(&self.path);
-            sink.file = file;
-            sink.written = written;
-        }
-        if let Some(file) = &mut sink.file
-            && file.write_all(text.as_bytes()).is_ok()
-        {
-            sink.written += text.len() as u64;
-        }
-    }
-}
-
-/// panic hook 用：把崩溃信息写进日志并落盘。日志的锁拿不到（panic 正发生在写日志时）就另开一个
-/// 句柄追加，不会在 hook 里死锁。自测进程写 stderr。
+/// panic hook / 原生崩溃处理用：把崩溃信息写进日志并落盘（每行写完即 flush，release 是
+/// `panic = "abort"` 时 hook 返回后进程立刻结束）。日志的锁拿不到（崩溃正发生在写日志时）就另开
+/// 一个句柄追加，不会在 hook 里死锁。自测进程写 stderr。
 pub fn write_crash(text: &str) {
-    let line = format!("[{}][ERROR][KwikPaste::health] {text}\n", timestamp());
+    let text = line(
+        "KwikPaste::health",
+        log::Level::Error,
+        &format_args!("{text}"),
+    );
     let Some(logger) = LOGGER.get() else {
-        let _ = std::io::stderr().lock().write_all(line.as_bytes());
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr.write_all(text.as_bytes());
+        let _ = stderr.flush();
         return;
     };
-    if let Ok(mut sink) = logger.sink.try_lock()
-        && let Some(file) = &mut sink.file
-    {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
+    if let Ok(mut sink) = logger.sink.try_lock() {
+        logger.append(&mut sink, &text);
         return;
     }
     if let Ok(mut file) = OpenOptions::new().append(true).open(&logger.path) {
-        let _ = file.write_all(line.as_bytes());
+        let _ = file.write_all(text.as_bytes());
         let _ = file.flush();
     }
 }
@@ -173,13 +183,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join(FILE_NAME);
-        let (file, written) = open(&path);
-        let logger = FileLogger {
-            path,
-            sink: Mutex::new(Sink { file, written }),
-        };
-        (logger, dir)
+        (FileLogger::open(dir.join(FILE_NAME)), dir)
     }
 
     fn emit(logger: &FileLogger, level: log::Level, target: &str, text: &str) {
@@ -193,41 +197,55 @@ mod tests {
     }
 
     #[test]
-    fn our_info_lines_are_kept_and_other_crates_only_from_warn() {
+    fn lines_use_the_1x_format_and_levels() {
         let (logger, dir) = logger_in("levels");
         emit(&logger, log::Level::Info, "KwikPaste::platform", "ours");
-        emit(&logger, log::Level::Info, "mdns_sd", "theirs");
-        emit(&logger, log::Level::Warn, "mdns_sd", "their warning");
-        logger.flush();
+        emit(&logger, log::Level::Info, "kwikpaste_core::db", "core");
+        emit(&logger, log::Level::Info, "gpui", "theirs");
+        emit(&logger, log::Level::Warn, "gpui", "their warning");
 
         let text = std::fs::read_to_string(dir.join(FILE_NAME)).expect("log file");
-        assert!(text.contains("[INFO][KwikPaste::platform] ours"));
+        let first = text.lines().next().expect("a line");
+        // [2026-10-03][04:05:06][target][LEVEL] message
+        assert_eq!(&first[..1], "[");
+        assert_eq!(&first[11..13], "][");
+        assert!(first.ends_with("][KwikPaste::platform][INFO] ours"));
+        assert!(text.contains("[kwikpaste_core::db][INFO] core"));
         assert!(!text.contains("theirs"));
-        assert!(text.contains("[WARN][mdns_sd] their warning"));
+        assert!(text.contains("[gpui][WARN] their warning"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn a_full_file_moves_to_the_old_name() {
+    fn the_file_starts_over_past_40_000_bytes() {
         let (logger, dir) = logger_in("rotate");
-        let line = "x".repeat(64 * 1024);
-        for _ in 0..34 {
-            emit(&logger, log::Level::Error, "KwikPaste::health", &line);
-        }
-        emit(
-            &logger,
-            log::Level::Error,
+        let filler = "x".repeat(1000);
+        let len = line(
             "KwikPaste::health",
-            "after rotation",
-        );
-        logger.flush();
+            log::Level::Info,
+            &format_args!("{filler}"),
+        )
+        .len() as u64;
+        let fit = MAX_BYTES / len;
+        for _ in 0..fit {
+            emit(&logger, log::Level::Info, "KwikPaste::health", &filler);
+        }
+        let path = dir.join(FILE_NAME);
+        assert_eq!(std::fs::metadata(&path).expect("log").len(), fit * len);
 
-        let current = std::fs::read_to_string(dir.join(FILE_NAME)).expect("log file");
-        let old = std::fs::metadata(dir.join(OLD_FILE_NAME)).expect("old log file");
-        assert!(current.contains("after rotation"));
-        assert!(current.len() < 1024 * 1024);
-        assert!(old.len() > MAX_BYTES);
+        emit(&logger, log::Level::Info, "KwikPaste::health", &filler);
+        let text = std::fs::read_to_string(&path).expect("log file");
+        assert_eq!(text.lines().count(), 1, "the file was not started over");
         drop(logger);
+
+        // 打开时已经超过上限：同样从头开始。
+        std::fs::write(&path, vec![b'y'; 41_000]).expect("big file");
+        let reopened = FileLogger::open(path.clone());
+        emit(&reopened, log::Level::Info, "KwikPaste::health", "fresh");
+        let text = std::fs::read_to_string(&path).expect("log file");
+        assert!(text.ends_with("[KwikPaste::health][INFO] fresh\n"));
+        assert!(!text.contains('y'));
+        drop(reopened);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
