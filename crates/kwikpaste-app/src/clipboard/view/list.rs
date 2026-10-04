@@ -855,6 +855,9 @@ impl ClipboardList {
 
     /// 交互自测使用的合成悬停，不读取系统指针位置；仍走正式的悬停预览计时器。
     pub(crate) fn selftest_hover(&mut self, id: &Arc<str>, cx: &mut Context<Self>) {
+        // 合成事件没有经过 `pointer_moved`，因此不能依赖真实指针把状态推进到
+        // `Moved`；否则预览用例会偶发地在 `preview_hover` 的门槛处直接返回。
+        self.pointer = Pointer::Moved;
         self.hover_card(id, true, cx);
     }
 
