@@ -594,6 +594,8 @@ impl ClipboardPanel {
 impl Render for ClipboardPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::tokens(cx);
+        let surface = crate::platform::material::surface_alpha(cx)
+            .map_or(tokens.bg_container, |alpha| tokens.material_surface(alpha));
 
         div()
             .id("clipboard-panel")
@@ -601,7 +603,7 @@ impl Render for ClipboardPanel {
             .size_full()
             .flex()
             .flex_col()
-            .bg(tokens.bg_container)
+            .bg(surface)
             .text_color(tokens.text)
             .on_modifiers_changed(cx.listener(|panel, event: &ModifiersChangedEvent, _, cx| {
                 panel.set_key_hints(event.modifiers.secondary(), cx);

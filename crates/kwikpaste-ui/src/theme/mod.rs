@@ -18,6 +18,11 @@ use gpui_component::{Theme, ThemeMode};
 pub use css_color::css_color;
 pub use tokens::{KpTokens, TextSize, control_height, motion, radius, space};
 
+/// 面板在 Windows Mica 材质上的内容层不透明度（与 1.x material surface 一致）。
+pub const MATERIAL_MICA_ALPHA: f32 = 0.58;
+/// 面板在 Windows Acrylic 材质上的内容层不透明度（与 1.x material surface 一致）。
+pub const MATERIAL_ACRYLIC_ALPHA: f32 = 0.34;
+
 /// 用户的主题设置，对应 1.x `appearance.theme` 的 `auto` / `light` / `dark`。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ThemePreference {

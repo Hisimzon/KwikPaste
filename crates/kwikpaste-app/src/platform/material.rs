@@ -30,6 +30,7 @@
 
 use gpui::{App, Global, Window, WindowBackgroundAppearance};
 use kwikpaste_core::settings::{Material, Theme};
+use kwikpaste_ui::theme;
 
 use super::panel::Panel;
 use super::system::SystemSignals;
@@ -66,6 +67,15 @@ pub fn current(cx: &App) -> WindowMaterial {
             effective: Material::Default,
             dark: false,
         })
+}
+
+/// 返回面板内容层的不透明度；默认材质返回 `None`，由调用方使用不透明 token。
+pub fn surface_alpha(cx: &App) -> Option<f32> {
+    match current(cx).effective {
+        Material::Mica => Some(theme::MATERIAL_MICA_ALPHA),
+        Material::Acrylic => Some(theme::MATERIAL_ACRYLIC_ALPHA),
+        Material::Default => None,
+    }
 }
 
 /// 按当前设置和系统设置重新计算材质，并套到面板上。设置或系统设置变化时调用。

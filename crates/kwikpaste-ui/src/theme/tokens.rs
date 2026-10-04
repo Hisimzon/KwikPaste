@@ -101,6 +101,11 @@ pub struct KpTokens {
 }
 
 impl KpTokens {
+    /// 以材质不透明度生成面板内容层颜色。
+    pub fn material_surface(&self, alpha: f32) -> Hsla {
+        self.bg_container.opacity(alpha)
+    }
+
     pub fn from_antd(colors: &AntdColors, shadows: &AntdShadows) -> Self {
         Self {
             text: colors.color_text.to_hsla(),
