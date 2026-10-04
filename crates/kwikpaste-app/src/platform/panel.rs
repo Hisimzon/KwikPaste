@@ -253,7 +253,7 @@ pub fn open<V: Render>(
 
     let mut native = None;
     let mut content = None;
-    let (window, root) = kwikpaste_ui::open_window(window_options(), cx, |window, cx| {
+    let (window, root) = crate::platform::open_window(window_options(), cx, |window, cx| {
         native = Some(NativePanel::attach(window, text_scale));
         let view = build(window, cx);
         content = Some(view.clone());

@@ -55,7 +55,7 @@ pub fn open_if_requested(cx: &mut App) -> bool {
         focus: false,
         ..Default::default()
     };
-    let opened = kwikpaste_ui::open_window(options, cx, |window, cx| {
+    let opened = crate::platform::open_window(options, cx, |window, cx| {
         cx.new(|cx| Gallery::new(window, cx))
     });
     if let Err(error) = opened {
@@ -682,7 +682,10 @@ impl Render for Gallery {
 
         column()
             .size_full()
-            .bg(tokens.bg_layout)
+            .bg(crate::platform::material::shell_surface(
+                cx,
+                tokens.bg_layout,
+            ))
             .child(self.render_header(cx))
             .child(
                 div()

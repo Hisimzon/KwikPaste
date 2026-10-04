@@ -362,7 +362,7 @@ fn open_update_window(status: UpdateStatus, cx: &mut App) {
         focus: false,
         ..Default::default()
     };
-    match kwikpaste_ui::open_window(options, cx, |_, cx| {
+    match crate::platform::open_window(options, cx, |_, cx| {
         cx.new(|_| UpdateWindow::new(updater.clone(), status, requests))
     }) {
         Ok((handle, view)) => {
@@ -559,7 +559,12 @@ impl Render for UpdateWindow {
             .flex_col()
             .gap(px(16.))
             .p(px(24.))
-            .bg(tokens.bg_container)
+            .bg(crate::platform::material::surface_tint(
+                cx,
+                tokens.bg_container,
+                0.58,
+                0.34,
+            ))
             .text_color(tokens.text)
             .child(div().kp_text(TextSize::Lg).child(title))
             .child(

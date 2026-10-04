@@ -681,7 +681,10 @@ impl Render for PreviewPanel {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(tokens.bg_elevated)
+            .bg(crate::platform::material::shell_surface(
+                cx,
+                tokens.bg_elevated,
+            ))
             .border_1()
             .border_color(tokens.border_secondary)
             .text_color(tokens.text)
@@ -724,7 +727,7 @@ impl PreviewWindow {
             ..Default::default()
         };
         let mut native = None;
-        let (handle, panel) = kwikpaste_ui::open_window(options, cx, |window, cx| {
+        let (handle, panel) = crate::platform::open_window(options, cx, |window, cx| {
             native = Some(native::NativePreview::attach(window));
             cx.new(PreviewPanel::new)
         })?;

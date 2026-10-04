@@ -54,7 +54,7 @@ pub fn open(cx: &mut App) -> anyhow::Result<()> {
         focus: false,
         ..Default::default()
     };
-    let (handle, view) = kwikpaste_ui::open_window(options, cx, |window, cx| {
+    let (handle, view) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Onboarding::new(window, cx));
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         view::bring_window_to_front(window);
@@ -396,7 +396,12 @@ impl Onboarding {
             .rounded(theme::radius::MD)
             .border_1()
             .border_color(theme::tokens(cx).border)
-            .bg(theme::tokens(cx).bg_container)
+            .bg(crate::platform::material::surface_tint(
+                cx,
+                theme::tokens(cx).bg_container,
+                0.58,
+                0.34,
+            ))
             .p(space(4.))
             .child(div().kp_text(TextSize::Base).child(title))
             .child(
@@ -844,7 +849,12 @@ impl Render for Onboarding {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(theme::tokens(cx).bg_container)
+            .bg(crate::platform::material::surface_tint(
+                cx,
+                theme::tokens(cx).bg_container,
+                0.58,
+                0.34,
+            ))
             .text_color(theme::tokens(cx).text)
             .child(self.render_header(cx))
             .child(

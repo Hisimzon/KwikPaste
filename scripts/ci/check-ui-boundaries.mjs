@@ -23,7 +23,8 @@ const COMPONENT_DEPENDENCY =
 const COMPONENT_PATH = /\b(gpui_component|gpui_base)\b/;
 const COLOR_LITERALS = [
   /\b(rgb|rgba|hsl|hsla)\s*\(/,
-  /\b(Rgba|Hsla)\s*\{/,
+  // `-> Hsla {` is a return type followed by the function body, not a struct literal.
+  /(?<!->\s*)\b(Rgba|Hsla)\s*\{/,
   /\b(black|white|red|green|blue|yellow|transparent_black|transparent_white|opaque_grey)\s*\(\s*\)/,
 ];
 

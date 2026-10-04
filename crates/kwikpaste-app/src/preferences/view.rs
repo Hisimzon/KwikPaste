@@ -86,7 +86,7 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
         focus: false,
         ..Default::default()
     };
-    kwikpaste_ui::open_window(options, cx, |window, cx| {
+    crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
         view.update(cx, |this, cx| this.refresh_storage_overview(cx));
         #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -108,7 +108,7 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
         focus: false,
         ..Default::default()
     };
-    kwikpaste_ui::open_window(options, cx, |window, cx| {
+    crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
         view.update(cx, |this, cx| this.refresh_storage_overview(cx));
         #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -352,6 +352,9 @@ impl Preferences {
             }
         });
         selects.insert("history.retention.unit", retention_unit_state);
+        // 材质切换后窗口重套背板，分层底色也要跟着重画；选项显示的仍是用户的设置值（同 1.x）。
+        let material_subscription =
+            cx.observe_global::<crate::platform::material::WindowMaterial>(|_, cx| cx.notify());
         let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
         let subscriptions = core_events(cx)
             .map(|events| {
@@ -375,6 +378,7 @@ impl Preferences {
                 lan_max_image_sub,
                 retention_value_sub,
                 retention_unit_sub,
+                material_subscription,
             ])
             .chain(setting_subscriptions)
             .collect();
@@ -1501,18 +1505,23 @@ impl Preferences {
             .into_any_element()
     }
 
-    fn render_retention(&self) -> gpui::AnyElement {
+    fn render_retention(&self, cx: &App) -> gpui::AnyElement {
         let Some(value_state) = self.number_inputs.get("history.retention.value") else {
             return div().into_any_element();
         };
         let Some(unit_state) = self.selects.get("history.retention.unit") else {
             return div().into_any_element();
         };
+        let keep_forever = unit_state
+            .selected_value(cx)
+            .is_some_and(|value| value.as_ref() == "forever");
         div()
             .flex()
             .items_center()
             .gap(space(1.))
-            .child(NumberInput::new(value_state).width(rems(7.)))
+            .when(!keep_forever, |row| {
+                row.child(NumberInput::new(value_state).width(rems(7.)))
+            })
             .child(
                 Select::new(unit_state)
                     .small()
@@ -2527,7 +2536,12 @@ impl Preferences {
             .p(space(2.))
             .border_r_1()
             .border_color(tokens.border_secondary)
-            .bg(tokens.bg_container)
+            .bg(crate::platform::material::surface_tint(
+                cx,
+                tokens.bg_container,
+                0.34,
+                0.20,
+            ))
             .child(
                 div()
                     .flex()
@@ -2658,7 +2672,7 @@ impl Preferences {
             Control::StorageOverview => self.render_storage_overview(cx),
             Control::CaptureKinds => self.render_capture_kinds(value, cx),
             Control::CaptureOrder => self.render_capture_order(cx),
-            Control::Retention => self.render_retention(),
+            Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
             Control::AppExclusion => self.render_app_exclusion(value, cx),
             Control::GroupSelect => self.render_group_select(path, value, cx),
@@ -2730,7 +2744,12 @@ impl Preferences {
                     .rounded(theme::radius::MD)
                     .border_1()
                     .border_color(tokens.border_secondary)
-                    .bg(tokens.bg_container)
+                    .bg(crate::platform::material::surface_tint(
+                        cx,
+                        tokens.bg_container,
+                        0.48,
+                        0.32,
+                    ))
                     .overflow_hidden()
                     .children(
                         section
@@ -2761,7 +2780,10 @@ impl Preferences {
             .min_w_0()
             .min_h_0()
             .h_full()
-            .bg(tokens.bg_layout)
+            .bg(crate::platform::material::shell_surface(
+                cx,
+                tokens.bg_layout,
+            ))
             .child(
                 div()
                     .flex()
@@ -2772,7 +2794,12 @@ impl Preferences {
                     .px(space(6.))
                     .border_b_1()
                     .border_color(tokens.border_secondary)
-                    .bg(tokens.bg_container)
+                    .bg(crate::platform::material::surface_tint(
+                        cx,
+                        tokens.bg_container,
+                        0.34,
+                        0.20,
+                    ))
                     .child(
                         div()
                             .kp_text(TextSize::Lg)
@@ -3298,6 +3325,10 @@ impl Render for RetentionRuleEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::tokens(cx);
         let entity = cx.entity().downgrade();
+        let keep_forever = self
+            .keep_unit
+            .selected_value(cx)
+            .is_some_and(|value| value.as_ref() == "forever");
         let categories = ContentCategory::ALL.into_iter().map(|category| {
             let checked = self.categories.contains(&category);
             let entity = entity.clone();
@@ -3403,7 +3434,9 @@ impl Render for RetentionRuleEditor {
                             .flex()
                             .items_center()
                             .gap(space(1.))
-                            .child(NumberInput::new(&self.keep_value).width(rems(9.)))
+                            .when(!keep_forever, |row| {
+                                row.child(NumberInput::new(&self.keep_value).width(rems(9.)))
+                            })
                             .child(Select::new(&self.keep_unit).width(rems(11.))),
                     ),
             )

@@ -28,13 +28,21 @@
 //! macOS：default 用不透明窗口，mica / acrylic 用 `Blurred` 加 `NSVisualEffectView`；系统关闭
 //! 透明效果或高对比度时回退 default。
 
-use gpui::{App, Global, Window, WindowBackgroundAppearance};
+use gpui::{AnyWindowHandle, App, Global, Hsla, Window, WindowBackgroundAppearance};
 use kwikpaste_core::settings::{Material, Theme};
 use kwikpaste_ui::theme;
 
 use super::panel::Panel;
 use super::system::SystemSignals;
 use crate::core_host;
+
+/// 当前已经创建的应用窗口；材质变化时所有窗口都要同步重套原生背板和 Root。
+#[derive(Default)]
+pub struct MaterialWindows {
+    handles: Vec<AnyWindowHandle>,
+}
+
+impl Global for MaterialWindows {}
 
 /// 当前窗口材质。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +86,42 @@ pub fn surface_alpha(cx: &App) -> Option<f32> {
     }
 }
 
-/// 按当前设置和系统设置重新计算材质，并套到面板上。设置或系统设置变化时调用。
+/// 窗口外壳底色（1.x `.kp-material-surface`）：默认材质用窗口自己的 token；材质下统一是
+/// `bg_container` 按面板同样的比例半透明——暗色的 `bg_layout` 是纯黑，不能拿来透底。
+pub fn shell_surface(cx: &App, default: Hsla) -> Hsla {
+    match surface_alpha(cx) {
+        Some(alpha) => theme::tokens(cx).bg_container.opacity(alpha),
+        None => default,
+    }
+}
+
+/// 生成窗口层的半透明色。默认材质保持原始 token，材质窗口按 1.x 的 chrome/content
+/// 分层降低不透明度，避免一个不透明矩形盖住 DWM/NSVisualEffectView 背板。
+pub fn surface_tint(cx: &App, base: Hsla, mica_alpha: f32, acrylic_alpha: f32) -> Hsla {
+    match current(cx).effective {
+        Material::Mica => base.opacity(mica_alpha),
+        Material::Acrylic => base.opacity(acrylic_alpha),
+        Material::Default => base,
+    }
+}
+
+/// 注册一个窗口并立即套用当前材质。窗口创建后 Root 已经存在，因此这里同时处理 Root 底色。
+pub fn register_window(handle: AnyWindowHandle, cx: &mut App) {
+    let handles = cx
+        .try_global::<MaterialWindows>()
+        .map_or_else(Vec::new, |windows| windows.handles.clone());
+    if !handles.contains(&handle) {
+        let mut next = handles;
+        next.push(handle);
+        cx.set_global(MaterialWindows { handles: next });
+    }
+    let material = current(cx);
+    cx.defer(move |cx| {
+        apply_one(handle, cx, &material);
+    });
+}
+
+/// 按当前设置和系统设置重新计算材质，并套到所有已创建窗口。设置或系统设置变化时调用。
 pub fn apply(cx: &mut App) {
     let Some(core) = core_host::core(cx) else {
         return;
@@ -103,8 +146,33 @@ pub fn apply(cx: &mut App) {
         super::probe::material(&material);
     }
 
+    let handles = cx
+        .try_global::<MaterialWindows>()
+        .map_or_else(Vec::new, |windows| windows.handles.clone());
+    let mut open_handles = Vec::with_capacity(handles.len());
+    for handle in handles {
+        if apply_one(handle, cx, &material) {
+            open_handles.push(handle);
+        }
+    }
+    cx.set_global(MaterialWindows {
+        handles: open_handles,
+    });
     if let Some(panel) = cx.try_global::<Panel>() {
         panel.request(super::panel::PanelCommand::SetMaterial(material));
+    }
+}
+
+fn apply_one(handle: AnyWindowHandle, cx: &mut App, material: &WindowMaterial) -> bool {
+    match handle.update(cx, |_, window, cx| {
+        apply_to_window(window, material);
+        kwikpaste_ui::set_root_translucent(window, material.is_translucent(), cx);
+    }) {
+        Ok(()) => true,
+        Err(err) => {
+            log::debug!("window material not applied now: {err:#}");
+            false
+        }
     }
 }
 

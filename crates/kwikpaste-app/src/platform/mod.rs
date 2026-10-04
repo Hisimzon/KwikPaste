@@ -62,7 +62,10 @@ mod native;
 use std::{path::PathBuf, rc::Rc};
 
 use anyhow::Context as _;
-use gpui::{App, AppContext as _, CursorHideMode, Entity, Platform, QuitMode, Render, Window};
+use gpui::{
+    AnyWindowHandle, App, AppContext as _, CursorHideMode, Entity, Platform, QuitMode, Render,
+    Window, WindowOptions,
+};
 use kwikpaste_os::single_instance::{self, Claim, Invocation, PrimaryInstance};
 
 use crate::core_host::{self, StartedCore};
@@ -75,6 +78,20 @@ pub use panel::{Panel, PanelCommand, PanelEvent, Trigger, TriggerSource, rendere
 pub use settings::{CoreEvents, core_events};
 #[allow(unused_imports, reason = "UI 接线用的接口，见本模块文档")]
 pub use system::SystemSignals;
+
+/// 打开应用窗口并加入材质同步集合。
+///
+/// 所有 GPUI 窗口都走这一层，保证用户在偏好设置里切换材质时，已打开的预览、偏好、引导、
+/// 更新和展示窗口会一起切换，而不是只有剪贴板面板刷新。
+pub fn open_window<V: Render>(
+    options: WindowOptions,
+    cx: &mut App,
+    build: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
+) -> gpui::Result<(AnyWindowHandle, Entity<V>)> {
+    let (handle, view) = kwikpaste_ui::open_window(options, cx, build)?;
+    material::register_window(handle, cx);
+    Ok((handle, view))
+}
 
 /// 崩溃重启的子进程最多等前一个实例退出这么久。
 const TAKE_OVER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
