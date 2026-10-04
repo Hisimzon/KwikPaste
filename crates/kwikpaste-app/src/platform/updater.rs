@@ -127,7 +127,7 @@ pub fn selftest_update_window(cx: &mut App) {
 }
 
 /// 开发自测：展示公告按钮顺序，不打开真实链接。
-pub fn selftest_announcement() {
+pub fn selftest_announcement(cx: &mut App) {
     let prompt = AnnouncementPrompt {
         id: "selftest-announcement".to_owned(),
         important: true,
@@ -144,10 +144,16 @@ pub fn selftest_announcement() {
             },
         ],
     };
-    log::info!(
-        "announcement self-test result: {:?}",
-        show_announcement(prompt)
-    );
+    // 原生模态框会泵消息，启动回调里调用会重入 GPUI 的 AppCell 并使进程崩溃。
+    // 交给后台执行器，让对话框的消息循环不占着 App 的借用。
+    cx.background_executor()
+        .spawn(async move {
+            log::info!(
+                "announcement self-test result: {:?}",
+                show_announcement(prompt)
+            );
+        })
+        .detach();
 }
 
 /// 交接请求的入口，自测演练交接时用。
@@ -555,15 +561,14 @@ impl Render for UpdateWindow {
             None
         };
         div()
+            .size_full()
             .flex()
             .flex_col()
             .gap(px(16.))
             .p(px(24.))
-            .bg(crate::platform::material::surface_tint(
+            .bg(crate::platform::material::shell_surface(
                 cx,
                 tokens.bg_container,
-                0.58,
-                0.34,
             ))
             .text_color(tokens.text)
             .child(div().kp_text(TextSize::Lg).child(title))

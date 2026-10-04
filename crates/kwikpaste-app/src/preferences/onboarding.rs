@@ -849,11 +849,9 @@ impl Render for Onboarding {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(crate::platform::material::surface_tint(
+            .bg(crate::platform::material::shell_surface(
                 cx,
                 theme::tokens(cx).bg_container,
-                0.58,
-                0.34,
             ))
             .text_color(theme::tokens(cx).text)
             .child(self.render_header(cx))

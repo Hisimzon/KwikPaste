@@ -229,22 +229,25 @@ pub fn start<V: Render>(
     if !selftest::active()
         && let Some(log_dir) = health::take_gave_up_notice()
     {
-        show_crash_notice(log_dir);
+        show_crash_notice(log_dir, cx);
     }
     let commands = cx.global::<Panel>().commands();
     keyboard::serve(cx);
     mouse::serve(cx, commands.clone());
     system::serve(cx, commands.clone());
 
-    // 列表自测（跑分、截图）不碰全局热键和托盘：热键是系统范围独占的，会抢走同时在跑的平台探针
+    // 列表自测不碰全局热键：热键是系统范围独占的，会抢走同时在跑的平台探针
     // 或手动开着的开发实例的热键。
-    if !crate::selftest::list_selftest() {
-        if let Err(err) = hotkey::register(cx, commands.clone()) {
-            log::error!("global hotkey is unavailable: {err:#}");
-        }
-        if let Err(err) = tray::create(cx, commands.clone()) {
-            log::error!("tray icon is unavailable: {err:#}");
-        }
+    if !crate::selftest::list_selftest()
+        && let Err(err) = hotkey::register(cx, commands.clone())
+    {
+        log::error!("global hotkey is unavailable: {err:#}");
+    }
+    // 演示实例保留托盘，便于核对原生菜单；跑分和自动交互自测仍不创建托盘。
+    if (!crate::selftest::list_selftest() || selftest::enabled(selftest::LIST_DEMO))
+        && let Err(err) = tray::create(cx, commands.clone())
+    {
+        log::error!("tray icon is unavailable: {err:#}");
     }
     settings::follow(cx);
     autostart::sync_at_startup(cx);
@@ -278,12 +281,12 @@ pub fn start<V: Render>(
         updater::selftest_update_window(cx);
     }
     if selftest::enabled(selftest::ANNOUNCEMENT) {
-        updater::selftest_announcement();
+        updater::selftest_announcement(cx);
     }
     if selftest::enabled(selftest::CRASH_GAVE_UP)
         && let Some(core) = core_host::core(cx)
     {
-        show_crash_notice(core.paths().log_dir());
+        show_crash_notice(core.paths().log_dir(), cx);
     }
     // 面板起来了才算正常启动：这时再在后台清掉 1.x 的 WebView2 数据（只清一次，不挡启动）。
     if !selftest::active()
@@ -296,7 +299,7 @@ pub fn start<V: Render>(
     Ok(())
 }
 
-fn show_crash_notice(log_dir: PathBuf) {
+fn show_crash_notice(log_dir: PathBuf, cx: &App) {
     let title = t("common:health.gaveUpTitle");
     let body = t("common:health.gaveUpBody");
     let open_logs = t("common:health.openLogs");
@@ -305,11 +308,24 @@ fn show_crash_notice(log_dir: PathBuf) {
         kwikpaste_os::dialogs::DialogButton::new(open_logs),
         kwikpaste_os::dialogs::DialogButton::new(ok),
     ];
-    if kwikpaste_os::dialogs::show(&title, &body, &buttons) == Some(0)
-        && let Err(err) = kwikpaste_os::dialogs::open_path(&log_dir)
-    {
-        log::warn!("crash log directory could not be opened: {err}");
-    }
+    // 原生模态框会泵消息，不能在 GPUI 借用 App 的启动回调中阻塞。
+    cx.background_executor()
+        .spawn(async move {
+            let selected = kwikpaste_os::dialogs::show(&title, &body, &buttons);
+            if crate::selftest::enabled(crate::selftest::CRASH_GAVE_UP) {
+                log::info!(
+                    "crash notice self-test result: {selected:?}; log path: {}",
+                    log_dir.display()
+                );
+                return;
+            }
+            if selected == Some(0)
+                && let Err(err) = kwikpaste_os::dialogs::open_path(&log_dir)
+            {
+                log::warn!("crash log directory could not be opened: {err}");
+            }
+        })
+        .detach();
 }
 
 /// 进入一个短暂的阶段（粘贴、拖出），守卫丢弃时按面板是否显示回到 `Panel` 或 `Idle`。
