@@ -270,6 +270,12 @@ impl ClipboardList {
             .px(dp(12.))
             .child(
                 div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .items_center()
+                    .window_control_area(gpui::WindowControlArea::Drag)
                     .kp_text(TextSize::Xs)
                     .text_color(tokens.tertiary)
                     .child(t_count("clipboard:footer.total", total, &[])),

@@ -160,9 +160,11 @@ impl Render for Header {
                     .child(img(ImageSource::Image(logo())).size(dp(20.))),
             )
             .child(
+                // 空白拖动区要有高度才能被命中（行内居中时空 div 的高度是 0）。
                 div()
                     .flex_1()
                     .min_w_0()
+                    .h(dp(32.))
                     .window_control_area(WindowControlArea::Drag),
             )
             .child(

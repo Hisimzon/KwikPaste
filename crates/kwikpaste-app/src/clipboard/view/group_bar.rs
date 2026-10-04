@@ -372,6 +372,7 @@ impl Render for GroupBar {
                 div()
                     .flex_1()
                     .min_w_0()
+                    .h(dp(32.))
                     .window_control_area(WindowControlArea::Drag),
             )
     }
