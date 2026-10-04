@@ -78,9 +78,12 @@ mod windows {
     use std::mem::size_of;
 
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Controls::{
-        TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TDF_ALLOW_DIALOG_CANCELLATION, TaskDialogIndirect,
+        TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TDF_ALLOW_DIALOG_CANCELLATION,
+        TDF_USE_HICON_MAIN, TaskDialogIndirect,
     };
+    use windows::Win32::UI::WindowsAndMessaging::{HICON, LoadIconW};
     use windows::core::PCWSTR;
 
     use super::DialogButton;
@@ -100,12 +103,25 @@ mod windows {
                 pszButtonText: PCWSTR(label.as_ptr()),
             })
             .collect();
+        let icon = unsafe {
+            GetModuleHandleW(None)
+                .ok()
+                .and_then(|module| {
+                    LoadIconW(
+                        Some(module.into()),
+                        PCWSTR(std::ptr::with_exposed_provenance::<u16>(1)),
+                    )
+                    .ok()
+                })
+                .unwrap_or(HICON::default())
+        };
         let config = TASKDIALOGCONFIG {
             cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
             hwndParent: HWND::default(),
-            dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
+            dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_USE_HICON_MAIN,
             pszWindowTitle: PCWSTR(title.as_ptr()),
             pszMainInstruction: PCWSTR(title.as_ptr()),
+            Anonymous1: TASKDIALOGCONFIG_0 { hMainIcon: icon },
             pszContent: PCWSTR(body.as_ptr()),
             cButtons: native_buttons.len() as u32,
             pButtons: native_buttons.as_ptr(),
