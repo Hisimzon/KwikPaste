@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use async_channel::Sender;
 use futures::channel::oneshot;
 use gpui::{
-    App, AppContext as _, AsyncApp, Context, Entity, Global, IntoElement, ParentElement as _,
-    Render, Styled as _, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
-    prelude::FluentBuilder as _, px, size,
+    App, AppContext as _, AsyncApp, Context, Entity, Global, ImageSource, IntoElement,
+    ParentElement as _, Render, Styled as _, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    div, img, prelude::FluentBuilder as _, px, relative, size,
 };
 use kwikpaste_ui::theme::TextSize;
 use kwikpaste_ui::{Button, KpStyled as _, theme};
@@ -360,7 +360,7 @@ fn open_update_window(status: UpdateStatus, cx: &mut App) {
         return;
     };
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(560.), px(420.)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(520.), px(230.)), cx)),
         titlebar: Some(TitlebarOptions {
             title: Some(t("common:update.title")),
             ..Default::default()
@@ -430,6 +430,8 @@ struct UpdateWindow {
     downloading: bool,
     installing: bool,
     error: Option<String>,
+    /// 已经设到原生标题栏的标题；只在变化时再设，免得每帧都发 `SetWindowTextW`。
+    window_title: String,
 }
 
 impl UpdateWindow {
@@ -443,12 +445,22 @@ impl UpdateWindow {
             downloading: false,
             installing: false,
             error: None,
+            window_title: String::new(),
         }
     }
 
     fn set_status(&mut self, status: UpdateStatus, cx: &mut Context<Self>) {
+        // 下载中途又收到同一版本的检查结果时保留进度，避免按钮回到“安装更新”被重复点下载。
+        let same_version = self.status.update.as_ref().map(|update| &update.version)
+            == status.update.as_ref().map(|update| &update.version);
         self.status = status;
         self.error = None;
+        if !same_version {
+            self.progress = None;
+            self.downloaded = None;
+            self.downloading = false;
+            self.installing = false;
+        }
         cx.notify();
     }
 
@@ -536,87 +548,194 @@ impl UpdateWindow {
         })
         .detach();
     }
+
+    fn open_release_notes(&self) {
+        let Some(update) = self.status.update.as_ref() else {
+            return;
+        };
+        if let Err(err) = kwikpaste_os::dialogs::open_url(&update.release_notes_url) {
+            log::warn!("update release notes could not be opened: {err}");
+        }
+    }
 }
 
 impl Render for UpdateWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::tokens(cx);
         let update = self.status.update.as_ref();
-        let title = update
-            .map(|update| t_args("common:update.available", &[("version", &update.version)]))
-            .unwrap_or_else(|| t("common:update.title"));
-        let notes = update
-            .and_then(|update| update.body.as_deref())
-            .map(str::to_owned)
-            .unwrap_or_else(|| t("common:update.unsupported").to_string());
-        let progress = self.progress.and_then(|progress| progress.progress);
-        let progress_text = progress.map(|value| format!("{:.0}", value * 100.));
         let downloaded =
             self.downloaded.is_some() || update.is_some_and(|update| update.downloaded);
-        let state_text = if self.installing {
-            Some(t("common:update.installing"))
+        let title = if self.error.is_some() {
+            t("common:update.errorTitle")
+        } else if self.downloading || self.installing {
+            t("common:update.updatingTitle")
         } else if downloaded {
-            Some(t("common:update.downloaded"))
+            t("common:update.downloadedTitle")
+        } else if update.is_some() {
+            t("common:update.available")
         } else {
-            None
+            t("common:update.latestTitle")
         };
+        let downloading_version = update.map_or_else(String::new, |update| update.version.clone());
+        let description = if let Some(error) = self.error.as_deref() {
+            t_args("common:update.error", &[("message", error)])
+        } else if self.downloading {
+            t_args(
+                "common:update.downloading",
+                &[("version", &downloading_version)],
+            )
+        } else if self.installing || downloaded {
+            t("common:update.downloaded")
+        } else if let Some(update) = update {
+            t_args(
+                "common:update.availableBody",
+                &[
+                    ("version", &update.version),
+                    ("currentVersion", &self.status.current_version),
+                ],
+            )
+        } else {
+            t_args(
+                "common:update.latest",
+                &[("currentVersion", &self.status.current_version)],
+            )
+        };
+        let progress = self.progress.and_then(|progress| progress.progress);
+        let progress_text = progress.map(|value| format!("{:.0}", value * 100.));
+        let show_progress = self.downloading || self.progress.is_some();
+        let progress_value = progress.unwrap_or(0.12).clamp(0., 1.) as f32;
+        let show_release_notes = update.is_some() && self.error.is_none();
+        let window_title = if self.downloading || self.installing {
+            t("common:update.updatingTitle")
+        } else {
+            t("common:update.title")
+        };
+        if self.window_title != window_title.as_ref() {
+            window.set_window_title(&window_title);
+            self.window_title = window_title.to_string();
+        }
         div()
             .size_full()
             .flex()
-            .flex_col()
-            .gap(px(16.))
-            .p(px(24.))
+            .gap(px(20.))
+            .p(px(20.))
             .bg(crate::platform::material::shell_surface(
                 cx,
                 tokens.bg_container,
             ))
             .text_color(tokens.text)
-            .child(div().kp_text(TextSize::Lg).child(title))
             .child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .text_color(tokens.secondary)
-                    .child(t_args(
-                        "common:update.current",
-                        &[("version", &self.status.current_version)],
-                    )),
+                div().flex_none().w(px(56.)).child(
+                    img(ImageSource::Image(crate::clipboard::view::app_logo())).size(px(56.)),
+                ),
             )
-            .child(div().kp_text(TextSize::Sm).child(t("common:update.notes")))
-            .child(div().flex_1().child(notes))
-            .when_some(state_text, |element, state| {
-                element.child(div().kp_text(TextSize::Sm).child(state))
-            })
-            .when_some(self.error.as_deref(), |element, error| {
-                element.child(
-                    div()
-                        .kp_text(TextSize::Sm)
-                        .text_color(tokens.error)
-                        .child(t_args("common:update.error", &[("message", error)])),
-                )
-            })
             .child(
                 div()
+                    .min_w_0()
+                    .flex_1()
                     .flex()
-                    .justify_end()
-                    .gap(px(8.))
-                    .when_some(progress_text, |element, progress| {
-                        element.child(div().flex_1().kp_text(TextSize::Sm).child(t_args(
-                            "common:update.downloading",
-                            &[("progress", &progress)],
-                        )))
-                    })
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(div().kp_text(TextSize::Lg).child(title))
                     .child(
-                        Button::new("update-later", t("common:update.later"))
-                            .on_click(|_, window, _| window.remove_window()),
+                        div()
+                            .kp_text(TextSize::Sm)
+                            .text_color(tokens.secondary)
+                            .child(description),
                     )
-                    .when(update.is_some_and(|update| !update.downloaded), |element| {
+                    .when(show_release_notes, |element| {
                         element.child(
-                            Button::new("update-skip", t("common:update.skip"))
-                                .on_click(cx.listener(|view, _, _, cx| view.skip(cx))),
+                            // 链接按钮在纵向 flex 里会被拉满一行、文字居中；包一层让它靠左。
+                            div().flex().child(
+                                Button::new(
+                                    "update-release-notes",
+                                    t("common:update.releaseNotes"),
+                                )
+                                .link()
+                                .on_click(cx.listener(|view, _, _, _| view.open_release_notes())),
+                            ),
+                        )
+                    })
+                    .when(show_progress, |element| {
+                        element.child(
+                            div()
+                                .mt(px(6.))
+                                .h(px(10.))
+                                .w_full()
+                                .rounded(px(5.))
+                                .bg(tokens.fill_secondary)
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(relative(progress_value))
+                                        .rounded(px(5.))
+                                        .bg(tokens.primary),
+                                ),
+                        )
+                    })
+                    .when_some(progress_text, |element, progress| {
+                        element.child(
+                            div()
+                                .kp_text(TextSize::Sm)
+                                .text_color(tokens.secondary)
+                                .child(t_args(
+                                    "common:update.progress",
+                                    &[("progress", &progress)],
+                                )),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(20.))
+                    .right(px(20.))
+                    .bottom(px(16.))
+                    .flex()
+                    .justify_between()
+                    .gap(px(8.))
+                    .child(div().flex().gap(px(8.)).when(
+                        update.is_some_and(|_| !downloaded && !self.downloading),
+                        |element| {
+                            element.child(
+                                Button::new("update-skip", t("common:update.skip"))
+                                    .on_click(cx.listener(|view, _, _, cx| view.skip(cx))),
+                            )
+                        },
+                    ))
+                    .child(div().flex_1())
+                    .when(
+                        update.is_some()
+                            && !self.downloading
+                            && !self.installing
+                            && !downloaded
+                            && self.error.is_none(),
+                        |element| {
+                            element.child(
+                                Button::new("update-later", t("common:update.later"))
+                                    .on_click(|_, window, _| window.remove_window()),
+                            )
+                        },
+                    )
+                    .when(self.downloading, |element| {
+                        element.child(
+                            Button::new("update-cancel", t("common:update.cancel"))
+                                .on_click(|_, window, _| window.remove_window()),
+                        )
+                    })
+                    .when(update.is_none() || self.error.is_some(), |element| {
+                        element.child(
+                            Button::new("update-ok", t("common:update.ok"))
+                                .primary()
+                                .on_click(|_, window, _| window.remove_window()),
                         )
                     })
                     .when(
-                        self.downloaded.is_some() || update.is_some_and(|update| update.downloaded),
+                        update.is_some()
+                            && !self.downloading
+                            && !self.installing
+                            && self.error.is_none()
+                            && downloaded,
                         |element| {
                             element.child(
                                 Button::new("update-install", t("common:update.install"))
@@ -626,8 +745,11 @@ impl Render for UpdateWindow {
                         },
                     )
                     .when(
-                        self.downloaded.is_none()
-                            && update.is_some_and(|update| !update.downloaded),
+                        update.is_some()
+                            && !self.downloading
+                            && !self.installing
+                            && !downloaded
+                            && self.error.is_none(),
                         |element| {
                             element.child(
                                 Button::new("update-download", t("common:update.download"))

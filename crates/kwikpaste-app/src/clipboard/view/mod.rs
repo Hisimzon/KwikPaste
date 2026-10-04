@@ -25,6 +25,7 @@ mod shortcuts;
 use gpui::{Action, App, KeyBinding, actions};
 use kwikpaste_ui::INPUT_KEY_CONTEXT;
 
+pub(crate) use card::logo as app_logo;
 pub use editing::request_panel;
 pub use panel::{ClipboardPanel, PanelIntent};
 

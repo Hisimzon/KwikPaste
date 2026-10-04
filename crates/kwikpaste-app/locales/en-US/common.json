@@ -11,17 +11,17 @@
   "app": {
     "tagline": "Cross-platform clipboard manager"
   },
-  "shortcutRecorder": {
-    "clear": "Clear shortcut",
-    "click": "Click to record",
-    "conflict": "{{shortcut}} is already used by \"{{label}}\"",
-    "press": "Press shortcut"
-  },
   "health": {
     "gaveUpBody": "KwikPaste exited unexpectedly several times and automatic restart has been paused.",
     "gaveUpTitle": "Automatic restart paused",
     "ok": "Got it",
     "openLogs": "Open log folder"
+  },
+  "shortcutRecorder": {
+    "clear": "Clear shortcut",
+    "click": "Click to record",
+    "conflict": "{{shortcut}} is already used by \"{{label}}\"",
+    "press": "Press shortcut"
   },
   "ui": {
     "ok": "OK",
@@ -31,18 +31,30 @@
     "items": "{{count}} items"
   },
   "update": {
-    "available": "Version {{version}} is available",
+    "available": "A new version of KwikPaste is available!",
+    "availableBody": "KwikPaste {{version}} is now available. You are currently running {{currentVersion}}. Would you like to install it now?",
+    "cancel": "Cancel",
+    "checkAgain": "Check Again",
     "current": "Current version: {{version}}",
-    "download": "Download update",
-    "downloaded": "Download complete",
-    "downloading": "Downloading… {{progress}}%",
+    "download": "Install Update",
+    "downloaded": "The update has been downloaded and is ready to install.",
+    "downloadedTitle": "Ready to install",
+    "downloading": "Downloading KwikPaste {{version}}. Please wait.",
     "error": "Update failed: {{message}}",
-    "install": "Install and restart",
-    "installing": "Installing…",
-    "later": "Later",
-    "notes": "Release notes",
+    "errorBody": "Something went wrong while updating. Please try again.",
+    "errorTitle": "Update failed",
+    "install": "Install and Relaunch",
+    "installing": "Updating KwikPaste",
+    "later": "Remind Me Later",
+    "latest": "You are already using the latest version, {{currentVersion}}.",
+    "latestTitle": "KwikPaste is up to date",
+    "notes": "Release Notes:",
+    "ok": "OK",
+    "progress": "Download progress: {{progress}}%",
+    "releaseNotes": "View Release Notes",
     "skip": "Skip this version",
-    "title": "KwikPaste update",
-    "unsupported": "This build cannot install updates automatically."
+    "title": "Software Update",
+    "unsupported": "No release notes were provided for this version.",
+    "updatingTitle": "Updating KwikPaste"
   }
 }
