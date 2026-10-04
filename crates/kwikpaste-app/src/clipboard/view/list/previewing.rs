@@ -502,10 +502,19 @@ impl ClipboardList {
                 pointer.x.as_f32() < window.viewport_size().width.as_f32() / 2.
             });
         let text_scale = f64::from(theme::text_scale(cx));
+        let measured_metrics = preview.as_ref().map(|preview| {
+            preview::measure_metrics(
+                &preview.metrics,
+                preview.payload.text.as_deref(),
+                &preview.payload.words,
+                text_scale,
+                window,
+            )
+        });
         let geometry = preview::geometry(
             place.card,
             place.monitor,
-            preview.as_ref().map(|preview| &preview.metrics),
+            measured_metrics.as_ref(),
             prefer_left,
             text_scale,
         );

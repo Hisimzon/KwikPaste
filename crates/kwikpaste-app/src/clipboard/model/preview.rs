@@ -4,7 +4,9 @@
 
 use std::{collections::BTreeSet, ops::Range};
 
-use kwikpaste_core::presenter::PreviewContentMetrics;
+use gpui::{FontWeight, TextRun, Window, font, px};
+use kwikpaste_core::{clipboard::WordSpan, presenter::PreviewContentMetrics};
+use kwikpaste_ui::theme::{TextSize, fonts};
 
 /// 面板与卡片之间的距离。
 const GAP: f64 = 40.;
@@ -32,6 +34,9 @@ const WORD_LINE_HEIGHT: f64 = 20.;
 pub const WORD_GAP: f64 = 4.;
 /// 词块区的内边距。
 pub const WORDS_PADDING: f64 = 16.;
+/// 选词区左右再扣掉的宽度：预览窗两侧各 1px 边框，加 1px 余量（GPUI 按设备像素取整，
+/// 词块实际会比测得的略宽；宁可多留一行空白也不能裁掉最后一行）。
+const WORDS_EDGE: f64 = 3.;
 const FALLBACK_SIZE: (f64, f64) = (320., 240.);
 /// 纯文本视图每行最多的字符数（1.x `PREVIEW_TEXT_SOFT_WRAP_CHARS`）。
 pub const SOFT_WRAP_CHARS: usize = 32;
@@ -132,6 +137,50 @@ pub fn geometry(
     Geometry { panel, placement }
 }
 
+/// 用 GPUI 实际使用的正文文字系统修正选词词块宽度。
+///
+/// core 在没有窗口的线程上只能用字符宽度估算；预览窗开在 UI 线程，
+/// 这里用同一套字体、回退字体和字号重新排一遍，保证定尺寸和实际渲染一致。
+pub fn measure_metrics(
+    metrics: &PreviewContentMetrics,
+    text: Option<&str>,
+    words: &[WordSpan],
+    scale: f64,
+    window: &Window,
+) -> PreviewContentMetrics {
+    let PreviewContentMetrics::Words { chips } = metrics else {
+        return metrics.clone();
+    };
+    let Some(text) = text else {
+        return metrics.clone();
+    };
+
+    let font_size = px(TextSize::Sm.font_size().0 * 16. * scale as f32);
+    let mut measured = chips.clone();
+    for ((span, _chip), measured_chip) in words.iter().zip(chips).zip(&mut measured) {
+        let range = utf16_range(text, span.0, span.1);
+        let Some(word) = text.get(range) else {
+            continue;
+        };
+        let mut ui_font = font(fonts::UI_FAMILY);
+        ui_font.fallbacks = Some(fonts::ui_fallbacks());
+        ui_font.weight = FontWeight::NORMAL;
+        let run = TextRun {
+            len: word.len(),
+            font: ui_font,
+            ..TextRun::default()
+        };
+        let width = window
+            .text_system()
+            .layout_line(word, font_size, &[run], None)
+            .width
+            .as_f32() as f64;
+        measured_chip.width = (width / scale + 12.).ceil().max(24.);
+    }
+
+    PreviewContentMetrics::Words { chips: measured }
+}
+
 /// 按内容度量算面板尺寸，规则与面板的渲染一一对应。
 fn panel_size(
     metrics: Option<&PreviewContentMetrics>,
@@ -154,7 +203,7 @@ fn panel_size(
                 .iter()
                 .map(|chip| (chip.width, chip.line_break))
                 .collect();
-            let content = max_width / scale - WORDS_PADDING * 2.;
+            let content = max_width / scale - WORDS_PADDING * 2. - WORDS_EDGE;
             (max_width, header + words_height(&widths, content) * scale)
         }
         Some(PreviewContentMetrics::Files { shown, total }) => {
@@ -426,6 +475,7 @@ impl WordSelection {
 
 #[cfg(test)]
 mod tests {
+    use kwikpaste_core::clipboard::split_words;
     use kwikpaste_core::presenter::PreviewWordChip;
 
     use super::*;
@@ -518,6 +568,42 @@ mod tests {
     }
 
     #[test]
+    fn measured_order_preview_keeps_the_phone_suffix_visible() {
+        let text = "订单 20260924 已发货，联系 138 1234 5678";
+        let tokens = split_words(text).tokens;
+        let estimated: Vec<_> = tokens
+            .iter()
+            .map(|token| PreviewWordChip::new(&token.text, token.line_break))
+            .collect();
+        let estimated_height = words_height(
+            &estimated
+                .iter()
+                .map(|chip| (chip.width, chip.line_break))
+                .collect::<Vec<_>>(),
+            448.,
+        );
+        assert_eq!(estimated_height, 56.);
+
+        // GPUI 的真实字形比 em 估算略宽；这组宽度让最后的 `5678` 落到第二行，
+        // 面板尺寸因此必须多留一行，避免原来的裁切。
+        let measured: Vec<_> = estimated
+            .iter()
+            .map(|chip| PreviewWordChip {
+                width: chip.width + 2.,
+                ..*chip
+            })
+            .collect();
+        let measured_height = words_height(
+            &measured
+                .iter()
+                .map(|chip| (chip.width, chip.line_break))
+                .collect::<Vec<_>>(),
+            448.,
+        );
+        assert_eq!(measured_height, 84.);
+    }
+
+    #[test]
     fn panels_scale_with_text_size() {
         let size = panel_size(None, &MONITOR.inset(MARGIN), 1.25);
         assert_eq!(size, (600., (48. + 96.) * 1.25));
@@ -531,6 +617,30 @@ mod tests {
 
         let wide = "中".repeat(33);
         assert_eq!(text_rows(&wide), vec![0..96, 96..99]);
+    }
+
+    #[test]
+    fn mixed_cjk_latin_urls_wrap_and_scroll_instead_of_clipping() {
+        let text = format!(
+            "联系 support@example.com https://paste.fastthree.com/docs/getting-started?from=clipboard 中文 {}",
+            "a".repeat(700)
+        );
+        let rows = text_rows(&text);
+        assert!(rows.len() > 1);
+        assert!(rows.iter().all(|row| {
+            text.get(row.clone())
+                .is_some_and(|line| line.encode_utf16().count() <= SOFT_WRAP_CHARS)
+        }));
+
+        let (width, height) = panel_size(
+            Some(&PreviewContentMetrics::Text {
+                rows: u32::try_from(rows.len()).unwrap_or(u32::MAX),
+            }),
+            &MONITOR.inset(MARGIN),
+            1.,
+        );
+        assert_eq!(width, 480.);
+        assert_eq!(height, 480.);
     }
 
     #[test]
