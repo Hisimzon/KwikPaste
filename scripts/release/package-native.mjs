@@ -14,6 +14,8 @@
 // --os-gate-test   (test identity only) also builds a setup whose OS gate requires build 99999.
 // --pubkey <file>  the public key the CLI compares the signing key with, instead of
 //                  crates/kwikpaste-updater/pubkey.txt (a throwaway key pair in dry runs).
+// --features <list> pass Cargo features through to `tauri bundle` (for example,
+//                    `e2e-overrides` in the local self-update driver).
 // --no-sign        skips the updater signatures (no TAURI_SIGNING_PRIVATE_KEY).
 //
 // Usage: node scripts/release/package-native.mjs --target <triple> --out <dir> [options]
@@ -112,6 +114,7 @@ export const tauriCli = () => {
 
 const parseArgs = (argv) => {
   const options = {
+    features: undefined,
     identity: "production",
     osGateTest: false,
     pubkey: undefined,
@@ -129,6 +132,8 @@ const parseArgs = (argv) => {
       options.osGateTest = true;
     } else if (arg === "--pubkey") {
       options.pubkey = resolve(argv[++index]);
+    } else if (arg === "--features") {
+      options.features = argv[++index];
     } else if (arg === "--no-sign") {
       options.sign = false;
     } else {
@@ -137,7 +142,7 @@ const parseArgs = (argv) => {
   }
   if (!options.target || !options.out) {
     throw new Error(
-      "Usage: package-native.mjs --target <triple> --out <dir> [--identity production|test]",
+      "Usage: package-native.mjs --target <triple> --out <dir> [--identity production|test] [--features <list>]",
     );
   }
   if (!["production", "test"].includes(options.identity)) {
@@ -176,6 +181,9 @@ const bundle = (cli, options, bundles, extraConfigs) => {
   }
   if (!options.sign) {
     args.push("--no-sign");
+  }
+  if (options.features) {
+    args.push("--features", options.features);
   }
   // The CLI looks for tauri.conf.json in TAURI_APP_PATH; from the repo root it would find src-tauri.
   run(process.execPath, args, {

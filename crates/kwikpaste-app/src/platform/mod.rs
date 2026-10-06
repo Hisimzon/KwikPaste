@@ -48,7 +48,7 @@ mod seed;
 mod settings;
 mod system;
 mod tray;
-mod updater;
+pub(crate) mod updater;
 mod watchdog;
 mod window_state;
 

@@ -9,6 +9,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{App, Keystroke};
+#[cfg(feature = "e2e-overrides")]
+use kwikpaste_core::clipboard::{ClipboardPayload, TextPayload};
 use kwikpaste_core::{
     db::overview::{ClearScope, ContentCategory},
     readable_export::{ExportFormat, ExportOptions},
@@ -94,6 +96,8 @@ pub const PANEL_UI: &str = "--selftest-panel-ui";
 pub const PREFERENCES: &str = "--selftest-preferences";
 /// 首次引导窗：打开窗口、检查步骤并写入完成标记。
 pub const ONBOARDING: &str = "--selftest-onboarding";
+/// 驱动一次真实的检查、下载、验签和安装交接；只在 `e2e-overrides` 构建中可用。
+pub const UPDATE_E2E: &str = "--selftest-update-e2e";
 
 const SMOKE_DURATION: Duration = Duration::from_secs(3);
 /// 平台探针最长运行时间：测量脚本中途出错时不留下进程。
@@ -125,6 +129,7 @@ pub fn kind() -> Option<&'static str> {
         (PANEL_UI, "panel-ui"),
         (PREFERENCES, "preferences"),
         (ONBOARDING, "onboarding"),
+        (UPDATE_E2E, "update-e2e"),
         (UPDATER_UI, "updater-ui"),
         (ANNOUNCEMENT, "announcement"),
         (CRASH_GAVE_UP, "crash-gave-up"),
@@ -279,6 +284,9 @@ pub fn schedule(cx: &mut App) {
     if onboarding_requested() {
         onboarding(cx);
     }
+    if enabled(UPDATE_E2E) {
+        update_e2e(cx);
+    }
     if enabled(PANEL_INVARIANTS)
         && let Some(panel) = cx.try_global::<Panel>()
     {
@@ -345,6 +353,98 @@ pub fn schedule(cx: &mut App) {
             cx.background_executor().timer(LIST_WATCHDOG).await;
             log::warn!("list selftest ran for {LIST_WATCHDOG:?}; quitting");
             std::process::exit(4);
+        })
+        .detach();
+    }
+}
+
+/// 端到端更新驱动：更新器仍负责所有网络、验签和平台交接，这里只把 UI 按钮路径变成
+/// 可重复的自测入口。生产构建没有 `e2e-overrides`，即使误传参数也不会请求测试端点。
+fn update_e2e(cx: &mut App) {
+    #[cfg(not(feature = "e2e-overrides"))]
+    {
+        log::error!("self-update e2e requires the e2e-overrides feature");
+        cx.quit();
+    }
+
+    #[cfg(feature = "e2e-overrides")]
+    {
+        let Some(updater) = crate::platform::updater::updater(cx).cloned() else {
+            log::error!("self-update e2e: updater is unavailable");
+            cx.quit();
+            return;
+        };
+        let core = crate::core_host::core(cx).cloned();
+        cx.spawn(async move |cx| {
+            if let Some(seed) = std::env::var_os("KWIKPASTE_E2E_SEED") {
+                if let Some(core) = core {
+                    let seed = seed.to_string_lossy().into_owned();
+                    let stored = core
+                        .build_item(&ClipboardPayload::Text(TextPayload {
+                            text: seed.clone(),
+                            html: None,
+                            rtf: None,
+                        }))
+                        .ok()
+                        .flatten();
+                    if let Some(item) = stored {
+                        if let Err(err) = core.store_item(item, None).await {
+                            log::error!("self-update e2e seed record failed: {err}");
+                        }
+                    }
+                    if let Err(err) = core
+                        .update_settings(serde_json::json!({
+                            "general": { "autoStart": true },
+                            "update": { "includeBeta": false }
+                        }))
+                        .await
+                    {
+                        log::error!("self-update e2e seed settings failed: {err}");
+                    }
+                    log::info!("self-update e2e seeded record {seed}");
+                }
+            }
+            let status = match updater.check(kwikpaste_updater::CheckMode::Manual).await {
+                Ok(status) => status,
+                Err(err) => {
+                    log::error!("self-update e2e check failed: {err:#}");
+                    let _ = cx.update(|cx| cx.quit());
+                    return;
+                }
+            };
+            let window_status = status.clone();
+            let Some(update) = status.update else {
+                log::info!("self-update e2e: no update available");
+                let _ = cx.update(|cx| cx.quit());
+                return;
+            };
+            cx.update(|cx| {
+                crate::platform::updater::selftest_update_window_status(cx, window_status);
+            });
+            log::info!(
+                "self-update e2e: update window candidate {} -> {}",
+                status.current_version,
+                update.version
+            );
+            let version = update.version;
+            let progress = |step: kwikpaste_updater::DownloadProgress| {
+                log::info!(
+                    "self-update e2e: download progress {} / {:?} ({:?})",
+                    step.downloaded,
+                    step.total,
+                    step.progress
+                );
+            };
+            if let Err(err) = updater.download(version.clone(), progress).await {
+                log::error!("self-update e2e download failed: {err:#}");
+                let _ = cx.update(|cx| cx.quit());
+                return;
+            }
+            log::info!("self-update e2e: downloaded {version}, installing");
+            if let Err(err) = updater.install(version).await {
+                log::error!("self-update e2e install failed: {err:#}");
+                let _ = cx.update(|cx| cx.quit());
+            }
         })
         .detach();
     }

@@ -126,6 +126,12 @@ pub fn selftest_update_window(cx: &mut App) {
     serve_ui(UiRequest::Update(Box::new(status)), cx);
 }
 
+/// 自测更新流程展示真实检查结果；下载与安装仍由调用方驱动，确保 UI 和 updater 共用同一状态。
+#[cfg(feature = "e2e-overrides")]
+pub fn selftest_update_window_status(cx: &mut App, status: UpdateStatus) {
+    serve_ui(UiRequest::Update(Box::new(status)), cx);
+}
+
 /// 开发自测：展示公告按钮顺序，不打开真实链接。
 pub fn selftest_announcement(cx: &mut App) {
     let prompt = AnnouncementPrompt {

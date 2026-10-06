@@ -19,6 +19,8 @@ runtime-shaders = ["gpui_platform/runtime_shaders"]
 # 用正式版的 identifier（com.fastthree.kwikpaste），会与已安装的 1.x 互认单实例。
 # 只有切换到原生版的发布流水线才打开；本机和 CI 的构建一律用开发 identifier。
 production-identity = []
+# Enables the local/CI self-update driver. Release builds never enable this feature.
+e2e-overrides = ["kwikpaste-updater/e2e-overrides"]
 
 [dependencies]
 anyhow.workspace = true
