@@ -204,6 +204,8 @@ fn apply(cx: &mut App) {
         theme.mono_font_size = px(MONO_BASE * scale);
         theme.radius = px(palette::RADIUS * scale);
         theme.radius_lg = px(palette::RADIUS_LG * scale);
+        // 输入框、选择器、按钮、开关聚焦时不画外圈光晕，只换边框色（见 `kit` 的 `ring`）。
+        theme.focus_ring = false;
     });
 }
 

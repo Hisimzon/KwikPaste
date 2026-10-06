@@ -96,8 +96,8 @@ pub fn theme_color(a: &AntdColors) -> ThemeColor {
         primary_foreground: c(a.color_text_light_solid),
         primary_hover: c(a.color_primary_hover),
         progress_bar: c(a.color_primary),
-        // 聚焦边框与聚焦环（环为它的半透明版）：antd 聚焦边框是 `colorPrimary`。
-        ring: c(a.color_primary),
+        // 聚焦与展开时的边框：比常态描边深一档的中性色，不用主色（光晕在 `apply` 里关掉）。
+        ring: c(a.color_text_quaternary),
         scrollbar: transparent,
         // 1.x OverlayScrollbars 的滑块：quaternary，悬停 tertiary。
         scrollbar_thumb: c(a.color_text_quaternary),
