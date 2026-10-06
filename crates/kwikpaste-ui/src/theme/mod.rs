@@ -1,5 +1,5 @@
-//! 主题：冻结的 antd token（[`antd`]）、应用使用的语义层（[`KpTokens`]、[`TextSize`] 等），
-//! 以及到 gpui-component `Theme` 的映射。
+//! 主题：2.0 的配色与度量（[`palette`]，沿用冻结的 antd token 结构 [`antd`]）、应用使用的语义层
+//! （[`KpTokens`]、[`TextSize`] 等），以及到 gpui-component `Theme` 的映射。
 //!
 //! 亮 / 暗由 [`ThemePreference`] 决定，默认跟随系统；系统切换明暗时由 [`crate::open_window`]
 //! 装的观察者转发到这里。gpui-component 的主题只有 App 级一份，所有窗口同时切换。
@@ -8,6 +8,7 @@ pub mod antd;
 mod css_color;
 pub mod fonts;
 mod kit;
+pub mod palette;
 mod tokens;
 
 use std::sync::LazyLock;
@@ -56,9 +57,9 @@ const MONO_BASE: f32 = 13.;
 const TEXT_SCALE_RANGE: (f32, f32) = (1., 2.25);
 
 static LIGHT_TOKENS: LazyLock<KpTokens> =
-    LazyLock::new(|| KpTokens::from_antd(&antd::LIGHT, &antd::LIGHT_SHADOWS));
+    LazyLock::new(|| KpTokens::from_antd(&palette::LIGHT, &palette::LIGHT_SHADOWS));
 static DARK_TOKENS: LazyLock<KpTokens> =
-    LazyLock::new(|| KpTokens::from_antd(&antd::DARK, &antd::DARK_SHADOWS));
+    LazyLock::new(|| KpTokens::from_antd(&palette::DARK, &palette::DARK_SHADOWS));
 
 struct KpTheme {
     preference: ThemePreference,
@@ -189,11 +190,11 @@ fn apply(cx: &mut App) {
     };
     let scale = theme.text_scale;
     let (mode, colors) = match theme.appearance() {
-        Appearance::Light => (ThemeMode::Light, &antd::LIGHT),
-        Appearance::Dark => (ThemeMode::Dark, &antd::DARK),
+        Appearance::Light => (ThemeMode::Light, &palette::LIGHT),
+        Appearance::Dark => (ThemeMode::Dark, &palette::DARK),
     };
 
-    // `change` 会先装上 gpui-component 自带的主题，随后的 `update` 再整体覆盖成 antd 冻结值。
+    // `change` 会先装上 gpui-component 自带的主题，随后的 `update` 再整体覆盖成快贴的配色。
     Theme::change(mode, None, cx);
     Theme::update(cx, |theme| {
         theme.colors = kit::theme_color(colors);
@@ -201,8 +202,8 @@ fn apply(cx: &mut App) {
         theme.mono_font_family = fonts::MONO_FAMILY.into();
         theme.font_size = px(REM_BASE * scale);
         theme.mono_font_size = px(MONO_BASE * scale);
-        theme.radius = px(antd::BORDER_RADIUS * scale);
-        theme.radius_lg = px(antd::BORDER_RADIUS_LG * scale);
+        theme.radius = px(palette::RADIUS * scale);
+        theme.radius_lg = px(palette::RADIUS_LG * scale);
     });
 }
 

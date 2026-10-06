@@ -256,20 +256,21 @@ const fn rem_of(px: f32) -> Rems {
     Rems(px / 16.)
 }
 
-/// 圆角（antd `borderRadius*`，换算成 rem 以跟随文本缩放）。
+/// 圆角（[`super::palette`] 的 px 值换算成 rem，跟随文本缩放）。
 pub mod radius {
     use gpui::Rems;
 
-    use super::{antd, rem_of};
+    use super::rem_of;
+    use crate::theme::palette;
 
-    /// antd `borderRadiusXS`：2 px。
-    pub const XS: Rems = rem_of(antd::BORDER_RADIUS_XS);
-    /// antd `borderRadiusSM`：4 px（UnoCSS `rounded-1`）。
-    pub const SM: Rems = rem_of(antd::BORDER_RADIUS_SM);
-    /// antd `borderRadius`：6 px（UnoCSS `rounded-1.5`，控件默认圆角）。
-    pub const MD: Rems = rem_of(antd::BORDER_RADIUS);
-    /// antd `borderRadiusLG`：8 px（UnoCSS `rounded-2`，卡片、浮层）。
-    pub const LG: Rems = rem_of(antd::BORDER_RADIUS_LG);
+    /// 3 px：标记、细小色块。
+    pub const XS: Rems = rem_of(palette::RADIUS_XS);
+    /// 5 px：图片缩略图、小标签。
+    pub const SM: Rems = rem_of(palette::RADIUS_SM);
+    /// 7 px：控件默认圆角。
+    pub const MD: Rems = rem_of(palette::RADIUS);
+    /// 10 px：卡片、浮层。
+    pub const LG: Rems = rem_of(palette::RADIUS_LG);
 }
 
 /// 控件高度（antd `controlHeight*`）。

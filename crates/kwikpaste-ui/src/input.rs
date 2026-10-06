@@ -233,34 +233,39 @@ impl RenderOnce for Input {
             .cleanable(self.cleanable)
             .disabled(self.disabled)
             .when(self.search, |input| {
+                // 搜索框是填充底的胶囊，不画描边；聚焦时仍由组件换成主色描边。
                 // 角标叠在图标的位置上，图标只是隐去，宽度不变，输入文字不会跳动。
-                input.prefix(
-                    div()
-                        .relative()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .when(hint_key.is_some(), |icon| icon.opacity(0.))
-                                .child(
-                                    Icon::new(IconName::Search)
-                                        .size(icon_size)
-                                        .color(tokens.quaternary),
-                                ),
-                        )
-                        .when_some(hint_key, |prefix, key| {
-                            prefix.child(
+                input
+                    .bg(tokens.fill_tertiary)
+                    .border_color(theme::transparent())
+                    .rounded_full()
+                    .prefix(
+                        div()
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
                                 div()
-                                    .absolute()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .size_full()
-                                    .child(KeyHint::new(key)),
+                                    .when(hint_key.is_some(), |icon| icon.opacity(0.))
+                                    .child(
+                                        Icon::new(IconName::Search)
+                                            .size(icon_size)
+                                            .color(tokens.quaternary),
+                                    ),
                             )
-                        }),
-                )
+                            .when_some(hint_key, |prefix, key| {
+                                prefix.child(
+                                    div()
+                                        .absolute()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .size_full()
+                                        .child(KeyHint::new(key)),
+                                )
+                            }),
+                    )
             })
             .when_some(self.accessibility_label, |input, label| {
                 input.aria_label(label)

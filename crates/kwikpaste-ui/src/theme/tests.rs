@@ -145,17 +145,17 @@ fn the_frozen_table_is_antd_6_6_0() {
 }
 
 #[test]
-fn semantic_tokens_follow_the_frozen_colors() {
+fn semantic_tokens_follow_the_palette() {
     for (appearance, colors) in [
-        (Appearance::Light, antd::LIGHT),
-        (Appearance::Dark, antd::DARK),
+        (Appearance::Light, palette::LIGHT),
+        (Appearance::Dark, palette::DARK),
     ] {
         let tokens = tokens_for(appearance);
         assert_eq!(tokens.text, colors.color_text.to_hsla());
         assert_eq!(tokens.secondary, colors.color_text_secondary.to_hsla());
         assert_eq!(tokens.primary, colors.color_primary.to_hsla());
         assert_eq!(tokens.bg_spotlight, colors.color_bg_spotlight.to_hsla());
-        // 1.x 的 `text-ant-disabled` 实际解析到 `colorBorderDisabled`。
+        // `disabled` 沿用 1.x 的取法：`text-ant-disabled` 实际解析到 `colorBorderDisabled`。
         assert_eq!(tokens.disabled, colors.color_border_disabled.to_hsla());
 
         let swatches = tokens.swatches();
@@ -211,7 +211,7 @@ fn type_scale_matches_wind4() {
         [(12., 16.), (14., 20.), (16., 24.), (18., 28.)].to_vec()
     );
     assert_eq!(TextSize::Sm.font_size().0 * 16., antd::FONT_SIZE);
-    assert_eq!(radius::MD.0 * 16., antd::BORDER_RADIUS);
+    assert_eq!(radius::MD.0 * 16., palette::RADIUS);
     assert_eq!(control_height::MD.0 * 16., antd::CONTROL_HEIGHT);
     assert_eq!(space(1.5).0, 0.375);
 }

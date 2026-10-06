@@ -90,8 +90,8 @@ fn tag_colors(color: TagColor, colors: &antd::AntdColors) -> (Hsla, Hsla, Hsla) 
 impl RenderOnce for Tag {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let colors = match theme::appearance(cx) {
-            theme::Appearance::Light => &antd::LIGHT,
-            theme::Appearance::Dark => &antd::DARK,
+            theme::Appearance::Light => &theme::palette::LIGHT,
+            theme::Appearance::Dark => &theme::palette::DARK,
         };
         let (bg, fg, border) = tag_colors(self.color, colors);
 
