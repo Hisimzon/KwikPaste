@@ -1,0 +1,193 @@
+name: Native install-over-1.x acceptance
+
+# A fresh runner is important: this is the only workflow that is allowed to use the production
+# identifier and signing key. It is dispatch-only and never runs on a developer checkout.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-package:
+    name: Package production 2.0 once
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install the pinned Tauri CLI
+        run: pnpm install --frozen-lockfile
+      - name: Build the production-identity native app
+        shell: pwsh
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --locked --release -p kwikpaste-app --features production-identity --target x86_64-pc-windows-msvc
+      - name: Package NSIS and portable artifacts
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node scripts/release/package-native.mjs --target x86_64-pc-windows-msvc --out dist --features production-identity
+      - name: Read the packaged version
+        id: version
+        shell: pwsh
+        run: |
+          $manifest = Get-Content Cargo.toml -Raw
+          $version = [regex]::Match($manifest, '(?ms)\[workspace\.package\].*?^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if (-not $version) { throw 'workspace version was not found' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-production-x64
+          path: dist/KwikPaste_*
+          if-no-files-found: error
+          retention-days: 3
+
+  nsis:
+    name: ${{ matrix.version }} ${{ matrix.scope }} over 1.x
+    needs: native-package
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [1.3.8, 1.4.0]
+        scope: [current-user, all-users]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/release crates/kwikpaste-core/tests/fixtures
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-production-x64
+          path: dist
+      - name: Download the released 1.x setup
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "v${{ matrix.version }}" --repo ManSanDADADA/KwikPaste --pattern "KwikPaste_${{ matrix.version }}_x64-setup.exe" --dir old
+      - name: Install over the 1.x current-user setup
+        if: matrix.scope == 'current-user'
+        shell: pwsh
+        env:
+          NATIVE_VERSION: ${{ needs.native-package.outputs.version }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/test-install-over-1x.ps1 -Setup "old\KwikPaste_${{ matrix.version }}_x64-setup.exe" -NativeSetup "dist\KwikPaste_${{ needs.native-package.outputs.version }}_x64-setup.exe" -Version $env:NATIVE_VERSION
+      - name: Install over the 1.x all-users setup
+        if: matrix.scope == 'all-users'
+        shell: pwsh
+        env:
+          NATIVE_VERSION: ${{ needs.native-package.outputs.version }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/test-install-over-1x.ps1 -Setup "old\KwikPaste_${{ matrix.version }}_x64-setup.exe" -NativeSetup "dist\KwikPaste_${{ needs.native-package.outputs.version }}_x64-setup.exe" -Version $env:NATIVE_VERSION -AllUsers
+
+  custom-storage:
+    name: 1.4.0 custom storage location
+    needs: native-package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-production-x64
+          path: dist
+      - name: Download the released 1.4.0 setup
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download v1.4.0 --repo ManSanDADADA/KwikPaste --pattern KwikPaste_1.4.0_x64-setup.exe --dir old
+      - name: Preserve a 1.x custom storage location through 2.0
+        shell: pwsh
+        env:
+          NATIVE_VERSION: ${{ needs.native-package.outputs.version }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/test-install-over-1x.ps1 -Setup "old\KwikPaste_1.4.0_x64-setup.exe" -NativeSetup "dist\KwikPaste_${{ needs.native-package.outputs.version }}_x64-setup.exe" -Version $env:NATIVE_VERSION -CustomStorage
+
+  portable:
+    name: 1.4.0 portable replacement
+    needs: native-package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-production-x64
+          path: native
+      - name: Download the released 1.4.0 portable build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download v1.4.0 --repo ManSanDADADA/KwikPaste --pattern KwikPaste_1.4.0_x64_portable.zip --dir old
+      - name: Replace the portable executable and smoke-test the old data directory
+        shell: pwsh
+        env:
+          NATIVE_VERSION: ${{ needs.native-package.outputs.version }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'kwikpaste-portable-over-1x'
+          Expand-Archive old\KwikPaste_1.4.0_x64_portable.zip -DestinationPath $root\old -Force
+          Expand-Archive (Join-Path native "KwikPaste_${env:NATIVE_VERSION}_x64_portable.zip") -DestinationPath $root\new -Force
+          $oldExe = Join-Path $root 'old\KwikPaste\KwikPaste.exe'
+          $newExe = Join-Path $root 'new\KwikPaste\KwikPaste.exe'
+          $old = Start-Process $oldExe -ArgumentList '--auto-launch' -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 5
+          $record = 'portable-upgrade-record-' + [guid]::NewGuid().ToString('N')
+          Set-Clipboard -Value $record
+          Start-Sleep -Seconds 4
+          if (-not $old.HasExited) { $old.Kill(); $old.WaitForExit() }
+          $db = Get-ChildItem -LiteralPath (Join-Path $root 'old') -Recurse -Filter 'clipboard.db' | Select-Object -First 1
+          if (-not $db) { throw 'portable 1.4.0 database was not created after seeding' }
+          $settings = Get-ChildItem -LiteralPath (Join-Path $root 'old') -Recurse -Filter 'settings.json' | Select-Object -First 1
+          if (-not $settings) { throw 'portable 1.4.0 settings.json was not created after seeding' }
+          $settingsHash = (Get-FileHash $settings.FullName -Algorithm SHA256).Hash
+          $queryPath = Join-Path $root 'query.py'
+          $query = @'
+          import sqlite3, sys
+          with sqlite3.connect(sys.argv[1]) as c:
+              print(c.execute("select count(*) from clipboard_items where content like ?", ("%" + sys.argv[2] + "%",)).fetchone()[0])
+          '@
+          [IO.File]::WriteAllText($queryPath, $query, [Text.UTF8Encoding]::new($false))
+          $before = (& python $queryPath $db.FullName $record).Trim()
+          if ($LASTEXITCODE -ne 0 -or $before -lt 1) { throw "portable 1.4.0 record was not readable before replacement (count=$before)" }
+          Copy-Item $newExe $oldExe -Force
+          $env:KWIKPASTE_SELFTEST = '1'
+          $smoke = Start-Process $oldExe -ArgumentList '--selftest-smoke' -PassThru -WindowStyle Hidden
+          if (-not $smoke.WaitForExit(60000) -or $smoke.ExitCode -ne 0) { throw "portable 2.0 smoke exited with $($smoke.ExitCode)" }
+          $after = (& python $queryPath $db.FullName $record).Trim()
+          if ($LASTEXITCODE -ne 0 -or $after -lt 1) { throw "portable 1.4.0 record was not readable after replacement (count=$after)" }
+          if ((Get-FileHash $settings.FullName -Algorithm SHA256).Hash -ne $settingsHash) { throw 'portable settings.json changed during executable replacement' }
+          'ok portable 1.4.0 record/settings survived the 2.0 executable replacement'
+
+  legacy:
+    name: Legacy database ${{ matrix.version }} opens in 2.0
+    needs: native-package
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [1.2.0, 1.3.5, 1.3.8]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/release crates/kwikpaste-core/tests/fixtures
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-production-x64
+          path: dist
+      - name: Download the released legacy setup
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "v${{ matrix.version }}" --repo ManSanDADADA/KwikPaste --pattern "KwikPaste_${{ matrix.version }}_x64-setup.exe" --dir old
+      - name: Open the legacy database with native 2.0
+        shell: pwsh
+        env:
+          NATIVE_VERSION: ${{ needs.native-package.outputs.version }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/test-install-over-1x.ps1 -Setup "old\KwikPaste_${{ matrix.version }}_x64-setup.exe" -NativeSetup "dist\KwikPaste_${{ needs.native-package.outputs.version }}_x64-setup.exe" -Version $env:NATIVE_VERSION -FixtureVersion ${{ matrix.version }}
