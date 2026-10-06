@@ -1,0 +1,62 @@
+name: Native self-update e2e
+
+# This workflow is intentionally dispatch-only.  It uses throwaway minisign keys and the test
+# identity; the production key and the installed official application are never used here.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Windows forms to exercise
+        type: choice
+        default: both
+        options: [portable, nsis, both]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-update-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows ${{ inputs.mode }} self-update
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install the pinned Tauri CLI
+        run: pnpm install --frozen-lockfile
+      - name: Build, serve and run the real Windows updater
+        shell: pwsh
+        env:
+          KWIKPASTE_E2E_MODE: ${{ inputs.mode }}
+        run: .\scripts\release\test-native-update-e2e.ps1 -Mode $env:KWIKPASTE_E2E_MODE
+
+  macos:
+    name: macOS app bundle self-update
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: aarch64-apple-darwin
+      - name: Install the pinned Tauri CLI
+        run: pnpm install --frozen-lockfile
+      - name: Build, serve and run the real macOS app swap
+        shell: bash
+        run: bash ./scripts/release/test-macos-update-e2e.sh

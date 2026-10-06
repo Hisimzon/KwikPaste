@@ -16,6 +16,7 @@
 *.plist text eol=lf
 *.svg text eol=lf
 *.nsh text eol=lf
+*.sh text eol=lf
 
 *.png binary
 *.ico binary
