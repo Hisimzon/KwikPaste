@@ -67,6 +67,8 @@ pub struct CardState {
     pub hint: Option<char>,
     /// 多选时已勾上：卡片铺一层淡主色。
     pub checked: bool,
+    /// 上一行铺了底色（当前项、悬停或勾选）：这一行上方的分隔线不画，免得贴着色块多出一道线。
+    pub after_highlight: bool,
     /// 悬停快捷动作（列表画好的按钮行）；有它时头部行不显示时间。
     pub actions: Option<AnyElement>,
     /// 多选的复选框。
@@ -86,6 +88,11 @@ pub type SnippetHandler = Rc<dyn Fn(Arc<str>, &mut Window, &mut App)>;
 
 /// 链接正文被点了。
 pub type LinkHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// 这一行会不会铺底色（当前项、悬停或勾选）。
+pub fn is_highlighted(active: bool, hovered: bool, checked: bool) -> bool {
+    active || hovered || checked
+}
 
 /// 超过这个长度的片段（多为链接）大概率会被截断，悬停时补一个完整内容的提示（1.x 同）。
 const SNIPPET_TOOLTIP_MIN_CHARS: usize = 32;
@@ -113,6 +120,8 @@ pub fn card(
     let actions = state.actions;
     let checkbox = state.checkbox;
     let on_snippet = state.on_snippet;
+    let highlighted = is_highlighted(state.active, state.hovered, state.checked);
+    let divider = !layout.seamless && state.position > 1 && !highlighted && !state.after_highlight;
 
     // 条目是扁平的行：平时没有底色和描边，悬停、当前项（中性灰）、勾选（淡主色）时才铺一层
     // 底色。卡片风格是圆角块、行间画细分隔线；无间风格贴边，用底边线分隔。
@@ -201,7 +210,8 @@ pub fn card(
                         .absolute()
                         .top(dp(4.))
                         .right(dp(4.))
-                        .rounded(dp(6.))
+                        .p(dp(2.))
+                        .rounded(radius::MD)
                         .border_1()
                         .border_color(tokens.border_secondary)
                         .bg(tokens.bg_elevated)
@@ -222,8 +232,8 @@ pub fn card(
         .relative()
         .px(dp(layout.item_padding_x))
         .pt(dp(layout.item_gap))
-        // 卡片风格的行间分隔线画在行上方的间距里，左右与正文对齐；第一行不画。
-        .when(!layout.seamless && state.position > 1, |row| {
+        // 卡片风格的行间分隔线画在行上方的间距里，左右与正文对齐；第一行和挨着色块的不画。
+        .when(divider, |row| {
             row.child(
                 div()
                     .absolute()
@@ -387,14 +397,14 @@ fn meta(
                     time_label(item.created_at, &env.now)
                 )))),
         )
-        // 右侧：置顶、敏感标记；悬停时是快捷动作，多选时跟复选框。
+        // 右侧：置顶、敏感标记；悬停时换成快捷动作（置顶动作本身带状态，标记不再重复），多选时跟复选框。
         .child(
             div()
                 .flex()
                 .flex_none()
                 .items_center()
                 .gap(dp(6.))
-                .child(marks)
+                .when(actions.is_none(), |side| side.child(marks))
                 .children(actions)
                 .children(checkbox),
         )
@@ -462,12 +472,18 @@ pub fn accessibility_name(item: &ListItem, now: &DateTime<Local>) -> SharedStrin
 }
 
 /// 来源应用图标；同步来的记录用设备平台图标；都没有时是快贴的图标（1.x 的顺序）。
+/// 头部行里配 12 px 的小字用 14 px，紧凑密度里和正文并排用 16 px，三种来源同一尺寸。
 fn app_icon(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
+    let size = if env.layout.header_row {
+        dp(14.)
+    } else {
+        dp(16.)
+    };
     if item.source_app_id.is_some()
         && let Some(path) = &item.source_app_icon_path
     {
         return img(std::path::PathBuf::from(&**path))
-            .size(dp(14.))
+            .size(size)
             .flex_none()
             .into_any_element();
     }
@@ -479,12 +495,12 @@ fn app_icon(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
         };
         return div()
             .flex_none()
-            .child(Icon::new(icon).size(dp(16.)).color(env.tokens.secondary))
+            .child(Icon::new(icon).size(size).color(env.tokens.secondary))
             .into_any_element();
     }
 
     img(ImageSource::Image(logo()))
-        .size(dp(16.))
+        .size(size)
         .flex_none()
         .into_any_element()
 }
@@ -552,7 +568,7 @@ fn text_body(env: &CardEnv<'_>, item: &ListItem, on_link: Option<LinkHandler>) -
             .kp_text(TextSize::Sm)
             .child(
                 div()
-                    .size(dp(18.))
+                    .size(dp(16.))
                     .flex_none()
                     .rounded(radius::SM)
                     .border_1()
@@ -598,7 +614,7 @@ fn note_annotation(env: &CardEnv<'_>, note: &Arc<str>) -> AnyElement {
     div()
         .flex()
         .items_start()
-        .gap(dp(2.))
+        .gap(dp(4.))
         .kp_text(TextSize::Sm)
         .child(
             div().flex_none().pt(dp(3.)).child(
@@ -624,13 +640,30 @@ fn image_body(
     let (width, height) = (dp(target.display.width), dp(target.display.height));
 
     match image.unwrap_or(Visual::Loading) {
+        // 圆角缩略图，上面叠一圈不占位置的细描边：白底截图、浅色图片也有边界，行高不变。
         Visual::Ready(image) => div()
             .flex()
             .child(
-                img(ImageSource::Render(image))
+                div()
+                    .relative()
+                    .flex_none()
                     .w(width)
                     .h(height)
-                    .flex_none(),
+                    .child(
+                        img(ImageSource::Render(image))
+                            .size_full()
+                            .rounded(radius::SM),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .rounded(radius::SM)
+                            .border_1()
+                            .border_color(tokens.split),
+                    ),
             )
             .into_any_element(),
         Visual::Failed => div()

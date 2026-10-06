@@ -9,7 +9,7 @@ use gpui::{
 };
 use kwikpaste_ui::{
     Button, Checkbox, Icon, IconName, KpStyled as _, TooltipExt as _,
-    theme::{self, KpTokens, TextSize},
+    theme::{self, KpTokens, TextSize, radius},
 };
 
 use super::ClipboardList;
@@ -166,7 +166,7 @@ impl ClipboardList {
                 .size(dp(20.))
                 .items_center()
                 .justify_center()
-                .rounded(dp(6.))
+                .rounded(radius::SM)
                 .cursor_pointer()
                 .text_color(color)
                 .hover(move |style| style.bg(tokens.fill_tertiary).text_color(hover_color))
@@ -227,23 +227,38 @@ impl ClipboardList {
             args.push(("group", group));
         }
 
+        // 图标放在浅灰圆底里；整组略高于正中（底部留白），视觉上才显得居中。
+        let icon = if text.searching {
+            IconName::Search
+        } else {
+            IconName::Inbox
+        };
+
         div()
             .flex()
             .flex_col()
             .flex_1()
             .items_center()
             .justify_center()
-            .gap(dp(8.))
+            .gap(dp(12.))
             .px(dp(24.))
+            .pb(dp(40.))
             .child(
-                Icon::new(IconName::Inbox)
-                    .size(dp(40.))
-                    .color(tokens.quaternary),
+                div()
+                    .flex()
+                    .flex_none()
+                    .size(dp(48.))
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(tokens.fill_tertiary)
+                    .child(Icon::new(icon).size(dp(24.)).color(tokens.tertiary)),
             )
             .child(
                 div()
+                    .max_w(dp(280.))
                     .kp_text(TextSize::Sm)
-                    .text_color(tokens.description)
+                    .text_color(tokens.tertiary)
                     .text_center()
                     .child(t_args(text.key, &args)),
             )

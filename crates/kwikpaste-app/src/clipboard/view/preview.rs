@@ -202,7 +202,7 @@ impl PreviewPanel {
             .gap(dp(12.))
             .px(dp(16.))
             .border_b_1()
-            .border_color(tokens.border)
+            .border_color(tokens.split)
             .child(
                 div()
                     .min_w_0()
@@ -232,10 +232,12 @@ impl PreviewPanel {
                         .when(self.can_pick_words(), |row| row.child(self.view_switch(cx)))
                         .child(
                             div()
+                                .flex()
+                                .h(dp(24.))
+                                .items_center()
                                 .rounded(radius::SM)
-                                .bg(tokens.fill_secondary)
+                                .bg(tokens.fill_tertiary)
                                 .px(dp(8.))
-                                .py(dp(2.))
                                 .kp_text(TextSize::Xs)
                                 .text_color(tokens.secondary)
                                 .child(t(type_key(payload.kind, payload.sub_kind))),
@@ -248,6 +250,11 @@ impl PreviewPanel {
     /// 文本方式切换（1.x antd `Segmented size="small"`）。
     fn view_switch(&self, cx: &mut Context<Self>) -> AnyElement {
         let tokens = theme::tokens(cx);
+        // 选中段在亮色里是浮起的白块（带一层极淡的影），暗色里是亮一档的填充。
+        let thumb = match theme::appearance(cx) {
+            theme::Appearance::Light => tokens.bg_container,
+            theme::Appearance::Dark => tokens.fill_secondary,
+        };
         let segment = |view: PreviewTextView, key: &str, cx: &mut Context<Self>| {
             let selected = self.text_view == view;
             div()
@@ -261,7 +268,10 @@ impl PreviewPanel {
                 .cursor_pointer()
                 .map(|segment| {
                     if selected {
-                        segment.bg(tokens.fill).text_color(tokens.text)
+                        segment
+                            .bg(thumb)
+                            .shadow(tokens.shadow_card.to_vec())
+                            .text_color(tokens.text)
                     } else {
                         segment
                             .text_color(tokens.secondary)
@@ -372,9 +382,27 @@ impl PreviewPanel {
             .justify_center()
             .p(dp(16.))
             .child(match state {
-                ImageState::Ready(image) => img(ImageSource::Render(image))
+                // 同列表缩略图：圆角，叠一圈不占位置的细描边。
+                ImageState::Ready(image) => div()
+                    .relative()
+                    .flex_none()
                     .w(px(width))
                     .h(px(height))
+                    .child(
+                        img(ImageSource::Render(image))
+                            .size_full()
+                            .rounded(radius::SM),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .rounded(radius::SM)
+                            .border_1()
+                            .border_color(theme::tokens(cx).split),
+                    )
                     .into_any_element(),
                 ImageState::Loading => div().w(px(width)).h(px(height)).into_any_element(),
                 ImageState::Failed => Self::empty("preview:empty.imageMissing", cx),
@@ -510,7 +538,7 @@ impl PreviewPanel {
                         .items_center()
                         .gap(dp(8.))
                         .border_t_1()
-                        .border_color(tokens.border)
+                        .border_color(tokens.split)
                         .py(dp(8.))
                         .pr(dp(12.))
                         .pl(dp(16.))
@@ -622,7 +650,7 @@ impl PreviewPanel {
                         div()
                             .flex_none()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.secondary)
+                            .text_color(tokens.tertiary)
                             .child(size_label),
                     ),
             )
