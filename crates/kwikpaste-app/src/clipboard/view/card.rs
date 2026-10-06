@@ -56,7 +56,7 @@ pub enum Visual {
 /// 卡片的状态标记。
 #[derive(Default)]
 pub struct CardState {
-    /// 当前项：淡主色底加左侧主色竖条。
+    /// 当前项：中性灰底。
     pub active: bool,
     /// 指针在卡片上：铺一层悬停底色。
     pub hovered: bool,
@@ -114,14 +114,15 @@ pub fn card(
     let checkbox = state.checkbox;
     let on_snippet = state.on_snippet;
 
-    // 条目是扁平的行：平时没有底色和描边，悬停、当前项、勾选时才铺一层底色，当前项再加左侧
-    // 主色竖条。卡片风格是圆角块、行间画细分隔线；无间风格贴边，用底边线分隔。
+    // 条目是扁平的行：平时没有底色和描边，悬停、当前项（中性灰）、勾选（淡主色）时才铺一层
+    // 底色。卡片风格是圆角块、行间画细分隔线；无间风格贴边，用底边线分隔。
     let highlight = if state.checked {
         Some(tokens.primary_bg)
     } else if state.active {
-        Some(tokens.primary.opacity(0.07))
+        Some(tokens.fill_secondary)
     } else if state.hovered {
-        Some(tokens.text_hover)
+        // 比当前项浅一档，指针扫过时不会和当前项混淆。
+        Some(tokens.fill_quaternary)
     } else {
         None
     };
@@ -141,18 +142,13 @@ pub fn card(
                 .border_color(kwikpaste_ui::theme::transparent())
                 .rounded(radius::LG)
         })
-        .when_some(highlight, |frame, highlight| frame.bg(highlight))
-        .when(state.active && !state.checked, |frame| {
-            frame.child(accent_bar(tokens))
-        });
+        .when_some(highlight, |frame, highlight| frame.bg(highlight));
 
     frame = if layout.header_row {
-        // 正文在上，来源、类型、时间这行信息放到正文下面，弱化成小号灰字。
+        // 来源、类型、时间这行小号灰字在正文上方。
         frame
             .flex_col()
             .gap(dp(layout.body_gap))
-            .child(body)
-            .children(snippets(env, item, 0, on_snippet))
             .child(meta(
                 env,
                 item,
@@ -161,6 +157,8 @@ pub fn card(
                 checkbox,
                 status_marks(tokens, pinned, sensitive, true),
             ))
+            .child(body)
+            .children(snippets(env, item, 0, on_snippet))
     } else {
         frame
             .items_start()
@@ -238,18 +236,6 @@ pub fn card(
         })
         .child(frame)
         .when(state.active, |row| row.aria_active_descendant())
-}
-
-/// 当前项左侧的主色竖条。
-fn accent_bar(tokens: &KpTokens) -> Div {
-    div()
-        .absolute()
-        .left(dp(0.))
-        .top(dp(8.))
-        .bottom(dp(8.))
-        .w(dp(3.))
-        .rounded_full()
-        .bg(tokens.primary)
 }
 
 /// 未加载行的骨架：照两行文本卡片画（1.x `renderPlaceholderItem`），标准档高 84 px。
