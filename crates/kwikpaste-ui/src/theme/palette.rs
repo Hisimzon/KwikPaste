@@ -64,7 +64,7 @@ pub const LIGHT: AntdColors = AntdColors {
     color_text_light_solid: hex(0xffffff),
     color_bg_container: hex(0xffffff),
     color_bg_elevated: hex(0xffffff),
-    color_bg_layout: hex(0xf4f4f6),
+    color_bg_layout: hex(0xf7f7f9),
     color_bg_spotlight: rgba(0x1d1d21, 0.92),
     color_bg_mask: rgba(0x000000, 0.32),
     color_bg_text_hover: rgba(0x000000, 0.05),

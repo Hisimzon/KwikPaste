@@ -2430,7 +2430,6 @@ impl Preferences {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
         let tokens = theme::tokens(cx);
-        let solid = !crate::platform::material::current(cx).is_translucent();
         let mut nav = div().flex().flex_col().gap(space(0.5));
         let mut group = None;
         for tab in tabs {
@@ -2454,24 +2453,19 @@ impl Preferences {
                     .px(space(2.5))
                     .rounded(theme::radius::MD)
                     .kp_text(TextSize::Sm)
-                    // 选中项是侧栏上浮起的一块卡片底（材质下换成填充色，半透明元素不能画阴影）。
-                    .when(selected && solid, |item| {
-                        item.bg(tokens.bg_container)
-                            .shadow(tokens.shadow_card.to_vec())
-                            .text_color(tokens.text)
-                    })
-                    .when(selected && !solid, |item| {
+                    // 选中项是中性灰底（同剪贴板面板的当前项），悬停浅一档。
+                    .when(selected, |item| {
                         item.bg(tokens.fill_secondary).text_color(tokens.text)
                     })
                     .when(!selected, |item| {
                         item.text_color(tokens.secondary)
-                            .hover(|style| style.bg(tokens.fill_secondary))
+                            .hover(|style| style.bg(tokens.fill_tertiary))
                     })
                     .cursor_pointer()
                     .child(tab.icon.view(
                         rems(1.),
                         if selected {
-                            tokens.primary
+                            tokens.text
                         } else {
                             tokens.secondary
                         },
@@ -2502,10 +2496,7 @@ impl Preferences {
             .flex_col()
             .gap(space(1.5))
             .rounded(theme::radius::LG)
-            .border_1()
-            .border_color(tokens.border_secondary)
-            .bg(tokens.bg_container)
-            .when(solid, |card| card.shadow(tokens.shadow_card.to_vec()))
+            .bg(tokens.fill_tertiary)
             .p(space(3.))
             .child(
                 div()
@@ -2695,10 +2686,10 @@ impl Preferences {
             .when(setting.control.full_width(), |row| {
                 row.flex_col().items_start()
             })
-            .px(space(4.))
+            .px(space(1.))
             .py(space(2.5))
             .min_h(rems(3.))
-            .when(setting.parent.is_some(), |row| row.pl(space(8.)))
+            .when(setting.parent.is_some(), |row| row.pl(space(5.)))
             .border_b_1()
             .border_color(theme::tokens(cx).split)
             .child(
@@ -2738,30 +2729,22 @@ impl Preferences {
         let sections = tab.map(|tab| tab.sections).unwrap_or_default();
         let show_titles = sections.len() > 1;
         let tokens = theme::tokens(cx);
-        let solid = !crate::platform::material::current(cx).is_translucent();
         let content = ScrollArea::new("preferences-scroll", &self.scroll)
             .flex()
             .flex_col()
-            .p(space(6.))
-            .gap(space(8.))
+            .px(space(7.))
+            .py(space(6.))
+            .gap(space(7.))
             .children(sections.into_iter().map(|section| {
                 if self.tab == TabId::Overview {
                     return self.render_storage_overview(cx);
                 }
+                // 分组不再套卡片框：标题下面直接是扁平的设置行，行间细分隔线。
                 let card = div()
                     .flex()
                     .flex_col()
-                    .rounded(theme::radius::LG)
-                    .border_1()
-                    .border_color(tokens.border_secondary)
-                    .bg(crate::platform::material::surface_tint(
-                        cx,
-                        tokens.bg_container,
-                        0.48,
-                        0.32,
-                    ))
-                    .when(solid, |card| card.shadow(tokens.shadow_card.to_vec()))
-                    .overflow_hidden()
+                    .border_t_1()
+                    .border_color(tokens.split)
                     .children(
                         section
                             .settings
@@ -2777,9 +2760,9 @@ impl Preferences {
                         section_view.child(
                             div()
                                 .px(space(1.))
-                                .kp_text(TextSize::Sm)
+                                .kp_text(TextSize::Xs)
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(tokens.secondary)
+                                .text_color(tokens.tertiary)
                                 .child(text::section_title(&section)),
                         )
                     })
@@ -2795,7 +2778,7 @@ impl Preferences {
             .h_full()
             .bg(crate::platform::material::shell_surface(
                 cx,
-                tokens.bg_layout,
+                tokens.bg_container,
             ))
             .child(
                 div()
@@ -2804,10 +2787,9 @@ impl Preferences {
                     .items_center()
                     .justify_between()
                     .h(rems(4.))
-                    .px(space(6.))
+                    .px(space(7.))
                     .border_b_1()
                     .border_color(tokens.split)
-                    .bg(crate::platform::material::chrome_surface(cx))
                     .child(
                         div()
                             .kp_text(TextSize::Lg)
@@ -3624,10 +3606,8 @@ fn overview_metric_card(
         .flex()
         .flex_col()
         .gap(space(1.))
-        .rounded(theme::radius::MD)
-        .border_1()
-        .border_color(theme::tokens(cx).border_secondary)
-        .bg(theme::tokens(cx).bg_container)
+        .rounded(theme::radius::LG)
+        .bg(theme::tokens(cx).fill_tertiary)
         .p(space(3.))
         .child(
             div()
@@ -3658,10 +3638,8 @@ where
         .flex()
         .flex_col()
         .gap(space(2.))
-        .rounded(theme::radius::MD)
-        .border_1()
-        .border_color(tokens.border_secondary)
-        .bg(tokens.bg_container)
+        .rounded(theme::radius::LG)
+        .bg(tokens.fill_tertiary)
         .p(space(3.))
         .child(
             div()
@@ -3708,10 +3686,8 @@ fn overview_trend_card(
         .flex()
         .flex_col()
         .gap(space(2.))
-        .rounded(theme::radius::MD)
-        .border_1()
-        .border_color(tokens.border_secondary)
-        .bg(tokens.bg_container)
+        .rounded(theme::radius::LG)
+        .bg(tokens.fill_tertiary)
         .p(space(3.))
         .child(
             div()
@@ -3806,10 +3782,8 @@ fn overview_groups_card(
         .flex()
         .flex_col()
         .gap(space(2.))
-        .rounded(theme::radius::MD)
-        .border_1()
-        .border_color(tokens.border_secondary)
-        .bg(tokens.bg_container)
+        .rounded(theme::radius::LG)
+        .bg(tokens.fill_tertiary)
         .p(space(3.))
         .child(
             div()

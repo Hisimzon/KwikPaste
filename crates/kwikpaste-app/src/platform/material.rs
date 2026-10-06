@@ -113,16 +113,6 @@ pub fn shell_surface(cx: &App, default: Hsla) -> Hsla {
     }
 }
 
-/// 生成窗口层的半透明色。默认材质保持原始 token，材质窗口按 1.x 的 chrome/content
-/// 分层降低不透明度，避免一个不透明矩形盖住 DWM/NSVisualEffectView 背板。
-pub fn surface_tint(cx: &App, base: Hsla, mica_alpha: f32, acrylic_alpha: f32) -> Hsla {
-    match current(cx).effective {
-        Material::Mica => base.opacity(mica_alpha),
-        Material::Acrylic => base.opacity(acrylic_alpha),
-        Material::Default => base,
-    }
-}
-
 /// 注册一个窗口并立即套用当前材质。窗口创建后 Root 已经存在，因此这里同时处理 Root 底色。
 pub fn register_window(handle: AnyWindowHandle, cx: &mut App) {
     let handles = cx

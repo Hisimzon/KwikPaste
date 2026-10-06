@@ -376,13 +376,16 @@ impl Onboarding {
                                 },
                             ))),
                     )
+                    // 下拉框的根元素会撑满剩余宽度，包一层定宽的容器它才会靠右。
                     .child(
-                        Select::new(&self.language)
-                            .small()
-                            .width(rems(8.))
-                            .accessibility_label(i18n::t(
-                                "preferences:schema.settings.appearance.language.title",
-                            )),
+                        div().flex_none().w(rems(8.)).child(
+                            Select::new(&self.language)
+                                .small()
+                                .width(rems(8.))
+                                .accessibility_label(i18n::t(
+                                    "preferences:schema.settings.appearance.language.title",
+                                )),
+                        ),
                     ),
             )
             .child(div().flex().gap(space(1.5)).children(segments))
@@ -409,23 +412,13 @@ impl Onboarding {
             )
     }
 
-    /// 白底卡片：细描边、圆角，不透明时带一层极淡的阴影（同剪贴板卡片、偏好设置分组）。
+    /// 浅灰底的圆角块，没有描边和阴影（同剪贴板面板的扁平风格）。
     fn surface_card(&self, cx: &App) -> Div {
-        let tokens = theme::tokens(cx);
-        let solid = !crate::platform::material::current(cx).is_translucent();
         div()
             .flex()
             .flex_col()
             .rounded(theme::radius::LG)
-            .border_1()
-            .border_color(tokens.border_secondary)
-            .bg(crate::platform::material::surface_tint(
-                cx,
-                tokens.bg_container,
-                0.58,
-                0.34,
-            ))
-            .when(solid, |card| card.shadow(tokens.shadow_card.to_vec()))
+            .bg(theme::tokens(cx).fill_tertiary)
             .overflow_hidden()
     }
 
@@ -710,7 +703,7 @@ impl Onboarding {
                     .items_center()
                     .justify_between()
                     .gap(space(3.))
-                    .px(space(4.))
+                    .px(space(1.))
                     .py(space(3.))
                     .when(!rows.is_empty(), |row| {
                         row.border_t_1().border_color(theme::tokens(cx).split)
@@ -745,7 +738,15 @@ impl Onboarding {
                 i18n::t("onboarding:shortcuts.description"),
                 cx,
             ))
-            .child(self.surface_card(cx).children(rows))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .border_t_1()
+                    .border_b_1()
+                    .border_color(theme::tokens(cx).split)
+                    .children(rows),
+            )
             .into_any_element()
     }
 
@@ -909,7 +910,7 @@ impl Render for Onboarding {
             .overflow_hidden()
             .bg(crate::platform::material::shell_surface(
                 cx,
-                theme::tokens(cx).bg_layout,
+                theme::tokens(cx).bg_container,
             ))
             .text_color(theme::tokens(cx).text)
             .child(self.render_header(cx))
@@ -935,7 +936,6 @@ impl Render for Onboarding {
                     .py(space(4.))
                     .border_t_1()
                     .border_color(theme::tokens(cx).split)
-                    .bg(crate::platform::material::chrome_surface(cx))
                     // 第一步没有“上一步”，留一个占位让右侧按钮仍靠右。
                     .child(if is_first {
                         div().into_any_element()
