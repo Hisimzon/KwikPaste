@@ -21,9 +21,7 @@ pub enum Density {
     Comfortable,
     #[default]
     Standard,
-    #[allow(dead_code, reason = "密度设置接进来之前只有单测在用")]
     Compact,
-    #[allow(dead_code, reason = "密度设置接进来之前只有单测在用")]
     Custom,
 }
 
@@ -144,6 +142,37 @@ impl LayoutSpec {
         }
     }
 
+    /// 设置里的列表排布（`clipboard.display` 的风格、密度、自定义尺寸、文本行数与图片高度）。
+    pub fn from_settings(display: &kwikpaste_core::settings::Display) -> Self {
+        use kwikpaste_core::settings::{ListDensity, ListStyle as SettingStyle};
+
+        let style = match display.list_style {
+            SettingStyle::Card => ListStyle::Card,
+            SettingStyle::Seamless => ListStyle::Seamless,
+        };
+        let density = match display.density {
+            ListDensity::Comfortable => Density::Comfortable,
+            ListDensity::Standard => Density::Standard,
+            ListDensity::Compact => Density::Compact,
+            ListDensity::Custom => Density::Custom,
+        };
+        let custom = CustomLayout {
+            header_row: display.custom_layout.header_row,
+            item_gap: display.custom_layout.item_gap,
+            padding_y: display.custom_layout.padding_y,
+        };
+
+        Self::resolve(
+            style,
+            density,
+            custom,
+            DisplayOptions {
+                text_max_lines: display.text_max_lines,
+                image_max_height: display.image_max_height,
+            },
+        )
+    }
+
     /// 未加载行的骨架高度：照两行文本卡片画，标准档是 1.x 的 84 px。
     pub fn placeholder_height(&self) -> f32 {
         let body = 2. * LINE_HEIGHT;
@@ -259,6 +288,20 @@ mod tests {
         assert_eq!(seamless.item_gap, 0.);
         assert_eq!(seamless.card_padding_x, 12.);
         assert!(seamless.ring_inset);
+    }
+
+    #[test]
+    fn settings_map_onto_the_layout() {
+        let mut display = kwikpaste_core::settings::Display::default();
+        assert_eq!(LayoutSpec::from_settings(&display), LayoutSpec::default());
+
+        display.list_style = kwikpaste_core::settings::ListStyle::Seamless;
+        display.density = kwikpaste_core::settings::ListDensity::Compact;
+        display.text_max_lines = 2;
+        let spec = LayoutSpec::from_settings(&display);
+        assert!(spec.seamless);
+        assert!(!spec.header_row);
+        assert_eq!(spec.text_max_lines, 2);
     }
 
     #[test]

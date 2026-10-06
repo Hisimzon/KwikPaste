@@ -277,7 +277,7 @@ impl ClipboardList {
             source,
             model: ListModel::new(),
             controller: ListController::new(),
-            layout: LayoutSpec::default(),
+            layout: LayoutSpec::from_settings(&settings.clipboard.display),
             state: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
             focus: cx.focus_handle(),
             window: window.window_handle(),

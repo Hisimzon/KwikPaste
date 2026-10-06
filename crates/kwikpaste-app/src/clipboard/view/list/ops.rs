@@ -24,6 +24,7 @@ use crate::{
             filter::ListFilter,
             freshness::Activation,
             item::{ListItem, SubKind},
+            layout::LayoutSpec,
         },
         source::Group,
         view::editing::{self, EditTarget},
@@ -80,13 +81,17 @@ impl ClipboardList {
         let resort = old.content.sort != new.content.sort;
         let refresh = old.display != new.display || old.sensitive != new.sensitive;
         let preview_changed = old.preview != new.preview;
+        // 风格、密度、行数、图片高度变了：行高全变，像换排序一样整体重排。
+        let layout = LayoutSpec::from_settings(&new.display);
+        let relayout = layout != self.layout;
         self.delete_policy = DeletePolicy::from_settings(&settings.clipboard.content);
         self.settings = settings;
+        self.layout = layout;
         if preview_changed {
             self.preview_settings_changed(cx);
         }
 
-        if resort {
+        if resort || relayout {
             self.reload_from_scratch(cx);
         } else if refresh && let Some(request) = self.model.reload_current_range() {
             self.fetch(request, cx);

@@ -424,6 +424,21 @@ impl ClipboardSource for FixtureSource {
         if let Ok(view) = self.text_view.lock() {
             settings.clipboard.preview.text_view = *view;
         }
+        // 截图验收换列表排布：`KP_LIST_STYLE`（card / seamless）、`KP_LIST_DENSITY`
+        // （comfortable / standard / compact）。夹具只在自测里用；值不认识时保持默认。
+        let display = &mut settings.clipboard.display;
+        if let Some(style) = std::env::var("KP_LIST_STYLE")
+            .ok()
+            .and_then(|value| serde_json::from_value(serde_json::Value::String(value)).ok())
+        {
+            display.list_style = style;
+        }
+        if let Some(density) = std::env::var("KP_LIST_DENSITY")
+            .ok()
+            .and_then(|value| serde_json::from_value(serde_json::Value::String(value)).ok())
+        {
+            display.density = density;
+        }
         settings
     }
 
