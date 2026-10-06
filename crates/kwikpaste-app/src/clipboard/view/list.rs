@@ -1157,7 +1157,6 @@ impl ClipboardList {
             layout: &layout,
             now: self.now,
             reduce_motion: self.reduce_motion(cx),
-            surfaces: crate::platform::material::panel_surfaces(cx),
         };
         let index = ix + self.rows.pinned;
         let placeholder = self.model.get(index).is_none();
@@ -1210,15 +1209,13 @@ impl Render for ClipboardList {
         self.consume_reload_at_top(cx);
 
         let tokens = theme::tokens(cx);
-        let surfaces = crate::platform::material::panel_surfaces(cx);
-        let surface = surfaces.base;
+        let surface = crate::platform::material::panel_surface(cx);
         let layout = self.layout;
         let env = CardEnv {
             tokens,
             layout: &layout,
             now: self.now,
             reduce_motion: self.reduce_motion(cx),
-            surfaces,
         };
 
         let empty = self.model.loaded_initial() && self.model.total() == 0;

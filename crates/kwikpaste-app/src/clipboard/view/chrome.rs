@@ -7,7 +7,7 @@ use gpui::{
     prelude::FluentBuilder as _, svg,
 };
 use kwikpaste_ui::{
-    Icon, IconName, KeyHint, TooltipExt as _,
+    Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _,
     theme::{KpTokens, TextSize},
 };
 
@@ -39,8 +39,10 @@ impl Glyph {
 pub enum Look {
     /// 无底，悬停出填充色、图标加深。
     Text,
-    /// 选中：淡主色底、主色图标（分组栏选中项、固定窗口按钮）。
+    /// 选中：淡主色底、主色图标（固定窗口按钮）。
     Selected,
+    /// 分组栏选中项：实心主色胶囊，图标后面跟名称。
+    Chip,
 }
 
 /// 图标按钮：`hint` 是按住修饰键时显示的角标（`None` 时不显示）。调用方挂点击。
@@ -59,7 +61,14 @@ pub fn icon_button(
             Some(tokens.primary.opacity(0.13)),
             tokens.primary.opacity(0.2),
         ),
+        Look::Chip => (
+            tokens.light_solid,
+            Some(tokens.primary),
+            tokens.primary_hover,
+        ),
     };
+    let chip = look == Look::Chip;
+    let chip_label = chip.then(|| label.clone());
     let hinted = hint.is_some();
     let keyshortcuts = hint.clone();
 
@@ -71,7 +80,9 @@ pub fn icon_button(
         .relative()
         .flex()
         .flex_none()
-        .size(dp(24.))
+        .h(dp(24.))
+        .when(!chip, |button| button.w(dp(24.)))
+        .when(chip, |button| button.px(dp(8.)).gap(dp(4.)).shadow_sm())
         .items_center()
         .justify_center()
         .rounded(dp(7.))
@@ -84,6 +95,17 @@ pub fn icon_button(
                 .when(hinted, |icon| icon.opacity(0.))
                 .child(glyph.render(TextSize::Base.font_size(), color)),
         )
+        .when_some(chip_label, |button, label| {
+            button.child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(color)
+                    .max_w(dp(72.))
+                    .truncate()
+                    .when(hinted, |text| text.opacity(0.))
+                    .child(label),
+            )
+        })
         .when_some(hint, |button, key| {
             button.child(
                 div()

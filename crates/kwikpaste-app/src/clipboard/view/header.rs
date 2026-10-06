@@ -160,21 +160,18 @@ impl Render for Header {
                     .child(img(ImageSource::Image(logo())).size(dp(20.))),
             )
             .child(
-                // 空白拖动区要有高度才能被命中（行内居中时空 div 的高度是 0）。
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h(dp(32.))
-                    .window_control_area(WindowControlArea::Drag),
-            )
-            .child(
                 div()
                     .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .ml(dp(10.))
                     .items_center()
                     .gap(dp(4.))
                     .child(
                         div()
                             .id("clipboard-search")
+                            .flex_1()
+                            .min_w_0()
                             .key_context(SEARCH_CONTEXT)
                             .capture_any_mouse_down(cx.listener(
                                 |header, event: &MouseDownEvent, _, cx| {
@@ -186,7 +183,6 @@ impl Render for Header {
                             .child(
                                 Input::search(&self.input)
                                     .small()
-                                    .width(dp(160.))
                                     .hint_key(hint("F"))
                                     .accessibility_label(t("clipboard:header.searchPlaceholder")),
                             ),

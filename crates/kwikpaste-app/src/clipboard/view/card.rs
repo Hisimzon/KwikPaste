@@ -8,9 +8,9 @@ use std::{rc::Rc, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Local};
 use gpui::{
-    AbsoluteLength, Animation, AnimationExt as _, AnyElement, App, Div, ElementId, Image,
-    ImageSource, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems,
-    RenderImage, SharedString, StatefulInteractiveElement as _, Styled, Window, div, img,
+    Animation, AnimationExt as _, AnyElement, App, Div, ElementId, Image, ImageSource,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems, RenderImage,
+    SharedString, StatefulInteractiveElement as _, Styled, Window, div, img,
     prelude::FluentBuilder as _, pulsating_between, relative, rems,
 };
 use kwikpaste_ui::{
@@ -43,8 +43,6 @@ pub struct CardEnv<'a> {
     pub layout: &'a LayoutSpec,
     pub now: DateTime<Local>,
     pub reduce_motion: bool,
-    /// 面板底色与卡片底色（随材质变化）。
-    pub surfaces: crate::platform::material::PanelSurfaces,
 }
 
 /// 图片区的状态（缩略图或单图文件）。
@@ -58,9 +56,9 @@ pub enum Visual {
 /// 卡片的状态标记。
 #[derive(Default)]
 pub struct CardState {
-    /// 当前项：画选中外环。
+    /// 当前项：淡主色底加左侧主色竖条。
     pub active: bool,
-    /// 指针在卡片上：描边加深一档。
+    /// 指针在卡片上：铺一层悬停底色。
     pub hovered: bool,
     pub image: Option<Visual>,
     /// 指针在卡片上：有备注且开了“悬停显示原文”时显示原文。
@@ -116,54 +114,53 @@ pub fn card(
     let checkbox = state.checkbox;
     let on_snippet = state.on_snippet;
 
-    // 卡片风格：比面板底高一档的卡片，细描边，不透明时再加一层极淡的阴影；悬停描边加深。
-    // 置顶只用右下角的图钉标记，不再整圈描主色。
-    let surfaces = env.surfaces;
+    // 条目是扁平的行：平时没有底色和描边，悬停、当前项、勾选时才铺一层底色，当前项再加左侧
+    // 主色竖条。卡片风格是圆角块、行间画细分隔线；无间风格贴边，用底边线分隔。
+    let highlight = if state.checked {
+        Some(tokens.primary_bg)
+    } else if state.active {
+        Some(tokens.primary.opacity(0.07))
+    } else if state.hovered {
+        Some(tokens.text_hover)
+    } else {
+        None
+    };
     let mut frame = div()
         .relative()
         .flex()
         .overflow_hidden()
         .py(dp(layout.card_padding_y))
         .px(dp(layout.card_padding_x))
-        .border_color(tokens.border_secondary)
-        .when(layout.seamless, |frame| frame.border_b_1())
+        .when(layout.seamless, |frame| {
+            frame.border_b_1().border_color(tokens.split)
+        })
+        // 卡片风格保留 1 px 的透明描边：行高估算里算了这圈描边。
         .when(!layout.seamless, |frame| {
             frame
                 .border_1()
+                .border_color(kwikpaste_ui::theme::transparent())
                 .rounded(radius::LG)
-                .bg(surfaces.card)
-                .when(surfaces.solid, |frame| {
-                    frame.shadow(tokens.shadow_card.to_vec())
-                })
-                .when(state.hovered && !state.checked, |frame| {
-                    frame.border_color(tokens.border)
-                })
         })
-        .when(pinned && layout.seamless, |frame| {
-            frame.bg(tokens.fill_quaternary)
-        })
-        // 写在置顶之后：无间风格的置顶底色和勾选底色冲突时，勾选的底色胜出（1.x 同）。
-        .when(state.checked, |frame| {
-            frame.bg(tokens.primary_bg).when(!layout.seamless, |frame| {
-                frame.border_color(tokens.primary.opacity(0.45))
-            })
+        .when_some(highlight, |frame, highlight| frame.bg(highlight))
+        .when(state.active && !state.checked, |frame| {
+            frame.child(accent_bar(tokens))
         });
 
     frame = if layout.header_row {
+        // 正文在上，来源、类型、时间这行信息放到正文下面，弱化成小号灰字。
         frame
             .flex_col()
             .gap(dp(layout.body_gap))
-            .child(header(env, item, hint, actions, checkbox))
             .child(body)
-            .children(snippets(
+            .children(snippets(env, item, 0, on_snippet))
+            .child(meta(
                 env,
                 item,
-                usize::from(pinned) + usize::from(sensitive),
-                on_snippet,
+                hint,
+                actions,
+                checkbox,
+                status_marks(tokens, pinned, sensitive, true),
             ))
-            .when(pinned || sensitive, |frame| {
-                frame.child(status_marks(tokens, pinned, sensitive, false))
-            })
     } else {
         frame
             .items_start()
@@ -227,44 +224,32 @@ pub fn card(
         .relative()
         .px(dp(layout.item_padding_x))
         .pt(dp(layout.item_gap))
-        .child(frame)
-        .when(state.active, |row| {
-            row.aria_active_descendant()
-                .child(selection_ring(tokens, layout))
+        // 卡片风格的行间分隔线画在行上方的间距里，左右与正文对齐；第一行不画。
+        .when(!layout.seamless && state.position > 1, |row| {
+            row.child(
+                div()
+                    .absolute()
+                    .top(dp(layout.item_gap / 2.))
+                    .left(dp(layout.item_padding_x + layout.card_padding_x))
+                    .right(dp(layout.item_padding_x + layout.card_padding_x))
+                    .h(gpui::px(1.))
+                    .bg(tokens.split),
+            )
         })
+        .child(frame)
+        .when(state.active, |row| row.aria_active_descendant())
 }
 
-/// 选中外环（主色 2 px）：画在描边外侧 2 px，放不下时（无间风格、
-/// 条目间距小于 2 px）画在内侧。用一层只有描边的覆盖层，不用阴影：GPUI 的阴影会铺满元素底下，
-/// 透明卡片会被整块染色，而 CSS 的 box-shadow 只画在外面。
-fn selection_ring(tokens: &KpTokens, layout: &LayoutSpec) -> Div {
-    let ring =
-        with_border_width(div().absolute(), dp(2.)).border_color(tokens.primary.opacity(0.5));
-
-    if layout.ring_inset {
-        ring.top(dp(layout.item_gap))
-            .left(dp(layout.item_padding_x))
-            .right(dp(layout.item_padding_x))
-            .bottom_0()
-            .when(!layout.seamless, |ring| ring.rounded(radius::LG))
-    } else {
-        ring.top(dp(layout.item_gap - 2.))
-            .left(dp(layout.item_padding_x - 2.))
-            .right(dp(layout.item_padding_x - 2.))
-            .bottom(dp(-2.))
-            .rounded(dp(12.))
-    }
-}
-
-/// 设成按 rem 缩放的描边宽度（GPUI 的 `border_N` 都是固定 px）。
-fn with_border_width(mut element: Div, width: Rems) -> Div {
-    let width = AbsoluteLength::from(width);
-    let edges = &mut element.style().border_widths;
-    edges.top = Some(width);
-    edges.right = Some(width);
-    edges.bottom = Some(width);
-    edges.left = Some(width);
-    element
+/// 当前项左侧的主色竖条。
+fn accent_bar(tokens: &KpTokens) -> Div {
+    div()
+        .absolute()
+        .left(dp(0.))
+        .top(dp(8.))
+        .bottom(dp(8.))
+        .w(dp(3.))
+        .rounded_full()
+        .bg(tokens.primary)
 }
 
 /// 未加载行的骨架：照两行文本卡片画（1.x `renderPlaceholderItem`），标准档高 84 px。
@@ -302,12 +287,11 @@ pub fn placeholder(env: &CardEnv<'_>) -> AnyElement {
         .flex()
         .py(dp(layout.card_padding_y))
         .px(dp(layout.card_padding_x))
-        .bg(if layout.seamless {
-            tokens.fill_quaternary
+        .border_color(if layout.seamless {
+            tokens.split
         } else {
-            env.surfaces.card
+            kwikpaste_ui::theme::transparent()
         })
-        .border_color(tokens.border_secondary)
         .when(layout.seamless, |frame| frame.border_b_1())
         .when(!layout.seamless, |frame| {
             frame.border_1().rounded(radius::LG)
@@ -371,12 +355,13 @@ pub struct ImageTarget {
     pub display: ImageBox,
 }
 
-fn header(
+fn meta(
     env: &CardEnv<'_>,
     item: &ListItem,
     hint: Option<char>,
     actions: Option<AnyElement>,
     checkbox: Option<AnyElement>,
+    marks: Div,
 ) -> Div {
     let tokens = env.tokens;
     let origin = item
@@ -410,27 +395,23 @@ fn header(
                     div()
                         .truncate()
                         .child(SharedString::from(format!("· {origin}")))
-                })),
+                }))
+                .child(div().flex_none().child(SharedString::from(format!(
+                    "· {}",
+                    time_label(item.created_at, &env.now)
+                )))),
         )
-        .child(match (actions, checkbox) {
-            // 滚动时绝大多数卡片走这里：只有时间，不多套一层容器。
-            (None, None) => div()
-                .flex_none()
-                .child(SharedString::from(time_label(item.created_at, &env.now))),
-            // 悬停时时间换成快捷动作（1.x 两者叠在同一格里交替淡入淡出）；多选时时间后面跟复选框。
-            (actions, checkbox) => div()
+        // 右侧：置顶、敏感标记；悬停时是快捷动作，多选时跟复选框。
+        .child(
+            div()
                 .flex()
                 .flex_none()
                 .items_center()
                 .gap(dp(6.))
-                .child(match actions {
-                    Some(actions) => actions,
-                    None => {
-                        SharedString::from(time_label(item.created_at, &env.now)).into_any_element()
-                    }
-                })
+                .child(marks)
+                .children(actions)
                 .children(checkbox),
-        })
+        )
 }
 
 /// 来源图标；按住修饰键时叠一个数字角标，图标本身隐去（1.x `KeyHint` 包着来源图标）。
@@ -500,7 +481,7 @@ fn app_icon(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
         && let Some(path) = &item.source_app_icon_path
     {
         return img(std::path::PathBuf::from(&**path))
-            .size(dp(16.))
+            .size(dp(14.))
             .flex_none()
             .into_any_element();
     }
@@ -811,7 +792,7 @@ fn snippets(
 
 /// 置顶、敏感标记：有头部行时是右下角 20 px 的水印，没有时是正文右侧 16 px 的小图标。
 fn status_marks(tokens: &KpTokens, pinned: bool, sensitive: bool, inline: bool) -> Div {
-    let size = if inline { dp(14.) } else { dp(16.) };
+    let size = dp(14.);
     let marks = div()
         .flex()
         .gap(dp(4.))
@@ -819,7 +800,7 @@ fn status_marks(tokens: &KpTokens, pinned: bool, sensitive: bool, inline: bool) 
             marks.child(
                 Icon::new(IconName::PushPin)
                     .size(size)
-                    .color(tokens.quaternary),
+                    .color(tokens.warning),
             )
         })
         .when(sensitive, |marks| {

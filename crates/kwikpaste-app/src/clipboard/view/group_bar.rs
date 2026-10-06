@@ -263,7 +263,7 @@ impl GroupBar {
 }
 
 fn look(selected: bool) -> Look {
-    if selected { Look::Selected } else { Look::Text }
+    if selected { Look::Chip } else { Look::Text }
 }
 
 /// 自定义分组的右键菜单：编辑、隐藏、删除（1.x `buildGroupActionMenuItems`）。

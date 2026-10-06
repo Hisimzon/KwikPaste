@@ -594,7 +594,7 @@ impl ClipboardPanel {
 impl Render for ClipboardPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::tokens(cx);
-        let surface = crate::platform::material::panel_surfaces(cx).base;
+        let surface = crate::platform::material::panel_surface(cx);
 
         div()
             .id("clipboard-panel")
