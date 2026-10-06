@@ -95,7 +95,7 @@ function Build-Version([string] $version, [string] $out) {
     # Cargo does not always fingerprint a workspace package version change. Clean only the
     # app target so the old archive cannot accidentally contain the newer binary.
     Run 'cargo' @('clean', '--release', '-p', 'kwikpaste-app', '--target', $Target)
-    Run 'cargo' @('build', '--offline', '--release', '--target', $Target, '-p', 'kwikpaste-app', '--features', 'e2e-overrides') @{ CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C target-feature=+crt-static' }
+    Run 'cargo' @('build', '--locked', '--release', '--target', $Target, '-p', 'kwikpaste-app', '--features', 'e2e-overrides') @{ CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C target-feature=+crt-static' }
     New-Item -ItemType Directory -Force -Path $out | Out-Null
     Run 'node' @('scripts/release/package-native.mjs', '--target', $Target, '--out', $out, '--identity', 'test', '--pubkey', (Join-Path $keyDir 'e2e.key.pub'), '--features', 'e2e-overrides') @{ TAURI_SIGNING_PRIVATE_KEY = (Join-Path $keyDir 'e2e.key'); TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $env:E2E_SIGNING_PASSWORD; KWIKPASTE_TAURI_CLI = $tauriCli }
 }

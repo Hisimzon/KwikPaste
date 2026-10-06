@@ -40,7 +40,7 @@ text = re.sub(r'(\[workspace\.package\].*?^version\s*=\s*")[^"]+(")',
               rf'\g<1>{version}\g<2>', text, count=1, flags=re.S | re.M)
 open(path, 'w', encoding='utf-8', newline='').write(text)
 PY
-  cargo build --offline --release -p kwikpaste-app --features e2e-overrides --target "$target"
+  cargo build --locked --release -p kwikpaste-app --features e2e-overrides --target "$target"
   TAURI_SIGNING_PRIVATE_KEY="$key_dir/e2e.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$password" \
     node scripts/release/package-native.mjs --target "$target" --out "$out" --identity test --pubkey "$key_dir/e2e.key.pub" --features e2e-overrides
 }
