@@ -47,7 +47,7 @@ impl DialogSpec {
         self
     }
 
-    /// 页脚里排在取消前面的额外按钮（1.x `SortableTreeModal` 的 `footerExtra`）。
+    /// 页脚左侧的额外按钮（1.x `SortableTreeModal` 的 `footerExtra`），与右侧的取消、确定分开。
     pub fn footer_extra(
         mut self,
         extra: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
@@ -135,11 +135,11 @@ pub fn form_dialog(
                                 .child(title.clone()),
                         )
                         .child(content(window, cx))
+                        // 额外按钮（如“新增”）靠左，与取消、确定分开；没有时取消、确定照常靠右。
                         .child(
                             h_flex()
-                                .justify_end()
                                 .gap(space(2.))
-                                .children(extra)
+                                .child(div().flex().flex_1().children(extra))
                                 .child(
                                     Button::new("kp-dialog-cancel", cancel_text.clone()).on_click(
                                         move |_, window, cx| {

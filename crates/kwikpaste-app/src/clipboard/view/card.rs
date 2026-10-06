@@ -122,6 +122,14 @@ pub fn card(
     let on_snippet = state.on_snippet;
     let highlighted = is_highlighted(state.active, state.hovered, state.checked);
     let divider = !layout.seamless && state.position > 1 && !highlighted && !state.after_highlight;
+    // 分隔线左端与正文对齐：紧凑密度的正文在 16 px 来源图标右侧。
+    let divider_left = layout.item_padding_x
+        + layout.card_padding_x
+        + if layout.header_row {
+            0.
+        } else {
+            16. + layout.body_gap
+        };
 
     // 条目是扁平的行：平时没有底色和描边，悬停、当前项（中性灰）、勾选（淡主色）时才铺一层
     // 底色。卡片风格是圆角块、行间画细分隔线；无间风格贴边，用底边线分隔。
@@ -238,7 +246,7 @@ pub fn card(
                 div()
                     .absolute()
                     .top(dp(layout.item_gap / 2.))
-                    .left(dp(layout.item_padding_x + layout.card_padding_x))
+                    .left(dp(divider_left))
                     .right(dp(layout.item_padding_x + layout.card_padding_x))
                     .h(gpui::px(1.))
                     .bg(tokens.split),

@@ -206,17 +206,16 @@ impl GroupEditor {
             .items_center()
             .justify_center()
             .size(dp(36.))
-            .rounded(radius::LG)
-            .border_1()
+            .rounded(radius::MD)
             .cursor_pointer()
+            // 浅灰底的图标块（同分组栏的扁平按钮），选中的是实心主色。
             .map(|button| {
                 if selected {
-                    button.border_color(tokens.primary).bg(tokens.primary)
+                    button.bg(tokens.primary)
                 } else {
                     button
-                        .border_color(tokens.border)
-                        .bg(tokens.bg_container)
-                        .hover(|style| style.bg(tokens.fill_tertiary))
+                        .bg(tokens.fill_tertiary)
+                        .hover(|style| style.bg(tokens.fill_secondary))
                 }
             })
             .child(
@@ -642,19 +641,18 @@ impl GroupManager {
             .flex()
             .items_center()
             .gap(dp(8.))
-            .h(dp(34.))
+            .h(dp(36.))
             .pl(dp(4.))
             .pr(dp(4.))
             .rounded(radius::MD)
-            .border_1()
-            .border_color(tokens.border_secondary)
-            .bg(tokens.bg_elevated)
+            // 扁平的行：悬停浅灰底，拖到上面时淡主色底（同列表的勾选色）。
+            .hover(|style| style.bg(tokens.fill_quaternary))
             .on_drag(dragged, |dragged, _, _, cx| {
                 cx.new(|_| DragPreview {
                     group: dragged.group.clone(),
                 })
             })
-            .drag_over::<DraggedGroup>(move |style, _, _, _| style.border_color(tokens.primary))
+            .drag_over::<DraggedGroup>(move |style, _, _, _| style.bg(tokens.primary_bg))
             .on_drop(cx.listener(move |manager, dragged: &DraggedGroup, _, cx| {
                 manager.move_group(dragged.index, index, cx);
             }))
@@ -753,7 +751,7 @@ impl Render for GroupManager {
             .id("group-manager")
             .flex()
             .flex_col()
-            .gap(dp(4.))
+            .gap(dp(2.))
             .max_h(dp(360.))
             .overflow_y_scroll()
             .children(
