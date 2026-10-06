@@ -376,46 +376,46 @@ fn update_e2e(cx: &mut App) {
         };
         let core = crate::core_host::core(cx).cloned();
         cx.spawn(async move |cx| {
-            if let Some(seed) = std::env::var_os("KWIKPASTE_E2E_SEED") {
-                if let Some(core) = core {
-                    let seed = seed.to_string_lossy().into_owned();
-                    let stored = core
-                        .build_item(&ClipboardPayload::Text(TextPayload {
-                            text: seed.clone(),
-                            html: None,
-                            rtf: None,
-                        }))
-                        .ok()
-                        .flatten();
-                    if let Some(item) = stored {
-                        if let Err(err) = core.store_item(item, None).await {
-                            log::error!("self-update e2e seed record failed: {err}");
-                        }
-                    }
-                    if let Err(err) = core
-                        .update_settings(serde_json::json!({
-                            "general": { "autoStart": true },
-                            "update": { "includeBeta": false }
-                        }))
-                        .await
-                    {
-                        log::error!("self-update e2e seed settings failed: {err}");
-                    }
-                    log::info!("self-update e2e seeded record {seed}");
+            if let Some(seed) = std::env::var_os("KWIKPASTE_E2E_SEED")
+                && let Some(core) = core
+            {
+                let seed = seed.to_string_lossy().into_owned();
+                let stored = core
+                    .build_item(&ClipboardPayload::Text(TextPayload {
+                        text: seed.clone(),
+                        html: None,
+                        rtf: None,
+                    }))
+                    .ok()
+                    .flatten();
+                if let Some(item) = stored
+                    && let Err(err) = core.store_item(item, None).await
+                {
+                    log::error!("self-update e2e seed record failed: {err}");
                 }
+                if let Err(err) = core
+                    .update_settings(serde_json::json!({
+                        "general": { "autoStart": true },
+                        "update": { "includeBeta": false }
+                    }))
+                    .await
+                {
+                    log::error!("self-update e2e seed settings failed: {err}");
+                }
+                log::info!("self-update e2e seeded record {seed}");
             }
             let status = match updater.check(kwikpaste_updater::CheckMode::Manual).await {
                 Ok(status) => status,
                 Err(err) => {
                     log::error!("self-update e2e check failed: {err:#}");
-                    let _ = cx.update(|cx| cx.quit());
+                    cx.update(|cx| cx.quit());
                     return;
                 }
             };
             let window_status = status.clone();
             let Some(update) = status.update else {
                 log::info!("self-update e2e: no update available");
-                let _ = cx.update(|cx| cx.quit());
+                cx.update(|cx| cx.quit());
                 return;
             };
             cx.update(|cx| {
@@ -437,13 +437,13 @@ fn update_e2e(cx: &mut App) {
             };
             if let Err(err) = updater.download(version.clone(), progress).await {
                 log::error!("self-update e2e download failed: {err:#}");
-                let _ = cx.update(|cx| cx.quit());
+                cx.update(|cx| cx.quit());
                 return;
             }
             log::info!("self-update e2e: downloaded {version}, installing");
             if let Err(err) = updater.install(version).await {
                 log::error!("self-update e2e install failed: {err:#}");
-                let _ = cx.update(|cx| cx.quit());
+                cx.update(|cx| cx.quit());
             }
         })
         .detach();
