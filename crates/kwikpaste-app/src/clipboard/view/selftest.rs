@@ -1692,7 +1692,7 @@ where
 }
 
 /// 截图用的演示状态（`KP_PANEL_DEMO`）：`hover`、`hints`、`selection`、`search-empty`、`group`、
-/// `note`、`delete`。数据加载完后摆好，供 PrintWindow 截图。
+/// `note`、`delete`、`shortcuts` 等。数据加载完后摆好，供 PrintWindow 截图。
 pub fn stage_demo(panel: Entity<ClipboardPanel>, cx: &mut App) {
     let Ok(stage) = std::env::var("KP_PANEL_DEMO") else {
         return;
@@ -1771,6 +1771,7 @@ impl Driver {
                 self.select_where(cx, |item| !item.is_pinned && !item.is_favorite);
                 self.key(cx, "secondary-backspace");
             }
+            "shortcuts" => self.key(cx, "secondary-k"),
             "preview-words" | "preview-text" | "preview-image" | "preview-files"
             | "preview-html" => {
                 let source = self.list.read_with(cx, |list, _| list.source.clone());

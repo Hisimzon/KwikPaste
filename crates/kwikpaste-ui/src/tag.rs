@@ -155,11 +155,25 @@ impl Shortcut {
 }
 
 impl RenderOnce for Shortcut {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    /// 每个键一个键帽；单独的 `/` 表示“或”，画成键帽之间的灰色分隔字。
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = theme::tokens(cx);
+
         h_flex()
             .gap(space(1.))
             .items_center()
-            .children(self.keys.into_iter().map(Kbd::new))
+            .children(self.keys.into_iter().map(|key| {
+                if key.as_ref() == "/" {
+                    return div()
+                        .px(space(0.5))
+                        .kp_text(TextSize::Xs)
+                        .text_color(tokens.tertiary)
+                        .child(key)
+                        .into_any_element();
+                }
+
+                Kbd::new(key).into_any_element()
+            }))
     }
 }
 

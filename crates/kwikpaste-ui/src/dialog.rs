@@ -6,7 +6,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use futures::channel::oneshot;
-use gpui::{AnyElement, App, ParentElement as _, SharedString, Styled as _, Window, div, px, rems};
+use gpui::{
+    AnyElement, App, ParentElement as _, SharedString, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px, rems,
+};
 use gpui_base::{h_flex, v_flex};
 use gpui_component::WindowExt as _;
 
@@ -28,6 +31,7 @@ pub struct DialogSpec {
     cancel_text: Option<SharedString>,
     validate: Option<DialogCheck>,
     footer_extra: Option<FooterExtra>,
+    show_cancel: bool,
 }
 
 impl DialogSpec {
@@ -38,7 +42,14 @@ impl DialogSpec {
             cancel_text: None,
             validate: None,
             footer_extra: None,
+            show_cancel: true,
         }
+    }
+
+    /// 只读的说明弹框（如快捷键列表）只要一个确定按钮；Esc 仍然关闭。
+    pub fn without_cancel(mut self) -> Self {
+        self.show_cancel = false;
+        self
     }
 
     /// 点确定时先校验（antd `form.validateFields`）：返回假时对话框留着，由表单自己显示错误。
@@ -105,6 +116,7 @@ pub fn form_dialog(
         let content = content.clone();
         let validate = spec.validate.clone();
         let footer_extra = spec.footer_extra.clone();
+        let show_cancel = spec.show_cancel;
         // antd Modal 默认宽 520 px；面板只有 360 px 宽，左右各留 16 px。
         let width = rems(32.5)
             .to_pixels(window.rem_size())
@@ -140,14 +152,15 @@ pub fn form_dialog(
                             h_flex()
                                 .gap(space(2.))
                                 .child(div().flex().flex_1().children(extra))
-                                .child(
-                                    Button::new("kp-dialog-cancel", cancel_text.clone()).on_click(
-                                        move |_, window, cx| {
-                                            cancel_answer.send(false);
-                                            window.close_dialog(cx);
-                                        },
-                                    ),
-                                )
+                                .when(show_cancel, |footer| {
+                                    footer.child(
+                                        Button::new("kp-dialog-cancel", cancel_text.clone())
+                                            .on_click(move |_, window, cx| {
+                                                cancel_answer.send(false);
+                                                window.close_dialog(cx);
+                                            }),
+                                    )
+                                })
                                 .child(
                                     Button::new("kp-dialog-ok", ok_text.clone())
                                         .primary()
