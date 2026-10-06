@@ -2430,7 +2430,8 @@ impl Preferences {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
         let tokens = theme::tokens(cx);
-        let mut nav = div().flex().flex_col().gap(space(1.));
+        let solid = !crate::platform::material::current(cx).is_translucent();
+        let mut nav = div().flex().flex_col().gap(space(0.5));
         let mut group = None;
         for tab in tabs {
             if group != Some(tab.group) && group.is_some() {
@@ -2450,15 +2451,21 @@ impl Preferences {
                     .gap(space(2.))
                     .w_full()
                     .h(rems(2.25))
-                    .px(space(2.))
-                    .rounded(theme::radius::SM)
+                    .px(space(2.5))
+                    .rounded(theme::radius::MD)
                     .kp_text(TextSize::Sm)
-                    .when(selected, |item| {
+                    // 选中项是侧栏上浮起的一块卡片底（材质下换成填充色，半透明元素不能画阴影）。
+                    .when(selected && solid, |item| {
+                        item.bg(tokens.bg_container)
+                            .shadow(tokens.shadow_card.to_vec())
+                            .text_color(tokens.text)
+                    })
+                    .when(selected && !solid, |item| {
                         item.bg(tokens.fill_secondary).text_color(tokens.text)
                     })
                     .when(!selected, |item| {
                         item.text_color(tokens.secondary)
-                            .hover(|style| style.bg(tokens.fill_tertiary))
+                            .hover(|style| style.bg(tokens.fill_secondary))
                     })
                     .cursor_pointer()
                     .child(tab.icon.view(
@@ -2493,12 +2500,13 @@ impl Preferences {
         let storage_card = div()
             .flex()
             .flex_col()
-            .gap(space(1.))
-            .rounded(theme::radius::SM)
+            .gap(space(1.5))
+            .rounded(theme::radius::LG)
             .border_1()
             .border_color(tokens.border_secondary)
-            .bg(tokens.bg_elevated)
-            .p(space(2.))
+            .bg(tokens.bg_container)
+            .when(solid, |card| card.shadow(tokens.shadow_card.to_vec()))
+            .p(space(3.))
             .child(
                 div()
                     .flex()
@@ -2508,11 +2516,16 @@ impl Preferences {
                     .child(PrefIcon::HardDrive.view(rems(1.), tokens.success))
                     .child(i18n::t("preferences:storage.title")),
             )
-            .child(div().kp_text(TextSize::Xs).child(format!(
-                "{} / {}",
-                text::format_bytes(usage),
-                text::format_bytes(limit)
-            )))
+            .child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.tertiary)
+                    .child(format!(
+                        "{} / {}",
+                        text::format_bytes(usage),
+                        text::format_bytes(limit)
+                    )),
+            )
             .child(
                 div()
                     .h(px(4.))
@@ -2533,15 +2546,10 @@ impl Preferences {
             .justify_between()
             .h_full()
             .w(rems(14.))
-            .p(space(2.))
+            .p(space(3.))
             .border_r_1()
-            .border_color(tokens.border_secondary)
-            .bg(crate::platform::material::surface_tint(
-                cx,
-                tokens.bg_container,
-                0.34,
-                0.20,
-            ))
+            .border_color(tokens.split)
+            .bg(crate::platform::material::chrome_surface(cx))
             .child(
                 div()
                     .flex()
@@ -2689,14 +2697,15 @@ impl Preferences {
             })
             .px(space(4.))
             .py(space(2.5))
+            .min_h(rems(3.))
             .when(setting.parent.is_some(), |row| row.pl(space(8.)))
             .border_b_1()
-            .border_color(theme::tokens(cx).border_secondary)
+            .border_color(theme::tokens(cx).split)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(space(1.))
+                    .gap(space(0.5))
                     .flex_1()
                     .min_w_0()
                     .child(div().kp_text(TextSize::Sm).child(title))
@@ -2704,7 +2713,7 @@ impl Preferences {
                         row.child(
                             div()
                                 .kp_text(TextSize::Xs)
-                                .text_color(theme::tokens(cx).secondary)
+                                .text_color(theme::tokens(cx).tertiary)
                                 .child(description),
                         )
                     }),
@@ -2729,6 +2738,7 @@ impl Preferences {
         let sections = tab.map(|tab| tab.sections).unwrap_or_default();
         let show_titles = sections.len() > 1;
         let tokens = theme::tokens(cx);
+        let solid = !crate::platform::material::current(cx).is_translucent();
         let content = ScrollArea::new("preferences-scroll", &self.scroll)
             .flex()
             .flex_col()
@@ -2741,7 +2751,7 @@ impl Preferences {
                 let card = div()
                     .flex()
                     .flex_col()
-                    .rounded(theme::radius::MD)
+                    .rounded(theme::radius::LG)
                     .border_1()
                     .border_color(tokens.border_secondary)
                     .bg(crate::platform::material::surface_tint(
@@ -2750,6 +2760,7 @@ impl Preferences {
                         0.48,
                         0.32,
                     ))
+                    .when(solid, |card| card.shadow(tokens.shadow_card.to_vec()))
                     .overflow_hidden()
                     .children(
                         section
@@ -2765,8 +2776,10 @@ impl Preferences {
                     .when(show_titles, |section_view| {
                         section_view.child(
                             div()
+                                .px(space(1.))
                                 .kp_text(TextSize::Sm)
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(tokens.secondary)
                                 .child(text::section_title(&section)),
                         )
                     })
@@ -2793,13 +2806,8 @@ impl Preferences {
                     .h(rems(4.))
                     .px(space(6.))
                     .border_b_1()
-                    .border_color(tokens.border_secondary)
-                    .bg(crate::platform::material::surface_tint(
-                        cx,
-                        tokens.bg_container,
-                        0.34,
-                        0.20,
-                    ))
+                    .border_color(tokens.split)
+                    .bg(crate::platform::material::chrome_surface(cx))
                     .child(
                         div()
                             .kp_text(TextSize::Lg)

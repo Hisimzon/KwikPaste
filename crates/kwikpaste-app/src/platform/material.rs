@@ -86,6 +86,45 @@ pub fn surface_alpha(cx: &App) -> Option<f32> {
     }
 }
 
+/// 窗口“框架”区（偏好设置的侧栏、标题栏）底色：默认材质与窗口底同色（`bg_layout`），
+/// 靠细分隔线区分；材质下照 1.x 叠一层很淡的 `bg_container`。
+pub fn chrome_surface(cx: &App) -> Hsla {
+    let tokens = theme::tokens(cx);
+    match current(cx).effective {
+        Material::Mica => tokens.bg_container.opacity(0.34),
+        Material::Acrylic => tokens.bg_container.opacity(0.2),
+        Material::Default => tokens.bg_layout,
+    }
+}
+
+/// 剪贴板面板的两层底色。
+#[derive(Clone, Copy, Debug)]
+pub struct PanelSurfaces {
+    /// 面板底：默认材质是比卡片低一档的 `bg_layout`，材质下是半透明的内容层。
+    pub base: Hsla,
+    /// 卡片底：默认材质是 `bg_container`；材质下比面板底更实一些，仍透出背板。
+    pub card: Hsla,
+    /// 卡片是不透明的：只有这时才给卡片画阴影（GPUI 的阴影会铺满半透明元素底下）。
+    pub solid: bool,
+}
+
+/// 按当前材质给出面板底色与卡片底色。
+pub fn panel_surfaces(cx: &App) -> PanelSurfaces {
+    let tokens = theme::tokens(cx);
+    match surface_alpha(cx) {
+        Some(alpha) => PanelSurfaces {
+            base: tokens.material_surface(alpha),
+            card: tokens.material_surface((alpha + 1.) / 2.),
+            solid: false,
+        },
+        None => PanelSurfaces {
+            base: tokens.bg_layout,
+            card: tokens.bg_container,
+            solid: true,
+        },
+    }
+}
+
 /// 窗口外壳底色（1.x `.kp-material-surface`）：默认材质用窗口自己的 token；材质下统一是
 /// `bg_container` 按面板同样的比例半透明——暗色的 `bg_layout` 是纯黑，不能拿来透底。
 pub fn shell_surface(cx: &App, default: Hsla) -> Hsla {

@@ -4,7 +4,7 @@ use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, Div, Entity, FocusHandle, Global, ImageSource,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
     SharedString, Styled as _, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions,
-    div, img, px, rems, size,
+    div, img, prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::settings::Settings;
 use kwikpaste_ui::{
@@ -328,58 +328,105 @@ impl Onboarding {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::tokens(cx);
         let steps = self.steps();
         let position = self.current_position();
+        // 每一步一段，走过的和当前步是主色，其余是填充色。
+        let segments = (0..steps.len()).map(|index| {
+            div()
+                .flex_1()
+                .h(px(4.))
+                .rounded_full()
+                .bg(if index <= position {
+                    tokens.primary
+                } else {
+                    tokens.fill_secondary
+                })
+        });
         div()
             .flex()
-            .items_center()
-            .justify_between()
-            .px(space(5.))
+            .flex_col()
+            .gap(space(3.))
+            .px(space(6.))
             .pt(space(4.))
             .child(
                 div()
                     .flex()
+                    .w_full()
                     .items_center()
-                    .gap(space(2.))
-                    .child(div().kp_text(TextSize::Sm).child(format!(
-                        "{}/{}",
-                        position + 1,
-                        steps.len()
-                    )))
+                    .justify_between()
                     .child(
                         div()
+                            .flex()
+                            .items_center()
+                            .gap(space(1.5))
                             .kp_text(TextSize::Sm)
-                            .child(i18n::t(match self.current_kind() {
-                                WELCOME => "onboarding:steps.welcome",
-                                PERMISSIONS => "onboarding:steps.permissions",
-                                SHORTCUTS => "onboarding:steps.shortcuts",
-                                IGNORE_APPS => "onboarding:steps.ignoreApps",
-                                _ => "onboarding:steps.done",
-                            })),
+                            .child(div().text_color(tokens.tertiary).child(format!(
+                                "{}/{}",
+                                position + 1,
+                                steps.len()
+                            )))
+                            .child(div().text_color(tokens.secondary).child(i18n::t(
+                                match self.current_kind() {
+                                    WELCOME => "onboarding:steps.welcome",
+                                    PERMISSIONS => "onboarding:steps.permissions",
+                                    SHORTCUTS => "onboarding:steps.shortcuts",
+                                    IGNORE_APPS => "onboarding:steps.ignoreApps",
+                                    _ => "onboarding:steps.done",
+                                },
+                            ))),
                     )
                     .child(
-                        div()
-                            .h(px(4.))
-                            .w(rems(16.))
-                            .rounded(theme::radius::MD)
-                            .bg(theme::tokens(cx).fill_secondary)
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(rems(16. * ((position + 1) as f32 / steps.len() as f32)))
-                                    .rounded(theme::radius::MD)
-                                    .bg(theme::tokens(cx).primary),
-                            ),
+                        Select::new(&self.language)
+                            .small()
+                            .width(rems(8.))
+                            .accessibility_label(i18n::t(
+                                "preferences:schema.settings.appearance.language.title",
+                            )),
                     ),
             )
+            .child(div().flex().gap(space(1.5)).children(segments))
+    }
+
+    /// 每一步顶部的标题和说明。
+    fn step_heading(&self, title: SharedString, description: SharedString, cx: &App) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap(space(1.))
+            .mb(space(2.))
             .child(
-                Select::new(&self.language)
-                    .small()
-                    .width(rems(8.))
-                    .accessibility_label(i18n::t(
-                        "preferences:schema.settings.appearance.language.title",
-                    )),
+                div()
+                    .kp_text(TextSize::Lg)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(title),
             )
+            .child(
+                div()
+                    .kp_text(TextSize::Sm)
+                    .text_color(theme::tokens(cx).secondary)
+                    .child(description),
+            )
+    }
+
+    /// 白底卡片：细描边、圆角，不透明时带一层极淡的阴影（同剪贴板卡片、偏好设置分组）。
+    fn surface_card(&self, cx: &App) -> Div {
+        let tokens = theme::tokens(cx);
+        let solid = !crate::platform::material::current(cx).is_translucent();
+        div()
+            .flex()
+            .flex_col()
+            .rounded(theme::radius::LG)
+            .border_1()
+            .border_color(tokens.border_secondary)
+            .bg(crate::platform::material::surface_tint(
+                cx,
+                tokens.bg_container,
+                0.58,
+                0.34,
+            ))
+            .when(solid, |card| card.shadow(tokens.shadow_card.to_vec()))
+            .overflow_hidden()
     }
 
     fn render_card(
@@ -388,26 +435,20 @@ impl Onboarding {
         description: SharedString,
         cx: &mut Context<Self>,
     ) -> Div {
-        div()
-            .flex()
-            .flex_col()
+        self.surface_card(cx)
             .gap(space(1.))
             .min_w_0()
-            .rounded(theme::radius::MD)
-            .border_1()
-            .border_color(theme::tokens(cx).border)
-            .bg(crate::platform::material::surface_tint(
-                cx,
-                theme::tokens(cx).bg_container,
-                0.58,
-                0.34,
-            ))
             .p(space(4.))
-            .child(div().kp_text(TextSize::Base).child(title))
+            .child(
+                div()
+                    .kp_text(TextSize::Base)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(title),
+            )
             .child(
                 div()
                     .kp_text(TextSize::Sm)
-                    .text_color(theme::tokens(cx).secondary)
+                    .text_color(theme::tokens(cx).tertiary)
                     .child(description),
             )
     }
@@ -420,43 +461,37 @@ impl Onboarding {
         cx: &mut Context<Self>,
     ) -> Div {
         let tokens = theme::tokens(cx);
-        div()
-            .flex()
-            .flex_col()
-            .gap(space(2.))
+        self.surface_card(cx)
+            .gap(space(3.))
             .min_w_0()
-            .rounded(theme::radius::MD)
-            .border_1()
-            .border_color(tokens.border)
-            .bg(tokens.bg_container)
-            .p(space(3.))
+            .p(space(4.))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(space(2.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(rems(2.))
-                            .rounded(theme::radius::SM)
-                            .bg(tokens.bg_elevated)
-                            .child(icon.view(rems(1.25), tokens.primary)),
-                    )
+                    .justify_center()
+                    .size(rems(2.25))
+                    .rounded(theme::radius::MD)
+                    .bg(tokens.primary_bg)
+                    .child(icon.view(rems(1.25), tokens.primary)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(1.))
                     .child(
                         div()
                             .kp_text(TextSize::Base)
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(title),
+                    )
+                    .child(
+                        div()
+                            .kp_text(TextSize::Sm)
+                            .text_color(tokens.tertiary)
+                            .child(description),
                     ),
-            )
-            .child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .text_color(tokens.secondary)
-                    .child(description),
             )
     }
 
@@ -465,11 +500,14 @@ impl Onboarding {
             .flex()
             .flex_col()
             .items_center()
-            .gap(space(3.))
-            .child(img(ImageSource::Image(view::logo())).size(rems(2.5)))
+            .gap(space(2.))
+            .pt(space(6.))
+            .child(img(ImageSource::Image(view::logo())).size(rems(3.5)))
             .child(
                 div()
+                    .mt(space(2.))
                     .kp_text(TextSize::Lg)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(i18n::t("onboarding:welcome.title")),
             )
             .child(
@@ -478,26 +516,34 @@ impl Onboarding {
                     .text_color(theme::tokens(cx).secondary)
                     .child(i18n::t("onboarding:welcome.description")),
             )
-            .child(div().grid().w_full().grid_cols(3).gap(space(3.)).children([
-                self.render_feature_card(
-                    PrefIcon::ClipboardPlus,
-                    i18n::t("onboarding:welcome.features.capture.title"),
-                    i18n::t("onboarding:welcome.features.capture.description"),
-                    cx,
-                ),
-                self.render_feature_card(
-                    PrefIcon::Search,
-                    i18n::t("onboarding:welcome.features.search.title"),
-                    i18n::t("onboarding:welcome.features.search.description"),
-                    cx,
-                ),
-                self.render_feature_card(
-                    PrefIcon::ClipboardPaste,
-                    i18n::t("onboarding:welcome.features.reuse.title"),
-                    i18n::t("onboarding:welcome.features.reuse.description"),
-                    cx,
-                ),
-            ]))
+            .child(
+                div()
+                    .grid()
+                    .w_full()
+                    .mt(space(6.))
+                    .grid_cols(3)
+                    .gap(space(3.))
+                    .children([
+                        self.render_feature_card(
+                            PrefIcon::ClipboardPlus,
+                            i18n::t("onboarding:welcome.features.capture.title"),
+                            i18n::t("onboarding:welcome.features.capture.description"),
+                            cx,
+                        ),
+                        self.render_feature_card(
+                            PrefIcon::Search,
+                            i18n::t("onboarding:welcome.features.search.title"),
+                            i18n::t("onboarding:welcome.features.search.description"),
+                            cx,
+                        ),
+                        self.render_feature_card(
+                            PrefIcon::ClipboardPaste,
+                            i18n::t("onboarding:welcome.features.reuse.title"),
+                            i18n::t("onboarding:welcome.features.reuse.description"),
+                            cx,
+                        ),
+                    ]),
+            )
             .into_any_element()
     }
 
@@ -581,17 +627,11 @@ impl Onboarding {
             .flex()
             .flex_col()
             .gap(space(3.))
-            .child(
-                div()
-                    .kp_text(TextSize::Lg)
-                    .child(i18n::t("onboarding:permissions.title")),
-            )
-            .child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .text_color(theme::tokens(cx).secondary)
-                    .child(i18n::t(description_key)),
-            )
+            .child(self.step_heading(
+                i18n::t("onboarding:permissions.title"),
+                i18n::t(description_key),
+                cx,
+            ))
             .children(rows)
             .into_any_element()
     }
@@ -670,14 +710,16 @@ impl Onboarding {
                     .items_center()
                     .justify_between()
                     .gap(space(3.))
+                    .px(space(4.))
                     .py(space(3.))
-                    .border_b_1()
-                    .border_color(theme::tokens(cx).border)
+                    .when(!rows.is_empty(), |row| {
+                        row.border_t_1().border_color(theme::tokens(cx).split)
+                    })
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap(space(1.))
+                            .gap(space(0.5))
                             .child(
                                 div()
                                     .kp_text(TextSize::Sm)
@@ -686,7 +728,7 @@ impl Onboarding {
                             .child(
                                 div()
                                     .kp_text(TextSize::Xs)
-                                    .text_color(theme::tokens(cx).secondary)
+                                    .text_color(theme::tokens(cx).tertiary)
                                     .child(text::setting_description(&setting)),
                             ),
                     )
@@ -698,18 +740,12 @@ impl Onboarding {
             .flex()
             .flex_col()
             .gap(space(1.))
-            .child(
-                div()
-                    .kp_text(TextSize::Lg)
-                    .child(i18n::t("onboarding:shortcuts.title")),
-            )
-            .child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .text_color(theme::tokens(cx).secondary)
-                    .child(i18n::t("onboarding:shortcuts.description")),
-            )
-            .children(rows)
+            .child(self.step_heading(
+                i18n::t("onboarding:shortcuts.title"),
+                i18n::t("onboarding:shortcuts.description"),
+                cx,
+            ))
+            .child(self.surface_card(cx).children(rows))
             .into_any_element()
     }
 
@@ -782,6 +818,7 @@ impl Onboarding {
                 .child(
                     div()
                         .kp_text(TextSize::Lg)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(i18n::t("onboarding:ignoreApps.title")),
                 )
                 .child(self.render_ignore_apps(cx))
@@ -798,10 +835,23 @@ impl Onboarding {
             .flex()
             .flex_col()
             .items_center()
-            .gap(space(3.))
+            .gap(space(2.))
+            .pt(space(6.))
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(rems(3.5))
+                    .rounded_full()
+                    .bg(theme::tokens(cx).success.opacity(0.12))
+                    .child(PrefIcon::CheckCircle.view(rems(1.75), theme::tokens(cx).success)),
+            )
+            .child(
+                div()
+                    .mt(space(2.))
                     .kp_text(TextSize::Lg)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(i18n::t("onboarding:done.title")),
             )
             .child(
@@ -810,26 +860,34 @@ impl Onboarding {
                     .text_color(theme::tokens(cx).secondary)
                     .child(i18n::t("onboarding:done.description")),
             )
-            .child(div().grid().w_full().grid_cols(3).gap(space(3.)).children([
-                self.render_feature_card(
-                    PrefIcon::ClipboardPlus,
-                    i18n::t("onboarding:done.cards.open.title"),
-                    i18n::t("onboarding:done.cards.open.description"),
-                    cx,
-                ),
-                self.render_feature_card(
-                    PrefIcon::Search,
-                    i18n::t("onboarding:done.cards.search.title"),
-                    i18n::t("onboarding:done.cards.search.description"),
-                    cx,
-                ),
-                self.render_feature_card(
-                    PrefIcon::Settings,
-                    i18n::t("onboarding:done.cards.preferences.title"),
-                    i18n::t("onboarding:done.cards.preferences.description"),
-                    cx,
-                ),
-            ]))
+            .child(
+                div()
+                    .grid()
+                    .w_full()
+                    .mt(space(6.))
+                    .grid_cols(3)
+                    .gap(space(3.))
+                    .children([
+                        self.render_feature_card(
+                            PrefIcon::ClipboardPlus,
+                            i18n::t("onboarding:done.cards.open.title"),
+                            i18n::t("onboarding:done.cards.open.description"),
+                            cx,
+                        ),
+                        self.render_feature_card(
+                            PrefIcon::Search,
+                            i18n::t("onboarding:done.cards.search.title"),
+                            i18n::t("onboarding:done.cards.search.description"),
+                            cx,
+                        ),
+                        self.render_feature_card(
+                            PrefIcon::Settings,
+                            i18n::t("onboarding:done.cards.preferences.title"),
+                            i18n::t("onboarding:done.cards.preferences.description"),
+                            cx,
+                        ),
+                    ]),
+            )
             .into_any_element()
     }
 }
@@ -851,31 +909,43 @@ impl Render for Onboarding {
             .overflow_hidden()
             .bg(crate::platform::material::shell_surface(
                 cx,
-                theme::tokens(cx).bg_container,
+                theme::tokens(cx).bg_layout,
             ))
             .text_color(theme::tokens(cx).text)
             .child(self.render_header(cx))
             .child(
                 ScrollArea::new("onboarding-scroll", &self.scroll)
                     .flex_1()
-                    .p(space(6.))
-                    .child(self.render_step(cx)),
+                    .px(space(6.))
+                    .py(space(6.))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(rems(48.))
+                            .mx_auto()
+                            .child(self.render_step(cx)),
+                    ),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px(space(5.))
+                    .px(space(6.))
                     .py(space(4.))
                     .border_t_1()
-                    .border_color(theme::tokens(cx).border)
-                    .child(
+                    .border_color(theme::tokens(cx).split)
+                    .bg(crate::platform::material::chrome_surface(cx))
+                    // 第一步没有“上一步”，留一个占位让右侧按钮仍靠右。
+                    .child(if is_first {
+                        div().into_any_element()
+                    } else {
                         Button::new("onboarding-back", i18n::t("onboarding:actions.previous"))
                             .size(ButtonSize::Medium)
-                            .disabled(is_first || self.finishing)
-                            .on_click(cx.listener(|this, _, _, cx| this.move_step(-1, cx))),
-                    )
+                            .disabled(self.finishing)
+                            .on_click(cx.listener(|this, _, _, cx| this.move_step(-1, cx)))
+                            .into_any_element()
+                    })
                     .child(
                         div().flex().items_center().gap(space(2.)).children([
                             Button::new("onboarding-skip", i18n::t("onboarding:actions.skip"))

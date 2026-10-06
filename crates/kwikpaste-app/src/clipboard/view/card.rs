@@ -43,6 +43,8 @@ pub struct CardEnv<'a> {
     pub layout: &'a LayoutSpec,
     pub now: DateTime<Local>,
     pub reduce_motion: bool,
+    /// 面板底色与卡片底色（随材质变化）。
+    pub surfaces: crate::platform::material::PanelSurfaces,
 }
 
 /// 图片区的状态（缩略图或单图文件）。
@@ -58,6 +60,8 @@ pub enum Visual {
 pub struct CardState {
     /// 当前项：画选中外环。
     pub active: bool,
+    /// 指针在卡片上：描边加深一档。
+    pub hovered: bool,
     pub image: Option<Visual>,
     /// 指针在卡片上：有备注且开了“悬停显示原文”时显示原文。
     pub show_original: bool,
@@ -112,6 +116,9 @@ pub fn card(
     let checkbox = state.checkbox;
     let on_snippet = state.on_snippet;
 
+    // 卡片风格：比面板底高一档的卡片，细描边，不透明时再加一层极淡的阴影；悬停描边加深。
+    // 置顶只用右下角的图钉标记，不再整圈描主色。
+    let surfaces = env.surfaces;
     let mut frame = div()
         .relative()
         .flex()
@@ -121,16 +128,26 @@ pub fn card(
         .border_color(tokens.border_secondary)
         .when(layout.seamless, |frame| frame.border_b_1())
         .when(!layout.seamless, |frame| {
-            frame.border_1().rounded(radius::LG)
-        })
-        .when(pinned && !layout.seamless, |frame| {
-            frame.border_color(tokens.primary)
+            frame
+                .border_1()
+                .rounded(radius::LG)
+                .bg(surfaces.card)
+                .when(surfaces.solid, |frame| {
+                    frame.shadow(tokens.shadow_card.to_vec())
+                })
+                .when(state.hovered && !state.checked, |frame| {
+                    frame.border_color(tokens.border)
+                })
         })
         .when(pinned && layout.seamless, |frame| {
             frame.bg(tokens.fill_quaternary)
         })
         // 写在置顶之后：无间风格的置顶底色和勾选底色冲突时，勾选的底色胜出（1.x 同）。
-        .when(state.checked, |frame| frame.bg(tokens.primary.opacity(0.1)));
+        .when(state.checked, |frame| {
+            frame.bg(tokens.primary_bg).when(!layout.seamless, |frame| {
+                frame.border_color(tokens.primary.opacity(0.45))
+            })
+        });
 
     frame = if layout.header_row {
         frame
@@ -217,12 +234,12 @@ pub fn card(
         })
 }
 
-/// 选中外环（1.x `ring-2 ring-ant-primary/35`）：画在描边外侧 2 px，放不下时（无间风格、
+/// 选中外环（主色 2 px）：画在描边外侧 2 px，放不下时（无间风格、
 /// 条目间距小于 2 px）画在内侧。用一层只有描边的覆盖层，不用阴影：GPUI 的阴影会铺满元素底下，
 /// 透明卡片会被整块染色，而 CSS 的 box-shadow 只画在外面。
 fn selection_ring(tokens: &KpTokens, layout: &LayoutSpec) -> Div {
     let ring =
-        with_border_width(div().absolute(), dp(2.)).border_color(tokens.primary.opacity(0.35));
+        with_border_width(div().absolute(), dp(2.)).border_color(tokens.primary.opacity(0.5));
 
     if layout.ring_inset {
         ring.top(dp(layout.item_gap))
@@ -235,7 +252,7 @@ fn selection_ring(tokens: &KpTokens, layout: &LayoutSpec) -> Div {
             .left(dp(layout.item_padding_x - 2.))
             .right(dp(layout.item_padding_x - 2.))
             .bottom(dp(-2.))
-            .rounded(dp(10.))
+            .rounded(dp(12.))
     }
 }
 
@@ -285,7 +302,11 @@ pub fn placeholder(env: &CardEnv<'_>) -> AnyElement {
         .flex()
         .py(dp(layout.card_padding_y))
         .px(dp(layout.card_padding_x))
-        .bg(tokens.fill_quaternary)
+        .bg(if layout.seamless {
+            tokens.fill_quaternary
+        } else {
+            env.surfaces.card
+        })
         .border_color(tokens.border_secondary)
         .when(layout.seamless, |frame| frame.border_b_1())
         .when(!layout.seamless, |frame| {
@@ -370,16 +391,21 @@ fn header(
         .justify_between()
         .gap(dp(6.))
         .kp_text(TextSize::Xs)
-        .text_color(tokens.secondary)
+        .text_color(tokens.tertiary)
         .child(
             div()
                 .flex()
                 .min_w_0()
                 .items_center()
-                .gap(dp(4.))
+                .gap(dp(6.))
                 .overflow_hidden()
                 .child(hinted_icon(env, item, hint))
-                .child(div().truncate().child(type_label(item.type_key())))
+                .child(
+                    div()
+                        .truncate()
+                        .text_color(tokens.secondary)
+                        .child(type_label(item.type_key())),
+                )
                 .children(origin.map(|origin| {
                     div()
                         .truncate()
@@ -785,7 +811,7 @@ fn snippets(
 
 /// 置顶、敏感标记：有头部行时是右下角 20 px 的水印，没有时是正文右侧 16 px 的小图标。
 fn status_marks(tokens: &KpTokens, pinned: bool, sensitive: bool, inline: bool) -> Div {
-    let size = if inline { dp(16.) } else { dp(20.) };
+    let size = if inline { dp(14.) } else { dp(16.) };
     let marks = div()
         .flex()
         .gap(dp(4.))

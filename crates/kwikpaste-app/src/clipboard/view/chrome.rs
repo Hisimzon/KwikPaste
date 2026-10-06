@@ -37,9 +37,9 @@ impl Glyph {
 /// 按钮的外观。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Look {
-    /// antd `type="text"`：无底，悬停出填充色。
+    /// 无底，悬停出填充色、图标加深。
     Text,
-    /// 选中：主色底、白色图标（分组栏选中项、固定窗口按钮）。
+    /// 选中：淡主色底、主色图标（分组栏选中项、固定窗口按钮）。
     Selected,
 }
 
@@ -53,11 +53,11 @@ pub fn icon_button(
     look: Look,
 ) -> Stateful<Div> {
     let (color, background, hover) = match look {
-        Look::Text => (tokens.secondary, None, tokens.fill_tertiary),
+        Look::Text => (tokens.secondary, None, tokens.fill_secondary),
         Look::Selected => (
-            tokens.light_solid,
-            Some(tokens.primary),
-            tokens.primary_hover,
+            tokens.primary,
+            Some(tokens.primary.opacity(0.13)),
+            tokens.primary.opacity(0.2),
         ),
     };
     let hinted = hint.is_some();
@@ -74,7 +74,7 @@ pub fn icon_button(
         .size(dp(24.))
         .items_center()
         .justify_center()
-        .rounded(dp(6.))
+        .rounded(dp(7.))
         .cursor_pointer()
         .when_some(background, |button, background| button.bg(background))
         .hover(move |style| style.bg(hover))
