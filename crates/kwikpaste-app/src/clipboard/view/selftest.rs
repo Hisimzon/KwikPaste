@@ -1691,8 +1691,9 @@ where
         .any(|child| tree_has_node(child, role, predicate))
 }
 
-/// 截图用的演示状态（`KP_PANEL_DEMO`）：`hover`、`hints`、`selection`、`search-empty`、`group`、
-/// `note`、`delete`、`shortcuts` 等。数据加载完后摆好，供 PrintWindow 截图。
+/// 截图用的演示状态（`KP_PANEL_DEMO`）：`hover`、`hints`、`selection`、`search-empty`、
+/// `search-focus`、`search-typed`、`group`、`note`、`delete`、`shortcuts` 等。数据加载完后摆好，
+/// 供 PrintWindow 截图。
 pub fn stage_demo(panel: Entity<ClipboardPanel>, cx: &mut App) {
     let Ok(stage) = std::env::var("KP_PANEL_DEMO") else {
         return;
@@ -1749,6 +1750,20 @@ impl Driver {
                 self.window
                     .update(cx, |_, window, cx| {
                         header.update(cx, |header, cx| header.type_text("没有这条", window, cx));
+                    })
+                    .ok();
+            }
+            "search-focus" | "search-typed" => {
+                let header = cx.update(|cx| self.panel.read(cx).header().clone());
+                self.window
+                    .update(cx, |_, window, cx| {
+                        header.update(cx, |header, cx| {
+                            header.set_editing(true, cx);
+                            header.focus_input(window, cx);
+                            if stage == "search-typed" {
+                                header.type_text("hello", window, cx);
+                            }
+                        });
                     })
                     .ok();
             }

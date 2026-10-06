@@ -149,29 +149,29 @@ impl Render for Header {
             .flex_none()
             .w_full()
             .items_center()
-            .justify_between()
             .px(dp(12.))
             .pt(dp(12.))
             .pb(dp(8.))
             .child(
+                // logo 到搜索框之间的空白都能拖动窗口。
                 div()
-                    .flex_none()
+                    .flex()
+                    .flex_1()
+                    .self_stretch()
+                    .items_center()
                     .window_control_area(WindowControlArea::Drag)
                     .child(img(ImageSource::Image(logo())).size(dp(20.))),
             )
             .child(
                 div()
                     .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .ml(dp(10.))
+                    .flex_none()
                     .items_center()
                     .gap(dp(4.))
                     .child(
                         div()
                             .id("clipboard-search")
-                            .flex_1()
-                            .min_w_0()
+                            .flex_none()
                             .key_context(SEARCH_CONTEXT)
                             .capture_any_mouse_down(cx.listener(
                                 |header, event: &MouseDownEvent, _, cx| {
@@ -183,6 +183,7 @@ impl Render for Header {
                             .child(
                                 Input::search(&self.input)
                                     .small()
+                                    .width(dp(160.))
                                     .hint_key(hint("F"))
                                     .accessibility_label(t("clipboard:header.searchPlaceholder")),
                             ),

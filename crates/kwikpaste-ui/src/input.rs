@@ -9,7 +9,7 @@ use gpui::{
     Window, div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
-    Sizable as _,
+    FocusableExt as _, Sizable as _,
     input::{Input as KitInput, InputEvent, InputState, Textarea as KitTextarea, TextareaState},
 };
 
@@ -219,8 +219,9 @@ impl Input {
 }
 
 impl RenderOnce for Input {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = theme::tokens(cx);
+        let focused = self.input.is_focused(window, cx);
         let icon_size = match self.size {
             InputSize::Small => theme::TextSize::Sm.font_size(),
             InputSize::Medium => theme::TextSize::Base.font_size(),
@@ -233,11 +234,18 @@ impl RenderOnce for Input {
             .cleanable(self.cleanable)
             .disabled(self.disabled)
             .when(self.search, |input| {
-                // 搜索框是填充底的胶囊，不画描边；聚焦时仍由组件换成主色描边。
+                // 搜索框是填充底的胶囊，不画描边；打开即聚焦时它几乎常驻聚焦态，所以聚焦只把
+                // 搜索图标换成主色，不要描边和光晕。
                 // 角标叠在图标的位置上，图标只是隐去，宽度不变，输入文字不会跳动。
+                let icon_color = if focused {
+                    tokens.primary
+                } else {
+                    tokens.quaternary
+                };
                 input
                     .bg(tokens.fill_tertiary)
                     .border_color(theme::transparent())
+                    .focus_ring(false)
                     .rounded_full()
                     .prefix(
                         div()
@@ -251,7 +259,7 @@ impl RenderOnce for Input {
                                     .child(
                                         Icon::new(IconName::Search)
                                             .size(icon_size)
-                                            .color(tokens.quaternary),
+                                            .color(icon_color),
                                     ),
                             )
                             .when_some(hint_key, |prefix, key| {
