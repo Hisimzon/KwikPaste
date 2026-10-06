@@ -326,7 +326,7 @@ jobs:
         shell: bash
         env:
           CI: ${{ runner.os == 'macOS' && 'false' || 'true' }}
-        run: node scripts/release/package-native.mjs --target ${{ matrix.target }} --out dist ${PUBKEY_ARGS}
+        run: node scripts/release/package-native.mjs --target ${{ matrix.target }} --out dist --features production-identity ${PUBKEY_ARGS}
 
       - name: Package
         if: needs.prepare.outputs.dry_run != 'true'
@@ -335,7 +335,7 @@ jobs:
           CI: ${{ runner.os == 'macOS' && 'false' || 'true' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: node scripts/release/package-native.mjs --target ${{ matrix.target }} --out dist
+        run: node scripts/release/package-native.mjs --target ${{ matrix.target }} --out dist --features production-identity
 
       - name: Check the rendered installer script
         if: runner.os == 'Windows'
