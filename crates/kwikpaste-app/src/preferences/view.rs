@@ -382,6 +382,21 @@ impl Preferences {
         // 材质切换后窗口重套背板，分层底色也要跟着重画；选项显示的仍是用户的设置值（同 1.x）。
         let material_subscription =
             cx.observe_global::<crate::platform::material::WindowMaterial>(|_, cx| cx.notify());
+        // 截图验收（只在自测里）：`KP_PREFERENCES_DEMO` 为 rule / export / apps 时打开对应的弹框。
+        // 弹框挂在窗口的 Root 上，要等 `open_window` 装好 Root 之后才能弹。
+        if crate::selftest::active()
+            && let Ok(demo) = std::env::var("KP_PREFERENCES_DEMO")
+        {
+            cx.spawn_in(window, async move |this, cx| {
+                let _ = this.update_in(cx, |this, window, cx| match demo.as_str() {
+                    "rule" => this.add_retention_rule(window, cx),
+                    "export" => this.export_readable(window, cx),
+                    "apps" => this.open_source_apps(window, cx),
+                    other => log::warn!("unknown preferences demo {other}"),
+                });
+            })
+            .detach();
+        }
         let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
         let subscriptions = core_events(cx)
             .map(|events| {
@@ -2981,6 +2996,7 @@ impl Render for ReadableExportDialog {
                     }),
             )
         });
+        let tokens = theme::tokens(cx);
         let preview_summary = self.preview.as_ref().map(|preview| {
             let summary = i18n::t_args(
                 "preferences:readableExport.summary",
@@ -2994,7 +3010,17 @@ impl Render for ReadableExportDialog {
                 .flex()
                 .flex_col()
                 .gap(space(1.))
-                .child(summary)
+                .p(space(3.))
+                .rounded(theme::radius::MD)
+                .bg(tokens.fill_quaternary)
+                .kp_text(TextSize::Xs)
+                .text_color(tokens.secondary)
+                .child(
+                    div()
+                        .kp_text(TextSize::Sm)
+                        .text_color(tokens.text)
+                        .child(summary),
+                )
                 .child(i18n::t_args(
                     "preferences:readableExport.excluded",
                     &[("count", &preview.excluded_sensitive.to_string())],
@@ -3006,39 +3032,77 @@ impl Render for ReadableExportDialog {
                         .map(|group| format!("{} · {}", group.name, group.count)),
                 )
                 .when(preview.item_count == 0, |element| {
-                    element.child(i18n::t("preferences:readableExport.empty"))
+                    element.child(
+                        div()
+                            .text_color(tokens.warning)
+                            .child(i18n::t("preferences:readableExport.empty")),
+                    )
                 })
         });
+        let selecting_groups = self.group_ids.is_some();
+        let groups_mode = div()
+            .flex()
+            .flex_none()
+            .gap(space(0.5))
+            .p(space(0.5))
+            .rounded(theme::radius::MD)
+            .bg(tokens.fill_tertiary)
+            .children([false, true].map(|selected_mode| {
+                let label = if selected_mode {
+                    i18n::t("preferences:readableExport.selectedGroups")
+                } else {
+                    i18n::t("preferences:readableExport.allGroups")
+                };
+                segment(
+                    if selected_mode {
+                        "readable-groups-selected"
+                    } else {
+                        "readable-groups-all"
+                    },
+                    label,
+                    selecting_groups == selected_mode,
+                    cx,
+                )
+                .on_click(cx.listener(move |dialog, _, _, cx| {
+                    if dialog.group_ids.is_some() != selected_mode {
+                        dialog.group_ids = selected_mode.then(Vec::new);
+                        dialog.invalidate_preview(cx);
+                    }
+                }))
+            }));
+        // 竖排的表单项：文件格式、分组范围、输出方式、内容范围，最后是预览按钮和预览结果。
         div()
             .flex()
             .flex_col()
-            .gap(space(2.))
-            .child(
-                Select::new(&self.format)
-                    .width(rems(16.))
-                    .accessibility_label(i18n::t("preferences:readableExport.format")),
-            )
-            .child(
-                Button::new(
-                    "readable-groups-mode",
-                    if self.group_ids.is_some() {
-                        i18n::t("preferences:readableExport.selectedGroups")
-                    } else {
-                        i18n::t("preferences:readableExport.allGroups")
-                    },
-                )
-                .ghost()
-                .on_click(cx.listener(|dialog, _, _, cx| {
-                    dialog.group_ids = if dialog.group_ids.is_some() {
-                        None
-                    } else {
-                        Some(Vec::new())
-                    };
-                    dialog.invalidate_preview(cx);
-                })),
-            )
-            .when_some(group_rows, |element, rows| element.child(rows))
-            .child(
+            .gap(space(4.))
+            .pb(space(1.))
+            .child(form_field(
+                i18n::t("preferences:readableExport.format"),
+                div()
+                    .flex()
+                    .child(
+                        Select::new(&self.format)
+                            .width(CONTROL_WIDTH)
+                            .accessibility_label(i18n::t("preferences:readableExport.format")),
+                    )
+                    .into_any_element(),
+                tokens,
+            ))
+            .child(form_field(
+                i18n::t("preferences:readableExport.groups"),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(2.))
+                    .child(div().flex().child(groups_mode))
+                    .when_some(group_rows, |field, rows| {
+                        field.child(list_tile(tokens).px(space(3.)).py(space(2.5)).child(rows))
+                    })
+                    .into_any_element(),
+                tokens,
+            ))
+            .child(form_field(
+                i18n::t("preferences:readableExport.output"),
                 Checkbox::new("readable-split")
                     .label(i18n::t("preferences:readableExport.split"))
                     .checked(self.split_by_group)
@@ -3052,72 +3116,136 @@ impl Render for ReadableExportDialog {
                                 });
                             }
                         }
-                    }),
-            )
-            .child(
-                Checkbox::new("readable-favorites")
-                    .label(i18n::t("preferences:readableExport.favorites"))
-                    .checked(self.favorites_only)
-                    .on_change({
+                    })
+                    .into_any_element(),
+                tokens,
+            ))
+            .child(form_field(
+                i18n::t("preferences:readableExport.range"),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(2.))
+                    .child(
+                        Checkbox::new("readable-favorites")
+                            .label(i18n::t("preferences:readableExport.favorites"))
+                            .checked(self.favorites_only)
+                            .on_change({
+                                let entity = entity.clone();
+                                move |checked, _, cx| {
+                                    if let Some(entity) = entity.upgrade() {
+                                        entity.update(cx, |dialog, cx| {
+                                            dialog.favorites_only = checked;
+                                            dialog.invalidate_preview(cx);
+                                        });
+                                    }
+                                }
+                            }),
+                    )
+                    .child(
+                        Checkbox::new("readable-sensitive")
+                            .label(i18n::t("preferences:readableExport.includeSensitive"))
+                            .checked(self.include_sensitive)
+                            .on_change({
+                                let entity = entity.clone();
+                                move |checked, _, cx| {
+                                    if let Some(entity) = entity.upgrade() {
+                                        entity.update(cx, |dialog, cx| {
+                                            dialog.include_sensitive = checked;
+                                            dialog.sensitive_confirmed = false;
+                                            dialog.invalidate_preview(cx);
+                                        });
+                                    }
+                                }
+                            }),
+                    )
+                    .when(self.include_sensitive, |element| {
                         let entity = entity.clone();
-                        move |checked, _, cx| {
-                            if let Some(entity) = entity.upgrade() {
-                                entity.update(cx, |dialog, cx| {
-                                    dialog.favorites_only = checked;
-                                    dialog.invalidate_preview(cx);
-                                });
-                            }
-                        }
-                    }),
-            )
+                        element.child(
+                            Checkbox::new("readable-sensitive-confirm")
+                                .label(i18n::t("preferences:readableExport.confirmSensitive"))
+                                .checked(self.sensitive_confirmed)
+                                .on_change(move |checked, _, cx| {
+                                    if let Some(entity) = entity.upgrade() {
+                                        entity.update(cx, |dialog, cx| {
+                                            dialog.sensitive_confirmed = checked;
+                                            cx.notify();
+                                        });
+                                    }
+                                }),
+                        )
+                    })
+                    .into_any_element(),
+                tokens,
+            ))
             .child(
-                Checkbox::new("readable-sensitive")
-                    .label(i18n::t("preferences:readableExport.includeSensitive"))
-                    .checked(self.include_sensitive)
-                    .on_change({
-                        let entity = entity.clone();
-                        move |checked, _, cx| {
-                            if let Some(entity) = entity.upgrade() {
-                                entity.update(cx, |dialog, cx| {
-                                    dialog.include_sensitive = checked;
-                                    dialog.sensitive_confirmed = false;
-                                    dialog.invalidate_preview(cx);
-                                });
-                            }
-                        }
-                    }),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(2.))
+                    .child(
+                        div().flex().child(
+                            Button::new(
+                                "readable-preview",
+                                i18n::t("preferences:readableExport.preview"),
+                            )
+                            .on_click(cx.listener(
+                                |dialog, _, _, cx| {
+                                    dialog.prepare_preview(cx);
+                                },
+                            )),
+                        ),
+                    )
+                    .when(self.preview_failed, |element| {
+                        element.child(
+                            div()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.warning)
+                                .child(i18n::t("preferences:readableExport.retryPreview")),
+                        )
+                    })
+                    .when_some(preview_summary, |element, summary| element.child(summary)),
             )
-            .when(self.include_sensitive, |element| {
-                let entity = entity.clone();
-                element.child(
-                    Checkbox::new("readable-sensitive-confirm")
-                        .label(i18n::t("preferences:readableExport.confirmSensitive"))
-                        .checked(self.sensitive_confirmed)
-                        .on_change(move |checked, _, cx| {
-                            if let Some(entity) = entity.upgrade() {
-                                entity.update(cx, |dialog, cx| {
-                                    dialog.sensitive_confirmed = checked;
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                )
-            })
-            .child(
-                Button::new(
-                    "readable-preview",
-                    i18n::t("preferences:readableExport.preview"),
-                )
-                .primary()
-                .on_click(cx.listener(|dialog, _, _, cx| {
-                    dialog.prepare_preview(cx);
-                })),
-            )
-            .when(self.preview_failed, |element| {
-                element.child(i18n::t("preferences:readableExport.retryPreview"))
-            })
-            .when_some(preview_summary, |element, summary| element.child(summary))
     }
+}
+
+/// 分段切换里的一段（同预览窗的文本方式切换）：选中段在亮色里是浮起的白块，暗色里亮一档。
+fn segment(
+    id: &'static str,
+    label: gpui::SharedString,
+    selected: bool,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let tokens = theme::tokens(cx);
+    let thumb = match theme::appearance(cx) {
+        theme::Appearance::Light => tokens.bg_container,
+        theme::Appearance::Dark => tokens.fill_secondary,
+    };
+
+    div()
+        .id(id)
+        .role(Role::Tab)
+        .aria_selected(selected)
+        .flex()
+        .items_center()
+        .h(rems(1.5))
+        .px(space(3.))
+        .rounded(theme::radius::SM)
+        .kp_text(TextSize::Sm)
+        .cursor_pointer()
+        .map(|segment| {
+            if selected {
+                segment
+                    .bg(thumb)
+                    .shadow(tokens.shadow_card.to_vec())
+                    .text_color(tokens.text)
+            } else {
+                segment
+                    .text_color(tokens.secondary)
+                    .hover(|style| style.text_color(tokens.text))
+            }
+        })
+        .child(label)
 }
 
 struct SourceAppsDialog {
@@ -3126,33 +3254,57 @@ struct SourceAppsDialog {
 }
 
 impl Render for SourceAppsDialog {
+    /// 浅灰列表块里每行一个应用：勾选框后面是应用名，下面一行灰色小字是路径（同引导的忽略应用）。
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = self.apps.iter().map(|app| {
+        let tokens = theme::tokens(cx);
+        let rows = self.apps.iter().enumerate().map(|(index, app)| {
             let id = app.id.clone();
             let checked = self.selected.contains(&id);
-            let label = if app.name.is_empty() {
+            let name = if app.name.is_empty() {
                 id.clone()
             } else {
-                format!("{} ({id})", app.name)
+                app.name.clone()
             };
+            let path = (!app.name.is_empty()).then(|| id.clone());
             let entity = cx.entity().downgrade();
-            Checkbox::new(format!("excluded-app-{id}"))
-                .label(label)
-                .checked(checked)
-                .on_change(move |checked, _, cx| {
-                    if let Some(entity) = entity.upgrade() {
-                        entity.update(cx, |this, cx| {
-                            if checked {
-                                this.selected.insert(id.clone());
-                            } else {
-                                this.selected.remove(&id);
+            div()
+                .flex()
+                .flex_col()
+                .gap(space(0.5))
+                .px(space(3.))
+                .py(space(2.))
+                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .child(
+                    Checkbox::new(format!("excluded-app-{id}"))
+                        .label(name)
+                        .checked(checked)
+                        .on_change(move |checked, _, cx| {
+                            if let Some(entity) = entity.upgrade() {
+                                entity.update(cx, |this, cx| {
+                                    if checked {
+                                        this.selected.insert(id.clone());
+                                    } else {
+                                        this.selected.remove(&id);
+                                    }
+                                    cx.notify();
+                                });
                             }
-                            cx.notify();
-                        });
-                    }
-                })
+                        }),
+                )
+                .children(path.map(|path| {
+                    div()
+                        .pl(space(6.))
+                        .kp_text(TextSize::Xs)
+                        .text_color(tokens.tertiary)
+                        .truncate()
+                        .child(path)
+                }))
         });
-        div().flex().flex_col().gap(space(1.)).children(rows)
+        div()
+            .id("excluded-apps-list")
+            .max_h(rems(24.))
+            .overflow_y_scroll()
+            .child(list_tile(tokens).children(rows))
     }
 }
 
@@ -3388,73 +3540,91 @@ impl Render for RetentionRuleEditor {
                     });
                 }
             });
+        // 竖排的表单项（同新增分组弹框）：标题在上、控件在下，项与项之间 16 px。
         div()
             .flex()
             .flex_col()
-            .gap(space(2.))
-            .child(
-                div()
-                    .kp_text(TextSize::Xs)
-                    .text_color(tokens.secondary)
-                    .child(i18n::t("preferences:retentionRules.form.categories")),
-            )
-            .child(div().flex().flex_wrap().gap(space(1.)).children(categories))
-            .child(
+            .gap(space(4.))
+            .pb(space(1.))
+            .child(form_field(
+                i18n::t("preferences:retentionRules.form.categories"),
                 div()
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(space(2.))
-                    .child(
-                        div()
-                            .kp_text(TextSize::Xs)
-                            .text_color(tokens.secondary)
-                            .child(i18n::t("preferences:retentionRules.form.minSize")),
-                    )
+                    .flex_wrap()
+                    .gap_x_4()
+                    .gap_y_2()
+                    .children(categories)
+                    .into_any_element(),
+                tokens,
+            ))
+            .child(form_field(
+                i18n::t("preferences:retentionRules.form.minSize"),
+                div()
+                    .flex()
                     .child(
                         NumberInput::new(&self.min_size)
-                            .width(rems(12.))
+                            .width(CONTROL_WIDTH)
                             .suffix("KB"),
-                    ),
-            )
-            .child(
-                div()
-                    .kp_text(TextSize::Xs)
-                    .text_color(tokens.secondary)
-                    .child(i18n::t("preferences:retentionRules.form.conditions")),
-            )
-            .child(
+                    )
+                    .into_any_element(),
+                tokens,
+            ))
+            .child(form_field(
+                i18n::t("preferences:retentionRules.form.conditions"),
                 div()
                     .flex()
                     .flex_col()
-                    .gap(space(1.))
+                    .gap(space(2.))
                     .child(sensitive)
-                    .child(unused),
-            )
-            .child(
+                    .child(unused)
+                    .into_any_element(),
+                tokens,
+            ))
+            .child(form_field(
+                i18n::t("preferences:retentionRules.form.keep"),
                 div()
                     .flex()
-                    .items_center()
-                    .justify_between()
+                    .flex_col()
                     .gap(space(2.))
-                    .child(
-                        div()
-                            .kp_text(TextSize::Xs)
-                            .text_color(tokens.secondary)
-                            .child(i18n::t("preferences:retentionRules.form.keep")),
-                    )
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(space(1.))
+                            .gap(space(2.))
                             .when(!keep_forever, |row| {
-                                row.child(NumberInput::new(&self.keep_value).width(rems(9.)))
+                                row.child(NumberInput::new(&self.keep_value).width(rems(6.)))
                             })
-                            .child(Select::new(&self.keep_unit).width(rems(11.))),
-                    ),
-            )
+                            .child(Select::new(&self.keep_unit).width(rems(8.))),
+                    )
+                    .child(
+                        div()
+                            .kp_text(TextSize::Xs)
+                            .text_color(tokens.tertiary)
+                            .child(i18n::t("preferences:retentionRules.form.keepHint")),
+                    )
+                    .into_any_element(),
+                tokens,
+            ))
     }
+}
+
+/// 弹框里竖排的一个表单项：正文字号的灰色标题，下面是控件。
+fn form_field(
+    label: gpui::SharedString,
+    control: gpui::AnyElement,
+    tokens: &KpTokens,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(space(2.))
+        .child(
+            div()
+                .kp_text(TextSize::Sm)
+                .text_color(tokens.secondary)
+                .child(label),
+        )
+        .child(control)
 }
 
 fn capture_kind_label(kind: CaptureKind) -> gpui::SharedString {
