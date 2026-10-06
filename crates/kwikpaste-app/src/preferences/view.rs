@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext as _, Context, FocusHandle, Image, ImageSource, InteractiveElement as _,
-    IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Render, Role, ScrollHandle,
+    App, AppContext as _, Context, FocusHandle, Hsla, Image, ImageSource, InteractiveElement as _,
+    IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Rems, Render, Role, ScrollHandle,
     StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, WeakEntity,
     Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _, px, rems, size,
 };
@@ -17,7 +17,7 @@ use kwikpaste_core::{
 use kwikpaste_ui::{
     Button, Checkbox, DialogSpec, IconName, Input, KpStyled as _, NumberInput, NumberInputState,
     ScrollArea, Select, SelectOption, SelectState, Switch, TextInput, form_dialog,
-    theme::{self, TextSize, space},
+    theme::{self, KpTokens, TextSize, space},
     toast::{self, Toast},
 };
 use serde_json::json;
@@ -280,6 +280,33 @@ impl Preferences {
                             let selected =
                                 values::get_choice(&settings_json, setting.path.unwrap_or(""));
                             let state = SelectState::new(options, selected.as_deref(), window, cx);
+                            let path = setting.path;
+                            let subscription = state.on_change(cx, move |this, value, cx| {
+                                if let (Some(path), Some(value)) = (path, value) {
+                                    this.update(path, json!(value.as_ref()), cx);
+                                }
+                            });
+                            setting_subscriptions.push(subscription);
+                            selects.insert(setting.id, state);
+                        }
+                        Control::GroupSelect => {
+                            let options = ["all", "preserve", "missingGroup"]
+                                .into_iter()
+                                .map(|value| {
+                                    SelectOption::new(
+                                        value,
+                                        i18n::t(&format!(
+                                            "preferences:schema.settings.{}.options.{}",
+                                            setting.id, value
+                                        )),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            let selected = values::get(&settings_json, setting.path.unwrap_or(""))
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("all")
+                                .to_owned();
+                            let state = SelectState::new(options, Some(&selected), window, cx);
                             let path = setting.path;
                             let subscription = state.on_change(cx, move |this, value, cx| {
                                 if let (Some(path), Some(value)) = (path, value) {
@@ -658,7 +685,7 @@ impl Preferences {
         } else if id == "capture.order" {
             i18n::t("preferences:schema.settings.capture.order.title")
         } else if id == "actions.visible" {
-            i18n::t("preferences:schema.settings.actions.visible.title")
+            i18n::t("preferences:schema.settings.actions.visible.controlLabel")
         } else if id == "history.rules" {
             i18n::t("preferences:schema.settings.history.rules.title")
         } else {
@@ -814,10 +841,10 @@ impl Preferences {
                 .flex()
                 .items_center()
                 .gap(space(2.))
-                .px(space(2.))
+                .px(space(3.))
                 .py(space(1.5))
-                .border_b_1()
-                .border_color(tokens.border_secondary)
+                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .cursor(gpui::CursorStyle::OpenHand)
                 .on_drag(CaptureOrderDrag { kind }, |dragged, _, _, cx| {
                     cx.new(|_| *dragged)
                 })
@@ -827,7 +854,7 @@ impl Preferences {
                 .on_drop(cx.listener(move |this, dragged: &CaptureOrderDrag, _, cx| {
                     this.move_capture_kind_to(dragged.kind, index, cx);
                 }))
-                .child(PrefIcon::Grip.view(rems(1.), tokens.secondary))
+                .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary))
                 .child(icon.view(rems(1.), tokens.secondary))
                 .child(div().flex_1().kp_text(TextSize::Sm).child(label))
                 .child(
@@ -860,15 +887,7 @@ impl Preferences {
                 )
                 .into_any_element()
         });
-        div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .rounded(theme::radius::SM)
-            .border_1()
-            .border_color(tokens.border_secondary)
-            .children(rows)
-            .into_any_element()
+        list_tile(tokens).children(rows).into_any_element()
     }
 
     fn render_retention_rules(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -887,10 +906,9 @@ impl Preferences {
                 .flex()
                 .items_center()
                 .gap(space(2.))
-                .px(space(2.))
-                .py(space(1.5))
-                .border_b_1()
-                .border_color(tokens.border_secondary)
+                .px(space(3.))
+                .py(space(2.))
+                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
                 .child(
                     Switch::new(format!("retention-enabled-{index}"))
                         .small()
@@ -925,7 +943,7 @@ impl Preferences {
                         .child(
                             div()
                                 .kp_text(TextSize::Xs)
-                                .text_color(tokens.secondary)
+                                .text_color(tokens.tertiary)
                                 .child(if enabled {
                                     keep
                                 } else {
@@ -1018,50 +1036,54 @@ impl Preferences {
                 .into_any_element()
         });
         let add = entity.clone();
+        // 规则列表与采集顺序同样是浅灰底的列表块；“添加规则”是列表下方按内容宽度的小按钮。
         div()
             .flex()
             .flex_col()
             .w_full()
             .gap(space(2.))
             .child(if rules.is_empty() {
-                div()
+                list_tile(tokens)
+                    .px(space(3.))
+                    .py(space(3.))
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.secondary)
+                    .text_color(tokens.tertiary)
                     .child(i18n::t("preferences:retentionRules.empty"))
                     .into_any_element()
             } else {
-                div()
-                    .flex()
-                    .flex_col()
-                    .rounded(theme::radius::SM)
-                    .border_1()
-                    .border_color(tokens.border_secondary)
-                    .children(rows)
-                    .into_any_element()
+                list_tile(tokens).children(rows).into_any_element()
             })
             .child(
-                Button::new("retention-add", i18n::t("preferences:retentionRules.add"))
-                    .small()
-                    .with_icon(IconName::Plus)
-                    .on_click(move |_, window, cx| {
-                        if let Some(entity) = add.upgrade() {
-                            entity.update(cx, |this, cx| this.add_retention_rule(window, cx));
-                        }
-                    }),
+                div().flex().child(
+                    Button::new("retention-add", i18n::t("preferences:retentionRules.add"))
+                        .small()
+                        .with_icon(IconName::Plus)
+                        .on_click(move |_, window, cx| {
+                            if let Some(entity) = add.upgrade() {
+                                entity.update(cx, |this, cx| this.add_retention_rule(window, cx));
+                            }
+                        }),
+                ),
             )
             .into_any_element()
     }
 
+    /// 数据概览：存储空间、四个数字、每日新增、内容构成与来源应用、分组与标记，都是浅灰圆角块。
     fn render_storage_overview(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let tokens = theme::tokens(cx);
         let Some(overview) = self.storage_overview.as_ref() else {
             let entity = cx.entity().downgrade();
             return div()
                 .flex()
                 .items_center()
                 .gap(space(2.))
+                .px(space(1.))
+                .kp_text(TextSize::Sm)
+                .text_color(tokens.tertiary)
                 .child(i18n::t("preferences:storage.loading"))
                 .child(
                     Button::new("storage-refresh", i18n::t("preferences:overview.refresh"))
+                        .small()
                         .ghost()
                         .on_click(move |_, _, cx| {
                             if let Some(entity) = entity.upgrade() {
@@ -1088,14 +1110,141 @@ impl Preferences {
         } else {
             (usage.total_bytes as f32 / limit as f32).clamp(0.0, 1.0)
         };
-        let used_width = 40. * used_ratio.max(0.02);
         let used_bytes = usage.total_bytes.max(1) as f32;
-        let storage_segment = |bytes: u64, color| {
-            div()
-                .h_full()
-                .w(rems(used_width * (bytes as f32 / used_bytes)))
-                .bg(color)
-        };
+        // 已用部分占整条的比例，再按各类占已用的比例切段（相对宽度，跟着窗口宽度走）。
+        let used_fraction = used_ratio.max(0.01);
+        let segments = [
+            (
+                i18n::t("preferences:overview.space.segments.database"),
+                overview.breakdown.database_bytes,
+                tokens.primary,
+            ),
+            (
+                i18n::t("preferences:overview.space.segments.image"),
+                overview.breakdown.image_bytes,
+                tokens.cyan_6,
+            ),
+            (
+                i18n::t("preferences:overview.space.segments.icon"),
+                overview.breakdown.icon_bytes,
+                tokens.warning,
+            ),
+            (
+                i18n::t("preferences:overview.space.segments.other"),
+                overview.breakdown.other_bytes,
+                tokens.quaternary,
+            ),
+        ];
+        let bar = div()
+            .flex()
+            .h(px(6.))
+            .w_full()
+            .overflow_hidden()
+            .rounded_full()
+            .bg(tokens.fill_secondary)
+            .children(segments.iter().map(|(_, bytes, color)| {
+                div()
+                    .h_full()
+                    .w(gpui::relative(used_fraction * (*bytes as f32 / used_bytes)))
+                    .bg(*color)
+            }));
+        let legend = div()
+            .grid()
+            .grid_cols(4)
+            .gap(space(3.))
+            .children(segments.iter().map(|(name, bytes, color)| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(0.5))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(space(1.5))
+                            .kp_text(TextSize::Xs)
+                            .text_color(tokens.secondary)
+                            .child(div().flex_none().size(px(8.)).rounded_full().bg(*color))
+                            .child(div().truncate().child(name.clone())),
+                    )
+                    .child(div().kp_text(TextSize::Sm).child(format_bytes(*bytes)))
+            }));
+        let clean = entity.clone();
+        let storage = overview_tile(tokens)
+            .gap(space(3.))
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap(space(3.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(space(1.))
+                            .child(overview_tile_title(
+                                i18n::t("preferences:overview.space.title"),
+                                None,
+                                tokens,
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_baseline()
+                                    .gap(space(1.))
+                                    .child(
+                                        div()
+                                            .kp_text(TextSize::Lg)
+                                            .child(format_bytes(usage.total_bytes)),
+                                    )
+                                    .child(
+                                        div()
+                                            .kp_text(TextSize::Xs)
+                                            .text_color(tokens.tertiary)
+                                            .child(format!("/ {}", format_bytes(limit))),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(space(2.))
+                            .child(
+                                Button::new(
+                                    "storage-clean",
+                                    i18n::t("preferences:overview.space.cleanCache"),
+                                )
+                                .small()
+                                .tooltip(reclaimable_label)
+                                .on_click(move |_, _, cx| {
+                                    if let Some(entity) = clean.upgrade() {
+                                        entity.update(cx, |this, cx| {
+                                            this.clean_resource_cache(cx);
+                                        });
+                                    }
+                                }),
+                            )
+                            .child(
+                                Button::new(
+                                    "storage-open",
+                                    i18n::t("preferences:overview.openDirectory"),
+                                )
+                                .small()
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.open_directory(PreferenceDirectory::Data, cx);
+                                    },
+                                )),
+                            ),
+                    ),
+            )
+            .child(bar)
+            .child(legend);
+
         let total_records = overview.history.totals.total;
         let today_records = overview.history.daily.last().map_or(0, |day| day.count);
         let reuse_count = overview.history.totals.reuses;
@@ -1124,7 +1273,6 @@ impl Preferences {
             .filter(|stat| stat.count > 0)
             .map(|stat| {
                 let name = category_label(stat.category);
-                let count = stat.count.to_string();
                 let removable = stat.removable;
                 let entity = category_entity.clone();
                 let scope = ClearScope::Category {
@@ -1145,247 +1293,139 @@ impl Preferences {
                         ("kept", &(stat.count - removable).to_string()),
                     ],
                 );
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(space(2.))
-                    .child(format!("{name}: {count}"))
-                    .child(
-                        Button::new(
-                            format!("storage-category-{:?}", stat.category),
-                            i18n::t("preferences:overview.clear.tooltip"),
-                        )
-                        .ghost()
-                        .disabled(removable == 0)
-                        .on_click(move |_, window, cx| {
-                            if let Some(entity) = entity.upgrade() {
-                                entity.update(cx, |this, cx| {
-                                    this.clear_storage_scope(
-                                        scope.clone(),
-                                        title.clone(),
-                                        content.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            }
-                        }),
-                    )
-                    .into_any_element()
-            });
-        let source_entity = entity.clone();
-        let source_rows = overview.history.source_apps.iter().map(|stat| {
-            let name = stat
-                .name
-                .clone()
-                .unwrap_or_else(|| i18n::t("preferences:overview.sources.unknown").to_string());
-            let removable = stat.removable;
-            let entity = source_entity.clone();
-            let scope = ClearScope::SourceApp {
-                app_id: stat.app_id.clone(),
-            };
-            let title = i18n::t_args(
-                "preferences:overview.clear.sourceAppTitle",
-                &[("name", &name)],
-            );
-            let content = i18n::t_args(
-                if removable == stat.count {
-                    "preferences:overview.clear.content"
-                } else {
-                    "preferences:overview.clear.contentWithKept"
-                },
-                &[
-                    ("value", &removable.to_string()),
-                    ("kept", &(stat.count - removable).to_string()),
-                ],
-            );
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(space(2.))
-                .child(format!("{}: {}", name, stat.count))
-                .child(
-                    Button::new(
-                        format!(
-                            "storage-source-{}",
-                            stat.app_id.as_deref().unwrap_or("unknown")
-                        ),
-                        i18n::t("preferences:overview.clear.tooltip"),
-                    )
-                    .ghost()
-                    .disabled(removable == 0)
-                    .on_click(move |_, window, cx| {
-                        if let Some(entity) = entity.upgrade() {
-                            entity.update(cx, |this, cx| {
-                                this.clear_storage_scope(
-                                    scope.clone(),
-                                    title.clone(),
-                                    content.clone(),
-                                    window,
-                                    cx,
-                                );
-                            });
-                        }
-                    }),
+                let clear = Button::new(
+                    format!("storage-category-{:?}", stat.category),
+                    i18n::t("preferences:overview.clear.tooltip"),
                 )
-                .into_any_element()
-        });
+                .small()
+                .ghost()
+                .disabled(removable == 0)
+                .on_click(move |_, window, cx| {
+                    if let Some(entity) = entity.upgrade() {
+                        entity.update(cx, |this, cx| {
+                            this.clear_storage_scope(
+                                scope.clone(),
+                                title.clone(),
+                                content.clone(),
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+                });
+                overview_count_row(name, stat.count, Some(clear.into_any_element()), tokens)
+            })
+            .collect::<Vec<_>>();
+        let source_entity = entity.clone();
+        let source_rows = overview
+            .history
+            .source_apps
+            .iter()
+            .map(|stat| {
+                let name = stat
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| i18n::t("preferences:overview.sources.unknown").to_string());
+                let removable = stat.removable;
+                let entity = source_entity.clone();
+                let scope = ClearScope::SourceApp {
+                    app_id: stat.app_id.clone(),
+                };
+                let title = i18n::t_args(
+                    "preferences:overview.clear.sourceAppTitle",
+                    &[("name", &name)],
+                );
+                let content = i18n::t_args(
+                    if removable == stat.count {
+                        "preferences:overview.clear.content"
+                    } else {
+                        "preferences:overview.clear.contentWithKept"
+                    },
+                    &[
+                        ("value", &removable.to_string()),
+                        ("kept", &(stat.count - removable).to_string()),
+                    ],
+                );
+                let clear = Button::new(
+                    format!(
+                        "storage-source-{}",
+                        stat.app_id.as_deref().unwrap_or("unknown")
+                    ),
+                    i18n::t("preferences:overview.clear.tooltip"),
+                )
+                .small()
+                .ghost()
+                .disabled(removable == 0)
+                .on_click(move |_, window, cx| {
+                    if let Some(entity) = entity.upgrade() {
+                        entity.update(cx, |this, cx| {
+                            this.clear_storage_scope(
+                                scope.clone(),
+                                title.clone(),
+                                content.clone(),
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+                });
+                overview_count_row(
+                    name.into(),
+                    stat.count,
+                    Some(clear.into_any_element()),
+                    tokens,
+                )
+            })
+            .collect::<Vec<_>>();
+
         div()
             .flex()
             .flex_col()
-            .gap(space(2.))
-            .p(space(3.))
-            .rounded(theme::radius::MD)
-            .bg(theme::tokens(cx).bg_elevated)
-            .child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .child(i18n::t("preferences:overview.space.title")),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_end()
-                    .gap(space(1.))
-                    .child(
-                        div()
-                            .kp_text(TextSize::Lg)
-                            .child(format_bytes(usage.total_bytes)),
-                    )
-                    .child(
-                        div()
-                            .kp_text(TextSize::Xs)
-                            .text_color(theme::tokens(cx).secondary)
-                            .child(format!("/ {}", format_bytes(limit),)),
-                    ),
-            )
-            .child(
-                div()
-                    .h(px(8.))
-                    .w_full()
-                    .rounded(theme::radius::SM)
-                    .bg(theme::tokens(cx).fill_secondary)
-                    .child(
-                        div()
-                            .flex()
-                            .h_full()
-                            .w(rems(used_width))
-                            .rounded(theme::radius::SM)
-                            .overflow_hidden()
-                            .children([
-                                storage_segment(
-                                    overview.breakdown.database_bytes,
-                                    theme::tokens(cx).primary,
-                                ),
-                                storage_segment(
-                                    overview.breakdown.image_bytes,
-                                    theme::tokens(cx).info,
-                                ),
-                                storage_segment(
-                                    overview.breakdown.icon_bytes,
-                                    theme::tokens(cx).warning,
-                                ),
-                                storage_segment(
-                                    overview.breakdown.other_bytes,
-                                    theme::tokens(cx).secondary,
-                                ),
-                            ]),
-                    ),
-            )
-            .children([
-                format_storage_row(
-                    i18n::t("preferences:overview.space.segments.database"),
-                    overview.breakdown.database_bytes,
-                ),
-                format_storage_row(
-                    i18n::t("preferences:overview.space.segments.image"),
-                    overview.breakdown.image_bytes,
-                ),
-                format_storage_row(
-                    i18n::t("preferences:overview.space.segments.icon"),
-                    overview.breakdown.icon_bytes,
-                ),
-                format_storage_row(
-                    i18n::t("preferences:overview.space.segments.other"),
-                    overview.breakdown.other_bytes,
-                ),
-            ])
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(space(2.))
-                    .child(reclaimable_label)
-                    .child(
-                        Button::new(
-                            "storage-clean",
-                            i18n::t("preferences:overview.space.cleanCache"),
-                        )
-                        .ghost()
-                        .on_click(move |_, _, cx| {
-                            if let Some(entity) = entity.upgrade() {
-                                entity.update(cx, |this, cx| {
-                                    this.clean_resource_cache(cx);
-                                });
-                            }
-                        }),
-                    )
-                    .child(
-                        Button::new(
-                            "storage-open",
-                            i18n::t("preferences:overview.openDirectory"),
-                        )
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_directory(PreferenceDirectory::Data, cx);
-                        })),
-                    ),
-            )
-            .child(div().grid().grid_cols(4).gap(space(2.)).children([
+            .gap(space(3.))
+            .child(storage)
+            .child(div().grid().grid_cols(4).gap(space(3.)).children([
                 overview_metric_card(
                     i18n::t("preferences:overview.tiles.total.label"),
                     total_records.to_string(),
                     total_hint,
-                    cx,
+                    tokens,
                 ),
                 overview_metric_card(
                     i18n::t("preferences:overview.tiles.recent.label"),
                     today_records.to_string(),
                     recent_hint,
-                    cx,
+                    tokens,
                 ),
                 overview_metric_card(
                     i18n::t("preferences:overview.tiles.reuses.label"),
                     reuse_count.to_string(),
                     i18n::t("preferences:overview.tiles.reuses.hint"),
-                    cx,
+                    tokens,
                 ),
                 overview_metric_card(
                     i18n::t("preferences:overview.tiles.span.label"),
                     oldest,
                     span_hint,
-                    cx,
+                    tokens,
                 ),
             ]))
-            .child(overview_trend_card(&overview.history.daily, cx))
-            .child(div().grid().grid_cols(2).gap(space(2.)).children([
+            .child(overview_trend_card(&overview.history.daily, tokens))
+            .child(div().grid().grid_cols(2).gap(space(3.)).children([
                 overview_detail_card(
                     i18n::t("preferences:overview.categories.title"),
                     category_rows,
-                    cx,
+                    tokens,
                 ),
                 overview_detail_card(
                     i18n::t("preferences:overview.sources.title"),
                     source_rows,
-                    cx,
+                    tokens,
                 ),
             ]))
             .child(overview_groups_card(
                 &overview.history.groups,
                 &overview.history.totals,
-                cx,
+                tokens,
             ))
             .into_any_element()
     }
@@ -1406,53 +1446,12 @@ impl Preferences {
                 &[("count", &count.to_string())],
             ),
         )
-        .ghost()
         .on_click(move |_, window, cx| {
             if let Some(entity) = entity.upgrade() {
                 entity.update(cx, |this, cx| this.open_source_apps(window, cx));
             }
         })
         .into_any_element()
-    }
-
-    fn render_group_select(
-        &self,
-        path: Option<&'static str>,
-        value: Option<serde_json::Value>,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let selected = value
-            .as_ref()
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("all")
-            .to_owned();
-        let options = ["all", "preserve", "missingGroup"];
-        let next = options
-            .iter()
-            .position(|option| *option == selected)
-            .and_then(|index| options.get((index + 1) % options.len()))
-            .copied()
-            .unwrap_or("all")
-            .to_owned();
-        let label = match selected.as_str() {
-            "preserve" => {
-                i18n::t("preferences:schema.settings.window.selectGroupOnOpen.options.preserve")
-            }
-            "missingGroup" => {
-                i18n::t("preferences:schema.settings.window.selectGroupOnOpen.options.missingGroup")
-            }
-            _ => i18n::t("preferences:schema.settings.window.selectGroupOnOpen.options.all"),
-        };
-        let entity = cx.entity().downgrade();
-        Button::new("group-select", label)
-            .on_click(move |_, _, cx| {
-                if let Some(path) = path
-                    && let Some(entity) = entity.upgrade()
-                {
-                    entity.update(cx, |this, cx| this.update(path, json!(next), cx));
-                }
-            })
-            .into_any_element()
     }
 
     /// 采集类型使用与 1.x 相同的五项多选控件，并一次性提交对象补丁。
@@ -1515,17 +1514,21 @@ impl Preferences {
         let keep_forever = unit_state
             .selected_value(cx)
             .is_some_and(|value| value.as_ref() == "forever");
+        // 数值和单位合起来与其他控件同宽；“永久保留”时只剩单位，仍占满这一列。
         div()
             .flex()
             .items_center()
-            .gap(space(1.))
+            .gap(space(2.))
             .when(!keep_forever, |row| {
-                row.child(NumberInput::new(value_state).width(rems(7.)))
+                row.child(NumberInput::new(value_state).width(rems(4.5)))
             })
             .child(
                 Select::new(unit_state)
-                    .small()
-                    .width(rems(8.))
+                    .width(if keep_forever {
+                        CONTROL_WIDTH
+                    } else {
+                        rems(7.)
+                    })
                     .accessibility_label(i18n::t(
                         "preferences:schema.settings.history.retention.title",
                     )),
@@ -1733,8 +1736,11 @@ impl Preferences {
             .detach();
     }
 
+    /// 同步页：上面是同步开关与选项，下面按“本机”“已配对设备”“附近设备”分组，
+    /// 全部用与其他页相同的扁平设置行。
     fn render_lan_sync(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let entity = cx.entity().downgrade();
+        let tokens = theme::tokens(cx);
         let lan = &self.settings.sync.lan;
         let enabled = Switch::new("lan-sync-enabled")
             .accessibility_label(i18n::t(
@@ -1751,98 +1757,111 @@ impl Preferences {
                     }
                 }
             });
-        let mut panel = div()
-            .flex()
-            .flex_col()
-            .gap(space(2.))
-            .p(space(3.))
-            .rounded(theme::radius::MD)
-            .bg(theme::tokens(cx).bg_elevated)
-            .child(setting_row(
+        let options = vec![
+            setting_row(
+                true,
                 i18n::t("preferences:schema.settings.sync.lan.enabled.title"),
                 i18n::t("preferences:schema.settings.sync.lan.enabled.description"),
-                enabled.into_any_element(),
-            ))
-            .child(setting_row(
+                Some(enabled.into_any_element()),
+                tokens,
+            ),
+            setting_row(
+                false,
                 i18n::t("preferences:schema.settings.sync.lan.deviceName.title"),
                 i18n::t("preferences:schema.settings.sync.lan.deviceName.description"),
-                Input::new(&self.lan_name)
-                    .width(rems(16.))
-                    .into_any_element(),
-            ))
-            .child(setting_row(
+                Some(
+                    Input::new(&self.lan_name)
+                        .width(CONTROL_WIDTH)
+                        .into_any_element(),
+                ),
+                tokens,
+            ),
+            setting_row(
+                false,
                 i18n::t("preferences:schema.settings.sync.lan.text.title"),
                 gpui::SharedString::default(),
-                self.render_lan_switch(
+                Some(self.render_lan_switch(
                     "sync.lan.text",
                     lan.text,
                     i18n::t("preferences:schema.settings.sync.lan.text.title"),
                     cx,
-                ),
-            ))
-            .child(setting_row(
+                )),
+                tokens,
+            ),
+            setting_row(
+                false,
                 i18n::t("preferences:schema.settings.sync.lan.image.title"),
                 gpui::SharedString::default(),
-                self.render_lan_switch(
+                Some(self.render_lan_switch(
                     "sync.lan.image",
                     lan.image,
                     i18n::t("preferences:schema.settings.sync.lan.image.title"),
                     cx,
-                ),
-            ))
-            .child(setting_row(
+                )),
+                tokens,
+            ),
+            setting_row(
+                false,
                 i18n::t("preferences:schema.settings.sync.lan.writeClipboard.title"),
                 i18n::t("preferences:schema.settings.sync.lan.writeClipboard.description"),
-                self.render_lan_switch(
+                Some(self.render_lan_switch(
                     "sync.lan.writeClipboard",
                     lan.write_clipboard,
                     i18n::t("preferences:schema.settings.sync.lan.writeClipboard.title"),
                     cx,
-                ),
-            ))
-            .child(setting_row(
+                )),
+                tokens,
+            ),
+            setting_row(
+                false,
                 i18n::t("preferences:schema.settings.sync.lan.maxImageMb.title"),
                 i18n::t("preferences:schema.settings.sync.lan.maxImageMb.description"),
-                NumberInput::new(&self.lan_max_image)
-                    .suffix("MB")
-                    .width(rems(10.))
-                    .accessibility_label(i18n::t(
-                        "preferences:schema.settings.sync.lan.maxImageMb.title",
-                    ))
-                    .into_any_element(),
-            ));
+                Some(
+                    NumberInput::new(&self.lan_max_image)
+                        .suffix("MB")
+                        .width(CONTROL_WIDTH)
+                        .accessibility_label(i18n::t(
+                            "preferences:schema.settings.sync.lan.maxImageMb.title",
+                        ))
+                        .into_any_element(),
+                ),
+                tokens,
+            ),
+        ];
+        let page = div()
+            .flex()
+            .flex_col()
+            .gap(space(7.))
+            .child(section_block(None, None, options, tokens));
 
-        if !lan.enabled {
-            return panel
-                .child(
-                    div()
-                        .kp_text(TextSize::Sm)
-                        .child(i18n::t("preferences:lanSync.off")),
-                )
-                .into_any_element();
-        }
-
-        let Some(state) = self.lan_state.as_ref() else {
-            return panel
-                .child(
-                    div()
-                        .kp_text(TextSize::Sm)
-                        .child(i18n::t("preferences:lanSync.starting")),
-                )
+        // 没开、正在启动或启动失败时，下面只有一句状态说明。
+        let status = if !lan.enabled {
+            Some((i18n::t("preferences:lanSync.off"), tokens.tertiary))
+        } else {
+            match self.lan_state.as_ref() {
+                None => Some((i18n::t("preferences:lanSync.starting"), tokens.tertiary)),
+                Some(state) if !state.running => Some((
+                    state
+                        .error
+                        .clone()
+                        .map_or_else(|| i18n::t("preferences:lanSync.starting"), Into::into),
+                    tokens.error,
+                )),
+                Some(_) => None,
+            }
+        };
+        let Some(state) = self.lan_state.as_ref().filter(|_| status.is_none()) else {
+            let (text, color) =
+                status.unwrap_or_else(|| (i18n::t("preferences:lanSync.off"), tokens.tertiary));
+            return page
+                .child(section_block(
+                    Some(i18n::t("preferences:lanSync.devices.title")),
+                    None,
+                    vec![note_row(true, text, color, tokens)],
+                    tokens,
+                ))
                 .into_any_element();
         };
-        if !state.running {
-            return panel
-                .child(
-                    div()
-                        .kp_text(TextSize::Sm)
-                        .text_color(theme::tokens(cx).error)
-                        .child(state.error.clone().unwrap_or_else(|| {
-                            i18n::t("preferences:lanSync.starting").to_string()
-                        })),
-                )
-                .into_any_element();
-        }
 
         let port = state.port.unwrap_or(kwikpaste_core::sync::DEFAULT_PORT);
         let addresses = if state.addresses.is_empty() {
@@ -1858,184 +1877,187 @@ impl Preferences {
         let code = state
             .pairing_code
             .as_deref()
-            .map_or_else(|| "".to_owned(), |value| value.to_owned());
+            .map_or_else(String::new, ToOwned::to_owned);
         let code_label = if code.is_empty() {
             i18n::t("preferences:lanSync.pairingCode.exhausted")
-        } else if state.pairing_attempts_left == 1 {
-            i18n::t_args("preferences:lanSync.pairingCode.hint", &[("count", "1")])
         } else {
             i18n::t_args(
                 "preferences:lanSync.pairingCode.hint",
                 &[("count", &state.pairing_attempts_left.to_string())],
             )
         };
-        panel = panel
-            .child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .child(format!("{} · {}", state.device_name, addresses)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(space(2.))
-                    .child(i18n::t("preferences:lanSync.pairingCode.title"))
-                    .child(
-                        Button::new(
-                            "lan-code-toggle",
-                            if self.lan_code_hidden {
-                                "••••••"
-                            } else {
-                                &code
-                            },
-                        )
-                        .ghost()
-                        .disabled(code.is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.lan_code_hidden = !this.lan_code_hidden;
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        Button::new(
-                            "lan-code-refresh",
-                            i18n::t("preferences:lanSync.pairingCode.refresh"),
-                        )
-                        .ghost()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.refresh_lan_code(window, cx);
-                        })),
-                    )
-                    .child(code_label),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(space(2.))
-                    .child(i18n::t("preferences:lanSync.devices.title"))
-                    .child(
-                        Button::new("lan-connect", i18n::t("preferences:lanSync.connect.manual"))
-                            .ghost()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_lan_connect_dialog(window, cx);
-                            })),
-                    ),
-            );
-        if state.devices.is_empty() {
-            panel = panel.child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .child(i18n::t("preferences:lanSync.devices.empty")),
-            );
+        let code_toggle = Button::new(
+            "lan-code-toggle",
+            if self.lan_code_hidden || code.is_empty() {
+                "••••••".to_owned()
+            } else {
+                code.clone()
+            },
+        )
+        .tooltip(if self.lan_code_hidden {
+            i18n::t("preferences:lanSync.pairingCode.show")
         } else {
-            for device in state.devices.iter().cloned() {
-                let name = device.name.clone();
-                let address = device.address.as_deref().map_or_else(
-                    || i18n::t("preferences:lanSync.devices.offline").to_string(),
-                    |address| address.to_owned(),
-                );
-                let entity = entity.clone();
-                panel = panel.child(
+            i18n::t("preferences:lanSync.pairingCode.hide")
+        })
+        .disabled(code.is_empty())
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.lan_code_hidden = !this.lan_code_hidden;
+            cx.notify();
+        }));
+        let code_refresh = Button::new(
+            "lan-code-refresh",
+            i18n::t("preferences:lanSync.pairingCode.refresh"),
+        )
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.refresh_lan_code(window, cx);
+        }));
+        let this_device = vec![
+            setting_row(
+                true,
+                state.device_name.clone().into(),
+                addresses.into(),
+                None,
+                tokens,
+            ),
+            setting_row(
+                false,
+                i18n::t("preferences:lanSync.pairingCode.title"),
+                code_label,
+                Some(
                     div()
                         .flex()
                         .items_center()
                         .gap(space(2.))
-                        .child(format!("{} · {}", name, address))
-                        .child(if device.online {
-                            i18n::t("preferences:lanSync.devices.online")
-                        } else {
-                            i18n::t("preferences:lanSync.devices.offline")
-                        })
-                        .child(
-                            Button::new(
-                                format!("lan-remove-{}", device.id),
-                                i18n::t("preferences:lanSync.devices.remove"),
-                            )
-                            .ghost()
-                            .on_click(move |_, window, cx| {
-                                if let Some(entity) = entity.upgrade() {
-                                    entity.update(cx, |this, cx| {
-                                        this.remove_lan_device(device.clone(), window, cx);
-                                    });
-                                }
-                            }),
-                        ),
-                );
-            }
-        }
-        panel = panel.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(space(2.))
-                .child(i18n::t("preferences:lanSync.nearby.title"))
-                .child(
-                    Button::new(
-                        "lan-manual-pair",
-                        i18n::t("preferences:lanSync.nearby.manual"),
-                    )
-                    .ghost()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_lan_pair_dialog(None, window, cx);
-                    })),
+                        .child(code_toggle)
+                        .child(code_refresh)
+                        .into_any_element(),
                 ),
-        );
-        if state.nearby.is_empty() {
-            panel = panel.child(
-                div()
-                    .kp_text(TextSize::Sm)
-                    .child(i18n::t("preferences:lanSync.nearby.empty")),
+                tokens,
+            ),
+        ];
+
+        let mut paired = Vec::new();
+        for device in state.devices.iter().cloned() {
+            let entity = entity.clone();
+            let address = device.address.as_deref().map_or_else(
+                || i18n::t("preferences:lanSync.devices.offline").to_string(),
+                ToOwned::to_owned,
             );
-        } else {
-            for device in state.nearby.iter().cloned() {
-                let entity = entity.clone();
-                let label = if device.compatible {
-                    i18n::t("preferences:lanSync.nearby.pair")
-                } else {
-                    i18n::t("preferences:lanSync.nearby.incompatible")
-                };
-                panel = panel.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(space(2.))
-                        .child(format!(
-                            "{} · {} · {}",
-                            device.name,
-                            device.address,
-                            platform_label(device.platform)
-                        ))
-                        .child(
-                            Button::new(format!("lan-pair-{}", device.id), label)
-                                .primary()
-                                .disabled(!device.compatible)
-                                .on_click(move |_, window, cx| {
-                                    if let Some(entity) = entity.upgrade() {
-                                        entity.update(cx, |this, cx| {
-                                            this.open_lan_pair_dialog(
-                                                Some(device.clone()),
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    }
-                                }),
-                        ),
-                );
-            }
+            let presence = if device.online {
+                i18n::t("preferences:lanSync.devices.online")
+            } else {
+                i18n::t("preferences:lanSync.devices.offline")
+            };
+            let name = device.name.clone();
+            let remove = Button::new(
+                format!("lan-remove-{}", device.id),
+                i18n::t("preferences:lanSync.devices.remove"),
+            )
+            .on_click(move |_, window, cx| {
+                if let Some(entity) = entity.upgrade() {
+                    entity.update(cx, |this, cx| {
+                        this.remove_lan_device(device.clone(), window, cx);
+                    });
+                }
+            });
+            paired.push(setting_row(
+                paired.is_empty(),
+                name.into(),
+                format!("{address} · {presence}").into(),
+                Some(remove.into_any_element()),
+                tokens,
+            ));
         }
+        if paired.is_empty() {
+            paired.push(note_row(
+                true,
+                i18n::t("preferences:lanSync.devices.empty"),
+                tokens.tertiary,
+                tokens,
+            ));
+        }
+
+        let mut nearby = Vec::new();
+        for device in state.nearby.iter().cloned() {
+            let entity = entity.clone();
+            let label = if device.compatible {
+                i18n::t("preferences:lanSync.nearby.pair")
+            } else {
+                i18n::t("preferences:lanSync.nearby.incompatible")
+            };
+            let description = format!("{} · {}", device.address, platform_label(device.platform));
+            let name = device.name.clone();
+            let pair = Button::new(format!("lan-pair-{}", device.id), label)
+                .primary()
+                .disabled(!device.compatible)
+                .on_click(move |_, window, cx| {
+                    if let Some(entity) = entity.upgrade() {
+                        entity.update(cx, |this, cx| {
+                            this.open_lan_pair_dialog(Some(device.clone()), window, cx);
+                        });
+                    }
+                });
+            nearby.push(setting_row(
+                nearby.is_empty(),
+                name.into(),
+                description.into(),
+                Some(pair.into_any_element()),
+                tokens,
+            ));
+        }
+        if nearby.is_empty() {
+            nearby.push(note_row(
+                true,
+                i18n::t("preferences:lanSync.nearby.empty"),
+                tokens.tertiary,
+                tokens,
+            ));
+        }
+
+        let connect = Button::new("lan-connect", i18n::t("preferences:lanSync.connect.manual"))
+            .small()
+            .ghost()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_lan_connect_dialog(window, cx);
+            }));
+        let manual_pair = Button::new(
+            "lan-manual-pair",
+            i18n::t("preferences:lanSync.nearby.manual"),
+        )
+        .small()
+        .ghost()
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.open_lan_pair_dialog(None, window, cx);
+        }));
+
+        let page = page
+            .child(section_block(
+                Some(i18n::t("preferences:lanSync.thisDevice.title")),
+                None,
+                this_device,
+                tokens,
+            ))
+            .child(section_block(
+                Some(i18n::t("preferences:lanSync.devices.title")),
+                Some(connect.into_any_element()),
+                paired,
+                tokens,
+            ))
+            .child(section_block(
+                Some(i18n::t("preferences:lanSync.nearby.title")),
+                Some(manual_pair.into_any_element()),
+                nearby,
+                tokens,
+            ));
         #[cfg(target_os = "windows")]
-        {
-            panel = panel.child(
-                div()
-                    .kp_text(TextSize::Xs)
-                    .child(i18n::t("preferences:lanSync.firewallHint")),
-            );
-        }
-        panel.into_any_element()
+        let page = page.child(
+            div()
+                .px(space(1.))
+                .kp_text(TextSize::Xs)
+                .text_color(tokens.tertiary)
+                .child(i18n::t("preferences:lanSync.firewallHint")),
+        );
+        page.into_any_element()
     }
 
     fn render_lan_switch(
@@ -2571,17 +2593,29 @@ impl Preferences {
             .child(storage_card)
     }
 
-    fn render_setting(&self, setting: &Setting, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if !self.search.value(cx).is_empty() {
-            let query = self.search.value(cx).to_lowercase();
-            let title = text::setting_title(setting);
-            if !search_matches(&query, &title, setting.keywords) {
-                return div().into_any_element();
-            }
+    /// 这一项现在要不要显示：折叠的子项不显示；搜索时只显示匹配的。
+    fn setting_visible(&self, setting: &Setting, cx: &App) -> bool {
+        if setting.is_collapsed(&self.settings) {
+            return false;
         }
-        if matches!(setting.control, Control::LanSync) {
-            return self.render_lan_sync(cx);
+        let query = self.search.value(cx);
+        if query.is_empty() {
+            return true;
         }
+
+        search_matches(
+            &query.to_lowercase(),
+            &text::setting_title(setting),
+            setting.keywords,
+        )
+    }
+
+    fn render_setting(
+        &self,
+        setting: &Setting,
+        first: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let title = text::setting_title(setting);
         let description = text::setting_description(setting);
         let path = setting.path;
@@ -2612,11 +2646,10 @@ impl Preferences {
                     })
                     .into_any_element()
             }
-            Control::Select(_) | Control::Tiles(_) => {
+            Control::Select(_) | Control::Tiles(_) | Control::GroupSelect => {
                 if let Some(state) = self.selects.get(setting.id) {
                     Select::new(state)
-                        .small()
-                        .width(rems(12.))
+                        .width(CONTROL_WIDTH)
                         .disabled(setting.is_disabled(&self.settings))
                         .accessibility_label(title.clone())
                         .into_any_element()
@@ -2627,7 +2660,7 @@ impl Preferences {
             Control::Number { suffix, .. } => {
                 if let Some(state) = self.number_inputs.get(setting.id) {
                     NumberInput::new(state)
-                        .width(rems(10.))
+                        .width(CONTROL_WIDTH)
                         .when_some(suffix, |input, suffix| {
                             input.suffix(text::number_suffix(suffix))
                         })
@@ -2674,49 +2707,24 @@ impl Preferences {
             Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
             Control::AppExclusion => self.render_app_exclusion(value, cx),
-            Control::GroupSelect => self.render_group_select(path, value, cx),
             Control::Action { .. } | Control::CleanupStatus => self.render_action(setting.id, cx),
             _ => self.render_action(setting.id, cx),
         };
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(space(3.))
-            .when(setting.control.full_width(), |row| {
-                row.flex_col().items_start()
+        let tokens = theme::tokens(cx);
+        let full_width = setting.control.full_width();
+        row_frame(first, tokens)
+            .when(full_width, |row| {
+                row.flex_col().items_start().gap(space(3.))
             })
-            .px(space(1.))
-            .py(space(2.5))
-            .min_h(rems(3.))
             .when(setting.parent.is_some(), |row| row.pl(space(5.)))
-            .border_b_1()
-            .border_color(theme::tokens(cx).split)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(space(0.5))
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().kp_text(TextSize::Sm).child(title))
-                    .when(!description.is_empty(), |row| {
-                        row.child(
-                            div()
-                                .kp_text(TextSize::Xs)
-                                .text_color(theme::tokens(cx).tertiary)
-                                .child(description),
-                        )
-                    }),
-            )
+            .child(row_label(title, description, tokens).when(full_width, |label| label.w_full()))
             .child(
                 div()
                     .flex()
                     .flex_none()
+                    .items_center()
                     .justify_end()
-                    .when(setting.control.full_width(), |wrapper| {
-                        wrapper.w_full().justify_start()
-                    })
+                    .when(full_width, |wrapper| wrapper.w_full().justify_start())
                     .child(control),
             )
             .into_any_element()
@@ -2729,46 +2737,73 @@ impl Preferences {
         let sections = tab.map(|tab| tab.sections).unwrap_or_default();
         let show_titles = sections.len() > 1;
         let tokens = theme::tokens(cx);
+        // 分组不套卡片框：小号灰字标题下面直接是扁平的设置行，只在行与行之间画细分隔线。
+        // 搜索时没有匹配项的分组整个不显示，一项都没有时给一句空状态。
+        let mut blocks: Vec<gpui::AnyElement> = Vec::new();
+        for section in sections {
+            if self.tab == TabId::Overview {
+                blocks.push(self.render_storage_overview(cx));
+                continue;
+            }
+            let visible: Vec<&Setting> = section
+                .settings
+                .iter()
+                .filter(|setting| self.setting_visible(setting, cx))
+                .collect();
+            if visible.is_empty() {
+                continue;
+            }
+            if let [setting] = visible.as_slice()
+                && matches!(setting.control, Control::LanSync)
+            {
+                blocks.push(self.render_lan_sync(cx));
+                continue;
+            }
+            let mut rows = Vec::with_capacity(visible.len());
+            for (index, setting) in visible.into_iter().enumerate() {
+                rows.push(self.render_setting(setting, index == 0, cx));
+            }
+            blocks.push(section_block(
+                show_titles.then(|| text::section_title(&section)),
+                None,
+                rows,
+                tokens,
+            ));
+        }
+        if blocks.is_empty() {
+            blocks.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(space(3.))
+                    .pt(space(16.))
+                    .child(
+                        div()
+                            .flex()
+                            .size(rems(3.))
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(tokens.fill_tertiary)
+                            .child(PrefIcon::Search.view(rems(1.5), tokens.tertiary)),
+                    )
+                    .child(
+                        div()
+                            .kp_text(TextSize::Sm)
+                            .text_color(tokens.tertiary)
+                            .child(i18n::t("preferences:search.empty")),
+                    )
+                    .into_any_element(),
+            );
+        }
         let content = ScrollArea::new("preferences-scroll", &self.scroll)
             .flex()
             .flex_col()
             .px(space(7.))
             .py(space(6.))
             .gap(space(7.))
-            .children(sections.into_iter().map(|section| {
-                if self.tab == TabId::Overview {
-                    return self.render_storage_overview(cx);
-                }
-                // 分组不再套卡片框：标题下面直接是扁平的设置行，行间细分隔线。
-                let card = div()
-                    .flex()
-                    .flex_col()
-                    .border_t_1()
-                    .border_color(tokens.split)
-                    .children(
-                        section
-                            .settings
-                            .iter()
-                            .filter(|setting| !setting.is_collapsed(&self.settings))
-                            .map(|setting| self.render_setting(setting, cx)),
-                    );
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(space(2.))
-                    .when(show_titles, |section_view| {
-                        section_view.child(
-                            div()
-                                .px(space(1.))
-                                .kp_text(TextSize::Xs)
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(tokens.tertiary)
-                                .child(text::section_title(&section)),
-                        )
-                    })
-                    .child(card)
-                    .into_any_element()
-            }));
+            .children(blocks);
         div()
             .flex()
             .flex_col()
@@ -3200,17 +3235,6 @@ fn open_source_apps_dialog(
         .detach();
 }
 
-fn format_storage_row(name: gpui::SharedString, bytes: u64) -> gpui::AnyElement {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .kp_text(TextSize::Sm)
-        .child(name.to_owned())
-        .child(format_bytes(bytes))
-        .into_any_element()
-}
-
 #[derive(Clone, Copy)]
 struct CaptureOrderDrag {
     kind: CaptureKind,
@@ -3525,28 +3549,126 @@ fn retention_rule_summary(rule: &RetentionRule) -> gpui::SharedString {
     parts.join(" · ").into()
 }
 
-fn setting_row(
-    title: gpui::SharedString,
-    description: gpui::SharedString,
-    control: gpui::AnyElement,
-) -> gpui::AnyElement {
+/// 设置行里的列表块（采集顺序、清理规则）：浅灰圆角底，没有描边，行间细分隔线由调用方画。
+fn list_tile(tokens: &KpTokens) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .overflow_hidden()
+        .rounded(theme::radius::LG)
+        .bg(tokens.fill_quaternary)
+}
+
+/// 设置行右侧下拉框、数字框、文本框的统一宽度，右边缘和左边缘都对齐。
+const CONTROL_WIDTH: Rems = Rems(12.);
+
+/// 设置行的外框：左右内边距、最小高度一致，行与行之间一条细分隔线（分组第一行上方不画）。
+pub(super) fn row_frame(first: bool, tokens: &KpTokens) -> gpui::Div {
     div()
         .flex()
         .items_center()
         .justify_between()
-        .gap(space(3.))
-        .child(
+        .gap(space(4.))
+        .px(space(1.))
+        .py(space(2.5))
+        .min_h(rems(3.5))
+        .when(!first, |row| row.border_t_1().border_color(tokens.split))
+}
+
+/// 设置行左侧的标题和说明。
+pub(super) fn row_label(
+    title: gpui::SharedString,
+    description: gpui::SharedString,
+    tokens: &KpTokens,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(space(0.5))
+        .flex_1()
+        .min_w_0()
+        .child(div().kp_text(TextSize::Sm).child(title))
+        .when(!description.is_empty(), |label| {
+            label.child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.tertiary)
+                    .child(description),
+            )
+        })
+}
+
+/// 一整行设置：标题、说明和右侧控件。
+fn setting_row(
+    first: bool,
+    title: gpui::SharedString,
+    description: gpui::SharedString,
+    control: Option<gpui::AnyElement>,
+    tokens: &KpTokens,
+) -> gpui::AnyElement {
+    row_frame(first, tokens)
+        .child(row_label(title, description, tokens))
+        .children(control.map(|control| {
             div()
                 .flex()
-                .flex_col()
-                .gap(space(1.))
+                .flex_none()
+                .items_center()
+                .gap(space(2.))
+                .child(control)
+        }))
+        .into_any_element()
+}
+
+/// 分组里的一句说明（空状态、提示、出错）：没有控件，字号与说明一致。
+fn note_row(
+    first: bool,
+    text: gpui::SharedString,
+    color: Hsla,
+    tokens: &KpTokens,
+) -> gpui::AnyElement {
+    row_frame(first, tokens)
+        .child(
+            div()
                 .flex_1()
-                .child(div().kp_text(TextSize::Sm).child(title))
-                .when(!description.is_empty(), |row| {
-                    row.child(div().kp_text(TextSize::Xs).child(description))
-                }),
+                .min_w_0()
+                .kp_text(TextSize::Sm)
+                .text_color(color)
+                .child(text),
         )
-        .child(control)
+        .into_any_element()
+}
+
+/// 一个设置分组：小号灰字标题（可带右侧的操作按钮），下面是扁平的设置行。
+fn section_block(
+    title: Option<gpui::SharedString>,
+    action: Option<gpui::AnyElement>,
+    rows: Vec<gpui::AnyElement>,
+    tokens: &KpTokens,
+) -> gpui::AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(space(1.))
+        .when_some(title, |section, title| {
+            section.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(space(2.))
+                    .min_h(rems(1.5))
+                    .px(space(1.))
+                    .child(
+                        div()
+                            .kp_text(TextSize::Xs)
+                            .text_color(tokens.tertiary)
+                            .child(title),
+                    )
+                    .children(action),
+            )
+        })
+        .child(div().flex().flex_col().children(rows))
         .into_any_element()
 }
 
@@ -3596,66 +3718,115 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// 数据概览的圆角块：浅灰底，没有描边和阴影。
+fn overview_tile(tokens: &KpTokens) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .rounded(theme::radius::LG)
+        .bg(tokens.fill_quaternary)
+        .p(space(4.))
+}
+
+/// 圆角块的标题：正文字号、常规字重，可跟一句灰色小字。
+fn overview_tile_title(
+    title: gpui::SharedString,
+    subtitle: Option<gpui::SharedString>,
+    tokens: &KpTokens,
+) -> gpui::Div {
+    div()
+        .flex()
+        .items_baseline()
+        .gap(space(1.5))
+        .child(
+            div()
+                .kp_text(TextSize::Sm)
+                .text_color(tokens.secondary)
+                .child(title),
+        )
+        .children(subtitle.map(|subtitle| {
+            div()
+                .kp_text(TextSize::Xs)
+                .text_color(tokens.tertiary)
+                .child(subtitle)
+        }))
+}
+
+/// 名称、条数和可选的操作按钮（内容构成、来源应用）。
+fn overview_count_row(
+    name: gpui::SharedString,
+    count: u64,
+    action: Option<gpui::AnyElement>,
+    tokens: &KpTokens,
+) -> gpui::AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(space(2.))
+        .min_h(rems(2.))
+        .kp_text(TextSize::Sm)
+        .child(div().flex_1().min_w_0().truncate().child(name))
+        .child(
+            div()
+                .flex_none()
+                .text_color(tokens.secondary)
+                .child(count.to_string()),
+        )
+        .children(action)
+        .into_any_element()
+}
+
 fn overview_metric_card(
     title: gpui::SharedString,
     value: String,
     hint: gpui::SharedString,
-    cx: &mut Context<Preferences>,
+    tokens: &KpTokens,
 ) -> gpui::AnyElement {
-    div()
-        .flex()
-        .flex_col()
+    overview_tile(tokens)
         .gap(space(1.))
-        .rounded(theme::radius::LG)
-        .bg(theme::tokens(cx).fill_tertiary)
-        .p(space(3.))
         .child(
             div()
                 .kp_text(TextSize::Xs)
-                .text_color(theme::tokens(cx).secondary)
+                .text_color(tokens.secondary)
                 .child(title),
         )
-        .child(div().kp_text(TextSize::Lg).child(value))
+        .child(div().kp_text(TextSize::Lg).truncate().child(value))
         .child(
             div()
                 .kp_text(TextSize::Xs)
-                .text_color(theme::tokens(cx).secondary)
+                .text_color(tokens.tertiary)
+                .truncate()
                 .child(hint),
         )
         .into_any_element()
 }
 
-fn overview_detail_card<I>(
+fn overview_detail_card(
     title: gpui::SharedString,
-    rows: I,
-    cx: &mut Context<Preferences>,
-) -> gpui::AnyElement
-where
-    I: IntoIterator<Item = gpui::AnyElement>,
-{
-    let tokens = theme::tokens(cx);
-    div()
-        .flex()
-        .flex_col()
+    rows: Vec<gpui::AnyElement>,
+    tokens: &KpTokens,
+) -> gpui::AnyElement {
+    let empty = rows.is_empty();
+    overview_tile(tokens)
         .gap(space(2.))
-        .rounded(theme::radius::LG)
-        .bg(tokens.fill_tertiary)
-        .p(space(3.))
-        .child(
-            div()
-                .kp_text(TextSize::Sm)
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(title),
-        )
-        .children(rows)
+        .child(overview_tile_title(title, None, tokens))
+        .when(empty, |card| {
+            card.child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.tertiary)
+                    .child(i18n::t("preferences:overview.tiles.span.empty")),
+            )
+        })
+        .child(div().flex().flex_col().children(rows))
         .into_any_element()
 }
 
 fn overview_trend_card(
     daily: &[kwikpaste_core::db::overview::DailyCount],
-    cx: &mut Context<Preferences>,
+    tokens: &KpTokens,
 ) -> gpui::AnyElement {
-    let tokens = theme::tokens(cx);
     let max_count = daily.iter().map(|day| day.count).max().unwrap_or(1).max(1);
     let recent = daily.iter().rev().take(7).collect::<Vec<_>>();
     let bars = recent.into_iter().rev().map(|day| {
@@ -3665,54 +3836,43 @@ fn overview_trend_card(
             .flex_col()
             .items_center()
             .justify_end()
-            .gap(space(0.5))
+            .gap(space(1.5))
             .flex_1()
             .child(
                 div()
                     .w(rems(1.25))
                     .h(rems((ratio * 5.0).max(0.25)))
-                    .rounded(theme::radius::SM)
-                    .bg(tokens.primary),
+                    .rounded(theme::radius::XS)
+                    .bg(if day.count == 0 {
+                        tokens.fill_secondary
+                    } else {
+                        tokens.primary
+                    }),
             )
             .child(
                 div()
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.secondary)
+                    .text_color(tokens.tertiary)
                     .child(day.date.format("%m/%d").to_string()),
             )
             .into_any_element()
     });
-    div()
-        .flex()
-        .flex_col()
-        .gap(space(2.))
-        .rounded(theme::radius::LG)
-        .bg(tokens.fill_tertiary)
-        .p(space(3.))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(space(1.))
-                .kp_text(TextSize::Sm)
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(i18n::t("preferences:overview.trend.title"))
-                .child(
-                    div()
-                        .kp_text(TextSize::Xs)
-                        .text_color(tokens.secondary)
-                        .child(i18n::t_args(
-                            "preferences:overview.trend.subtitle",
-                            &[("count", "30")],
-                        )),
-                ),
-        )
+    overview_tile(tokens)
+        .gap(space(3.))
+        .child(overview_tile_title(
+            i18n::t("preferences:overview.trend.title"),
+            Some(i18n::t_args(
+                "preferences:overview.trend.subtitle",
+                &[("count", "30")],
+            )),
+            tokens,
+        ))
         .child(
             div()
                 .flex()
                 .items_end()
                 .gap(space(2.))
-                .h(rems(8.))
+                .h(rems(7.))
                 .children(bars),
         )
         .into_any_element()
@@ -3721,9 +3881,8 @@ fn overview_trend_card(
 fn overview_groups_card(
     groups: &[kwikpaste_core::db::overview::GroupStat],
     totals: &kwikpaste_core::db::overview::ItemTotals,
-    cx: &mut Context<Preferences>,
+    tokens: &KpTokens,
 ) -> gpui::AnyElement {
-    let tokens = theme::tokens(cx);
     let rows = [
         (
             i18n::t("preferences:overview.organize.favorites"),
@@ -3744,67 +3903,68 @@ fn overview_groups_card(
         ),
     ];
     let marks = rows.into_iter().map(|(label, count)| {
+        let ratio = count as f32 / totals.total.max(1) as f32;
         div()
             .flex()
             .items_center()
-            .gap(space(2.))
-            .child(div().kp_text(TextSize::Sm).child(label))
+            .gap(space(3.))
+            .min_h(rems(2.))
+            .kp_text(TextSize::Sm)
+            .child(div().w(rems(6.)).flex_none().truncate().child(label))
             .child(
                 div()
                     .flex_1()
-                    .h(px(4.))
-                    .rounded(theme::radius::SM)
+                    .h(px(6.))
+                    .overflow_hidden()
+                    .rounded_full()
                     .bg(tokens.fill_secondary)
                     .child(
                         div()
                             .h_full()
-                            .rounded(theme::radius::SM)
-                            .w(rems(
-                                (count as f32 / totals.total.max(1) as f32 * 12.0).max(0.2),
-                            ))
+                            .rounded_full()
+                            .w(gpui::relative(ratio))
                             .bg(tokens.primary),
                     ),
             )
-            .child(div().kp_text(TextSize::Xs).child(count.to_string()))
+            .child(
+                div()
+                    .w(rems(2.5))
+                    .flex_none()
+                    .text_right()
+                    .text_color(tokens.secondary)
+                    .child(count.to_string()),
+            )
             .into_any_element()
     });
-    let group_rows = groups.iter().take(5).map(|group| {
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .kp_text(TextSize::Sm)
-            .child(group.name.clone())
-            .child(group.count.to_string())
-            .into_any_element()
-    });
-    div()
-        .flex()
-        .flex_col()
+    let group_rows = groups
+        .iter()
+        .take(5)
+        .map(|group| overview_count_row(group.name.clone().into(), group.count, None, tokens))
+        .collect::<Vec<_>>();
+    let groups_empty = group_rows.is_empty();
+    overview_tile(tokens)
         .gap(space(2.))
-        .rounded(theme::radius::LG)
-        .bg(tokens.fill_tertiary)
-        .p(space(3.))
+        .child(overview_tile_title(
+            i18n::t("preferences:overview.organize.title"),
+            None,
+            tokens,
+        ))
         .child(
-            div()
-                .kp_text(TextSize::Sm)
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(i18n::t("preferences:overview.organize.title")),
-        )
-        .child(
-            div().grid().grid_cols(2).gap(space(4.)).children([
+            div().grid().grid_cols(2).gap(space(6.)).children([
                 div()
                     .flex()
                     .flex_col()
-                    .gap(space(1.))
+                    .when(groups_empty, |column| {
+                        column.child(
+                            div()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.tertiary)
+                                .child(i18n::t("preferences:overview.tiles.span.empty")),
+                        )
+                    })
                     .children(group_rows)
                     .into_any_element(),
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(space(1.))
-                    .children(marks)
-                    .into_any_element(),
+                div().flex().flex_col().children(marks).into_any_element(),
             ]),
         )
         .into_any_element()

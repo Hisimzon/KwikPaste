@@ -137,15 +137,12 @@ pub enum Control {
 }
 
 impl Control {
-    /// 外观磁贴、采集类型和清理规则需要整行宽度，换到标题下方单独一行。
+    /// 采集类型、采集顺序和清理规则需要整行宽度，换到标题下方单独一行；外观磁贴现在画成
+    /// 下拉框，和其他选项一样靠右。
     pub fn full_width(self) -> bool {
         matches!(
             self,
-            Self::Tiles(_)
-                | Self::CaptureKinds
-                | Self::CaptureOrder
-                | Self::RetentionRules
-                | Self::LanSync
+            Self::CaptureKinds | Self::CaptureOrder | Self::RetentionRules | Self::LanSync
         )
     }
 }

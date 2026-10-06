@@ -27,7 +27,8 @@
     "title": "Start Using KwikPaste"
   },
   "ignoreApps": {
-    "description": "Choose source apps that should not be recorded. Password managers, key tools, or temporary windows are good candidates; apps on the right will not be written to clipboard history.",
+    "description": "Choose source apps that should not be recorded. Password managers, key tools, or temporary windows are good candidates; content copied from checked apps will not be written to clipboard history.",
+    "manage": "Manage in Preferences",
     "title": "Set Ignored Apps"
   },
   "permissions": {

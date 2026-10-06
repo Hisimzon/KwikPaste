@@ -13,9 +13,10 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use async_channel::Sender;
 use futures::channel::oneshot;
 use gpui::{
-    App, AppContext as _, AsyncApp, Context, Entity, Global, ImageSource, IntoElement,
-    ParentElement as _, Render, Styled as _, TitlebarOptions, Window, WindowBounds, WindowOptions,
-    div, img, prelude::FluentBuilder as _, px, relative, size,
+    App, AppContext as _, AsyncApp, Context, Entity, Global, ImageSource, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _,
+    px, relative, size,
 };
 use kwikpaste_ui::theme::TextSize;
 use kwikpaste_ui::{Button, KpStyled as _, theme};
@@ -650,15 +651,24 @@ impl Render for UpdateWindow {
                             .child(description),
                     )
                     .when(show_release_notes, |element| {
+                        // 纯文字链接，左边缘与说明文字对齐（链接按钮自带左右内边距，会缩进一截）。
+                        let label = t("common:update.releaseNotes");
                         element.child(
-                            // 链接按钮在纵向 flex 里会被拉满一行、文字居中；包一层让它靠左。
                             div().flex().child(
-                                Button::new(
-                                    "update-release-notes",
-                                    t("common:update.releaseNotes"),
-                                )
-                                .link()
-                                .on_click(cx.listener(|view, _, _, _| view.open_release_notes())),
+                                div()
+                                    .id("update-release-notes")
+                                    .role(gpui::Role::Link)
+                                    .aria_label(label.clone())
+                                    .kp_text(TextSize::Sm)
+                                    .text_color(tokens.primary)
+                                    .cursor_pointer()
+                                    .hover(|style| {
+                                        style.text_color(tokens.primary_hover).underline()
+                                    })
+                                    .child(label)
+                                    .on_click(
+                                        cx.listener(|view, _, _, _| view.open_release_notes()),
+                                    ),
                             ),
                         )
                     })
@@ -666,15 +676,16 @@ impl Render for UpdateWindow {
                         element.child(
                             div()
                                 .mt(px(6.))
-                                .h(px(10.))
+                                .h(px(6.))
                                 .w_full()
-                                .rounded(px(5.))
+                                .overflow_hidden()
+                                .rounded_full()
                                 .bg(tokens.fill_secondary)
                                 .child(
                                     div()
                                         .h_full()
                                         .w(relative(progress_value))
-                                        .rounded(px(5.))
+                                        .rounded_full()
                                         .bg(tokens.primary),
                                 ),
                         )

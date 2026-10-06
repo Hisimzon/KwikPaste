@@ -43,6 +43,7 @@ pub use icon::{Icon, IconName};
 pub use input::{
     INPUT_KEY_CONTEXT, Input, InputSize, TextArea, TextAreaInput, TextInput, TextInputEvent,
 };
+pub use kinsoku::kinsoku_wrap;
 pub use menu::{
     MenuEntry, MenuIcon, MenuItem, MenuTrigger, Submenu, context_menu, dismiss_menu, menu_open,
 };
