@@ -4150,6 +4150,8 @@ pub(crate) fn shortcut_recorder_button(
         i18n::t("preferences:controls.recordShortcut")
     } else if conflict || occupied {
         format!("{} ⚠", text::format_shortcut(current)).into()
+    } else if current.trim().is_empty() {
+        i18n::t("preferences:controls.shortcutNotSet")
     } else {
         text::format_shortcut(current).into()
     };

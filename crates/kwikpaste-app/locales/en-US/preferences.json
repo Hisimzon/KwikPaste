@@ -73,7 +73,8 @@
     "recordShortcut": "Record shortcut",
     "saving": "Saving…",
     "shortcutConflict": "This shortcut conflicts with another global shortcut",
-    "shortcutInUse": "In use by another app"
+    "shortcutInUse": "In use by another app",
+    "shortcutNotSet": "Not set"
   },
   "lanSync": {
     "connect": {

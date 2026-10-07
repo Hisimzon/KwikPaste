@@ -73,7 +73,8 @@
     "recordShortcut": "录制快捷键",
     "saving": "保存中…",
     "shortcutConflict": "此快捷键与另一个全局快捷键冲突",
-    "shortcutInUse": "已被其他程序占用"
+    "shortcutInUse": "已被其他程序占用",
+    "shortcutNotSet": "未设置"
   },
   "lanSync": {
     "connect": {
