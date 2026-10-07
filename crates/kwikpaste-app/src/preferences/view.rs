@@ -3719,7 +3719,8 @@ fn retention_rule_summary(rule: &RetentionRule) -> gpui::SharedString {
     parts.join(" · ").into()
 }
 
-/// 设置行里的列表块（采集顺序、清理规则）：浅灰圆角底，没有描边，行间细分隔线由调用方画。
+/// 设置行里的列表块（采集顺序、清理规则）：嵌在分组卡片里，用内容底色加细边框和小圆角，
+/// 行间细分隔线由调用方画。
 fn list_tile(tokens: &KpTokens) -> gpui::Div {
     div()
         .flex()
@@ -3727,7 +3728,21 @@ fn list_tile(tokens: &KpTokens) -> gpui::Div {
         .w_full()
         .overflow_hidden()
         .rounded(theme::radius::LG)
+        .bg(tokens.bg_container)
+        .border_1()
+        .border_color(tokens.border_secondary)
+}
+
+/// 设置分组的卡片：很淡的填充底、细边框、小圆角，行与行之间的分隔线留在卡片内。
+fn section_card(tokens: &KpTokens) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .px(space(3.))
+        .rounded(theme::radius::LG)
         .bg(tokens.fill_quaternary)
+        .border_1()
+        .border_color(tokens.border_secondary)
 }
 
 /// 设置行右侧下拉框、数字框、文本框的统一宽度，右边缘和左边缘都对齐。
@@ -3809,7 +3824,7 @@ fn note_row(
         .into_any_element()
 }
 
-/// 一个设置分组：小号灰字标题（可带右侧的操作按钮），下面是扁平的设置行。
+/// 一个设置分组：小号灰字标题（可带右侧的操作按钮），下面是装在分组卡片里的设置行。
 fn section_block(
     title: Option<gpui::SharedString>,
     action: Option<gpui::AnyElement>,
@@ -3838,7 +3853,7 @@ fn section_block(
                     .children(action),
             )
         })
-        .child(div().flex().flex_col().children(rows))
+        .child(section_card(tokens).children(rows))
         .into_any_element()
 }
 
@@ -3989,7 +4004,7 @@ fn overview_detail_card(
                     .child(i18n::t("preferences:overview.tiles.span.empty")),
             )
         })
-        .child(div().flex().flex_col().children(rows))
+        .child(section_card(tokens).children(rows))
         .into_any_element()
 }
 

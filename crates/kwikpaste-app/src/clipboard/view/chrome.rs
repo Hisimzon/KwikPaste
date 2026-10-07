@@ -41,7 +41,7 @@ pub enum Look {
     Text,
     /// 选中：淡主色底、主色图标（固定窗口按钮）。
     Selected,
-    /// 分组栏选中项：实心主色胶囊，图标后面跟名称。
+    /// 分组栏选中项：中性填充底的胶囊，图标后面跟名称（主色只留给焦点与开关）。
     Chip,
 }
 
@@ -61,11 +61,7 @@ pub fn icon_button(
             Some(tokens.primary.opacity(0.13)),
             tokens.primary.opacity(0.2),
         ),
-        Look::Chip => (
-            tokens.light_solid,
-            Some(tokens.primary),
-            tokens.primary_hover,
-        ),
+        Look::Chip => (tokens.text, Some(tokens.fill_secondary), tokens.fill),
     };
     let chip = look == Look::Chip;
     let chip_label = chip.then(|| label.clone());
@@ -82,7 +78,7 @@ pub fn icon_button(
         .flex_none()
         .h(dp(24.))
         .when(!chip, |button| button.w(dp(24.)))
-        .when(chip, |button| button.px(dp(8.)).gap(dp(4.)).shadow_sm())
+        .when(chip, |button| button.px(dp(8.)).gap(dp(4.)))
         .items_center()
         .justify_center()
         .rounded(dp(7.))
