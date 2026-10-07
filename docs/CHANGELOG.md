@@ -2,6 +2,12 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.0-beta.1 - 2026-10-07
+
+- The first beta of KwikPaste 2.0. The whole app is rewritten with a native Rust interface and no longer uses a WebView, so it uses less memory and opens faster.
+- You can install it over 1.x; your records, settings and images carry over.
+- This is a beta and may still have problems. Please report anything you run into.
+
 ## 1.4.0 - 2026-10-02
 
 - Added Export to files in Preference › Data › Backup & Migration. It exports records to Excel or Markdown for reading, sorting and sharing. You can export only favorites or chosen groups, as one file or one file per group; sensitive records are left out by default. Exported files are not encrypted and cannot restore your data, so keep using Export Backup for full backups.
