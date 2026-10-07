@@ -522,7 +522,9 @@ jobs:
           fi
           # <<< no-latest-json
 
+          # 用发布后的标签地址：草稿资产的 browser_download_url 是 untagged-…，发布后就失效了。
           node scripts/release/v2-manifest.mjs --version "${VERSION}" --dir dist --pubkey crates/kwikpaste-updater/pubkey.txt \
+            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}" \
             --assets assets.json --notes release-body.md --out latest-v2.json
           gh release upload "${TAG_NAME}" latest-v2.json --clobber
 

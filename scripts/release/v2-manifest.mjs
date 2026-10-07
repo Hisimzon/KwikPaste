@@ -9,12 +9,13 @@
 // releases/latest/download/latest.json. Only the Qiniu mirror publishes it as kwikpaste/v2/<channel>/latest.json.
 //
 // Every platform must be present, every signature must verify against --pubkey with the local file, and
-// with --assets (the draft release's asset list) every URL is the asset's browser_download_url and the
-// local file has the uploaded size.
+// with --assets (the draft release's asset list) every file must be uploaded with the local size.
+// URLs are always --base-url/<name>: a draft's browser_download_url points at releases/download/untagged-…,
+// which stops resolving once the draft is published.
 //
 // Usage:
 //   node scripts/release/v2-manifest.mjs --version <v> --dir <assets dir> --pubkey <file> --out latest-v2.json
-//     (--assets <assets.json> | --base-url <url>) [--notes <file>] [--pub-date <RFC 3339>]
+//     --base-url <url> [--assets <assets.json>] [--notes <file>] [--pub-date <RFC 3339>]
 //   node scripts/release/v2-manifest.mjs --sample [--out <file> | --check <file>]
 //     The deterministic sample kwikpaste-updater parses in its tests
 //     (crates/kwikpaste-updater/fixtures/latest-v2.sample.json); --check compares it with the file.
@@ -160,7 +161,7 @@ const main = () => {
     !options.dir ||
     !options.pubkey ||
     !options.out ||
-    !(options.assets || options.baseUrl)
+    !options.baseUrl
   ) {
     throw new Error(
       "missing arguments; see the usage at the top of scripts/release/v2-manifest.mjs",
@@ -178,19 +179,18 @@ const main = () => {
   }
 
   const urlFor = (name) => {
-    if (!assets) {
-      return `${options.baseUrl}/${encodeURIComponent(name)}`;
+    if (assets) {
+      const asset = assets.find((candidate) => candidate.name === name);
+      if (!asset) {
+        throw new Error(`${name} is not uploaded to the release`);
+      }
+      if (asset.size !== statSync(join(dir, name)).size) {
+        throw new Error(
+          `${name} on the release is ${asset.size} bytes, the built file ${statSync(join(dir, name)).size}`,
+        );
+      }
     }
-    const asset = assets.find((candidate) => candidate.name === name);
-    if (!asset) {
-      throw new Error(`${name} is not uploaded to the release`);
-    }
-    if (asset.size !== statSync(join(dir, name)).size) {
-      throw new Error(
-        `${name} on the release is ${asset.size} bytes, the built file ${statSync(join(dir, name)).size}`,
-      );
-    }
-    return asset.browser_download_url;
+    return `${options.baseUrl}/${encodeURIComponent(name)}`;
   };
   const signatureFor = (name) => {
     const path = join(dir, name);
