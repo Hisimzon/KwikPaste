@@ -203,6 +203,11 @@ pub fn onboarding_requested() -> bool {
     enabled(ONBOARDING)
 }
 
+/// 截图门禁只保持自测演示状态，不运行会写设置或关闭窗口的检查。
+pub fn capture_mode() -> bool {
+    active() && std::env::var_os("KP_THEME_GATE").is_some_and(|value| value == "1")
+}
+
 fn env_enabled() -> bool {
     std::env::var_os(ENV).is_some_and(|value| value == "1")
 }
@@ -458,6 +463,10 @@ fn preferences(cx: &mut App) {
         std::process::exit(1);
     }
 
+    if capture_mode() {
+        return;
+    }
+
     let core = crate::core_host::core(cx).cloned();
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_secs(3)).await;
@@ -567,6 +576,10 @@ fn preferences(cx: &mut App) {
 
 /// 引导窗自测：窗口已经由平台层打开，随后用真实 core 写入完成标记并退出。
 fn onboarding(cx: &mut App) {
+    if capture_mode() {
+        return;
+    }
+
     let core = crate::core_host::core(cx).cloned();
     cx.spawn(async move |cx| {
         // 留出 PrintWindow/CI 截图时间；窗口仍由自测进程自动关闭。

@@ -35,7 +35,7 @@ use crate::{
             controller::ListUpdate,
             empty_state::empty_text,
             filter::{ListFilter, Range},
-            item::{ItemKind, ListItem},
+            item::{ItemKind, ListItem, SubKind},
             menu::{MenuAction, menu_groups},
         },
         source::{ClipboardSource, FixtureStore, ListQuery, PreviewTextView},
@@ -1718,6 +1718,31 @@ pub fn stage_demo(panel: Entity<ClipboardPanel>, cx: &mut App) {
                 list.model.loaded_initial() && list.total() > 0
             })
             .await;
+        if matches!(
+            stage.as_str(),
+            "idle"
+                | "hints"
+                | "search-focus"
+                | "preview-words"
+                | "preview-text"
+                | "preview-image"
+                | "preview-files"
+                | "preview-html"
+        ) {
+            // 截图状态固定在样例中的颜色条目，避免捕获时用户光标位置影响悬停底色。
+            driver.list.update(cx, |list, cx| {
+                let id = (0..list.total())
+                    .filter_map(|index| list.model.get(index))
+                    .find(|item| {
+                        item.kind == ItemKind::Text
+                            && item.sub_kind == Some(SubKind::Color)
+                            && !item.is_pinned
+                    })
+                    .map(|item| item.id.clone());
+                list.hovered = id;
+                cx.notify();
+            });
+        }
         driver.stage(&stage, cx).await;
         log::info!("demo stage {stage} ready");
     })

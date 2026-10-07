@@ -127,7 +127,7 @@ impl Gallery {
         }
 
         Self {
-            focus_search: true,
+            focus_search: !crate::selftest::capture_mode(),
             clear_on_hide: false,
             switch_on: true,
             small_switch_on: false,
