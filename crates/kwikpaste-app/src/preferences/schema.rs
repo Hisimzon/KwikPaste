@@ -370,16 +370,17 @@ fn general_sections(portable: bool) -> Vec<Section> {
         .keywords(&["tray", "click", "preferences", "clipboard"])
         .child_of("control.trayIcon", |settings| !settings.general.tray_icon),
     );
-    startup.extend([
+    #[cfg(target_os = "macos")]
+    startup.push(
         Setting::new("control.dockIcon", Control::Switch)
             .path("general.dockIcon")
             .keywords(&["dock", "taskbar", "icon"]),
-        Setting::new(
-            "control.reopenOnboarding",
-            Control::Action { danger: false },
-        )
-        .keywords(&["onboarding", "guide", "welcome", "help"]),
-    ]);
+    );
+    startup.extend([Setting::new(
+        "control.reopenOnboarding",
+        Control::Action { danger: false },
+    )
+    .keywords(&["onboarding", "guide", "welcome", "help"])]);
 
     let mut sections = vec![Section {
         id: "startup",

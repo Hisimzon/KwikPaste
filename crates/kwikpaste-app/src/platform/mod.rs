@@ -188,6 +188,26 @@ pub fn create() -> anyhow::Result<Rc<dyn Platform>> {
     Ok(gpui_platform::current_platform(false))
 }
 
+/// macOS 点 Dock 图标重新打开应用：没有可见窗口时打开偏好设置（未完成引导时改开引导窗），与 1.x 相同。
+#[cfg(target_os = "macos")]
+pub fn reopen_from_dock(cx: &mut App) {
+    let any_visible = cx.windows().iter().any(|handle| {
+        handle
+            .update(cx, |_, window, _| window.is_visible())
+            .unwrap_or(false)
+    });
+    if any_visible {
+        return;
+    }
+
+    host::dispatch(
+        cx,
+        host::HostRequest::OpenPreferences {
+            source: host::RequestSource::Dock,
+        },
+    );
+}
+
 /// 在 `Application::run` 回调里调用：设全局行为，接上 core，预创建隐藏的面板，注册热键和托盘。
 ///
 /// `--selftest-platform` 下面板放平台自测视图，不用 `build_panel`。只有面板创建失败才返回错误；
@@ -198,8 +218,10 @@ pub fn start<V: Render>(
     build_panel: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
 ) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
-    if let Err(err) = kwikpaste_os::mac::panel::use_accessory_activation_policy() {
-        log::warn!("could not switch to the accessory activation policy: {err}");
+    if let Err(err) = kwikpaste_os::mac::panel::set_dock_icon_visible(
+        launch.core.host.core().settings().general.dock_icon,
+    ) {
+        log::warn!("could not set the application activation policy: {err}");
     }
     cx.set_quit_mode(QuitMode::Explicit);
     // 钩子派发的按键会命中 action，默认模式会因此隐藏停在面板上的鼠标指针。

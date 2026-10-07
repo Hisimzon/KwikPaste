@@ -84,6 +84,13 @@ pub fn follow(cx: &mut App) {
             tray::apply(settings, cx);
         }
         autostart::apply(settings, delta);
+        #[cfg(target_os = "macos")]
+        if delta.touches("general.dockIcon")
+            && let Err(err) =
+                kwikpaste_os::mac::panel::set_dock_icon_visible(settings.general.dock_icon)
+        {
+            log::warn!("could not update Dock icon visibility: {err}");
+        }
         if delta.touches("shortcuts.winV") || delta.touches("shortcuts.mouseTrigger") {
             mouse::apply(&settings.shortcuts);
         }

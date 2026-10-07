@@ -32,6 +32,12 @@ pub enum RequestSource {
     TrayClick,
     /// 全局快捷键 `shortcuts.openPreference`。
     Hotkey,
+    /// macOS Dock 图标重新打开应用。
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(dead_code, reason = "only the macOS Dock reopen sends it")
+    )]
+    Dock,
     /// 剪贴板面板头部的偏好设置按钮。
     Panel,
 }
@@ -85,7 +91,7 @@ pub fn dispatch(cx: &mut App, request: HostRequest) {
             let trigger = Trigger::now(match source {
                 RequestSource::TrayMenu | RequestSource::TrayClick => TriggerSource::Tray,
                 RequestSource::Hotkey => TriggerSource::Hotkey,
-                RequestSource::Panel => TriggerSource::Ui,
+                RequestSource::Panel | RequestSource::Dock => TriggerSource::Ui,
                 RequestSource::SecondLaunch | RequestSource::Launch => {
                     TriggerSource::SecondInstance
                 }

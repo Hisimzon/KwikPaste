@@ -23,13 +23,16 @@ use crate::geometry::{Point, Rect, Size, follow_cursor};
 use kwikpaste_core::window_state::WindowGeometry;
 
 /// 切成不进 Dock、也不出现在 Cmd-Tab 中的辅助应用策略。
-pub fn use_accessory_activation_policy() -> io::Result<()> {
+pub fn set_dock_icon_visible(visible: bool) -> io::Result<()> {
     let main_thread = main_thread()?;
     let app = NSApplication::sharedApplication(main_thread);
-    if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
-        return Err(io::Error::other(
-            "NSApp refused the accessory activation policy",
-        ));
+    let policy = if visible {
+        NSApplicationActivationPolicy::Regular
+    } else {
+        NSApplicationActivationPolicy::Accessory
+    };
+    if !app.setActivationPolicy(policy) {
+        return Err(io::Error::other("NSApp refused the activation policy"));
     }
     Ok(())
 }
