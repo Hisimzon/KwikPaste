@@ -784,9 +784,7 @@ impl Preferences {
                             log::warn!("could not reopen onboarding: {error:#}");
                         }
                     }
-                    "about.checkUpdates" => {
-                        log::info!("manual update check requested from preferences")
-                    }
+                    "about.checkUpdates" => crate::platform::updater::check_now(cx),
                     _ => log::info!("preferences action requested: {id}"),
                 });
             })

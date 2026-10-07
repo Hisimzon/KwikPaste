@@ -9,19 +9,20 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::Duration;
 
 use async_channel::Sender;
 use futures::channel::oneshot;
 use gpui::{
-    App, AppContext as _, AsyncApp, Context, Entity, Global, ImageSource, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _,
-    px, relative, size,
+    Animation, AnimationExt as _, App, AppContext as _, AsyncApp, Context, Entity, Global,
+    ImageSource, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
+    WindowOptions, div, img, prelude::FluentBuilder as _, pulsating_between, px, relative, size,
 };
 use kwikpaste_ui::theme::TextSize;
 use kwikpaste_ui::{Button, KpStyled as _, theme};
 use kwikpaste_updater::{
-    AnnouncementOutcome, AnnouncementPrompt, DownloadProgress, HandoffHost, HostFuture,
+    AnnouncementOutcome, AnnouncementPrompt, CheckMode, DownloadProgress, HandoffHost, HostFuture,
     UpdateMetadata, UpdateStatus, Updater, UpdaterUi,
 };
 #[cfg(target_os = "windows")]
@@ -36,6 +37,9 @@ use crate::{
 
 /// 交接要求的退出码；`main` 在 GPUI 的循环结束后据此退出。
 static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
+
+/// 更新窗「正在检查」进度条一次呼吸的时长。
+const CHECKING_PULSE: Duration = Duration::from_secs(2);
 
 /// 运行中的更新器，UI 的更新窗、偏好页经 [`updater`] 取用。
 pub struct UpdaterHost(Updater);
@@ -105,6 +109,22 @@ pub fn start(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// 手动检查更新（偏好设置的「检查更新」）：先以「正在检查」打开或唤起更新窗，结果回来后在窗里展示。
+/// 正在下载或安装时只唤起窗口，不打断。
+pub fn check_now(cx: &mut App) {
+    let Some(status) = updater(cx).map(Updater::status) else {
+        log::warn!("the updater is unavailable; the manual update check was skipped");
+        return;
+    };
+    open_update_window(status, cx);
+    if let Some(view) = cx
+        .try_global::<UpdateWindowHost>()
+        .map(|host| host.view.clone())
+    {
+        view.update(cx, |view, cx| view.check(cx));
+    }
 }
 
 /// 开发自测：不请求网络，直接以一个固定候选版本展示更新窗。
@@ -440,9 +460,12 @@ struct UpdateWindow {
     status: UpdateStatus,
     progress: Option<DownloadProgress>,
     downloaded: Option<UpdateMetadata>,
+    checking: bool,
     downloading: bool,
     installing: bool,
     error: Option<String>,
+    /// `error` 来自检查（而不是下载或安装）：标题换成「检查更新失败」，并提供「重新检查」。
+    check_failed: bool,
     /// 已经设到原生标题栏的标题；只在变化时再设，免得每帧都发 `SetWindowTextW`。
     window_title: String,
 }
@@ -455,9 +478,11 @@ impl UpdateWindow {
             status,
             progress: None,
             downloaded: None,
+            checking: false,
             downloading: false,
             installing: false,
             error: None,
+            check_failed: false,
             window_title: String::new(),
         }
     }
@@ -468,6 +493,7 @@ impl UpdateWindow {
             == status.update.as_ref().map(|update| &update.version);
         self.status = status;
         self.error = None;
+        self.check_failed = false;
         if !same_version {
             self.progress = None;
             self.downloaded = None;
@@ -477,8 +503,38 @@ impl UpdateWindow {
         cx.notify();
     }
 
+    /// 手动检查：窗里显示「正在检查」，结果回来后换成新状态或检查失败。
+    fn check(&mut self, cx: &mut Context<Self>) {
+        if self.checking || self.downloading || self.installing {
+            return;
+        }
+        let updater = self.updater.clone();
+        self.checking = true;
+        self.error = None;
+        self.check_failed = false;
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = updater.check(CheckMode::Manual).await;
+            if let Err(err) = view.update(cx, |view, cx| {
+                view.checking = false;
+                match result {
+                    Ok(status) => view.set_status(status, cx),
+                    Err(err) => {
+                        log::warn!("manual update check failed: {err}");
+                        view.error = Some(err.to_string());
+                        view.check_failed = true;
+                        cx.notify();
+                    }
+                }
+            }) {
+                log::debug!("the update window closed before the check completed: {err:#}");
+            }
+        })
+        .detach();
+    }
+
     fn download(&mut self, cx: &mut Context<Self>) {
-        if self.downloading || self.installing {
+        if self.checking || self.downloading || self.installing {
             return;
         }
         let Some(update) = self.status.update.clone() else {
@@ -575,10 +631,15 @@ impl UpdateWindow {
 impl Render for UpdateWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
-        let update = self.status.update.as_ref();
+        // 检查期间不展示上一次的结果，只留「取消」。
+        let update = self.status.update.as_ref().filter(|_| !self.checking);
         let downloaded =
             self.downloaded.is_some() || update.is_some_and(|update| update.downloaded);
-        let title = if self.error.is_some() {
+        let title = if self.checking {
+            t("common:update.checking")
+        } else if self.check_failed {
+            t("common:update.checkErrorTitle")
+        } else if self.error.is_some() {
             t("common:update.errorTitle")
         } else if self.downloading || self.installing {
             t("common:update.updatingTitle")
@@ -590,8 +651,15 @@ impl Render for UpdateWindow {
             t("common:update.latestTitle")
         };
         let downloading_version = update.map_or_else(String::new, |update| update.version.clone());
-        let description = if let Some(error) = self.error.as_deref() {
-            t_args("common:update.error", &[("message", error)])
+        let description = if self.checking {
+            t("common:update.checkingBody")
+        } else if let Some(error) = self.error.as_deref() {
+            let key = if self.check_failed {
+                "common:update.checkError"
+            } else {
+                "common:update.error"
+            };
+            t_args(key, &[("message", error)])
         } else if self.downloading {
             t_args(
                 "common:update.downloading",
@@ -613,10 +681,36 @@ impl Render for UpdateWindow {
                 &[("currentVersion", &self.status.current_version)],
             )
         };
-        let progress = self.progress.and_then(|progress| progress.progress);
+        let progress = self
+            .progress
+            .and_then(|progress| progress.progress)
+            .filter(|_| !self.checking);
         let progress_text = progress.map(|value| format!("{:.0}", value * 100.));
-        let show_progress = self.downloading || self.progress.is_some();
-        let progress_value = progress.unwrap_or(0.12).clamp(0., 1.) as f32;
+        let show_progress = self.checking || self.downloading || self.progress.is_some();
+        let progress_value = if self.checking {
+            1.
+        } else {
+            progress.unwrap_or(0.12).clamp(0., 1.) as f32
+        };
+        let progress_fill = div()
+            .h_full()
+            .w(relative(progress_value))
+            .rounded_full()
+            .bg(tokens.accent.solid);
+        // 检查没有进度可报：整条进度条呼吸闪烁，表示还在等服务器。
+        let progress_fill = if self.checking && !cx.reduce_motion() {
+            progress_fill
+                .with_animation(
+                    "update-checking",
+                    Animation::new(CHECKING_PULSE)
+                        .repeat()
+                        .with_easing(pulsating_between(0.35, 1.)),
+                    |fill, delta| fill.opacity(delta),
+                )
+                .into_any_element()
+        } else {
+            progress_fill.into_any_element()
+        };
         let show_release_notes = update.is_some() && self.error.is_none();
         let window_title = if self.downloading || self.installing {
             t("common:update.updatingTitle")
@@ -687,13 +781,7 @@ impl Render for UpdateWindow {
                                 .overflow_hidden()
                                 .rounded_full()
                                 .bg(tokens.fill.default)
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .w(relative(progress_value))
-                                        .rounded_full()
-                                        .bg(tokens.accent.solid),
-                                ),
+                                .child(progress_fill),
                         )
                     })
                     .when_some(progress_text, |element, progress| {
@@ -740,19 +828,28 @@ impl Render for UpdateWindow {
                             )
                         },
                     )
-                    .when(self.downloading, |element| {
+                    .when(self.checking || self.downloading, |element| {
                         element.child(
                             Button::new("update-cancel", t("common:update.cancel"))
                                 .on_click(|_, window, _| window.remove_window()),
                         )
                     })
-                    .when(update.is_none() || self.error.is_some(), |element| {
+                    .when(self.check_failed, |element| {
                         element.child(
-                            Button::new("update-ok", t("common:update.ok"))
-                                .primary()
-                                .on_click(|_, window, _| window.remove_window()),
+                            Button::new("update-check-again", t("common:update.checkAgain"))
+                                .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
                         )
                     })
+                    .when(
+                        (update.is_none() && !self.checking) || self.error.is_some(),
+                        |element| {
+                            element.child(
+                                Button::new("update-ok", t("common:update.ok"))
+                                    .primary()
+                                    .on_click(|_, window, _| window.remove_window()),
+                            )
+                        },
+                    )
                     .when(
                         update.is_some()
                             && !self.downloading
