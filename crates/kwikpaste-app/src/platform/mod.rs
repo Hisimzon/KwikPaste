@@ -60,7 +60,12 @@ mod native;
 #[path = "native_windows.rs"]
 mod native;
 
-use std::{path::PathBuf, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    path::PathBuf,
+    rc::Rc,
+    time::Duration,
+};
 
 use anyhow::Context as _;
 use gpui::{
@@ -68,6 +73,9 @@ use gpui::{
     Window, WindowOptions,
 };
 use kwikpaste_os::single_instance::{self, Claim, Invocation, PrimaryInstance};
+
+#[cfg(target_os = "windows")]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::core_host::{self, StartedCore};
 use crate::{health, i18n::t, selftest};
@@ -92,6 +100,84 @@ pub fn open_window<V: Render>(
     let (handle, view) = kwikpaste_ui::open_window(options, cx, build)?;
     material::register_window(handle, cx);
     Ok((handle, view))
+}
+
+#[cfg(target_os = "windows")]
+type RevealCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
+
+#[cfg(target_os = "windows")]
+struct RevealState {
+    revealed: Cell<bool>,
+    callback: RefCell<Option<RevealCallback>>,
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_once(window: &mut Window, cx: &mut App, state: &RevealState) {
+    if state.revealed.replace(true) {
+        return;
+    }
+    if let Some(hwnd) = window_hwnd(window)
+        && let Err(error) = kwikpaste_os::win::set_window_cloaked(hwnd, false)
+    {
+        log::warn!("could not uncloak window: {error}");
+    }
+    if let Some(callback) = state.callback.borrow_mut().take() {
+        callback(window, cx);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn window_hwnd(window: &Window) -> Option<isize> {
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return None;
+    };
+    Some(handle.hwnd.get())
+}
+
+/// 新建的窗口先用 DWM 隐藏，画完第一帧再显示并执行 `on_revealed`（调到前台）。
+///
+/// GPUI 在 Windows 上建窗时就把窗口显示出来，第一帧没画好之前用户看到的是一块空的圆角窗框；
+/// 在建窗回调里调用本函数即可把这段遮住。被隐藏的窗口仍是 `IsWindowVisible`，GPUI 照常绘制。
+/// 第一个 `on_next_frame` 在首帧绘制前触发，第二个在首帧之后；500 ms 没等到就直接显示，
+/// 窗口不会一直隐藏。macOS 直接执行 `on_revealed`。
+pub fn reveal_after_first_frame(
+    window: &mut Window,
+    cx: &mut App,
+    on_revealed: impl FnOnce(&mut Window, &mut App) + 'static,
+) {
+    #[cfg(target_os = "macos")]
+    on_revealed(window, cx);
+
+    #[cfg(target_os = "windows")]
+    {
+        let Some(hwnd) = window_hwnd(window) else {
+            on_revealed(window, cx);
+            return;
+        };
+        if let Err(error) = kwikpaste_os::win::set_window_cloaked(hwnd, true) {
+            log::warn!("could not cloak window: {error}");
+        }
+        let state = Rc::new(RevealState {
+            revealed: Cell::new(false),
+            callback: RefCell::new(Some(Box::new(on_revealed))),
+        });
+        let first_state = state.clone();
+        window.on_next_frame(move |window, _| {
+            let second_state = first_state.clone();
+            window.on_next_frame(move |window, cx| reveal_once(window, cx, &second_state));
+        });
+
+        let timeout_state = state;
+        window
+            .spawn(cx, async move |cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                let _ = cx.update(|window, cx| reveal_once(window, cx, &timeout_state));
+            })
+            .detach();
+    }
 }
 
 /// 崩溃重启的子进程最多等前一个实例退出这么久。

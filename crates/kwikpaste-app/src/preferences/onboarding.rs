@@ -60,8 +60,9 @@ pub fn open(cx: &mut App) -> anyhow::Result<()> {
     };
     let (handle, view) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Onboarding::new(window, cx));
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        view::bring_window_to_front(window);
+        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
+            view::bring_window_to_front(window);
+        });
         view
     })?;
     cx.set_global(OnboardingWindow { handle, view });

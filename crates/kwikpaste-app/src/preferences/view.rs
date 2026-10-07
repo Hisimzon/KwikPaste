@@ -1,8 +1,9 @@
 use gpui::{
-    App, AppContext as _, Context, FocusHandle, Hsla, Image, ImageSource, InteractiveElement as _,
-    IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Rems, Render, Role, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, WeakEntity,
-    Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _, px, rems, size,
+    AnyWindowHandle, App, AppContext as _, Context, FocusHandle, Global, Hsla, Image, ImageSource,
+    InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Rems,
+    Render, Role, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Subscription,
+    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
+    prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
     CoreEvent, app_ids,
@@ -38,6 +39,12 @@ use crate::{
 mod overview;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(960.), px(600.));
+
+struct PreferencesWindow {
+    handle: AnyWindowHandle,
+}
+
+impl Global for PreferencesWindow {}
 
 pub(crate) fn logo() -> Arc<Image> {
     static LOGO: std::sync::LazyLock<Arc<Image>> = std::sync::LazyLock::new(|| {
@@ -79,6 +86,13 @@ fn initial_tab() -> TabId {
 }
 
 pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
+    if let Some(handle) = cx
+        .try_global::<PreferencesWindow>()
+        .map(|window| window.handle)
+    {
+        let _ = handle.update(cx, |_, window, _| bring_window_to_front(window));
+        return Ok(());
+    }
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(window_size(cx), cx)),
         window_min_size: Some(WINDOW_MIN_SIZE),
@@ -89,15 +103,23 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
         focus: false,
         ..Default::default()
     };
-    crate::platform::open_window(options, cx, |window, cx| {
+    let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
         view.update(cx, |this, cx| this.refresh_storage_overview(cx));
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        bring_window_to_front(window);
+        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
+            bring_window_to_front(window);
+        });
         view
+    })?;
+    cx.set_global(PreferencesWindow { handle });
+    let window_id = handle.window_id();
+    cx.on_window_closed(move |cx, closed_id| {
+        if closed_id == window_id {
+            let _ = cx.remove_global::<PreferencesWindow>();
+        }
     })
-    .map(|_| ())
-    .map_err(|error| anyhow::anyhow!("failed to open preferences window: {error:#}"))
+    .detach();
+    Ok(())
 }
 
 pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
@@ -111,16 +133,24 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
         focus: false,
         ..Default::default()
     };
-    crate::platform::open_window(options, cx, |window, cx| {
+    let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
         view.update(cx, |this, cx| this.refresh_storage_overview(cx));
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        bring_window_to_front(window);
+        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
+            bring_window_to_front(window);
+        });
         Preferences::show_import_confirmation(path.clone(), window, cx);
         view
+    })?;
+    cx.set_global(PreferencesWindow { handle });
+    let window_id = handle.window_id();
+    cx.on_window_closed(move |cx, closed_id| {
+        if closed_id == window_id {
+            let _ = cx.remove_global::<PreferencesWindow>();
+        }
     })
-    .map(|_| ())
-    .map_err(|error| anyhow::anyhow!("failed to open preferences window: {error:#}"))
+    .detach();
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

@@ -19,9 +19,10 @@ pub mod system;
 pub mod trigger_pause;
 pub mod win_v;
 
-use std::ffi::c_void;
+use std::{ffi::c_void, io, mem::size_of};
 
 use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, SetForegroundWindow};
 
 use crate::geometry::{Point, Rect};
@@ -41,6 +42,20 @@ pub fn set_foreground(hwnd: isize) -> bool {
 /// 句柄是否仍是一个存在的窗口。
 pub fn is_window(hwnd: isize) -> bool {
     hwnd != 0 && unsafe { IsWindow(Some(HWND(hwnd as *mut c_void))) }.as_bool()
+}
+
+/// 用 DWM 隐藏（cloak）或重新显示一个窗口：窗口仍是可见状态、照常绘制，只是不上屏。
+pub fn set_window_cloaked(hwnd: isize, cloaked: bool) -> io::Result<()> {
+    let value = i32::from(cloaked);
+    unsafe {
+        DwmSetWindowAttribute(
+            HWND(hwnd as *mut c_void),
+            DWMWA_CLOAK,
+            (&raw const value).cast(),
+            size_of::<i32>() as u32,
+        )
+    }
+    .map_err(|error| io::Error::other(error.to_string()))
 }
 
 fn rect_from_win32(rect: RECT) -> Rect {

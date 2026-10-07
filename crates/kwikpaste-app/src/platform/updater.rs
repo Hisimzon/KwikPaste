@@ -375,11 +375,13 @@ fn open_update_window(status: UpdateStatus, cx: &mut App) {
         focus: false,
         ..Default::default()
     };
-    match crate::platform::open_window(options, cx, |_, cx| {
+    match crate::platform::open_window(options, cx, |window, cx| {
+        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
+            raise_update_window_in_place(window);
+        });
         cx.new(|_| UpdateWindow::new(updater.clone(), status, requests))
     }) {
         Ok((handle, view)) => {
-            raise_update_window(handle, cx);
             cx.set_global(UpdateWindowHost { handle, view });
             let window_id = handle.window_id();
             cx.on_window_closed(move |cx, closed_id| {
@@ -403,23 +405,7 @@ fn raise_update_window(handle: gpui::AnyWindowHandle, cx: &mut App) {
     #[cfg(target_os = "windows")]
     {
         if let Err(err) = handle.update(cx, |_, window, _| {
-            let Ok(handle) = HasWindowHandle::window_handle(window) else {
-                return;
-            };
-            let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-                return;
-            };
-            if !kwikpaste_os::win::keyboard::swallow_marked_alt(std::time::Duration::from_millis(
-                50,
-            )) {
-                log::debug!(
-                    "the keyboard hook did not confirm the marked Alt for the update window"
-                );
-                return;
-            }
-            if !kwikpaste_os::win::set_foreground(handle.hwnd.get()) {
-                log::debug!("SetForegroundWindow did not accept the update window");
-            }
+            raise_update_window_in_place(window);
         }) {
             log::debug!("the update window could not be raised: {err:#}");
         }
@@ -427,6 +413,26 @@ fn raise_update_window(handle: gpui::AnyWindowHandle, cx: &mut App) {
     #[cfg(target_os = "macos")]
     let _ = (handle, cx);
 }
+
+#[cfg(target_os = "windows")]
+fn raise_update_window_in_place(window: &Window) {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    if !kwikpaste_os::win::keyboard::swallow_marked_alt(std::time::Duration::from_millis(50)) {
+        log::debug!("the keyboard hook did not confirm the marked Alt for the update window");
+        return;
+    }
+    if !kwikpaste_os::win::set_foreground(handle.hwnd.get()) {
+        log::debug!("SetForegroundWindow did not accept the update window");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn raise_update_window_in_place(_: &Window) {}
 
 struct UpdateWindow {
     updater: Updater,
