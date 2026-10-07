@@ -520,7 +520,7 @@ impl UpdateWindow {
                 match result {
                     Ok(status) => view.set_status(status, cx),
                     Err(err) => {
-                        log::warn!("manual update check failed: {err}");
+                        log::warn!("manual update check failed: {err:#}");
                         view.error = Some(err.to_string());
                         view.check_failed = true;
                         cx.notify();
@@ -653,13 +653,11 @@ impl Render for UpdateWindow {
         let downloading_version = update.map_or_else(String::new, |update| update.version.clone());
         let description = if self.checking {
             t("common:update.checkingBody")
+        } else if self.check_failed {
+            // 检查失败的原因（哪个镜像、什么状态码）只对排查有用，已写进日志。
+            t("common:update.checkError")
         } else if let Some(error) = self.error.as_deref() {
-            let key = if self.check_failed {
-                "common:update.checkError"
-            } else {
-                "common:update.error"
-            };
-            t_args(key, &[("message", error)])
+            t_args("common:update.error", &[("message", error)])
         } else if self.downloading {
             t_args(
                 "common:update.downloading",

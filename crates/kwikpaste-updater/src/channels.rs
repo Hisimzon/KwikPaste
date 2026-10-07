@@ -8,7 +8,8 @@
 //!
 //! 渠道沿用设置里已有的键：总是检查稳定版，`update.includeBeta` 为真时再检查测试版。v2 没有
 //! nightly 渠道，`update.includeNightly` 不再读取。各渠道并发检查，先各自滤掉跳过的版本、系统不满足
-//! 要求的版本和没有本机安装包的版本，再取版本号最大的；只要有一个渠道正常响应就不算检查失败。
+//! 要求的版本和没有本机安装包的版本，再取版本号最大的；只要有一个渠道正常响应就不算检查失败，
+//! 清单 404（渠道还没发布过版本）也算正常响应。
 
 use anyhow::{Context, anyhow};
 use url::Url;
@@ -90,22 +91,34 @@ pub struct Candidate {
 }
 
 /// 一个渠道的检查结果：`Ok(None)` 表示正常响应但没有可装的更新。
+///
+/// 没有镜像给出清单、但有镜像答 404 时，按这个渠道还没发布过版本处理（如第一个 2.x 稳定版发布前的
+/// 稳定版渠道）：清单就是不存在，算正常响应，不算检查失败。
 pub(crate) async fn check_channel(
     client: &reqwest::Client,
     channel: Channel,
     mirrors: &[Url],
     criteria: &Criteria,
 ) -> anyhow::Result<Option<Candidate>> {
+    let mut missing = false;
     let mut last_error = None;
     for url in mirrors {
         match fetch(client, url).await {
             Ok(Fetched::NoContent) => return Ok(None),
             Ok(Fetched::Release(release)) => return Ok(select(channel, *release, criteria)),
+            Ok(Fetched::Missing) => {
+                log::info!("update manifest {url} does not exist");
+                missing = true;
+            }
             Err(err) => {
                 log::warn!("update manifest {url} unusable: {err:#}");
                 last_error = Some(err);
             }
         }
+    }
+    if missing {
+        log::info!("the {} channel has no release yet", channel.name());
+        return Ok(None);
     }
 
     Err(last_error
@@ -163,6 +176,8 @@ pub(crate) async fn check_all(
 
 enum Fetched {
     NoContent,
+    /// 404：这个镜像上没有清单。
+    Missing,
     Release(Box<Release>),
 }
 
@@ -176,6 +191,9 @@ async fn fetch(client: &reqwest::Client, url: &Url) -> anyhow::Result<Fetched> {
     let status = response.status();
     if status == reqwest::StatusCode::NO_CONTENT {
         return Ok(Fetched::NoContent);
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(Fetched::Missing);
     }
     if !status.is_success() {
         anyhow::bail!("endpoint answered {status}");
@@ -362,6 +380,46 @@ mod tests {
 
         assert!(found.is_none());
         assert_eq!(server.requests().len(), 1);
+    }
+
+    /// 还没发布过版本的渠道：清单 404 算没有更新，镜像不可达但另一个镜像答 404 也一样。
+    #[test]
+    fn missing_manifests_mean_no_release_yet() {
+        let rt = runtime();
+        for second in [
+            Reply::status("404 Not Found"),
+            Reply::status("500 Internal Server Error"),
+        ] {
+            let server = Server::start(vec![Reply::status("404 Not Found"), second]);
+            let mirrors = [
+                url(&server, "/cdn/latest.json"),
+                url(&server, "/gh/latest.json"),
+            ];
+
+            let found = rt
+                .block_on(check_channel(
+                    &client(),
+                    Channel::Stable,
+                    &mirrors,
+                    &criteria(),
+                ))
+                .unwrap();
+
+            assert!(found.is_none());
+            assert_eq!(server.requests().len(), 2);
+        }
+
+        let stable = Server::start(vec![Reply::status("404 Not Found")]);
+        let beta = Server::start(vec![Reply::status("404 Not Found")]);
+        let channels = vec![
+            (Channel::Stable, vec![url(&stable, "/latest.json")]),
+            (Channel::Beta, vec![url(&beta, "/latest.json")]),
+        ];
+        assert!(
+            rt.block_on(check_all(&client(), channels, &criteria()))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

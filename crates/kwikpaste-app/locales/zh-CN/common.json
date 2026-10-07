@@ -35,7 +35,7 @@
     "availableBody": "快贴 {{version}} 现已可用，您当前使用的是 {{currentVersion}}。要现在安装这个更新吗？",
     "cancel": "取消",
     "checkAgain": "重新检查",
-    "checkError": "无法检查可用更新：{{message}}",
+    "checkError": "无法连接更新服务器，请检查网络后再试。",
     "checkErrorTitle": "检查更新失败",
     "checking": "正在检查更新…",
     "checkingBody": "正在连接更新服务器，请稍候。",
