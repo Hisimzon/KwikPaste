@@ -8,8 +8,8 @@
 //!   （Windows Ctrl+V，macOS ⌘V）。列表经 `clipboard::view::host::PlatformHost` 调到这里
 //!   （`keep_visible` 先传假）；粘贴的就是列表给的 id，「当前项是不是刚复制的那条」由列表负责。
 //! - **粘贴片段**（快捷信息、拆词选区）：[`paste_fragment`]，流程同上；只复制不粘贴用 [`copy_fragment`]。
-//! - **复制**（不粘贴）：[`copy`]。`Core::copy_item` 写回剪贴板；设置「复制后隐藏窗口」打开且
-//!   `keep_visible` 为假时隐藏面板。
+//! - **复制**（不粘贴）：[`copy`]。`Core::copy_item` 写回剪贴板；固定面板（`keep_visible`）完成复制后
+//!   释放导航键，设置「复制后隐藏窗口」打开且 `keep_visible` 为假时隐藏面板。
 //! - **全局快速粘贴**（设置 `shortcuts.quickPaste` 的修饰键 + 1…9、0）由热键模块直接调用
 //!   [`quick_paste`]，UI 不用管：`Core::prepare_quick_paste` → 等修饰键全部松开（最多 2 s；超时就把内容
 //!   留在剪贴板上、不粘贴）→ 面板可见时让出前台并等 50 ms → 注入 → 丢弃凭据。
@@ -86,7 +86,11 @@ pub fn copy(
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         let outcome = core.copy_item(&id, plain).await?;
-        if outcome.hide_window && !keep_visible {
+        if keep_visible {
+            cx.update(|cx| {
+                super::request(cx, PanelCommand::SetInputCapture(false));
+            });
+        } else if outcome.hide_window {
             cx.update(|cx| {
                 super::request(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)))
             });
@@ -109,7 +113,11 @@ pub fn copy_fragment(
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         let outcome = core.copy_fragment(&id, fragment).await?;
-        if outcome.hide_window && !keep_visible {
+        if keep_visible {
+            cx.update(|cx| {
+                super::request(cx, PanelCommand::SetInputCapture(false));
+            });
+        } else if outcome.hide_window {
             cx.update(|cx| {
                 super::request(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)))
             });

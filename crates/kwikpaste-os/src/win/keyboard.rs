@@ -1,7 +1,8 @@
 //! 面板可见期间的低级键盘钩子（`WH_KEYBOARD_LL`）。
 //!
-//! - 非编辑态（导航开启）：按 [`crate::hook_keys`] 吞下面板要处理的键，转成 [`HookEvent`] 交给宿主；
-//!   被吞的键松开时一并吞掉，否则目标应用会收到孤立的松开。Ctrl 的按下、松开只通知、不吞。
+//! - 非编辑态（导航开启且输入已捕获）：按 [`crate::hook_keys`] 吞下面板要处理的键，转成
+//!   [`HookEvent`] 交给宿主；被吞的键松开时一并吞掉，否则目标应用会收到孤立的松开。Ctrl 的按下、
+//!   松开只通知、不吞。输入捕获只对记录的目标前台窗口生效，切到别的窗口就懒释放。
 //! - 编辑态（导航关闭）：面板已是前台窗口，键盘消息直接发给它，钩子只放行。
 //! - 取前台：注入一次带 [`OWN_INPUT_MARKER`] 的 Alt，由钩子吞掉，目标应用收不到
 //!   （见 [`swallow_marked_alt`]）。
@@ -11,7 +12,7 @@
 //! 还有被吞的键没松开时线程等它们松开后再退出。
 
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -25,9 +26,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, PeekMessageW,
-    PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN,
-    WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetForegroundWindow, GetMessageW, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE,
+    PeekMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::hook_keys::{self, HookKeyKind};
@@ -66,6 +67,12 @@ static SINK: OnceLock<Sink> = OnceLock::new();
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 /// 非编辑态：吞表里的键。
 static NAVIGATION: AtomicBool = AtomicBool::new(false);
+/// 面板当前是否捕获了非编辑态输入；与编辑态导航开关分开保存。
+static CAPTURED: AtomicBool = AtomicBool::new(false);
+/// 面板 HWND，用来允许面板自己暂时成为前台窗口。
+static PANEL_HWND: AtomicIsize = AtomicIsize::new(0);
+/// 捕获时记录的目标前台窗口。
+static TARGET_HWND: AtomicIsize = AtomicIsize::new(0);
 /// 按下被吞、还没松开的键。
 static SWALLOWED: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
 static CONTROL_DOWN: AtomicBool = AtomicBool::new(false);
@@ -79,9 +86,18 @@ pub fn set_sink(sink: impl Fn(HookEvent) + Send + Sync + 'static) -> io::Result<
         .map_err(|_| io::Error::other("the keyboard hook sink is already set"))
 }
 
-/// 面板显示时调用：装好钩子（线程就绪后才返回），打开导航。
+/// 面板显示时调用：装好钩子（线程就绪后才返回），打开导航并捕获目标前台窗口。
 pub fn start() -> io::Result<()> {
+    start_with_target(0, 0)
+}
+
+/// 面板显示时调用：记录面板和目标 HWND，装好钩子后开始捕获。
+pub fn start_with_target(panel: isize, target: isize) -> io::Result<()> {
     let mut thread = thread_state();
+    PANEL_HWND.store(panel, Ordering::SeqCst);
+    TARGET_HWND.store(target, Ordering::SeqCst);
+    CAPTURED.store(true, Ordering::SeqCst);
+    CONTROL_DOWN.store(false, Ordering::SeqCst);
     ACTIVE.store(true, Ordering::SeqCst);
     NAVIGATION.store(true, Ordering::SeqCst);
     if thread.is_some() {
@@ -96,6 +112,7 @@ pub fn start() -> io::Result<()> {
         Err(err) => {
             ACTIVE.store(false, Ordering::SeqCst);
             NAVIGATION.store(false, Ordering::SeqCst);
+            CAPTURED.store(false, Ordering::SeqCst);
             Err(err)
         }
     }
@@ -106,7 +123,7 @@ pub fn stop() {
     let thread = thread_state();
     ACTIVE.store(false, Ordering::SeqCst);
     NAVIGATION.store(false, Ordering::SeqCst);
-    CONTROL_DOWN.store(false, Ordering::SeqCst);
+    release();
     if let Some(id) = *thread
         && !any_swallowed()
     {
@@ -121,6 +138,35 @@ pub fn set_navigation(enabled: bool) {
 
 pub fn is_running() -> bool {
     thread_state().is_some()
+}
+
+/// 当前是否仍捕获输入；读取时顺便检查前台，供热键切换在没有键盘事件时懒释放。
+pub fn is_captured() -> bool {
+    if NAVIGATION.load(Ordering::SeqCst) {
+        let _ = capture_allows_input();
+    }
+    CAPTURED.load(Ordering::SeqCst)
+}
+
+/// 把捕获目标改成 `target`，并重新接管导航键。
+pub fn capture(target: isize) {
+    if ACTIVE.load(Ordering::SeqCst) {
+        TARGET_HWND.store(target, Ordering::SeqCst);
+        CAPTURED.store(true, Ordering::SeqCst);
+    }
+}
+
+/// 释放导航键；已报告按下的 Ctrl 要补一条松开通知。
+pub fn release() {
+    CAPTURED.store(false, Ordering::SeqCst);
+    if CONTROL_DOWN.swap(false, Ordering::SeqCst) {
+        emit(HookEvent::Control { down: false });
+    }
+}
+
+/// 显示中的召回输入：可见但已释放时再次唤起应重新捕获，而不是隐藏。
+pub fn toggle_requires_recapture(visible: bool, captured: bool, summon: bool) -> bool {
+    visible && summon && !captured
 }
 
 /// 注入一次带标记的 Alt 按下、松开，等钩子把两次都吞掉后返回 `true`（最多等 `timeout`）。
@@ -253,10 +299,12 @@ fn handle_key(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
         return true;
     }
 
+    let navigation = NAVIGATION.load(Ordering::SeqCst);
+    let captured = navigation && capture_allows_input();
+
     if up && SWALLOWED[usize::from(vk)].swap(false, Ordering::SeqCst) {
         if let Some(entry) = hook_keys::HOOK_KEYS.iter().find(|entry| entry.vk == vk)
             && entry.kind == HookKeyKind::Hold
-            && NAVIGATION.load(Ordering::SeqCst)
         {
             emit_key(entry.key, KeyPhase::Up);
         }
@@ -267,7 +315,7 @@ fn handle_key(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
         return true;
     }
 
-    if !NAVIGATION.load(Ordering::SeqCst) || !(down || up) {
+    if !navigation || !captured || !(down || up) {
         return false;
     }
 
@@ -318,4 +366,115 @@ fn is_control(vk: u16) -> bool {
 fn key_down(vk: VIRTUAL_KEY) -> bool {
     let state = unsafe { GetAsyncKeyState(i32::from(vk.0)) };
     state < 0
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CaptureState {
+    active: bool,
+    navigation: bool,
+    captured: bool,
+    panel: isize,
+    target: isize,
+}
+
+impl CaptureState {
+    #[cfg(test)]
+    const fn shown(panel: isize, target: isize) -> Self {
+        Self {
+            active: true,
+            navigation: true,
+            captured: true,
+            panel,
+            target,
+        }
+    }
+
+    const fn allows(self, foreground: isize) -> bool {
+        self.active
+            && self.navigation
+            && self.captured
+            && (foreground == self.target || foreground == self.panel)
+    }
+
+    const fn should_release(self, foreground: isize) -> bool {
+        self.active
+            && self.navigation
+            && self.captured
+            && foreground != self.target
+            && foreground != self.panel
+    }
+
+    #[cfg(test)]
+    const fn released(self) -> Self {
+        Self {
+            captured: false,
+            ..self
+        }
+    }
+
+    #[cfg(test)]
+    const fn capture(self, target: isize) -> Self {
+        Self {
+            captured: true,
+            target,
+            ..self
+        }
+    }
+}
+
+fn capture_allows_input() -> bool {
+    let state = CaptureState {
+        active: ACTIVE.load(Ordering::SeqCst),
+        navigation: NAVIGATION.load(Ordering::SeqCst),
+        captured: CAPTURED.load(Ordering::SeqCst),
+        panel: PANEL_HWND.load(Ordering::SeqCst),
+        target: TARGET_HWND.load(Ordering::SeqCst),
+    };
+    let foreground = unsafe { GetForegroundWindow() }.0 as isize;
+    if state.should_release(foreground) {
+        release();
+        return false;
+    }
+    state.allows(foreground)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shown_state_captures_only_its_target_or_panel() {
+        let state = CaptureState::shown(10, 20);
+        assert!(state.allows(10));
+        assert!(state.allows(20));
+        assert!(state.should_release(30));
+    }
+
+    #[test]
+    fn outside_click_and_paste_release_keep_foreground_check_open() {
+        let state = CaptureState::shown(10, 20).released();
+        assert!(!state.allows(20));
+        assert!(!state.allows(30));
+    }
+
+    #[test]
+    fn inside_click_and_end_editing_recapture_the_restored_target() {
+        let state = CaptureState::shown(10, 20).released().capture(30);
+        assert!(state.allows(30));
+        assert!(!state.should_release(10));
+    }
+
+    #[test]
+    fn changed_foreground_releases_but_panel_foreground_does_not() {
+        let state = CaptureState::shown(10, 20);
+        assert!(state.should_release(30));
+        assert!(!state.should_release(10));
+    }
+
+    #[test]
+    fn summon_toggle_recaptures_a_released_visible_panel() {
+        assert!(toggle_requires_recapture(true, false, true));
+        assert!(!toggle_requires_recapture(true, true, true));
+        assert!(!toggle_requires_recapture(true, false, false));
+    }
 }

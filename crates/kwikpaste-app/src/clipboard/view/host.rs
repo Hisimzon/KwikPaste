@@ -127,10 +127,13 @@ impl ItemHost for SourceHost {
 
         cx.spawn(async move |cx| {
             let hide = future.await?;
-            if hide && !cx.update(|cx| pin::pinned(cx)) {
+            let keep_visible = cx.update(|cx| pin::pinned(cx));
+            if hide && !keep_visible {
                 cx.update(|cx| {
                     request_panel(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)))
                 });
+            } else if keep_visible {
+                cx.update(|cx| request_panel(cx, PanelCommand::SetInputCapture(false)));
             }
             Ok(())
         })
@@ -140,9 +143,12 @@ impl ItemHost for SourceHost {
         &self,
         id: Arc<str>,
         _: ClipboardFragment,
-        _: &mut App,
+        cx: &mut App,
     ) -> Task<anyhow::Result<()>> {
         log::info!("fragment of {id} not copied: the data is not the host core's");
+        if pin::pinned(cx) {
+            request_panel(cx, PanelCommand::SetInputCapture(false));
+        }
         Task::ready(Ok(()))
     }
 

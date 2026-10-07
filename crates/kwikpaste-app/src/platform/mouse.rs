@@ -27,6 +27,9 @@ pub fn serve(cx: &mut App, commands: Sender<PanelCommand>) {
             let trigger = Trigger::now(TriggerSource::OutsideClick);
             let _ = commands.try_send(PanelCommand::Hide(trigger));
         }
+        MouseEvent::InsideClick(_) => {
+            let _ = commands.try_send(PanelCommand::SetInputCapture(true));
+        }
         MouseEvent::Trigger => {
             let trigger = Trigger::now(TriggerSource::MouseButton);
             let _ = commands.try_send(PanelCommand::Toggle(trigger));

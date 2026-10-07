@@ -175,7 +175,7 @@ impl NativePanel {
 
     /// 面板显示后装上键盘、鼠标钩子：非编辑态的按键、窗外点击隐藏。
     pub fn start_hooks(&self) {
-        if let Err(err) = keyboard::start() {
+        if let Err(err) = keyboard::start_with_target(self.panel.raw(), os::foreground_window()) {
             log::error!("keyboard hook is unavailable: {err}");
         }
         if let Err(err) = mouse::start_outside_click() {
@@ -186,6 +186,20 @@ impl NativePanel {
     pub fn stop_hooks(&self) {
         keyboard::stop();
         mouse::stop_outside_click();
+    }
+
+    /// 唤起输入落在已显示、但按键已还给目标应用的面板上：应拉回按键而不是隐藏。
+    pub fn should_recapture_on_toggle(&self, visible: bool, summon: bool) -> bool {
+        keyboard::toggle_requires_recapture(visible, keyboard::is_captured(), summon)
+    }
+
+    /// 按键交给面板（目标记为当前前台窗口）或还给目标应用。
+    pub fn set_input_capture(&self, captured: bool) {
+        if captured {
+            keyboard::capture(os::foreground_window());
+        } else {
+            keyboard::release();
+        }
     }
 
     /// 显示后外框必须等于写入的矩形；不等（例如 DPI 变化改了尺寸）就记错误并重放一次。
@@ -289,6 +303,7 @@ impl NativePanel {
 
         self.panel.set_activatable(false);
         keyboard::set_navigation(true);
+        keyboard::capture(previous);
         if restore_foreground
             && foreground_is_panel
             && os::is_window(previous)

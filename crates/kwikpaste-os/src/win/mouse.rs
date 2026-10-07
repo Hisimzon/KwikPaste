@@ -2,7 +2,8 @@
 //!
 //! - 窗外点击隐藏：面板可见期间，在本进程窗口以外按下鼠标就通知宿主隐藏面板。面板从不激活，
 //!   系统不会给它失焦通知，只能在全局监听按下。点击本身不吞，照常落到目标窗口。光标下的顶层窗口
-//!   属于本进程（面板、以后的预览和菜单、托盘菜单）时不算窗外。
+//!   属于本进程（面板、以后的预览和菜单、托盘菜单）时不算窗外；非激活的本进程窗口按下会通知宿主
+//!   重新捕获导航键。
 //! - 鼠标按键唤起（设置 `shortcuts.mouseTrigger`，开启期间钩子常驻）：选定按键（中键、后退、前进）
 //!   的单击整个交给快贴，按下和松开都吞掉，松开时通知宿主开合面板；按键原有的单击功能随之停用。
 //!   侧键按住时鼠标移动多远都算单击；中键按住拖出阈值（系统拖动阈值的两倍）就把吞掉的按下补发
@@ -18,18 +19,19 @@ use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 
-use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MIDDLEDOWN, MOUSEINPUT, SendInput,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GA_ROOT, GetAncestor, GetMessageW, GetSystemMetrics, GetWindowThreadProcessId,
-    HHOOK, KillTimer, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW,
-    SM_CXDRAG, SM_CYDRAG, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL,
-    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_TIMER,
-    WM_XBUTTONDOWN, WM_XBUTTONUP, WindowFromPoint,
+    CallNextHookEx, GA_ROOT, GWL_EXSTYLE, GetAncestor, GetForegroundWindow, GetMessageW,
+    GetSystemMetrics, GetWindowLongPtrW, GetWindowThreadProcessId, HHOOK, KillTimer, MSG,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SM_CXDRAG, SM_CYDRAG, SetTimer,
+    SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_TIMER, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    WS_EX_NOACTIVATE, WindowFromPoint,
 };
 
 use super::keyboard::OWN_INPUT_MARKER;
@@ -45,6 +47,8 @@ const XBUTTON2: u16 = 2;
 pub enum MouseEvent {
     /// 在本进程窗口以外按下了鼠标（左、右、中键），坐标是物理像素。
     OutsideClick(Point),
+    /// 在本进程的非激活窗口上按下鼠标；用于重新捕获面板导航键。
+    InsideClick(Point),
     /// 唤起按键单击（松开）：开合面板。
     Trigger,
 }
@@ -208,14 +212,21 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     }
 
     if OUTSIDE_CLICK.load(Ordering::SeqCst)
-        && !crate::drag_out::is_active()
         && matches!(message, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN)
-        && !is_own_window_at(event.pt)
     {
-        emit(MouseEvent::OutsideClick(Point {
+        let point = Point {
             x: event.pt.x,
             y: event.pt.y,
-        }));
+        };
+        if let Some(window) = own_window_at(event.pt) {
+            // 只有不激活的窗口（面板、预览）算面板内按下：按下不改前台，目标仍是原应用。偏好设置这类
+            // 会被激活的窗口、已在前台的系统文件对话框不算，下一次按键按前台变化释放。
+            if is_non_activating(window) && !is_own_foreground() {
+                emit(MouseEvent::InsideClick(point));
+            }
+        } else if !crate::drag_out::is_active() {
+            emit(MouseEvent::OutsideClick(point));
+        }
     }
 
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
@@ -284,7 +295,7 @@ fn judge(
         if button != trigger {
             return Verdict::Pass;
         }
-        if yield_press() || (button == TriggerButton::Middle && is_own_window_at(event.pt)) {
+        if yield_press() || (button == TriggerButton::Middle && own_window_at(event.pt).is_some()) {
             PRESS.set(Press::Idle);
             return Verdict::Pass;
         }
@@ -330,17 +341,30 @@ fn replay_middle_down() {
     }
 }
 
-/// 光标下的顶层窗口是否属于本进程。`WindowFromPoint` 只给调用线程自己的窗口发 `WM_NCHITTEST`，
+/// 光标下属于本进程的顶层窗口。`WindowFromPoint` 只给调用线程自己的窗口发 `WM_NCHITTEST`，
 /// 钩子线程没有窗口，不会被别的应用卡住。
-fn is_own_window_at(point: POINT) -> bool {
-    let window = unsafe { WindowFromPoint(point) };
+fn own_window_at(point: POINT) -> Option<HWND> {
+    own_root(unsafe { WindowFromPoint(point) })
+}
+
+fn is_own_foreground() -> bool {
+    own_root(unsafe { GetForegroundWindow() }).is_some()
+}
+
+fn own_root(window: HWND) -> Option<HWND> {
     if window.is_invalid() {
-        return false;
+        return None;
     }
 
+    let root = unsafe { GetAncestor(window, GA_ROOT) };
     let mut process = 0;
-    unsafe { GetWindowThreadProcessId(GetAncestor(window, GA_ROOT), Some(&mut process)) };
-    process == unsafe { GetCurrentProcessId() }
+    unsafe { GetWindowThreadProcessId(root, Some(&mut process)) };
+    (process == unsafe { GetCurrentProcessId() }).then_some(root)
+}
+
+fn is_non_activating(window: HWND) -> bool {
+    let ex_style = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+    ex_style & WS_EX_NOACTIVATE.0 as isize != 0
 }
 
 #[cfg(test)]

@@ -105,6 +105,8 @@ pub enum PanelCommand {
     },
     /// 点击面板外部时是否隐藏（默认是）。UI 在固定面板、打开系统文件对话框期间关掉它。
     SetHideOnOutsideClick(bool),
+    /// 非激活窗口上的鼠标按下重新捕获或释放导航键。
+    SetInputCapture(bool),
     /// 原生层截获了面板拖动区/缩放边的按下，GPUI 没有机会让弹出菜单自行收起。
     DismissPopup,
 }
@@ -311,18 +313,34 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
     while let Ok(command) = commands.recv().await {
         let visible = parts.native.is_visible();
         let (want_visible, trigger) = match command {
-            PanelCommand::Toggle(trigger) => (!visible, trigger),
+            PanelCommand::Toggle(trigger) => {
+                let summon = matches!(
+                    trigger.source,
+                    TriggerSource::Hotkey | TriggerSource::WinV | TriggerSource::MouseButton
+                );
+                if parts.native.should_recapture_on_toggle(visible, summon) {
+                    parts.native.raise();
+                    parts.native.set_input_capture(true);
+                    continue;
+                }
+                (!visible, trigger)
+            }
             PanelCommand::Show(trigger) => (true, trigger),
             PanelCommand::Hide(trigger)
                 if !hide_on_outside_click
                     && matches!(trigger.source, TriggerSource::OutsideClick) =>
             {
+                parts.native.set_input_capture(false);
                 parts.emit(PanelEvent::PopupDismissed, cx);
                 continue;
             }
             PanelCommand::Hide(trigger) => (false, trigger),
             PanelCommand::SetHideOnOutsideClick(hide) => {
                 hide_on_outside_click = hide;
+                continue;
+            }
+            PanelCommand::SetInputCapture(captured) => {
+                parts.native.set_input_capture(captured);
                 continue;
             }
             PanelCommand::DismissPopup => {
@@ -350,6 +368,8 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
                     end_editing(&parts, cx);
                     if !keep_visible {
                         hide(&parts, Trigger::now(TriggerSource::Paste), cx);
+                    } else {
+                        parts.native.set_input_capture(false);
                     }
                 }
                 let _ = done.try_send(visible);

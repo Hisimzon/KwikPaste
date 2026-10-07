@@ -113,6 +113,13 @@ impl NativePanel {
         self.panel.stop_global_mouse_monitor();
     }
 
+    /// macOS 由 NSPanel 的 key window 分发按键，没有 Windows 的按键捕获。
+    pub fn should_recapture_on_toggle(&self, _visible: bool, _summon: bool) -> bool {
+        false
+    }
+
+    pub fn set_input_capture(&self, _captured: bool) {}
+
     pub fn verify(&self, _: &Placement) {}
 
     pub fn raise(&self) {
