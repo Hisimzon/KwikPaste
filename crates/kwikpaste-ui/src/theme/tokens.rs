@@ -14,10 +14,12 @@ pub enum TextSize {
     Base,
     /// `text-lg`：18 / 28 px。
     Lg,
+    /// `text-2xl`：24 / 32 px，数据概览等处的大数字。
+    TwoXl,
 }
 
 impl TextSize {
-    pub const ALL: [Self; 4] = [Self::Xs, Self::Sm, Self::Base, Self::Lg];
+    pub const ALL: [Self; 5] = [Self::Xs, Self::Sm, Self::Base, Self::Lg, Self::TwoXl];
 
     pub fn font_size(self) -> Rems {
         match self {
@@ -25,6 +27,7 @@ impl TextSize {
             Self::Sm => rems(0.875),
             Self::Base => rems(1.),
             Self::Lg => rems(1.125),
+            Self::TwoXl => rems(1.5),
         }
     }
 
@@ -34,6 +37,7 @@ impl TextSize {
             Self::Sm => rems(1.25),
             Self::Base => rems(1.5),
             Self::Lg => rems(1.75),
+            Self::TwoXl => rems(2.),
         }
     }
 
@@ -44,6 +48,7 @@ impl TextSize {
             Self::Sm => "text-sm",
             Self::Base => "text-base",
             Self::Lg => "text-lg",
+            Self::TwoXl => "text-2xl",
         }
     }
 }

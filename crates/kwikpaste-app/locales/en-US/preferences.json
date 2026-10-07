@@ -140,7 +140,8 @@
         "url": "Links"
       },
       "title": "Content Types",
-      "tooltip": "{{value}} records · {{size}} · {{share}}"
+      "tooltip_one": "{{value}} record · {{size}} · {{share}}",
+      "tooltip_other": "{{value}} records · {{size}} · {{share}}"
     },
     "clear": {
       "ariaLabel": "Clean up {{name}} records",
@@ -174,7 +175,8 @@
     "sources": {
       "others": "{{apps}} more apps with {{value}} records",
       "title": "Source Apps",
-      "tooltip": "{{name}} · {{value}} records · {{size}}",
+      "tooltip_one": "{{name}} · {{value}} record · {{size}}",
+      "tooltip_other": "{{name}} · {{value}} records · {{size}}",
       "unknown": "Unknown source"
     },
     "space": {
@@ -220,7 +222,8 @@
         "empty": "No records yet",
         "label": "History span",
         "since": "Since {{date}}",
-        "value": "{{days}} days"
+        "value_one": "{{days}} day",
+        "value_other": "{{days}} days"
       },
       "total": {
         "label": "Total records",
@@ -233,7 +236,8 @@
       "subtitle": "Last {{count}} days",
       "title": "Daily Additions",
       "today": "Today",
-      "tooltip": "{{date}} · {{value}} records"
+      "tooltip_one": "{{date}} · {{value}} record",
+      "tooltip_other": "{{date}} · {{value}} records"
     }
   },
   "readableExport": {

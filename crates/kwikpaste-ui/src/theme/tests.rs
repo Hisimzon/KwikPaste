@@ -114,7 +114,7 @@ fn type_scale_matches_wind4() {
         .collect();
     assert_eq!(
         pairs,
-        [(12., 16.), (14., 20.), (16., 24.), (18., 28.)].to_vec()
+        [(12., 16.), (14., 20.), (16., 24.), (18., 28.), (24., 32.)].to_vec()
     );
     assert_eq!(radius::MD.0 * 16., palette::RADIUS);
     assert_eq!(control_height::MD.0 * 16., 32.);

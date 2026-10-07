@@ -513,7 +513,7 @@ fn preferences(cx: &mut App) {
                 .await
                 .is_ok();
             let storage_source_cleanup_checked = core
-                .clear_items_in_scope(ClearScope::SourceApp { app_id: None })
+                .clear_items_in_scope(ClearScope::UnknownSource)
                 .await
                 .is_ok();
             let readable_export_checked = core

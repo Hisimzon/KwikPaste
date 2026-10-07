@@ -53,6 +53,22 @@ const ICONS = [
   "lucide:file-image",
   "lucide:file-type",
   "lucide:clipboard-type",
+  // 数据概览：卡片标题、数字卡、内容类别与标记。
+  "lucide:chart-column",
+  "lucide:shapes",
+  "lucide:app-window",
+  "lucide:circle-help",
+  "lucide:folder-tree",
+  "lucide:calendar-plus",
+  "lucide:repeat",
+  "lucide:history",
+  "lucide:link",
+  "lucide:mail",
+  "lucide:star",
+  "lucide:pin",
+  "lucide:notebook-pen",
+  "lucide:shield-alert",
+  "lucide:inbox",
 ];
 
 /** 取图标数据；别名取它指向的图标，带变换的别名不支持。 */

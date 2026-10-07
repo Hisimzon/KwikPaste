@@ -43,6 +43,21 @@ pub enum PrefIcon {
     FileImage,
     FileType,
     ClipboardType,
+    ChartColumn,
+    Shapes,
+    AppWindow,
+    CircleHelp,
+    FolderTree,
+    CalendarPlus,
+    Repeat,
+    History,
+    Link,
+    Mail,
+    Star,
+    Pin,
+    NotebookPen,
+    ShieldAlert,
+    Inbox,
 }
 
 impl PrefIcon {
@@ -83,6 +98,21 @@ impl PrefIcon {
             Self::FileImage => include_str!("icons/lucide-file-image.svg"),
             Self::FileType => include_str!("icons/lucide-file-type.svg"),
             Self::ClipboardType => include_str!("icons/lucide-clipboard-type.svg"),
+            Self::ChartColumn => include_str!("icons/lucide-chart-column.svg"),
+            Self::Shapes => include_str!("icons/lucide-shapes.svg"),
+            Self::AppWindow => include_str!("icons/lucide-app-window.svg"),
+            Self::CircleHelp => include_str!("icons/lucide-circle-help.svg"),
+            Self::FolderTree => include_str!("icons/lucide-folder-tree.svg"),
+            Self::CalendarPlus => include_str!("icons/lucide-calendar-plus.svg"),
+            Self::Repeat => include_str!("icons/lucide-repeat.svg"),
+            Self::History => include_str!("icons/lucide-history.svg"),
+            Self::Link => include_str!("icons/lucide-link.svg"),
+            Self::Mail => include_str!("icons/lucide-mail.svg"),
+            Self::Star => include_str!("icons/lucide-star.svg"),
+            Self::Pin => include_str!("icons/lucide-pin.svg"),
+            Self::NotebookPen => include_str!("icons/lucide-notebook-pen.svg"),
+            Self::ShieldAlert => include_str!("icons/lucide-shield-alert.svg"),
+            Self::Inbox => include_str!("icons/lucide-inbox.svg"),
         }
     }
 

@@ -8,6 +8,7 @@ use chrono::{DateTime, Days, NaiveDate, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
+use crate::app_ids::app_family_key;
 use crate::db::items::{absorb_deleted, CleanupOutcome, DeletedRow};
 use crate::db::models::{ClipboardKind, ClipboardSubKind};
 use crate::error::Result;
@@ -87,10 +88,12 @@ pub enum ClearScope {
     Category {
         category: ContentCategory,
     },
-    /// `app_id = None` 表示没有记录到来源应用的条目。
+    /// 一个来源应用的记录；路径带版本号的应用（见 [`app_family_key`]）各版本的 id 都在这里。
     SourceApp {
-        app_id: Option<String>,
+        app_ids: Vec<String>,
     },
+    /// 没有记录到来源应用的条目。
+    UnknownSource,
 }
 
 /// 全部历史记录的计数汇总。
@@ -120,10 +123,14 @@ pub struct CategoryStat {
 }
 
 /// 单个来源应用的记录数；`app_id = None` 汇总未取到来源应用的记录。
+/// 同一应用的不同安装版本合并成一项，名称与图标取最近采集过的那个版本。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceAppStat {
+    /// 最近采集过的那个版本的 id。
     pub app_id: Option<String>,
+    /// 合并进来的全部版本的 id，清理时整组删除；未知来源为空。
+    pub app_ids: Vec<String>,
     pub name: Option<String>,
     #[serde(skip)]
     pub icon_file: Option<String>,
@@ -207,12 +214,18 @@ pub async fn clear_scope(pool: &SqlitePool, scope: &ClearScope) -> Result<Cleanu
         ClearScope::Category { category } => {
             qb.push(category.sql_condition());
         }
-        ClearScope::SourceApp {
-            app_id: Some(app_id),
-        } => {
-            qb.push("source_app_id = ").push_bind(app_id.clone());
+        ClearScope::SourceApp { app_ids } if app_ids.is_empty() => {
+            qb.push("0");
         }
-        ClearScope::SourceApp { app_id: None } => {
+        ClearScope::SourceApp { app_ids } => {
+            qb.push("source_app_id IN (");
+            let mut ids = qb.separated(", ");
+            for app_id in app_ids {
+                ids.push_bind(app_id.clone());
+            }
+            qb.push(")");
+        }
+        ClearScope::UnknownSource => {
             qb.push("source_app_id IS NULL");
         }
     }
@@ -314,7 +327,7 @@ fn empty_category(category: ContentCategory) -> CategoryStat {
     }
 }
 
-/// 来源应用分组查询的一行：应用 id、名称、图标文件名、条数、内容字节、可清理条数。
+/// 来源应用分组查询的一行：应用 id、名称、图标文件名、条数、内容字节、可清理条数、最近采集时间。
 type SourceAppRow = (
     Option<String>,
     Option<String>,
@@ -322,6 +335,7 @@ type SourceAppRow = (
     i64,
     i64,
     i64,
+    Option<String>,
 );
 
 async fn load_source_apps(pool: &SqlitePool) -> Result<(Vec<SourceAppStat>, OtherSourceApps)> {
@@ -330,34 +344,65 @@ async fn load_source_apps(pool: &SqlitePool) -> Result<(Vec<SourceAppStat>, Othe
                  COUNT(*), \
                  COALESCE(SUM(COALESCE(clipboard_items.size, 0)), 0), \
                  COALESCE(SUM(CASE WHEN clipboard_items.is_favorite = 0 \
-                     AND clipboard_items.is_pinned = 0 THEN 1 ELSE 0 END), 0) \
+                     AND clipboard_items.is_pinned = 0 THEN 1 ELSE 0 END), 0), \
+                 MAX(clipboard_items.created_at) \
              FROM clipboard_items \
              LEFT JOIN clipboard_apps ON clipboard_apps.id = clipboard_items.source_app_id \
-             GROUP BY clipboard_items.source_app_id \
-             ORDER BY COUNT(*) DESC, clipboard_apps.name COLLATE NOCASE ASC",
+             GROUP BY clipboard_items.source_app_id",
     )
     .fetch_all(pool)
     .await
     .context("failed to group clipboard items by source app")?;
 
-    let mut top = Vec::with_capacity(TOP_SOURCE_APPS.min(rows.len()));
+    let mut apps: Vec<(SourceAppStat, Option<String>)> = Vec::with_capacity(rows.len());
+    let mut by_family: HashMap<Option<String>, usize> = HashMap::new();
+    for (app_id, name, icon_file, count, bytes, removable, latest) in rows {
+        let family = app_id.as_deref().map(app_family_key);
+        if let Some(&index) = by_family.get(&family) {
+            let (stat, newest) = &mut apps[index];
+            stat.count += non_negative(count);
+            stat.bytes += non_negative(bytes);
+            stat.removable += non_negative(removable);
+            stat.app_ids.extend(app_id.clone());
+            if latest > *newest {
+                stat.app_id = app_id;
+                stat.name = name;
+                stat.icon_file = icon_file;
+                *newest = latest;
+            }
+            continue;
+        }
+
+        by_family.insert(family, apps.len());
+        let stat = SourceAppStat {
+            app_ids: app_id.iter().cloned().collect(),
+            app_id,
+            name,
+            icon_file,
+            icon_path: None,
+            count: non_negative(count),
+            bytes: non_negative(bytes),
+            removable: non_negative(removable),
+        };
+        apps.push((stat, latest));
+    }
+    apps.sort_by_cached_key(|(stat, _)| {
+        (
+            std::cmp::Reverse(stat.count),
+            stat.name.as_deref().unwrap_or_default().to_lowercase(),
+        )
+    });
+
+    let mut top = Vec::with_capacity(TOP_SOURCE_APPS.min(apps.len()));
     let mut others = OtherSourceApps::default();
-    for (app_id, name, icon_file, count, bytes, removable) in rows {
+    for (stat, _) in apps {
         if top.len() < TOP_SOURCE_APPS {
-            top.push(SourceAppStat {
-                app_id,
-                name,
-                icon_file,
-                icon_path: None,
-                count: non_negative(count),
-                bytes: non_negative(bytes),
-                removable: non_negative(removable),
-            });
+            top.push(stat);
             continue;
         }
 
         others.apps += 1;
-        others.count += non_negative(count);
+        others.count += stat.count;
     }
 
     Ok((top, others))
@@ -636,7 +681,12 @@ mod tests {
         assert_eq!(outcome.removed, 1);
         assert!(outcome.image_files.is_empty());
 
-        let outcome = clear_scope(&pool, &ClearScope::SourceApp { app_id: None })
+        let outcome = clear_scope(&pool, &ClearScope::SourceApp { app_ids: vec![] })
+            .await
+            .unwrap();
+        assert_eq!(outcome.removed, 0);
+
+        let outcome = clear_scope(&pool, &ClearScope::UnknownSource)
             .await
             .unwrap();
         assert_eq!(outcome.removed, 1);
@@ -661,10 +711,71 @@ mod tests {
         ));
 
         let scope: ClearScope =
-            serde_json::from_str(r#"{"type":"sourceApp","appId":"C:\\a.exe"}"#).unwrap();
+            serde_json::from_str(r#"{"type":"sourceApp","appIds":["C:\\a.exe"]}"#).unwrap();
         assert!(
-            matches!(scope, ClearScope::SourceApp { app_id: Some(ref id) } if id == "C:\\a.exe")
+            matches!(scope, ClearScope::SourceApp { ref app_ids } if app_ids == &["C:\\a.exe"])
         );
+
+        let scope: ClearScope = serde_json::from_str(r#"{"type":"unknownSource"}"#).unwrap();
+        assert!(matches!(scope, ClearScope::UnknownSource));
+    }
+
+    #[tokio::test]
+    async fn overview_merges_versions_of_one_app() {
+        let pool = memory_pool().await;
+        let old = "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.930.2377.0_x64__2p2nqsd0c76g0\\app\\ChatGPT.exe";
+        let new = "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.930.3930.0_x64__2p2nqsd0c76g0\\app\\ChatGPT.exe";
+        insert_app(&pool, old, "ChatGPT old").await;
+        insert_app(&pool, new, "ChatGPT").await;
+        insert_app(&pool, "C:\\Windows\\explorer.exe", "explorer").await;
+        for (id, app, created_at) in [
+            ("a", old, "2026-09-01T00:00:00+00:00"),
+            ("b", old, "2026-09-02T00:00:00+00:00"),
+            ("c", new, "2026-09-20T00:00:00+00:00"),
+            (
+                "d",
+                "C:\\Windows\\explorer.exe",
+                "2026-09-21T00:00:00+00:00",
+            ),
+            (
+                "e",
+                "C:\\Windows\\explorer.exe",
+                "2026-09-21T00:00:00+00:00",
+            ),
+        ] {
+            insert(
+                &pool,
+                Row {
+                    source_app_id: Some(app),
+                    created_at,
+                    ..Row::text(id)
+                },
+            )
+            .await;
+        }
+
+        let overview = load_history_overview(&pool, Utc::now(), &Utc)
+            .await
+            .unwrap();
+
+        assert_eq!(overview.source_apps.len(), 2);
+        let chatgpt = &overview.source_apps[0];
+        assert_eq!(chatgpt.count, 3);
+        assert_eq!(chatgpt.app_id.as_deref(), Some(new));
+        assert_eq!(chatgpt.name.as_deref(), Some("ChatGPT"));
+        let mut ids = chatgpt.app_ids.clone();
+        ids.sort();
+        assert_eq!(ids, vec![old.to_owned(), new.to_owned()]);
+
+        let outcome = clear_scope(
+            &pool,
+            &ClearScope::SourceApp {
+                app_ids: chatgpt.app_ids.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.removed, 3);
     }
 
     #[test]
