@@ -27,6 +27,19 @@ pub struct PreviewFileTokens {
     pub missing_opacity: f32,
 }
 
+/// 引导完成状态的图标背景。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OnboardingTokens {
+    pub done_background: Hsla,
+}
+
+/// 偏好设置导航的常态、悬停和选中状态。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreferencesTokens {
+    pub nav_selected: Hsla,
+    pub nav_hover: Hsla,
+}
+
 /// 输入和选择器的表面、边框、聚焦边框及占位符颜色。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InputTokens {
@@ -160,6 +173,8 @@ pub struct ComponentTokens {
     pub icon_button: IconButtonTokens,
     pub quick_action: QuickActionTokens,
     pub preview_file: PreviewFileTokens,
+    pub onboarding: OnboardingTokens,
+    pub preferences: PreferencesTokens,
     pub input: InputTokens,
     pub group_chip: GroupChipTokens,
     pub card_row: CardRowTokens,
@@ -182,6 +197,13 @@ impl ComponentTokens {
             },
             preview_file: PreviewFileTokens {
                 missing_opacity: 0.5,
+            },
+            onboarding: OnboardingTokens {
+                done_background: s.status.success.solid.opacity(0.12),
+            },
+            preferences: PreferencesTokens {
+                nav_selected: s.fill.default,
+                nav_hover: s.fill.subtle,
             },
             input: input(s),
             group_chip: GroupChipTokens {

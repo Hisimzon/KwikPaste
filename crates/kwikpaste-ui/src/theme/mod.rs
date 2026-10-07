@@ -1,10 +1,8 @@
-//! 主题：2.0 的配色与度量（[`palette`]，沿用冻结的 antd token 结构 [`antd`]）、应用使用的语义层
-//! （[`KpTokens`]、[`TextSize`] 等），以及到 gpui-component `Theme` 的映射。
+//! 主题：2.0 的角色色板、语义 token、组件状态 token 与公共度量，以及到 gpui-component `Theme` 的映射。
 //!
 //! 亮 / 暗由 [`ThemePreference`] 决定，默认跟随系统；系统切换明暗时由 [`crate::open_window`]
 //! 装的观察者转发到这里。gpui-component 的主题只有 App 级一份，所有窗口同时切换。
 
-pub mod antd;
 pub mod components;
 mod css_color;
 pub mod fonts;
@@ -19,9 +17,9 @@ use gpui_component::{Theme, ThemeMode};
 use components::ComponentTokens;
 pub use css_color::css_color;
 pub use palette::{MATERIAL_ACRYLIC_ALPHA, MATERIAL_MICA_ALPHA, MaterialKind};
-use semantic::SemanticTokens;
+pub use semantic::SemanticTokens;
 use std::sync::OnceLock;
-pub use tokens::{KpTokens, TextSize, control_height, motion, radius, space};
+pub use tokens::{TextSize, control_height, motion, px_rems, radius, space};
 
 /// 用户的主题设置，对应 1.x `appearance.theme` 的 `auto` / `light` / `dark`。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,7 +73,6 @@ struct ThemeSet {
     palette: &'static palette::Palette,
     semantic: SemanticTokens,
     components: ComponentTokens,
-    compat: KpTokens,
 }
 
 /// 每个色板与明暗组合只构建一次，所有访问器共享同一个驻留集合。
@@ -89,12 +86,10 @@ fn intern(appearance: Appearance) -> &'static ThemeSet {
     slot.get_or_init(|| {
         let semantic = SemanticTokens::from_palette(palette);
         let components = ComponentTokens::from_semantic(&semantic);
-        let compat = KpTokens::from_semantic(&semantic);
         Box::leak(Box::new(ThemeSet {
             palette,
             semantic,
             components,
-            compat,
         }))
     })
 }
@@ -131,11 +126,6 @@ pub(crate) fn init(cx: &mut App) {
     apply(cx);
 }
 
-/// 指定明暗的颜色 token。
-pub fn tokens_for(appearance: Appearance) -> &'static KpTokens {
-    &intern(appearance).compat
-}
-
 /// 指定明暗的角色语义 token，测试和无全局主题的初始化路径使用。
 pub fn semantic_for(appearance: Appearance) -> &'static SemanticTokens {
     &intern(appearance).semantic
@@ -144,12 +134,6 @@ pub fn semantic_for(appearance: Appearance) -> &'static SemanticTokens {
 /// 指定明暗的组件状态 token，测试和无全局主题的初始化路径使用。
 pub fn components_for(appearance: Appearance) -> &'static ComponentTokens {
     &intern(appearance).components
-}
-
-/// 当前生效的颜色 token，应用读颜色的唯一入口。
-pub fn tokens(cx: &App) -> &'static KpTokens {
-    cx.try_global::<KpTheme>()
-        .map_or_else(|| tokens_for(appearance(cx)), |theme| &theme.set.compat)
 }
 
 /// 当前角色语义 token，新界面只通过这个入口读取颜色。

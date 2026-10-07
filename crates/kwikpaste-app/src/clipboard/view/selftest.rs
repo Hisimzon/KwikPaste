@@ -35,7 +35,7 @@ use crate::{
             controller::ListUpdate,
             empty_state::empty_text,
             filter::{ListFilter, Range},
-            item::{ItemKind, ListItem, SubKind},
+            item::{ItemKind, ListItem},
             menu::{MenuAction, menu_groups},
         },
         source::{ClipboardSource, FixtureStore, ListQuery, PreviewTextView},
@@ -1718,6 +1718,17 @@ pub fn stage_demo(panel: Entity<ClipboardPanel>, cx: &mut App) {
                 list.model.loaded_initial() && list.total() > 0
             })
             .await;
+        if !matches!(
+            stage.as_str(),
+            "preview-words" | "preview-text" | "preview-image" | "preview-files" | "preview-html"
+        ) {
+            // 普通演示只展示卡片悬停态，不让延迟预览窗随捕获时序弹出。
+            driver.list.update(cx, |list, cx| {
+                let mut settings = list.settings().clone();
+                settings.clipboard.preview.hover_enabled = false;
+                list.apply_settings(settings, cx);
+            });
+        }
         if matches!(
             stage.as_str(),
             "idle"
@@ -1731,15 +1742,8 @@ pub fn stage_demo(panel: Entity<ClipboardPanel>, cx: &mut App) {
         ) {
             // 截图状态固定在样例中的颜色条目，避免捕获时用户光标位置影响悬停底色。
             driver.list.update(cx, |list, cx| {
-                let id = (0..list.total())
-                    .filter_map(|index| list.model.get(index))
-                    .find(|item| {
-                        item.kind == ItemKind::Text
-                            && item.sub_kind == Some(SubKind::Color)
-                            && !item.is_pinned
-                    })
-                    .map(|item| item.id.clone());
-                list.hovered = id;
+                // 颜色行属于固定示例夹具；直接绑定稳定 id，避免首屏先显示时它尚未解码。
+                list.hovered = Some("sample-color".into());
                 cx.notify();
             });
         }
@@ -1848,19 +1852,23 @@ impl Driver {
                     list.hovered = Some(id.clone());
                     cx.notify();
                 });
+                let saved_scroll = self
+                    .list
+                    .read_with(cx, |list, _| list.state.logical_scroll_top());
                 self.list.update(cx, |list, cx| list.reveal_item(&id, cx));
                 // 面板刚显示后 vsync 线程最多停 1 秒（见报告），等它醒来出帧，卡片位置才记得下。
                 self.pause(cx, 1200).await;
-                if stage == "preview-files" {
-                    self.list
-                        .update(cx, |list, cx| list.reveal_item_now(&id, cx));
-                }
                 self.list.update(cx, |list, cx| {
                     list.open_preview(id, PreviewTrigger::Keyboard, cx);
                 });
                 if stage == "preview-files" {
                     // 文件图标由后台解码后才进入 GPUI 图集；自测等待一帧完整结果，避免首张截图落在 Loading。
                     self.pause(cx, 4000).await;
+                    self.list.update(cx, |list, cx| {
+                        list.state.scroll_to(saved_scroll);
+                        list.stop_reveal(cx);
+                        cx.notify();
+                    });
                 }
             }
             "group-menu" => {
@@ -1868,7 +1876,6 @@ impl Driver {
                 self.pointer_at(cx, 190., 56.);
                 self.right_click(cx, 190., 56.);
                 self.settle_menu(cx, true).await;
-                self.pointer_at(cx, 20., 20.);
                 self.list.update(cx, |list, cx| {
                     list.close_preview(cx);
                 });

@@ -75,7 +75,7 @@ pub struct ItemTokens {
     pub text_hover: Hsla,
     pub text_active: Hsla,
 }
-/// 与组件库色板兼容的少量独立色相。
+/// 组件库仍会用到的少量独立色相。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HueTokens {
     pub blue_1: Hsla,
@@ -135,7 +135,7 @@ fn status(s: palette::StatusPalette) -> StatusTokens {
     }
 }
 impl SemanticTokens {
-    /// 从角色色板建立语义层，不经过旧的兼容视图。
+    /// 从角色色板建立语义层。
     pub fn from_palette(p: &Palette) -> Self {
         Self {
             surface: SurfaceTokens {

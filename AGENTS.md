@@ -186,6 +186,7 @@ cargo fmt
 - release 是 `panic = "abort"`：任何线程上的 panic 都会终止进程。后台线程与任务同样不得 panic，可失败的路径一律返回 `Result`。
 - 不引入 gpui-wry 或任何 WebView。
 - 仓库根目录不放 `.cargo/config.toml`（会泄漏进 `src-tauri` 的构建）；release profile 不开 `debug-assertions`。
+- 原生界面的颜色只能从 `theme::semantic(cx)` / `theme::components(cx)` 读取；新增颜色或状态必须先进入 palette 或组件 token，不能在视图里写内联色调。
 - 自测入口必须同时满足 `--selftest-*` 参数和 `KWIKPASTE_SELFTEST=1`。
 
 ## 外部文档

@@ -381,7 +381,7 @@ impl Onboarding {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let steps = self.steps();
         let position = self.current_position();
         // 每一步一段，走过的和当前步是主色，其余是填充色。
@@ -391,9 +391,9 @@ impl Onboarding {
                 .h(px(4.))
                 .rounded_full()
                 .bg(if index <= position {
-                    tokens.primary
+                    tokens.accent.solid
                 } else {
-                    tokens.fill_secondary
+                    tokens.fill.default
                 })
         });
         div()
@@ -414,12 +414,12 @@ impl Onboarding {
                             .items_center()
                             .gap(space(1.5))
                             .kp_text(TextSize::Sm)
-                            .child(div().text_color(tokens.tertiary).child(format!(
+                            .child(div().text_color(tokens.text.muted).child(format!(
                                 "{}/{}",
                                 position + 1,
                                 steps.len()
                             )))
-                            .child(div().text_color(tokens.secondary).child(i18n::t(
+                            .child(div().text_color(tokens.text.secondary).child(i18n::t(
                                 match self.current_kind() {
                                     WELCOME => "onboarding:steps.welcome",
                                     PERMISSIONS => "onboarding:steps.permissions",
@@ -470,7 +470,7 @@ impl Onboarding {
             .child(
                 div()
                     .kp_text(TextSize::Sm)
-                    .text_color(theme::tokens(cx).secondary)
+                    .text_color(theme::semantic(cx).text.secondary)
                     .child(self.wrap(description, self.content_width, cx)),
             )
     }
@@ -481,7 +481,7 @@ impl Onboarding {
             .flex()
             .flex_col()
             .rounded(theme::radius::LG)
-            .bg(theme::tokens(cx).fill_tertiary)
+            .bg(theme::semantic(cx).fill.subtle)
             .overflow_hidden()
     }
 
@@ -493,7 +493,7 @@ impl Onboarding {
         action: Button,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         self.surface_card(cx)
             .flex_row()
             .items_center()
@@ -512,7 +512,7 @@ impl Onboarding {
                     .child(
                         div()
                             .kp_text(TextSize::Sm)
-                            .text_color(tokens.tertiary)
+                            .text_color(tokens.text.muted)
                             .child(description),
                     ),
             )
@@ -527,7 +527,7 @@ impl Onboarding {
         description: SharedString,
         cx: &mut Context<Self>,
     ) -> Div {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         // 三列网格（列间距 12 px）里的一格，再减去左右各 16 px 的内边距。
         let text_width = (self.content_width - space(6.).to_pixels(self.rem)) / 3.
             - space(8.).to_pixels(self.rem);
@@ -543,8 +543,8 @@ impl Onboarding {
                     .justify_center()
                     .size(rems(2.25))
                     .rounded(theme::radius::MD)
-                    .bg(tokens.primary_bg)
-                    .child(icon.view(rems(1.25), tokens.primary)),
+                    .bg(tokens.accent.subtle)
+                    .child(icon.view(rems(1.25), tokens.accent.solid)),
             )
             .child(
                 div()
@@ -560,7 +560,7 @@ impl Onboarding {
                     .child(
                         div()
                             .kp_text(TextSize::Sm)
-                            .text_color(tokens.tertiary)
+                            .text_color(tokens.text.muted)
                             .child(description),
                     ),
             )
@@ -584,7 +584,7 @@ impl Onboarding {
             .child(
                 div()
                     .kp_text(TextSize::Sm)
-                    .text_color(theme::tokens(cx).secondary)
+                    .text_color(theme::semantic(cx).text.secondary)
                     .child(i18n::t("onboarding:welcome.description")),
             )
             .child(
@@ -743,7 +743,7 @@ impl Onboarding {
                     _ => continue,
                 };
             // 与偏好窗的设置行同一个样子：只在行与行之间画细分隔线。
-            let tokens = theme::tokens(cx);
+            let tokens = theme::semantic(cx);
             rows.push(
                 view::row_frame(rows.is_empty(), tokens)
                     .child(view::row_label(
@@ -771,7 +771,7 @@ impl Onboarding {
     /// 忽略应用：浅灰列表块里每行一个应用，勾选框、应用图标和应用名，下面一行灰色小字是路径。
     fn render_ignore_apps(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let entity = cx.entity().downgrade();
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let rows = self.source_apps.iter().enumerate().map(|(index, app)| {
             let id = app.id.clone();
             let name = if app.name.is_empty() {
@@ -792,7 +792,9 @@ impl Onboarding {
                 .gap(space(0.5))
                 .px(space(4.))
                 .py(space(2.5))
-                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .when(index > 0, |row| {
+                    row.border_t_1().border_color(tokens.border.divider)
+                })
                 .child(
                     div()
                         .flex()
@@ -842,7 +844,7 @@ impl Onboarding {
                     div()
                         .pl(space(13.))
                         .kp_text(TextSize::Xs)
-                        .text_color(tokens.tertiary)
+                        .text_color(tokens.text.muted)
                         .truncate()
                         .child(path)
                 }))
@@ -903,8 +905,11 @@ impl Onboarding {
                     .justify_center()
                     .size(rems(3.5))
                     .rounded_full()
-                    .bg(theme::tokens(cx).success.opacity(0.12))
-                    .child(PrefIcon::CheckCircle.view(rems(1.75), theme::tokens(cx).success)),
+                    .bg(theme::components(cx).onboarding.done_background)
+                    .child(
+                        PrefIcon::CheckCircle
+                            .view(rems(1.75), theme::semantic(cx).status.success.solid),
+                    ),
             )
             .child(
                 div()
@@ -916,7 +921,7 @@ impl Onboarding {
             .child(
                 div()
                     .kp_text(TextSize::Sm)
-                    .text_color(theme::tokens(cx).secondary)
+                    .text_color(theme::semantic(cx).text.secondary)
                     .child(i18n::t("onboarding:done.description")),
             )
             .child(
@@ -973,9 +978,9 @@ impl Render for Onboarding {
             .overflow_hidden()
             .bg(crate::platform::material::shell_surface(
                 cx,
-                theme::tokens(cx).bg_container,
+                theme::semantic(cx).surface.panel,
             ))
-            .text_color(theme::tokens(cx).text)
+            .text_color(theme::semantic(cx).text.primary)
             .child(self.render_header(cx))
             .child(
                 ScrollArea::new("onboarding-scroll", &self.scroll)
@@ -998,7 +1003,7 @@ impl Render for Onboarding {
                     .px(space(6.))
                     .py(space(4.))
                     .border_t_1()
-                    .border_color(theme::tokens(cx).split)
+                    .border_color(theme::semantic(cx).border.divider)
                     // 第一步没有“上一步”，留一个占位让右侧按钮仍靠右。
                     .child(if is_first {
                         div().into_any_element()

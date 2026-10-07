@@ -1,4 +1,4 @@
-//! 按钮与图标按钮。颜色来自冻结的 antd token（经 gpui-component 主题映射），高度走 rem。
+//! 按钮与图标按钮。颜色来自主题语义与组件 token，高度走 rem。
 
 use std::rc::Rc;
 

@@ -8,7 +8,7 @@ use gpui_component::ThemeColor;
 
 use super::{palette::Palette, semantic::SemanticTokens};
 
-/// 按 antd token 生成 gpui-component 的颜色表。
+/// 按当前 palette 与语义 token 生成 gpui-component 的颜色表。
 pub fn theme_color(p: &Palette, s: &SemanticTokens) -> ThemeColor {
     let c = |color: Hsla| -> Hsla { color };
     let transparent = transparent_black();

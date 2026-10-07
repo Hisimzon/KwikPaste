@@ -18,7 +18,7 @@ use kwikpaste_ui::{
     Button, Checkbox, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
     NumberInputState, ScrollArea, Select, SelectOption, SelectState, Switch, TextInput,
     form_dialog,
-    theme::{self, KpTokens, TextSize, space},
+    theme::{self, SemanticTokens, TextSize, space},
     toast::{self, Toast},
 };
 use serde_json::json;
@@ -879,14 +879,14 @@ impl Preferences {
     }
 
     fn render_capture_order(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let order = self.settings.clipboard.capture.ordered_kinds();
         let rows = order.iter().enumerate().map(|(index, kind)| {
             let kind = *kind;
             let label = capture_kind_label(kind);
             let icon = capture_kind_icon(kind);
             sortable::row(format!("capture-order-{index}"), tokens)
-                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .when(index > 0, |row| row.border_t_1().border_color(tokens.border.divider))
                 .on_drag(CaptureOrderDrag { kind }, |dragged, _, _, cx| {
                     cx.new(|_| *dragged)
                 })
@@ -900,9 +900,9 @@ impl Preferences {
                     div()
                         .flex_none()
                         .cursor_grab()
-                        .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary)),
+                        .child(PrefIcon::Grip.view(rems(1.), tokens.text.faint)),
                 )
-                .child(icon.view(rems(1.), tokens.secondary))
+                .child(icon.view(rems(1.), tokens.text.secondary))
                 .child(div().flex_1().kp_text(TextSize::Sm).child(label))
                 .into_any_element()
         });
@@ -911,7 +911,7 @@ impl Preferences {
 
     fn render_retention_rules(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let entity = cx.entity().downgrade();
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let rules = &self.settings.clipboard.history.rules;
         let rows = rules.iter().enumerate().map(|(index, rule)| {
             let rule_id = rule.id.clone();
@@ -927,7 +927,9 @@ impl Preferences {
                 .gap(space(2.))
                 .px(space(3.))
                 .py(space(2.))
-                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .when(index > 0, |row| {
+                    row.border_t_1().border_color(tokens.border.divider)
+                })
                 .child(
                     Switch::new(format!("retention-enabled-{index}"))
                         .small()
@@ -962,7 +964,7 @@ impl Preferences {
                         .child(
                             div()
                                 .kp_text(TextSize::Xs)
-                                .text_color(tokens.tertiary)
+                                .text_color(tokens.text.muted)
                                 .child(if enabled {
                                     keep
                                 } else {
@@ -1066,7 +1068,7 @@ impl Preferences {
                     .px(space(3.))
                     .py(space(3.))
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.tertiary)
+                    .text_color(tokens.text.muted)
                     .child(i18n::t("preferences:retentionRules.empty"))
                     .into_any_element()
             } else {
@@ -1089,7 +1091,7 @@ impl Preferences {
 
     /// 数据概览：存储空间、四个数字、每日新增、内容构成与来源应用、分组与标记，都是浅灰圆角块。
     fn render_storage_overview(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let Some(overview) = self.storage_overview.as_ref() else {
             let entity = cx.entity().downgrade();
             return div()
@@ -1098,7 +1100,7 @@ impl Preferences {
                 .gap(space(2.))
                 .px(space(1.))
                 .kp_text(TextSize::Sm)
-                .text_color(tokens.tertiary)
+                .text_color(tokens.text.muted)
                 .child(i18n::t("preferences:storage.loading"))
                 .child(
                     Button::new("storage-refresh", i18n::t("preferences:overview.refresh"))
@@ -1136,22 +1138,22 @@ impl Preferences {
             (
                 i18n::t("preferences:overview.space.segments.database"),
                 overview.breakdown.database_bytes,
-                tokens.primary,
+                tokens.accent.solid,
             ),
             (
                 i18n::t("preferences:overview.space.segments.image"),
                 overview.breakdown.image_bytes,
-                tokens.cyan_6,
+                tokens.hues.cyan_6,
             ),
             (
                 i18n::t("preferences:overview.space.segments.icon"),
                 overview.breakdown.icon_bytes,
-                tokens.warning,
+                tokens.status.warning.solid,
             ),
             (
                 i18n::t("preferences:overview.space.segments.other"),
                 overview.breakdown.other_bytes,
-                tokens.quaternary,
+                tokens.text.faint,
             ),
         ];
         let bar = div()
@@ -1160,7 +1162,7 @@ impl Preferences {
             .w_full()
             .overflow_hidden()
             .rounded_full()
-            .bg(tokens.fill_secondary)
+            .bg(tokens.fill.default)
             .children(segments.iter().map(|(_, bytes, color)| {
                 div()
                     .h_full()
@@ -1183,7 +1185,7 @@ impl Preferences {
                             .items_center()
                             .gap(space(1.5))
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.secondary)
+                            .text_color(tokens.text.secondary)
                             .child(div().flex_none().size(px(8.)).rounded_full().bg(*color))
                             .child(div().truncate().child(name.clone())),
                     )
@@ -1221,7 +1223,7 @@ impl Preferences {
                                     .child(
                                         div()
                                             .kp_text(TextSize::Xs)
-                                            .text_color(tokens.tertiary)
+                                            .text_color(tokens.text.muted)
                                             .child(format!("/ {}", format_bytes(limit))),
                                     ),
                             ),
@@ -1759,7 +1761,7 @@ impl Preferences {
     /// 全部用与其他页相同的扁平设置行。
     fn render_lan_sync(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let entity = cx.entity().downgrade();
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let lan = &self.settings.sync.lan;
         let enabled = Switch::new("lan-sync-enabled")
             .accessibility_label(i18n::t(
@@ -1855,23 +1857,23 @@ impl Preferences {
 
         // 没开、正在启动或启动失败时，下面只有一句状态说明。
         let status = if !lan.enabled {
-            Some((i18n::t("preferences:lanSync.off"), tokens.tertiary))
+            Some((i18n::t("preferences:lanSync.off"), tokens.text.muted))
         } else {
             match self.lan_state.as_ref() {
-                None => Some((i18n::t("preferences:lanSync.starting"), tokens.tertiary)),
+                None => Some((i18n::t("preferences:lanSync.starting"), tokens.text.muted)),
                 Some(state) if !state.running => Some((
                     state
                         .error
                         .clone()
                         .map_or_else(|| i18n::t("preferences:lanSync.starting"), Into::into),
-                    tokens.error,
+                    tokens.status.danger.solid,
                 )),
                 Some(_) => None,
             }
         };
         let Some(state) = self.lan_state.as_ref().filter(|_| status.is_none()) else {
             let (text, color) =
-                status.unwrap_or_else(|| (i18n::t("preferences:lanSync.off"), tokens.tertiary));
+                status.unwrap_or_else(|| (i18n::t("preferences:lanSync.off"), tokens.text.muted));
             return page
                 .child(section_block(
                     Some(i18n::t("preferences:lanSync.devices.title")),
@@ -1991,7 +1993,7 @@ impl Preferences {
             paired.push(note_row(
                 true,
                 i18n::t("preferences:lanSync.devices.empty"),
-                tokens.tertiary,
+                tokens.text.muted,
                 tokens,
             ));
         }
@@ -2028,7 +2030,7 @@ impl Preferences {
             nearby.push(note_row(
                 true,
                 i18n::t("preferences:lanSync.nearby.empty"),
-                tokens.tertiary,
+                tokens.text.muted,
                 tokens,
             ));
         }
@@ -2073,7 +2075,7 @@ impl Preferences {
             div()
                 .px(space(1.))
                 .kp_text(TextSize::Xs)
-                .text_color(tokens.tertiary)
+                .text_color(tokens.text.muted)
                 .child(i18n::t("preferences:lanSync.firewallHint")),
         );
         page.into_any_element()
@@ -2470,12 +2472,13 @@ impl Preferences {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
+        let component_tokens = theme::components(cx).preferences;
         let mut nav = div().flex().flex_col().gap(space(0.5));
         let mut group = None;
         for tab in tabs {
             if group != Some(tab.group) && group.is_some() {
-                nav = nav.child(div().h(px(1.)).my(space(1.)).bg(tokens.split));
+                nav = nav.child(div().h(px(1.)).my(space(1.)).bg(tokens.border.divider));
             }
             group = Some(tab.group);
             let selected = tab.id == self.tab;
@@ -2496,19 +2499,20 @@ impl Preferences {
                     .kp_text(TextSize::Sm)
                     // 选中项是中性灰底（同剪贴板面板的当前项），悬停浅一档。
                     .when(selected, |item| {
-                        item.bg(tokens.fill_secondary).text_color(tokens.text)
+                        item.bg(component_tokens.nav_selected)
+                            .text_color(tokens.text.primary)
                     })
                     .when(!selected, |item| {
-                        item.text_color(tokens.secondary)
-                            .hover(|style| style.bg(tokens.fill_tertiary))
+                        item.text_color(tokens.text.secondary)
+                            .hover(|style| style.bg(component_tokens.nav_hover))
                     })
                     .cursor_pointer()
                     .child(tab.icon.view(
                         rems(1.),
                         if selected {
-                            tokens.text
+                            tokens.text.primary
                         } else {
-                            tokens.secondary
+                            tokens.text.secondary
                         },
                     ))
                     .child(title)
@@ -2537,7 +2541,7 @@ impl Preferences {
             .flex_col()
             .gap(space(1.5))
             .rounded(theme::radius::LG)
-            .bg(tokens.fill_tertiary)
+            .bg(tokens.fill.subtle)
             .p(space(3.))
             .child(
                 div()
@@ -2545,13 +2549,13 @@ impl Preferences {
                     .items_center()
                     .gap(space(1.))
                     .kp_text(TextSize::Sm)
-                    .child(PrefIcon::HardDrive.view(rems(1.), tokens.success))
+                    .child(PrefIcon::HardDrive.view(rems(1.), tokens.status.success.solid))
                     .child(i18n::t("preferences:storage.title")),
             )
             .child(
                 div()
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.tertiary)
+                    .text_color(tokens.text.muted)
                     .child(format!(
                         "{} / {}",
                         text::format_bytes(usage),
@@ -2563,13 +2567,13 @@ impl Preferences {
                     .h(px(4.))
                     .w_full()
                     .rounded(theme::radius::SM)
-                    .bg(tokens.fill_secondary)
+                    .bg(tokens.fill.default)
                     .child(
                         div()
                             .h_full()
                             .rounded(theme::radius::SM)
                             .w(rems(10. * ratio.max(0.12)))
-                            .bg(tokens.success),
+                            .bg(tokens.status.success.solid),
                     ),
             );
         div()
@@ -2580,7 +2584,7 @@ impl Preferences {
             .w(rems(14.))
             .p(space(3.))
             .border_r_1()
-            .border_color(tokens.split)
+            .border_color(tokens.border.divider)
             .bg(crate::platform::material::chrome_surface(cx))
             .child(
                 div()
@@ -2602,7 +2606,7 @@ impl Preferences {
                                     .child(
                                         div()
                                             .kp_text(TextSize::Xs)
-                                            .text_color(tokens.secondary)
+                                            .text_color(tokens.text.secondary)
                                             .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
                                     ),
                             ),
@@ -2729,7 +2733,7 @@ impl Preferences {
             Control::Action { .. } | Control::CleanupStatus => self.render_action(setting.id, cx),
             _ => self.render_action(setting.id, cx),
         };
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let full_width = setting.control.full_width();
         row_frame(first, tokens)
             .when(full_width, |row| {
@@ -2755,7 +2759,7 @@ impl Preferences {
         let tab = tabs.into_iter().find(|tab| tab.id == self.tab);
         let sections = tab.map(|tab| tab.sections).unwrap_or_default();
         let show_titles = sections.len() > 1;
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         // 分组不套卡片框：小号灰字标题下面直接是扁平的设置行，只在行与行之间画细分隔线。
         // 搜索时没有匹配项的分组整个不显示，一项都没有时给一句空状态。
         let mut blocks: Vec<gpui::AnyElement> = Vec::new();
@@ -2804,13 +2808,13 @@ impl Preferences {
                             .items_center()
                             .justify_center()
                             .rounded_full()
-                            .bg(tokens.fill_tertiary)
-                            .child(PrefIcon::Search.view(rems(1.5), tokens.tertiary)),
+                            .bg(tokens.fill.subtle)
+                            .child(PrefIcon::Search.view(rems(1.5), tokens.text.muted)),
                     )
                     .child(
                         div()
                             .kp_text(TextSize::Sm)
-                            .text_color(tokens.tertiary)
+                            .text_color(tokens.text.muted)
                             .child(i18n::t("preferences:search.empty")),
                     )
                     .into_any_element(),
@@ -2832,7 +2836,7 @@ impl Preferences {
             .h_full()
             .bg(crate::platform::material::shell_surface(
                 cx,
-                tokens.bg_container,
+                tokens.surface.panel,
             ))
             .child(
                 div()
@@ -2843,7 +2847,7 @@ impl Preferences {
                     .h(rems(4.))
                     .px(space(7.))
                     .border_b_1()
-                    .border_color(tokens.split)
+                    .border_color(tokens.border.divider)
                     .child(
                         div()
                             .kp_text(TextSize::Lg)
@@ -3000,7 +3004,7 @@ impl Render for ReadableExportDialog {
                     }),
             )
         });
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let preview_summary = self.preview.as_ref().map(|preview| {
             let summary = i18n::t_args(
                 "preferences:readableExport.summary",
@@ -3016,13 +3020,13 @@ impl Render for ReadableExportDialog {
                 .gap(space(1.))
                 .p(space(3.))
                 .rounded(theme::radius::MD)
-                .bg(tokens.fill_quaternary)
+                .bg(tokens.fill.faint)
                 .kp_text(TextSize::Xs)
-                .text_color(tokens.secondary)
+                .text_color(tokens.text.secondary)
                 .child(
                     div()
                         .kp_text(TextSize::Sm)
-                        .text_color(tokens.text)
+                        .text_color(tokens.text.primary)
                         .child(summary),
                 )
                 .child(i18n::t_args(
@@ -3038,7 +3042,7 @@ impl Render for ReadableExportDialog {
                 .when(preview.item_count == 0, |element| {
                     element.child(
                         div()
-                            .text_color(tokens.warning)
+                            .text_color(tokens.status.warning.solid)
                             .child(i18n::t("preferences:readableExport.empty")),
                     )
                 })
@@ -3050,7 +3054,7 @@ impl Render for ReadableExportDialog {
             .gap(space(0.5))
             .p(space(0.5))
             .rounded(theme::radius::MD)
-            .bg(tokens.fill_tertiary)
+            .bg(tokens.fill.subtle)
             .children([false, true].map(|selected_mode| {
                 let label = if selected_mode {
                     i18n::t("preferences:readableExport.selectedGroups")
@@ -3204,7 +3208,7 @@ impl Render for ReadableExportDialog {
                         element.child(
                             div()
                                 .kp_text(TextSize::Xs)
-                                .text_color(tokens.warning)
+                                .text_color(tokens.status.warning.solid)
                                 .child(i18n::t("preferences:readableExport.retryPreview")),
                         )
                     })
@@ -3220,10 +3224,10 @@ fn segment(
     selected: bool,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
-    let tokens = theme::tokens(cx);
+    let tokens = theme::semantic(cx);
     let thumb = match theme::appearance(cx) {
-        theme::Appearance::Light => tokens.bg_container,
-        theme::Appearance::Dark => tokens.fill_secondary,
+        theme::Appearance::Light => tokens.surface.panel,
+        theme::Appearance::Dark => tokens.fill.default,
     };
 
     div()
@@ -3241,12 +3245,12 @@ fn segment(
             if selected {
                 segment
                     .bg(thumb)
-                    .shadow(tokens.shadow_card.to_vec())
-                    .text_color(tokens.text)
+                    .shadow(tokens.shadow.card.to_vec())
+                    .text_color(tokens.text.primary)
             } else {
                 segment
-                    .text_color(tokens.secondary)
-                    .hover(|style| style.text_color(tokens.text))
+                    .text_color(tokens.text.secondary)
+                    .hover(|style| style.text_color(tokens.text.primary))
             }
         })
         .child(label)
@@ -3271,7 +3275,7 @@ impl SourceAppsDialog {
 /// 显示来源应用缓存图标；抽取失败时用固定尺寸的中性窗口图标占位。
 pub(super) fn app_icon(
     path: Option<&str>,
-    tokens: &kwikpaste_ui::theme::KpTokens,
+    tokens: &kwikpaste_ui::theme::SemanticTokens,
 ) -> gpui::AnyElement {
     match path.filter(|path| !path.is_empty()) {
         Some(path) => img(PathBuf::from(path))
@@ -3287,7 +3291,7 @@ pub(super) fn app_icon(
             .child(
                 Icon::new(IconName::Monitor)
                     .size(rems(1.1))
-                    .color(tokens.tertiary),
+                    .color(tokens.text.muted),
             )
             .into_any_element(),
     }
@@ -3315,7 +3319,7 @@ struct ActionVisibilityPreview {
 
 impl Render for ActionVisibilityPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let (icon, label) = clipboard::view::quick_action_glyph(self.action);
         div()
             .flex()
@@ -3325,11 +3329,11 @@ impl Render for ActionVisibilityPreview {
             .py(space(1.5))
             .rounded(theme::radius::SM)
             .border_1()
-            .border_color(tokens.primary)
-            .bg(tokens.bg_elevated)
+            .border_color(tokens.accent.solid)
+            .bg(tokens.surface.raised)
             .kp_text(TextSize::Sm)
-            .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary))
-            .child(Icon::new(icon).size(rems(1.)).color(tokens.secondary))
+            .child(PrefIcon::Grip.view(rems(1.), tokens.text.faint))
+            .child(Icon::new(icon).size(rems(1.)).color(tokens.text.secondary))
             .child(label)
     }
 }
@@ -3369,7 +3373,7 @@ impl ActionVisibilityDialog {
 
 impl Render for ActionVisibilityDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let rows = self.order.iter().enumerate().map(|(index, action)| {
             let action = *action;
             let checked = self.enabled.contains(&action);
@@ -3378,7 +3382,7 @@ impl Render for ActionVisibilityDialog {
             let checkbox_entity = entity.clone();
             let label_entity = entity.clone();
             sortable::row(format!("visible-action-{index}"), tokens)
-                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .when(index > 0, |row| row.border_t_1().border_color(tokens.border.divider))
                 .on_drag(ActionVisibilityDrag { action }, |dragged, _, _, cx| {
                     cx.new(|_| ActionVisibilityPreview {
                         action: dragged.action,
@@ -3396,7 +3400,7 @@ impl Render for ActionVisibilityDialog {
                     div()
                         .flex_none()
                         .cursor_grab()
-                        .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary)),
+                        .child(PrefIcon::Grip.view(rems(1.), tokens.text.faint)),
                 )
                 .child(
                     Checkbox::new(format!("visible-action-check-{index}"))
@@ -3408,7 +3412,7 @@ impl Render for ActionVisibilityDialog {
                             }
                         }),
                 )
-                .child(Icon::new(icon).size(rems(1.)).color(tokens.secondary))
+                .child(Icon::new(icon).size(rems(1.)).color(tokens.text.secondary))
                 .child(
                     div()
                         .id(format!("visible-action-label-{index}"))
@@ -3437,7 +3441,7 @@ impl Render for ActionVisibilityDialog {
 impl Render for SourceAppsDialog {
     /// 浅灰列表块里每行一个应用：勾选框、应用图标和应用名，下面一行灰色小字是路径（同引导的忽略应用）。
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let rows = self.apps.iter().enumerate().map(|(index, app)| {
             let id = app.id.clone();
             let checked = self.selected.contains(&id);
@@ -3454,7 +3458,9 @@ impl Render for SourceAppsDialog {
                 .gap(space(0.5))
                 .px(space(3.))
                 .py(space(2.))
-                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .when(index > 0, |row| {
+                    row.border_t_1().border_color(tokens.border.divider)
+                })
                 .child(
                     div()
                         .flex()
@@ -3500,7 +3506,7 @@ impl Render for SourceAppsDialog {
                     div()
                         .pl(space(13.))
                         .kp_text(TextSize::Xs)
-                        .text_color(tokens.tertiary)
+                        .text_color(tokens.text.muted)
                         .truncate()
                         .child(path)
                 }))
@@ -3599,7 +3605,7 @@ struct CaptureOrderDrag {
 
 impl Render for CaptureOrderDrag {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         div()
             .flex()
             .items_center()
@@ -3608,11 +3614,11 @@ impl Render for CaptureOrderDrag {
             .py(space(1.5))
             .rounded(theme::radius::SM)
             .border_1()
-            .border_color(tokens.primary)
-            .bg(tokens.bg_elevated)
+            .border_color(tokens.accent.solid)
+            .bg(tokens.surface.raised)
             .kp_text(TextSize::Sm)
-            .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary))
-            .child(capture_kind_icon(self.kind).view(rems(1.), tokens.primary))
+            .child(PrefIcon::Grip.view(rems(1.), tokens.text.faint))
+            .child(capture_kind_icon(self.kind).view(rems(1.), tokens.accent.solid))
             .child(capture_kind_label(self.kind))
     }
 }
@@ -3696,7 +3702,7 @@ impl RetentionRuleEditor {
 
 impl Render for RetentionRuleEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let entity = cx.entity().downgrade();
         let keep_forever = self
             .keep_unit
@@ -3806,7 +3812,7 @@ impl Render for RetentionRuleEditor {
                     .child(
                         div()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.tertiary)
+                            .text_color(tokens.text.muted)
                             .child(i18n::t("preferences:retentionRules.form.keepHint")),
                     )
                     .into_any_element(),
@@ -3819,7 +3825,7 @@ impl Render for RetentionRuleEditor {
 fn form_field(
     label: gpui::SharedString,
     control: gpui::AnyElement,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::Div {
     div()
         .flex()
@@ -3828,7 +3834,7 @@ fn form_field(
         .child(
             div()
                 .kp_text(TextSize::Sm)
-                .text_color(tokens.secondary)
+                .text_color(tokens.text.secondary)
                 .child(label),
         )
         .child(control)
@@ -3928,35 +3934,35 @@ fn retention_rule_summary(rule: &RetentionRule) -> gpui::SharedString {
 
 /// 设置行里的列表块（采集顺序、清理规则）：嵌在分组卡片里，用内容底色加细边框和小圆角，
 /// 行间细分隔线由调用方画。
-fn list_tile(tokens: &KpTokens) -> gpui::Div {
+fn list_tile(tokens: &SemanticTokens) -> gpui::Div {
     div()
         .flex()
         .flex_col()
         .w_full()
         .overflow_hidden()
         .rounded(theme::radius::LG)
-        .bg(tokens.bg_container)
+        .bg(tokens.surface.panel)
         .border_1()
-        .border_color(tokens.border_secondary)
+        .border_color(tokens.border.subtle)
 }
 
 /// 设置分组的卡片：很淡的填充底、细边框、小圆角，行与行之间的分隔线留在卡片内。
-fn section_card(tokens: &KpTokens) -> gpui::Div {
+fn section_card(tokens: &SemanticTokens) -> gpui::Div {
     div()
         .flex()
         .flex_col()
         .px(space(3.))
         .rounded(theme::radius::LG)
-        .bg(tokens.fill_quaternary)
+        .bg(tokens.fill.faint)
         .border_1()
-        .border_color(tokens.border_secondary)
+        .border_color(tokens.border.subtle)
 }
 
 /// 设置行右侧下拉框、数字框、文本框的统一宽度，右边缘和左边缘都对齐。
 const CONTROL_WIDTH: Rems = Rems(12.);
 
 /// 设置行的外框：左右内边距、最小高度一致，行与行之间一条细分隔线（分组第一行上方不画）。
-pub(super) fn row_frame(first: bool, tokens: &KpTokens) -> gpui::Div {
+pub(super) fn row_frame(first: bool, tokens: &SemanticTokens) -> gpui::Div {
     div()
         .flex()
         .items_center()
@@ -3965,14 +3971,16 @@ pub(super) fn row_frame(first: bool, tokens: &KpTokens) -> gpui::Div {
         .px(space(1.))
         .py(space(2.5))
         .min_h(rems(3.5))
-        .when(!first, |row| row.border_t_1().border_color(tokens.split))
+        .when(!first, |row| {
+            row.border_t_1().border_color(tokens.border.divider)
+        })
 }
 
 /// 设置行左侧的标题和说明。
 pub(super) fn row_label(
     title: gpui::SharedString,
     description: gpui::SharedString,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::Div {
     div()
         .flex()
@@ -3985,7 +3993,7 @@ pub(super) fn row_label(
             label.child(
                 div()
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.tertiary)
+                    .text_color(tokens.text.muted)
                     .child(description),
             )
         })
@@ -3997,7 +4005,7 @@ fn setting_row(
     title: gpui::SharedString,
     description: gpui::SharedString,
     control: Option<gpui::AnyElement>,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::AnyElement {
     row_frame(first, tokens)
         .child(row_label(title, description, tokens))
@@ -4017,7 +4025,7 @@ fn note_row(
     first: bool,
     text: gpui::SharedString,
     color: Hsla,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::AnyElement {
     row_frame(first, tokens)
         .child(
@@ -4036,7 +4044,7 @@ fn section_block(
     title: Option<gpui::SharedString>,
     action: Option<gpui::AnyElement>,
     rows: Vec<gpui::AnyElement>,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::AnyElement {
     div()
         .flex()
@@ -4054,7 +4062,7 @@ fn section_block(
                     .child(
                         div()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.tertiary)
+                            .text_color(tokens.text.muted)
                             .child(title),
                     )
                     .children(action),
@@ -4111,13 +4119,13 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 /// 数据概览的圆角块：浅灰底，没有描边和阴影。
-fn overview_tile(tokens: &KpTokens) -> gpui::Div {
+fn overview_tile(tokens: &SemanticTokens) -> gpui::Div {
     div()
         .flex()
         .flex_col()
         .min_w_0()
         .rounded(theme::radius::LG)
-        .bg(tokens.fill_quaternary)
+        .bg(tokens.fill.faint)
         .p(space(4.))
 }
 
@@ -4125,7 +4133,7 @@ fn overview_tile(tokens: &KpTokens) -> gpui::Div {
 fn overview_tile_title(
     title: gpui::SharedString,
     subtitle: Option<gpui::SharedString>,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::Div {
     div()
         .flex()
@@ -4134,13 +4142,13 @@ fn overview_tile_title(
         .child(
             div()
                 .kp_text(TextSize::Sm)
-                .text_color(tokens.secondary)
+                .text_color(tokens.text.secondary)
                 .child(title),
         )
         .children(subtitle.map(|subtitle| {
             div()
                 .kp_text(TextSize::Xs)
-                .text_color(tokens.tertiary)
+                .text_color(tokens.text.muted)
                 .child(subtitle)
         }))
 }
@@ -4150,7 +4158,7 @@ fn overview_count_row(
     name: gpui::SharedString,
     count: u64,
     action: Option<gpui::AnyElement>,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::AnyElement {
     div()
         .flex()
@@ -4162,7 +4170,7 @@ fn overview_count_row(
         .child(
             div()
                 .flex_none()
-                .text_color(tokens.secondary)
+                .text_color(tokens.text.secondary)
                 .child(count.to_string()),
         )
         .children(action)
@@ -4173,21 +4181,21 @@ fn overview_metric_card(
     title: gpui::SharedString,
     value: String,
     hint: gpui::SharedString,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::AnyElement {
     overview_tile(tokens)
         .gap(space(1.))
         .child(
             div()
                 .kp_text(TextSize::Xs)
-                .text_color(tokens.secondary)
+                .text_color(tokens.text.secondary)
                 .child(title),
         )
         .child(div().kp_text(TextSize::Lg).truncate().child(value))
         .child(
             div()
                 .kp_text(TextSize::Xs)
-                .text_color(tokens.tertiary)
+                .text_color(tokens.text.muted)
                 .truncate()
                 .child(hint),
         )
@@ -4197,7 +4205,7 @@ fn overview_metric_card(
 fn overview_detail_card(
     title: gpui::SharedString,
     rows: Vec<gpui::AnyElement>,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::AnyElement {
     let empty = rows.is_empty();
     overview_tile(tokens)
@@ -4207,7 +4215,7 @@ fn overview_detail_card(
             card.child(
                 div()
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.tertiary)
+                    .text_color(tokens.text.muted)
                     .child(i18n::t("preferences:overview.tiles.span.empty")),
             )
         })
@@ -4217,7 +4225,7 @@ fn overview_detail_card(
 
 fn overview_trend_card(
     daily: &[kwikpaste_core::db::overview::DailyCount],
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::AnyElement {
     let max_count = daily.iter().map(|day| day.count).max().unwrap_or(1).max(1);
     let recent = daily.iter().rev().take(7).collect::<Vec<_>>();
@@ -4236,15 +4244,15 @@ fn overview_trend_card(
                     .h(rems((ratio * 5.0).max(0.25)))
                     .rounded(theme::radius::XS)
                     .bg(if day.count == 0 {
-                        tokens.fill_secondary
+                        tokens.fill.default
                     } else {
-                        tokens.primary
+                        tokens.accent.solid
                     }),
             )
             .child(
                 div()
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.tertiary)
+                    .text_color(tokens.text.muted)
                     .child(day.date.format("%m/%d").to_string()),
             )
             .into_any_element()
@@ -4273,7 +4281,7 @@ fn overview_trend_card(
 fn overview_groups_card(
     groups: &[kwikpaste_core::db::overview::GroupStat],
     totals: &kwikpaste_core::db::overview::ItemTotals,
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
 ) -> gpui::AnyElement {
     let rows = [
         (
@@ -4309,13 +4317,13 @@ fn overview_groups_card(
                     .h(px(6.))
                     .overflow_hidden()
                     .rounded_full()
-                    .bg(tokens.fill_secondary)
+                    .bg(tokens.fill.default)
                     .child(
                         div()
                             .h_full()
                             .rounded_full()
                             .w(gpui::relative(ratio))
-                            .bg(tokens.primary),
+                            .bg(tokens.accent.solid),
                     ),
             )
             .child(
@@ -4323,7 +4331,7 @@ fn overview_groups_card(
                     .w(rems(2.5))
                     .flex_none()
                     .text_right()
-                    .text_color(tokens.secondary)
+                    .text_color(tokens.text.secondary)
                     .child(count.to_string()),
             )
             .into_any_element()
@@ -4350,7 +4358,7 @@ fn overview_groups_card(
                         column.child(
                             div()
                                 .kp_text(TextSize::Xs)
-                                .text_color(tokens.tertiary)
+                                .text_color(tokens.text.muted)
                                 .child(i18n::t("preferences:overview.tiles.span.empty")),
                         )
                     })
@@ -4374,9 +4382,9 @@ impl Render for Preferences {
             .overflow_hidden()
             .when(
                 !crate::platform::material::current(cx).is_translucent(),
-                |root| root.bg(theme::tokens(cx).bg_layout),
+                |root| root.bg(theme::semantic(cx).surface.window),
             )
-            .text_color(theme::tokens(cx).text)
+            .text_color(theme::semantic(cx).text.primary)
             .child(self.render_sidebar(cx))
             .child(self.render_page(cx))
     }

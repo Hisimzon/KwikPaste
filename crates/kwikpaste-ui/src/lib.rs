@@ -1,6 +1,6 @@
 //! gpui-component 的隔离层：应用只经这个 crate 使用 gpui-component，它的破坏性升级只改这里。
 //!
-//! - [`theme`]：冻结的 antd token、语义层 [`theme::KpTokens`]、字号与度量，明暗切换与文本缩放。
+//! - [`theme`]：角色色板、语义与组件状态 token、字号与度量，明暗切换与文本缩放。
 //! - 组件：[`Button`]、[`Checkbox`]、[`Switch`]、[`Input`]、[`TextArea`]、[`Select`]、[`Tag`]、[`Kbd`]、
 //!   [`KeyHint`]、Tooltip（[`TooltipExt`]）、[`ListScrollbar`]、[`toast`]、[`confirm()`]、[`form_dialog`]、
 //!   下拉与右键菜单（[`MenuTrigger`]、[`context_menu`]）。

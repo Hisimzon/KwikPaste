@@ -3,9 +3,11 @@
 // 1. Only crates/kwikpaste-ui may use gpui-component / gpui-base. crates/kwikpaste-app must not depend on
 //    them in its Cargo.toml nor name `gpui_component` / `gpui_base` in its sources; it goes through the
 //    wrappers that kwikpaste-ui exports.
-// 2. Colors come from the frozen antd tokens (`KpTokens`). Outside crates/kwikpaste-ui/src/theme/ no UI
+// 2. Colors come from the theme palette through semantic/component tokens. Outside crates/kwikpaste-ui/src/theme/ no UI
 //    source may build a color from literals: `rgb(..)`, `rgba(..)`, `hsla(..)`, `hsl(..)`, `Rgba { .. }`,
 //    `Hsla { .. }` or gpui's named colors (`black()`, `white()`, `red()`, ...).
+//    Nonzero literal color opacity is also forbidden outside the theme; `.opacity(0.)` remains valid
+//    for hiding an element, while all visual tints belong in a component token.
 //
 // Comment lines are skipped, so prose may mention the forbidden names.
 //
@@ -27,6 +29,7 @@ const COLOR_LITERALS = [
   /(?<!->\s*)\b(Rgba|Hsla)\s*\{/,
   /\b(black|white|red|green|blue|yellow|transparent_black|transparent_white|opaque_grey)\s*\(\s*\)/,
 ];
+const NONZERO_COLOR_OPACITY = /\.opacity\(\s*0\.[1-9]\d*/;
 
 const say = (line) => {
   process.stdout.write(`${line}\n`);
@@ -100,7 +103,12 @@ for (const path of [...rustFiles(`${APP}/src`), ...rustFiles(`${UI}/src`)]) {
   for (const [number, line] of codeLines(path)) {
     if (COLOR_LITERALS.some((pattern) => pattern.test(line))) {
       problems.push(
-        `${path}:${number}: color literal outside ${THEME_DIR} (take it from KpTokens)`,
+        `${path}:${number}: color literal outside ${THEME_DIR} (take it from theme semantic/component tokens)`,
+      );
+    }
+    if (NONZERO_COLOR_OPACITY.test(line)) {
+      problems.push(
+        `${path}:${number}: nonzero color opacity outside ${THEME_DIR} (move the tint into a component token)`,
       );
     }
   }

@@ -150,7 +150,7 @@ pub struct Materials {
     pub chrome_acrylic_alpha: f32,
 }
 
-/// 一个完整的明暗原始色板；语义层和兼容层都只能从这里读取。
+/// 一个完整的明暗原始色板；语义层和组件 token 都只能从这里读取。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub surfaces: SurfacePalette,

@@ -190,7 +190,7 @@ impl Gallery {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let preference = theme::preference(cx);
         let language = i18n::language();
         let scale = theme::text_scale(cx);
@@ -218,9 +218,9 @@ impl Gallery {
             .gap(space(6.))
             .px(space(6.))
             .py(space(4.))
-            .bg(tokens.bg_container)
+            .bg(tokens.surface.panel)
             .border_b_1()
-            .border_color(tokens.border_secondary)
+            .border_color(tokens.border.subtle)
             .child(
                 column()
                     .gap(space(1.))
@@ -233,7 +233,7 @@ impl Gallery {
                     .child(
                         div()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.secondary)
+                            .text_color(tokens.text.secondary)
                             .child(t("gallery:subtitle")),
                     ),
             )
@@ -290,7 +290,59 @@ impl Gallery {
     }
 
     fn render_palette(&self, cx: &App) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
+        let swatches = [
+            ("text", "colorText", tokens.text.primary),
+            ("secondary", "colorTextSecondary", tokens.text.secondary),
+            ("tertiary", "colorTextTertiary", tokens.text.muted),
+            ("quaternary", "colorTextQuaternary", tokens.text.faint),
+            ("disabled", "colorBorderDisabled", tokens.border_disabled),
+            ("description", "colorTextDescription", tokens.text.muted),
+            (
+                "placeholder",
+                "colorTextPlaceholder",
+                tokens.text.placeholder,
+            ),
+            ("light_solid", "colorTextLightSolid", tokens.text.on_accent),
+            ("primary", "colorPrimary", tokens.accent.solid),
+            ("primary_hover", "colorPrimaryHover", tokens.accent.hover),
+            ("primary_active", "colorPrimaryActive", tokens.accent.active),
+            ("primary_bg", "colorPrimaryBg", tokens.accent.subtle),
+            ("primary_border", "colorPrimaryBorder", tokens.accent.border),
+            ("success", "colorSuccess", tokens.status.success.solid),
+            ("warning", "colorWarning", tokens.status.warning.solid),
+            (
+                "warning_hover",
+                "colorWarningHover",
+                tokens.status.warning.hover,
+            ),
+            ("error", "colorError", tokens.status.danger.solid),
+            ("error_hover", "colorErrorHover", tokens.status.danger.hover),
+            ("info", "colorInfo", tokens.status.info.solid),
+            ("bg_container", "colorBgContainer", tokens.surface.panel),
+            ("bg_elevated", "colorBgElevated", tokens.surface.raised),
+            ("bg_layout", "colorBgLayout", tokens.surface.window),
+            ("bg_spotlight", "colorBgSpotlight", tokens.surface.spotlight),
+            ("mask", "colorBgMask", tokens.surface.mask),
+            ("text_hover", "colorBgTextHover", tokens.item.text_hover),
+            ("white", "colorWhite", tokens.white),
+            ("border", "colorBorder", tokens.border.default),
+            (
+                "border_secondary",
+                "colorBorderSecondary",
+                tokens.border.subtle,
+            ),
+            ("split", "colorSplit", tokens.border.divider),
+            ("fill", "colorFill", tokens.fill.strong),
+            ("fill_secondary", "colorFillSecondary", tokens.fill.default),
+            ("fill_tertiary", "colorFillTertiary", tokens.fill.subtle),
+            ("fill_quaternary", "colorFillQuaternary", tokens.fill.faint),
+            ("blue_1", "blue-1", tokens.hues.blue_1),
+            ("blue_6", "blue-6", tokens.hues.blue_6),
+            ("cyan_6", "cyan-6", tokens.hues.cyan_6),
+            ("orange_6", "orange-6", tokens.hues.orange_6),
+            ("gold_3", "gold-3", tokens.hues.gold_3),
+        ];
 
         section(
             t("gallery:sections.palette"),
@@ -303,7 +355,7 @@ impl Gallery {
                 .flex_wrap()
                 .gap_x(space(3.))
                 .gap_y(space(2.))
-                .children(tokens.swatches().into_iter().map(|(name, antd, color)| {
+                .children(swatches.into_iter().map(|(name, source, color)| {
                     row()
                         .w(rems(10.5))
                         .gap(space(2.))
@@ -313,7 +365,7 @@ impl Gallery {
                                 .size(space(7.))
                                 .rounded(radius::MD)
                                 .border_1()
-                                .border_color(tokens.border_secondary)
+                                .border_color(tokens.border.subtle)
                                 .bg(color),
                         )
                         .child(
@@ -324,9 +376,9 @@ impl Gallery {
                                     div()
                                         .kp_text(TextSize::Xs)
                                         .kp_mono()
-                                        .text_color(tokens.tertiary)
+                                        .text_color(tokens.text.muted)
                                         .truncate()
-                                        .child(antd),
+                                        .child(source),
                                 ),
                         )
                 })),
@@ -335,15 +387,15 @@ impl Gallery {
     }
 
     fn render_typography(&self, cx: &App) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let levels = [
-            ("text", tokens.text),
-            ("secondary", tokens.secondary),
-            ("tertiary", tokens.tertiary),
-            ("quaternary", tokens.quaternary),
-            ("disabled", tokens.disabled),
-            ("primary", tokens.primary),
-            ("error", tokens.error),
+            ("text", tokens.text.primary),
+            ("secondary", tokens.text.secondary),
+            ("tertiary", tokens.text.muted),
+            ("quaternary", tokens.text.faint),
+            ("disabled", tokens.border_disabled),
+            ("primary", tokens.accent.solid),
+            ("error", tokens.status.danger.solid),
         ];
 
         section(t("gallery:sections.typography"), None, cx)
@@ -356,7 +408,7 @@ impl Gallery {
                         div()
                             .kp_text(TextSize::Xs)
                             .kp_mono()
-                            .text_color(tokens.tertiary)
+                            .text_color(tokens.text.muted)
                             .child(format!("{} · {font}/{line}px", size.class_name())),
                     )
                     .child(
@@ -547,7 +599,7 @@ impl Gallery {
                     .child(
                         div()
                             .kp_text(TextSize::Xs)
-                            .text_color(theme::tokens(cx).tertiary)
+                            .text_color(theme::semantic(cx).text.muted)
                             .child(format!("\u{201c}{search_value}\u{201d}")),
                     ),
                 cx,
@@ -561,7 +613,7 @@ impl Gallery {
                         div()
                             .kp_text(TextSize::Xs)
                             .kp_mono()
-                            .text_color(theme::tokens(cx).tertiary)
+                            .text_color(theme::semantic(cx).text.muted)
                             .child(sort_value),
                     ),
                 cx,
@@ -603,7 +655,7 @@ impl Gallery {
     }
 
     fn render_feedback(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let answer = match self.last_answer {
             None => t("gallery:feedback.none"),
             Some(true) => t("gallery:feedback.confirmed"),
@@ -652,7 +704,7 @@ impl Gallery {
                     .child(
                         div()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.secondary)
+                            .text_color(tokens.text.secondary)
                             .child(t_args(
                                 "gallery:feedback.result",
                                 &[("result", answer.as_ref())],
@@ -666,10 +718,10 @@ impl Gallery {
                     .px(rems(1.5))
                     .py(rems(1.25))
                     .rounded(radius::LG)
-                    .bg(tokens.bg_elevated)
+                    .bg(tokens.surface.raised)
                     .border_1()
-                    .border_color(tokens.border_secondary)
-                    .shadow(tokens.shadow_elevated.to_vec())
+                    .border_color(tokens.border.subtle)
+                    .shadow(tokens.shadow.overlay.to_vec())
                     .child(ConfirmBody::preview(confirm_spec(true), cx)),
             )
             .into_any_element()
@@ -678,13 +730,13 @@ impl Gallery {
 
 impl Render for Gallery {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
 
         column()
             .size_full()
             .bg(crate::platform::material::shell_surface(
                 cx,
-                tokens.bg_layout,
+                tokens.surface.window,
             ))
             .child(self.render_header(cx))
             .child(
@@ -736,15 +788,15 @@ fn wrap_row() -> Div {
 
 /// 一个分区卡片：标题、可选说明，内容由调用方追加。
 fn section(title: SharedString, description: Option<SharedString>, cx: &App) -> Div {
-    let tokens = theme::tokens(cx);
+    let tokens = theme::semantic(cx);
 
     column()
         .gap(space(3.))
         .p(space(4.))
         .rounded(radius::LG)
-        .bg(tokens.bg_container)
+        .bg(tokens.surface.panel)
         .border_1()
-        .border_color(tokens.border_secondary)
+        .border_color(tokens.border.subtle)
         .child(
             div()
                 .kp_text(TextSize::Base)
@@ -755,7 +807,7 @@ fn section(title: SharedString, description: Option<SharedString>, cx: &App) -> 
             section.child(
                 div()
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.tertiary)
+                    .text_color(tokens.text.muted)
                     .child(description),
             )
         })
@@ -764,7 +816,7 @@ fn section(title: SharedString, description: Option<SharedString>, cx: &App) -> 
 fn caption(text: SharedString, cx: &App) -> Div {
     div()
         .kp_text(TextSize::Xs)
-        .text_color(theme::tokens(cx).secondary)
+        .text_color(theme::semantic(cx).text.secondary)
         .child(text)
 }
 

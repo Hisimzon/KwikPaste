@@ -42,7 +42,7 @@ use kwikpaste_core::{
 };
 use kwikpaste_ui::{
     ListScrollbar, TextAreaInput, close_dialog, context_menu, dismiss_menu,
-    theme::{self, space},
+    theme::{self, px_rems},
 };
 
 use super::{
@@ -732,7 +732,7 @@ impl ClipboardList {
             .mean()
             .filter(|_| self.heights.count >= MIN_HEIGHT_SAMPLES)
             .unwrap_or_else(|| {
-                space((self.layout.placeholder_height()) / 4.)
+                px_rems(self.layout.placeholder_height())
                     .to_pixels(self.rem)
                     .as_f32()
             })
@@ -837,15 +837,10 @@ impl ClipboardList {
         }
     }
 
-    /// 自测在布局稳定后立即把目标行定位到视口，避免平滑 reveal 的小数像素差异。
-    pub(super) fn reveal_item_now(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Some(index) = self.model.index_of(id)
-            && index >= self.rows.pinned
-        {
-            self.motion.reveal = None;
-            self.state.scroll_to_reveal_item(index - self.rows.pinned);
-            cx.notify();
-        }
+    /// 停止自测中的平滑定位并恢复捕获前的滚动位置。
+    pub(super) fn stop_reveal(&mut self, cx: &mut Context<Self>) {
+        self.motion.reveal = None;
+        cx.notify();
     }
 
     /// ↑ / ↓（主窗口的按键转来）。
@@ -976,7 +971,7 @@ impl ClipboardList {
 
     pub(super) fn on_wheel_lines(&mut self, lines: f32, cx: &mut Context<Self>) {
         self.close_pointer_preview(cx);
-        let distance = -lines * space((WHEEL_LINE) / 4.).to_pixels(self.rem).as_f32();
+        let distance = -lines * px_rems(WHEEL_LINE).to_pixels(self.rem).as_f32();
         if self.reduce_motion(cx) {
             self.state.scroll_by(px(distance));
         } else {
@@ -1011,7 +1006,7 @@ impl ClipboardList {
 
         let scale = window.scale_factor();
         let to_physical = |value: f32| {
-            (space((value) / 4.).to_pixels(self.rem).as_f32() * scale)
+            (px_rems(value).to_pixels(self.rem).as_f32() * scale)
                 .round()
                 .max(1.) as u32
         };
