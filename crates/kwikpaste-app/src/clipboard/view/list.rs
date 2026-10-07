@@ -246,6 +246,8 @@ pub struct ClipboardList {
     previewing: previewing::Previewing,
     /// 卡片上按下左键后拖动多远算拖出（平台层的拖出接口）。
     drag: DragTracker,
+    /// 左键按下的卡片；拖出开始时清掉，点击时据此执行单击动作。
+    armed_click: Option<Arc<str>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -319,6 +321,7 @@ impl ClipboardList {
             pointer: Pointer::Moved,
             previewing: previewing::Previewing::default(),
             drag: DragTracker::default(),
+            armed_click: None,
             _subscriptions: subscriptions,
         };
         let request = list.model.reset_and_reload();
@@ -898,7 +901,8 @@ impl ClipboardList {
     }
 
     /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选；否则左键选中、记下拖出的
-    /// 起点（1.x 卡片 `draggable={!selecting}`），并按“单击粘贴 / 复制”设置执行，中键按中键设置执行。
+    /// 起点（1.x 卡片 `draggable={!selecting}`）并预备单击动作（见 [`Self::click_card`]），中键按
+    /// 中键设置执行。
     fn press_card(
         &mut self,
         item: Arc<ListItem>,
@@ -924,11 +928,7 @@ impl ClipboardList {
             MouseButton::Left => {
                 self.controller.select(&id);
                 self.drag.press(id.to_string(), event.position);
-                match self.settings.clipboard.content.auto_paste {
-                    AutoPaste::SingleClickPaste => self.paste_item(id, false, cx),
-                    AutoPaste::SingleClickCopy => self.copy(id, false, None, window, cx),
-                    _ => {}
-                }
+                self.armed_click = Some(id);
             }
             MouseButton::Middle => {
                 let action = self.settings.clipboard.content.middle_click;
@@ -950,21 +950,28 @@ impl ClipboardList {
         cx.notify();
     }
 
-    /// 双击卡片（1.x `handleCardDoubleClick`）：按“双击粘贴 / 复制”设置执行；多选时不响应。
-    fn double_click_card(
+    /// 点击卡片（左键在同一张卡片上按下又松开）：“单击粘贴 / 复制”在没有拖出时执行，“双击粘贴 /
+    /// 复制”在第二次点击时执行（1.x `handleCardDoubleClick`）；多选时不响应。单击动作不放在按下时：
+    /// 那样拖出图片会先粘贴一次、投放时再贴一次。
+    fn click_card(
         &mut self,
         item: Arc<ListItem>,
+        click_count: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let armed = self.armed_click.take().is_some_and(|id| id == item.id);
         if self.selection.active() {
             return;
         }
 
         let id = item.id.clone();
+        let double = click_count >= 2;
         match self.settings.clipboard.content.auto_paste {
-            AutoPaste::DoubleClickPaste => self.paste_item(id, false, cx),
-            AutoPaste::DoubleClickCopy => self.copy(id, false, None, window, cx),
+            AutoPaste::SingleClickPaste if armed => self.paste_item(id, false, cx),
+            AutoPaste::SingleClickCopy if armed => self.copy(id, false, None, window, cx),
+            AutoPaste::DoubleClickPaste if double => self.paste_item(id, false, cx),
+            AutoPaste::DoubleClickCopy if double => self.copy(id, false, None, window, cx),
             _ => {}
         }
     }
@@ -1162,9 +1169,7 @@ impl ClipboardList {
                 )
             })
             .on_click(cx.listener(move |list, event: &ClickEvent, window, cx| {
-                if event.click_count() >= 2 {
-                    list.double_click_card(clicked.clone(), window, cx);
-                }
+                list.click_card(clicked.clone(), event.click_count(), window, cx);
             }))
             .into_any_element()
     }
@@ -1319,6 +1324,7 @@ impl Render for ClipboardList {
                 list.pointer_moved(event.position, cx);
                 // 在卡片上按住左键拖过系统阈值：拖出这条记录。
                 if let Some(id) = list.drag.moved(event, window) {
+                    list.armed_click = None;
                     list.drag_out(Arc::from(id), window, cx);
                 }
             }))

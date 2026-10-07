@@ -5,7 +5,8 @@
 //! 2. 列表根元素 `on_mouse_move` 里 [`DragTracker::moved`]：左键按住且移动超过系统拖拽阈值时返回
 //!    条目 id，接着调用 [`start_item`]；`on_mouse_up` 里 [`DragTracker::release`]。不要用 GPUI 的
 //!    `on_drag`（会留下 `cx.active_drag`）。
-//! 3. 卡片保持「单击选中、双击 / Enter 粘贴」，不要把粘贴绑在单击上。
+//! 3. 卡片的单击粘贴 / 复制放在点击（松开且没有拖出）时执行，不要放在按下时：否则一次拖出会先
+//!    粘贴、松开时再投放一次。
 //! 4. [`start_item`] 返回的任务在拖出结束后给出 [`DragReport`]（`Dropped` / `Refused` / `Cancelled`）；
 //!    失败（文件已不存在等）是带用户文案的错误，可以直接做 toast。UI 不需要做清理：结束后这里已经
 //!    给面板派发了一条窗口外坐标的左键 `MouseUp`，清掉所有元素残留的按下状态（否则右键抬起会凑成
