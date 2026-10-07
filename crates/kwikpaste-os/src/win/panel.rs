@@ -14,7 +14,7 @@
 //! 子类过程只改消息、记日志和计数，不调用 GPUI。显示、隐藏、移动一律带 `SWP_NOACTIVATE`，
 //! 并且要在 GPUI 的 `App` 借用之外调用：这些调用会同步触发 GPUI 的窗口过程，借用中它只能丢掉回调。
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::io;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -137,6 +137,7 @@ impl Panel {
             min_logical_size: options.min_logical_size,
             text_scale: Cell::new(options.text_scale),
             drag: Cell::new(None),
+            drag_sink: RefCell::new(None),
         }));
         let installed =
             unsafe { SetWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID, state as usize) };
@@ -163,6 +164,16 @@ impl Panel {
         if !data.is_invalid() {
             let state = unsafe { &*(data.0 as *const SubclassState) };
             state.text_scale.set(text_scale);
+        }
+    }
+
+    /// 在拖动区或缩放边按下时的通知（[`Panel::install`] 之后设置）。这类按下由子类过程自己处理，
+    /// GPUI 收不到，弹出菜单靠它收起。回调在窗口过程里同步执行，只能投递消息，不能碰 GPUI。
+    pub fn set_drag_sink(&self, sink: Box<dyn Fn()>) {
+        let data = unsafe { GetPropW(self.hwnd, STATE_PROPERTY) };
+        if !data.is_invalid() {
+            let state = unsafe { &*(data.0 as *const SubclassState) };
+            state.drag_sink.replace(Some(sink));
         }
     }
 
@@ -281,6 +292,7 @@ struct SubclassState {
     /// 系统「文本大小」系数，由宿主经 [`Panel::set_text_scale`] 更新。
     text_scale: Cell<f64>,
     drag: Cell<Option<Drag>>,
+    drag_sink: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 /// 自己的移动 / 缩放循环：按下时的命中区、光标和外框。
@@ -316,6 +328,9 @@ unsafe extern "system" fn subclass_proc(
             }
         }
         WM_NCLBUTTONDOWN if is_drag_hit(wparam.0 as u32) => {
+            if let Some(sink) = state.drag_sink.borrow().as_ref() {
+                sink();
+            }
             begin_drag(hwnd, state, wparam.0 as u32);
             return LRESULT(0);
         }

@@ -11,12 +11,13 @@ use kwikpaste_core::{
     ops::{PreferenceDirectory, StorageOverview},
     readable_export::{ExportFormat, ExportOptions, ExportPreview},
     settings::Settings,
-    settings::{CaptureKind, RetentionRule, RetentionUnit},
+    settings::{CaptureKind, Content, ItemAction, RetentionRule, RetentionUnit},
     sync::{LanDeviceView, LanNearbyView, LanSyncState, PairTarget},
 };
 use kwikpaste_ui::{
-    Button, Checkbox, DialogSpec, IconName, Input, KpStyled as _, NumberInput, NumberInputState,
-    ScrollArea, Select, SelectOption, SelectState, Switch, TextInput, form_dialog,
+    Button, Checkbox, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
+    NumberInputState, ScrollArea, Select, SelectOption, SelectState, Switch, TextInput,
+    form_dialog,
     theme::{self, KpTokens, TextSize, space},
     toast::{self, Toast},
 };
@@ -26,7 +27,7 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use super::{
     icons::PrefIcon,
     schema::{self, Control, PermissionKind, Setting, TabId},
-    text, values,
+    sortable, text, values,
 };
 use crate::{
     clipboard::{self, source::ClipboardSource, view::group_dialogs},
@@ -724,6 +725,7 @@ impl Preferences {
                     "localData.logDirectory" => this.open_directory(PreferenceDirectory::Logs, cx),
                     "organizing.customGroups" => this.open_group_manager(window, cx),
                     "source.excludedApps" => this.open_source_apps(window, cx),
+                    "actions.visible" => this.open_action_visibility(window, cx),
                     "control.reopenOnboarding" => {
                         if let Err(error) = super::open_onboarding(cx) {
                             log::warn!("could not reopen onboarding: {error:#}");
@@ -738,18 +740,6 @@ impl Preferences {
             .into_any_element()
     }
 
-    fn move_capture_kind(&mut self, kind: CaptureKind, offset: i8, cx: &mut Context<Self>) {
-        let order = self.settings.clipboard.capture.ordered_kinds();
-        let Some(index) = order.iter().position(|candidate| *candidate == kind) else {
-            return;
-        };
-        let target = index as i8 + offset;
-        if target < 0 || target as usize >= order.len() {
-            return;
-        }
-        self.move_capture_kind_to(kind, target as usize, cx);
-    }
-
     /// 拖放按当前位置移入目标行；未启用的格式仍保留在顺序中，避免开关采集类型时丢失位置。
     fn move_capture_kind_to(&mut self, kind: CaptureKind, target: usize, cx: &mut Context<Self>) {
         let mut order = self.settings.clipboard.capture.ordered_kinds();
@@ -760,6 +750,53 @@ impl Preferences {
             Ok(value) => self.update("clipboard.capture.order", value, cx),
             Err(error) => log::warn!("could not encode capture order: {error}"),
         }
+    }
+
+    /// 打开快捷动作排序弹框；所有改动先留在弹框实体里，保存时一次写回顺序和勾选项。
+    fn open_action_visibility(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let order =
+            normalized_item_action_order(&self.settings.clipboard.content.item_action_order);
+        let dialog = cx.new(|_| ActionVisibilityDialog {
+            enabled: self.settings.clipboard.content.item_actions.clone(),
+            order,
+        });
+        let content = dialog.clone();
+        let answer = form_dialog(
+            DialogSpec::new(i18n::t("preferences:schema.settings.actions.visible.title"))
+                .ok_text(i18n::t("common:actions.save"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            move |_, _| content.clone().into_any_element(),
+            window,
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if !answer.await.unwrap_or(false) {
+                    return;
+                }
+                let Some((order, enabled)) = cx
+                    .update(|_, cx| {
+                        let dialog = dialog.read(cx);
+                        let enabled = dialog
+                            .order
+                            .iter()
+                            .copied()
+                            .filter(|action| dialog.enabled.contains(action))
+                            .collect::<Vec<_>>();
+                        (dialog.order.clone(), enabled)
+                    })
+                    .ok()
+                else {
+                    return;
+                };
+                let patch = values::merge(
+                    values::patch("clipboard.content.itemActionOrder", json!(order)),
+                    values::patch("clipboard.content.itemActions", json!(enabled)),
+                );
+                let _ = entity.update(cx, |this, cx| this.apply_patch(patch, cx));
+            })
+            .detach();
     }
 
     fn add_retention_rule(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -842,64 +879,31 @@ impl Preferences {
     }
 
     fn render_capture_order(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let entity = cx.entity().downgrade();
         let tokens = theme::tokens(cx);
         let order = self.settings.clipboard.capture.ordered_kinds();
         let rows = order.iter().enumerate().map(|(index, kind)| {
             let kind = *kind;
             let label = capture_kind_label(kind);
             let icon = capture_kind_icon(kind);
-            let up = entity.clone();
-            let down = entity.clone();
-            div()
-                .id(format!("capture-order-{index}"))
-                .flex()
-                .items_center()
-                .gap(space(2.))
-                .px(space(3.))
-                .py(space(1.5))
+            sortable::row(format!("capture-order-{index}"), tokens)
                 .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
-                .cursor(gpui::CursorStyle::OpenHand)
                 .on_drag(CaptureOrderDrag { kind }, |dragged, _, _, cx| {
                     cx.new(|_| *dragged)
                 })
                 .drag_over::<CaptureOrderDrag>(move |style, _, _, _| {
-                    style.bg(tokens.fill_secondary)
+                    sortable::drop_target(style, tokens)
                 })
                 .on_drop(cx.listener(move |this, dragged: &CaptureOrderDrag, _, cx| {
                     this.move_capture_kind_to(dragged.kind, index, cx);
                 }))
-                .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary))
+                .child(
+                    div()
+                        .flex_none()
+                        .cursor_grab()
+                        .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary)),
+                )
                 .child(icon.view(rems(1.), tokens.secondary))
                 .child(div().flex_1().kp_text(TextSize::Sm).child(label))
-                .child(
-                    Button::new(
-                        format!("capture-up-{index}"),
-                        i18n::t("preferences:retentionRules.moveUp"),
-                    )
-                    .small()
-                    .ghost()
-                    .disabled(index == 0)
-                    .on_click(move |_, _, cx| {
-                        if let Some(entity) = up.upgrade() {
-                            entity.update(cx, |this, cx| this.move_capture_kind(kind, -1, cx));
-                        }
-                    }),
-                )
-                .child(
-                    Button::new(
-                        format!("capture-down-{index}"),
-                        i18n::t("preferences:retentionRules.moveDown"),
-                    )
-                    .small()
-                    .ghost()
-                    .disabled(index + 1 == order.len())
-                    .on_click(move |_, _, cx| {
-                        if let Some(entity) = down.upgrade() {
-                            entity.update(cx, |this, cx| this.move_capture_kind(kind, 1, cx));
-                        }
-                    }),
-                )
                 .into_any_element()
         });
         list_tile(tokens).children(rows).into_any_element()
@@ -3253,8 +3257,185 @@ struct SourceAppsDialog {
     selected: HashSet<String>,
 }
 
+impl SourceAppsDialog {
+    fn set_selected(&mut self, id: &str, checked: bool, cx: &mut Context<Self>) {
+        if checked {
+            self.selected.insert(id.to_owned());
+        } else {
+            self.selected.remove(id);
+        }
+        cx.notify();
+    }
+}
+
+/// 显示来源应用缓存图标；抽取失败时用固定尺寸的中性窗口图标占位。
+pub(super) fn app_icon(
+    path: Option<&str>,
+    tokens: &kwikpaste_ui::theme::KpTokens,
+) -> gpui::AnyElement {
+    match path.filter(|path| !path.is_empty()) {
+        Some(path) => img(PathBuf::from(path))
+            .size(rems(1.25))
+            .flex_none()
+            .into_any_element(),
+        None => div()
+            .size(rems(1.25))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                Icon::new(IconName::Monitor)
+                    .size(rems(1.1))
+                    .color(tokens.tertiary),
+            )
+            .into_any_element(),
+    }
+}
+
+/// 设置里的顺序在前（去重），缺的动作按默认顺序补在末尾，弹框始终列出全部动作。
+fn normalized_item_action_order(current: &[ItemAction]) -> Vec<ItemAction> {
+    let mut order = Vec::new();
+    for action in current.iter().chain(&Content::default().item_action_order) {
+        if !order.contains(action) {
+            order.push(*action);
+        }
+    }
+    order
+}
+
+#[derive(Clone, Copy)]
+struct ActionVisibilityDrag {
+    action: ItemAction,
+}
+
+struct ActionVisibilityPreview {
+    action: ItemAction,
+}
+
+impl Render for ActionVisibilityPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::tokens(cx);
+        let (icon, label) = clipboard::view::quick_action_glyph(self.action);
+        div()
+            .flex()
+            .items_center()
+            .gap(space(2.))
+            .px(space(3.))
+            .py(space(1.5))
+            .rounded(theme::radius::SM)
+            .border_1()
+            .border_color(tokens.primary)
+            .bg(tokens.bg_elevated)
+            .kp_text(TextSize::Sm)
+            .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary))
+            .child(Icon::new(icon).size(rems(1.)).color(tokens.secondary))
+            .child(label)
+    }
+}
+
+struct ActionVisibilityDialog {
+    order: Vec<ItemAction>,
+    enabled: Vec<ItemAction>,
+}
+
+impl ActionVisibilityDialog {
+    fn toggle(&mut self, action: ItemAction, checked: bool, cx: &mut Context<Self>) {
+        if checked {
+            if !self.enabled.contains(&action) {
+                self.enabled.push(action);
+            }
+        } else {
+            self.enabled.retain(|candidate| *candidate != action);
+        }
+        cx.notify();
+    }
+
+    fn move_to(&mut self, action: ItemAction, target: usize, cx: &mut Context<Self>) {
+        if target >= self.order.len() {
+            return;
+        }
+        let Some(index) = self.order.iter().position(|candidate| *candidate == action) else {
+            return;
+        };
+        if index == target {
+            return;
+        }
+        let action = self.order.remove(index);
+        self.order.insert(target, action);
+        cx.notify();
+    }
+}
+
+impl Render for ActionVisibilityDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::tokens(cx);
+        let rows = self.order.iter().enumerate().map(|(index, action)| {
+            let action = *action;
+            let checked = self.enabled.contains(&action);
+            let (icon, label) = clipboard::view::quick_action_glyph(action);
+            let entity = cx.entity().downgrade();
+            let checkbox_entity = entity.clone();
+            let label_entity = entity.clone();
+            sortable::row(format!("visible-action-{index}"), tokens)
+                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .on_drag(ActionVisibilityDrag { action }, |dragged, _, _, cx| {
+                    cx.new(|_| ActionVisibilityPreview {
+                        action: dragged.action,
+                    })
+                })
+                .drag_over::<ActionVisibilityDrag>(move |style, _, _, _| {
+                    sortable::drop_target(style, tokens)
+                })
+                .on_drop(
+                    cx.listener(move |this, dragged: &ActionVisibilityDrag, _, cx| {
+                        this.move_to(dragged.action, index, cx);
+                    }),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .cursor_grab()
+                        .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary)),
+                )
+                .child(
+                    Checkbox::new(format!("visible-action-check-{index}"))
+                        .checked(checked)
+                        .accessibility_label(label.clone())
+                        .on_change(move |checked, _, cx| {
+                            if let Some(entity) = checkbox_entity.upgrade() {
+                                entity.update(cx, |dialog, cx| dialog.toggle(action, checked, cx));
+                            }
+                        }),
+                )
+                .child(Icon::new(icon).size(rems(1.)).color(tokens.secondary))
+                .child(
+                    div()
+                        .id(format!("visible-action-label-{index}"))
+                        .flex_1()
+                        .cursor_pointer()
+                        .on_click(move |_, _, cx| {
+                            if let Some(entity) = label_entity.upgrade() {
+                                entity.update(cx, |dialog, cx| {
+                                    let checked = !dialog.enabled.contains(&action);
+                                    dialog.toggle(action, checked, cx);
+                                });
+                            }
+                        })
+                        .child(label),
+                )
+                .into_any_element()
+        });
+        div()
+            .id("visible-actions-list")
+            .max_h(rems(28.))
+            .overflow_y_scroll()
+            .child(list_tile(tokens).children(rows))
+    }
+}
+
 impl Render for SourceAppsDialog {
-    /// 浅灰列表块里每行一个应用：勾选框后面是应用名，下面一行灰色小字是路径（同引导的忽略应用）。
+    /// 浅灰列表块里每行一个应用：勾选框、应用图标和应用名，下面一行灰色小字是路径（同引导的忽略应用）。
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::tokens(cx);
         let rows = self.apps.iter().enumerate().map(|(index, app)| {
@@ -3275,25 +3456,49 @@ impl Render for SourceAppsDialog {
                 .py(space(2.))
                 .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
                 .child(
-                    Checkbox::new(format!("excluded-app-{id}"))
-                        .label(name)
-                        .checked(checked)
-                        .on_change(move |checked, _, cx| {
-                            if let Some(entity) = entity.upgrade() {
-                                entity.update(cx, |this, cx| {
-                                    if checked {
-                                        this.selected.insert(id.clone());
-                                    } else {
-                                        this.selected.remove(&id);
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(space(2.))
+                        .child(
+                            Checkbox::new(format!("excluded-app-{id}"))
+                                .accessibility_label(name.clone())
+                                .checked(checked)
+                                .on_change({
+                                    let entity = entity.clone();
+                                    let id = id.clone();
+                                    move |checked, _, cx| {
+                                        if let Some(entity) = entity.upgrade() {
+                                            entity.update(cx, |this, cx| {
+                                                this.set_selected(&id, checked, cx)
+                                            });
+                                        }
                                     }
-                                    cx.notify();
-                                });
-                            }
-                        }),
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(format!("excluded-app-label-{index}"))
+                                .flex()
+                                .flex_1()
+                                .min_w_0()
+                                .items_center()
+                                .gap(space(2.))
+                                .cursor_pointer()
+                                .on_click(move |_, _, cx| {
+                                    if let Some(entity) = entity.upgrade() {
+                                        entity.update(cx, |this, cx| {
+                                            this.set_selected(&id, !checked, cx)
+                                        });
+                                    }
+                                })
+                                .child(app_icon(app.icon_path.as_deref(), tokens))
+                                .child(div().min_w_0().truncate().child(name)),
+                        ),
                 )
                 .children(path.map(|path| {
                     div()
-                        .pl(space(6.))
+                        .pl(space(13.))
                         .kp_text(TextSize::Xs)
                         .text_color(tokens.tertiary)
                         .truncate()
@@ -3399,12 +3604,14 @@ impl Render for CaptureOrderDrag {
             .flex()
             .items_center()
             .gap(space(2.))
-            .p(space(2.))
+            .px(space(3.))
+            .py(space(1.5))
             .rounded(theme::radius::SM)
             .border_1()
             .border_color(tokens.primary)
             .bg(tokens.bg_elevated)
             .kp_text(TextSize::Sm)
+            .child(PrefIcon::Grip.view(rems(1.), tokens.quaternary))
             .child(capture_kind_icon(self.kind).view(rems(1.), tokens.primary))
             .child(capture_kind_label(self.kind))
     }

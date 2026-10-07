@@ -87,6 +87,7 @@ impl ProbeView {
                 window.focus(&self.list, cx);
             }
             PanelEvent::Hidden => {}
+            PanelEvent::PopupDismissed => {}
         }
         cx.notify();
     }

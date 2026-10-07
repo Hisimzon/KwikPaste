@@ -24,6 +24,26 @@ use crate::{
     i18n::{t, t_args, t_count},
 };
 
+/// 快捷动作的常规图标和文案（未激活态），卡片按钮和偏好设置里的快捷动作管理共用。
+pub(crate) fn quick_action_glyph(action: QuickAction) -> (IconName, SharedString) {
+    let (icon, key) = match action {
+        QuickAction::Paste => (IconName::ClipboardPaste, "paste"),
+        QuickAction::PastePlain => (IconName::ClipboardType, "pastePlain"),
+        QuickAction::PastePath => (IconName::FileSymlink, "pastePath"),
+        QuickAction::Copy => (IconName::Copy, "copy"),
+        QuickAction::CopyPlain => (IconName::CopyCheck, "copyPlain"),
+        QuickAction::SplitWords => (IconName::TextSelect, "splitWords"),
+        QuickAction::OpenLink => (IconName::SquareArrowOutUpRight, "openLink"),
+        QuickAction::SendEmail => (IconName::Mail, "sendEmail"),
+        QuickAction::Reveal => (IconName::FolderOpen, "reveal"),
+        QuickAction::Note => (IconName::NotebookPen, "note"),
+        QuickAction::Star => (IconName::Star, "star"),
+        QuickAction::PinItem => (IconName::PushPin, "pinItem"),
+        QuickAction::Delete => (IconName::Trash, "delete"),
+    };
+    (icon, t(&format!("clipboard:quickActions.{key}")))
+}
+
 /// 一个快捷动作按钮的图标、文案和颜色（1.x `resolveItemActionPresentation`）。
 fn presentation(
     tokens: &SemanticTokens,
@@ -31,85 +51,34 @@ fn presentation(
     item: &ListItem,
     copied: bool,
 ) -> (IconName, SharedString, gpui::Hsla) {
-    let secondary = tokens.text.secondary;
-    match action {
-        QuickAction::Paste => (
-            IconName::ClipboardPaste,
-            t("clipboard:quickActions.paste"),
-            secondary,
-        ),
-        QuickAction::PastePlain => (
-            IconName::ClipboardType,
-            t("clipboard:quickActions.pastePlain"),
-            secondary,
-        ),
-        QuickAction::PastePath => (
-            IconName::FileSymlink,
-            t("clipboard:quickActions.pastePath"),
-            secondary,
-        ),
-        QuickAction::Copy | QuickAction::CopyPlain if copied => (
-            IconName::CircleCheck,
-            t("clipboard:quickActions.copySuccess"),
-            tokens.status.success.solid,
-        ),
-        QuickAction::Copy => (IconName::Copy, t("clipboard:quickActions.copy"), secondary),
-        QuickAction::CopyPlain => (
-            IconName::CopyCheck,
-            t("clipboard:quickActions.copyPlain"),
-            secondary,
-        ),
-        QuickAction::SplitWords => (
-            IconName::TextSelect,
-            t("clipboard:quickActions.splitWords"),
-            secondary,
-        ),
-        QuickAction::OpenLink => (
-            IconName::SquareArrowOutUpRight,
-            t("clipboard:quickActions.openLink"),
-            secondary,
-        ),
-        QuickAction::SendEmail => (
-            IconName::Mail,
-            t("clipboard:quickActions.sendEmail"),
-            secondary,
-        ),
-        QuickAction::Reveal => (
-            IconName::FolderOpen,
-            t("clipboard:quickActions.reveal"),
-            secondary,
-        ),
-        QuickAction::Note => (
-            IconName::NotebookPen,
-            t("clipboard:quickActions.note"),
-            if item.note.is_some() {
-                tokens.accent.solid
-            } else {
-                secondary
-            },
-        ),
-        QuickAction::Star if item.is_favorite => (
-            IconName::Star,
-            t("clipboard:quickActions.starActive"),
-            tokens.status.warning.solid,
-        ),
-        QuickAction::Star => (IconName::Star, t("clipboard:quickActions.star"), secondary),
-        QuickAction::PinItem if item.is_pinned => (
-            IconName::PushPin,
-            t("clipboard:quickActions.pinItemActive"),
-            tokens.accent.solid,
-        ),
-        QuickAction::PinItem => (
-            IconName::PushPin,
-            t("clipboard:quickActions.pinItem"),
-            secondary,
-        ),
-        QuickAction::Delete => (
-            IconName::Trash,
-            t("clipboard:quickActions.delete"),
-            tokens.status.danger.solid,
-        ),
-    }
+    let color = match action {
+        QuickAction::Copy | QuickAction::CopyPlain if copied => {
+            return (
+                IconName::CircleCheck,
+                t("clipboard:quickActions.copySuccess"),
+                tokens.status.success.solid,
+            );
+        }
+        QuickAction::Star if item.is_favorite => {
+            return (
+                IconName::Star,
+                t("clipboard:quickActions.starActive"),
+                tokens.status.warning.solid,
+            );
+        }
+        QuickAction::PinItem if item.is_pinned => {
+            return (
+                IconName::PushPin,
+                t("clipboard:quickActions.pinItemActive"),
+                tokens.accent.solid,
+            );
+        }
+        QuickAction::Note if item.note.is_some() => tokens.accent.solid,
+        QuickAction::Delete => tokens.status.danger.solid,
+        _ => tokens.text.secondary,
+    };
+    let (icon, label) = quick_action_glyph(action);
+    (icon, label, color)
 }
 
 fn action_name(action: QuickAction) -> &'static str {

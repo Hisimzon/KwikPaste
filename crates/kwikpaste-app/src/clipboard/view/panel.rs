@@ -467,6 +467,7 @@ impl ClipboardPanel {
                     .update(cx, |header, cx| header.set_editing(false, cx));
                 editing::clear(cx);
             }
+            PanelEvent::PopupDismissed => {}
         }
     }
 

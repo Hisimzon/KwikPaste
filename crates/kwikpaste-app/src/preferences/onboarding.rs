@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, Div, Entity, FocusHandle, Global, ImageSource,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Pixels, Render,
-    ScrollHandle, SharedString, Styled as _, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, img, prelude::FluentBuilder as _, px, rems, size,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _,
+    px, rems, size,
 };
 use kwikpaste_core::settings::Settings;
 use kwikpaste_ui::{
@@ -767,7 +768,7 @@ impl Onboarding {
             .into_any_element()
     }
 
-    /// 忽略应用：浅灰列表块里每行一个应用，勾选框后面是应用名，下面一行灰色小字是路径。
+    /// 忽略应用：浅灰列表块里每行一个应用，勾选框、应用图标和应用名，下面一行灰色小字是路径。
     fn render_ignore_apps(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let entity = cx.entity().downgrade();
         let tokens = theme::tokens(cx);
@@ -793,24 +794,53 @@ impl Onboarding {
                 .py(space(2.5))
                 .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
                 .child(
-                    Checkbox::new(format!("onboarding-ignore-{id}"))
-                        .label(name)
-                        .checked(checked)
-                        .on_change({
-                            let entity = entity.clone();
-                            move |checked, _, cx| {
-                                if let Some(entity) = entity.upgrade() {
-                                    entity.update(cx, |this, cx| {
-                                        this.set_excluded_app(id.clone(), checked, cx);
-                                    });
-                                }
-                            }
-                        }),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(space(2.))
+                        .child(
+                            Checkbox::new(format!("onboarding-ignore-{id}"))
+                                .accessibility_label(name.clone())
+                                .checked(checked)
+                                .on_change({
+                                    let entity = entity.clone();
+                                    let id = id.clone();
+                                    move |checked, _, cx| {
+                                        if let Some(entity) = entity.upgrade() {
+                                            entity.update(cx, |this, cx| {
+                                                this.set_excluded_app(id.clone(), checked, cx);
+                                            });
+                                        }
+                                    }
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(format!("onboarding-ignore-label-{index}"))
+                                .flex()
+                                .flex_1()
+                                .min_w_0()
+                                .items_center()
+                                .gap(space(2.))
+                                .cursor_pointer()
+                                .on_click({
+                                    let entity = entity.clone();
+                                    move |_, _, cx| {
+                                        if let Some(entity) = entity.upgrade() {
+                                            entity.update(cx, |this, cx| {
+                                                this.set_excluded_app(id.clone(), !checked, cx);
+                                            });
+                                        }
+                                    }
+                                })
+                                .child(view::app_icon(app.icon_path.as_deref(), tokens))
+                                .child(div().min_w_0().truncate().child(name)),
+                        ),
                 )
                 .children(path.map(|path| {
-                    // 与勾选框后的文字左对齐（16 px 方框加 8 px 间距）。
+                    // 与应用名左对齐（16 px 方框、20 px 图标及其间距）。
                     div()
-                        .pl(space(6.))
+                        .pl(space(13.))
                         .kp_text(TextSize::Xs)
                         .text_color(tokens.tertiary)
                         .truncate()

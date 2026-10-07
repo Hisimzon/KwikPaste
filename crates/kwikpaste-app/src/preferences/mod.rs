@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod onboarding;
+mod sortable;
 pub(crate) mod view;
 
 pub mod icons;

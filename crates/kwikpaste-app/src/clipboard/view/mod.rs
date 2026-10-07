@@ -26,6 +26,7 @@ use kwikpaste_ui::INPUT_KEY_CONTEXT;
 
 pub(crate) use card::logo as app_logo;
 pub use editing::request_panel;
+pub(crate) use list::quick_action_glyph;
 pub use panel::{ClipboardPanel, PanelIntent};
 
 /// 主窗口的 key context。Windows 上面板收不到键盘消息，平台层的钩子用 `Window::dispatch_keystroke`

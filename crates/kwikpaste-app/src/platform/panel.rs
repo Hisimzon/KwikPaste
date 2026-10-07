@@ -105,6 +105,8 @@ pub enum PanelCommand {
     },
     /// 点击面板外部时是否隐藏（默认是）。UI 在固定面板、打开系统文件对话框期间关掉它。
     SetHideOnOutsideClick(bool),
+    /// 原生层截获了面板拖动区/缩放边的按下，GPUI 没有机会让弹出菜单自行收起。
+    DismissPopup,
 }
 
 /// 面板状态变化，从 [`Panel::events`] 发出。
@@ -121,6 +123,8 @@ pub enum PanelEvent {
     EditingRefused,
     /// 已退出编辑态（包括随面板隐藏退出），焦点应还给列表。
     EditingEnded,
+    /// 原生鼠标按下发生在菜单之外（包括不激活的拖动/缩放区域）。
+    PopupDismissed,
 }
 
 /// 发出 [`PanelEvent`] 的实体。面板窗口打开之前就已建好，UI 在构造自己的视图时即可订阅。
@@ -313,11 +317,16 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
                 if !hide_on_outside_click
                     && matches!(trigger.source, TriggerSource::OutsideClick) =>
             {
+                parts.emit(PanelEvent::PopupDismissed, cx);
                 continue;
             }
             PanelCommand::Hide(trigger) => (false, trigger),
             PanelCommand::SetHideOnOutsideClick(hide) => {
                 hide_on_outside_click = hide;
+                continue;
+            }
+            PanelCommand::DismissPopup => {
+                parts.emit(PanelEvent::PopupDismissed, cx);
                 continue;
             }
             PanelCommand::BeginEditing(trigger) => {

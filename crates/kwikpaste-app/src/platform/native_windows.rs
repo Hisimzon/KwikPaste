@@ -1,6 +1,6 @@
 //! Windows 面板胶水：从 GPUI 窗口取 HWND，几何计算和原生调用交给 `kwikpaste_os::win`。
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, anyhow, bail};
@@ -14,7 +14,7 @@ use kwikpaste_os::win::{self as os, keyboard, mouse};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::editing::{EditReport, EditTrigger};
-use super::panel::PANEL_SIZE;
+use super::panel::{PANEL_SIZE, PanelCommand};
 use super::window_state::PanelLayout;
 
 /// 钩子确认吞掉带标记的 Alt 的最长等待（实测约 1.5 ms）。
@@ -35,10 +35,14 @@ pub struct NativePanel {
     text_scale: Cell<f64>,
     /// 编辑态：进入前的前台窗口；`None` 表示不在编辑态。
     editing: Cell<Option<isize>>,
+    /// 拖动区、缩放边上的按下要收起弹出菜单，经它发给面板任务。
+    commands: RefCell<Option<async_channel::Sender<PanelCommand>>>,
 }
 
 impl NativePanel {
-    pub fn set_command_sender(&self, _sender: async_channel::Sender<super::panel::PanelCommand>) {}
+    pub fn set_command_sender(&self, sender: async_channel::Sender<PanelCommand>) {
+        *self.commands.borrow_mut() = Some(sender);
+    }
 
     pub fn attach(window: &Window, text_scale: f64) -> anyhow::Result<Self> {
         let handle = HasWindowHandle::window_handle(window)
@@ -53,6 +57,7 @@ impl NativePanel {
             last: Cell::new(None),
             text_scale: Cell::new(text_scale),
             editing: Cell::new(None),
+            commands: RefCell::new(None),
         })
     }
 
@@ -61,6 +66,11 @@ impl NativePanel {
             min_logical_size: PANEL_SIZE,
             text_scale: self.text_scale.get(),
         })?;
+        if let Some(sender) = self.commands.borrow().clone() {
+            self.panel.set_drag_sink(Box::new(move || {
+                let _ = sender.try_send(PanelCommand::DismissPopup);
+            }));
+        }
         Ok(())
     }
 

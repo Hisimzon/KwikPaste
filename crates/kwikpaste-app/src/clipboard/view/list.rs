@@ -14,6 +14,7 @@
 mod menu;
 mod ops;
 mod parts;
+pub(crate) use parts::quick_action_glyph;
 mod previewing;
 pub use previewing::PreviewTrigger;
 mod selecting;
@@ -426,6 +427,9 @@ impl ClipboardList {
                 {
                     note.input.focus(window, cx);
                 }
+            }
+            PanelEvent::PopupDismissed => {
+                dismiss_menu(window, cx);
             }
             PanelEvent::Hidden => {
                 self.visible = false;
