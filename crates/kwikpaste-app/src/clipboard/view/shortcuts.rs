@@ -61,7 +61,7 @@ pub fn show(window: &mut Window, cx: &mut Context<ClipboardPanel>) {
 }
 
 fn content(window: &mut Window, cx: &mut App) -> AnyElement {
-    let tokens = theme::tokens(cx);
+    let tokens = theme::semantic(cx);
     let max_height = (window.viewport_size().height - px(DIALOG_CHROME))
         .max(px(160.))
         .min(rems(30.).to_pixels(window.rem_size()));
@@ -82,12 +82,14 @@ fn content(window: &mut Window, cx: &mut App) -> AnyElement {
                 .gap(space(4.))
                 .min_h(rems(2.25))
                 .py(space(1.))
-                .when(index > 0, |row| row.border_t_1().border_color(tokens.split))
+                .when(index > 0, |row| {
+                    row.border_t_1().border_color(tokens.border.divider)
+                })
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .text_color(tokens.text)
+                        .text_color(tokens.text.primary)
                         .kp_text(TextSize::Sm)
                         .child(t(label)),
                 )

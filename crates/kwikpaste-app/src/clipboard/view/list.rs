@@ -39,11 +39,14 @@ use kwikpaste_core::{
     CoreEvent,
     settings::{AutoPaste, MiddleClickAction, Settings},
 };
-use kwikpaste_ui::{ListScrollbar, TextAreaInput, close_dialog, context_menu, dismiss_menu, theme};
+use kwikpaste_ui::{
+    ListScrollbar, TextAreaInput, close_dialog, context_menu, dismiss_menu,
+    theme::{self, space},
+};
 
 use super::{
     bench::Bench,
-    card::{self, CardEnv, CardState, LinkHandler, SnippetHandler, Visual, dp},
+    card::{self, CardEnv, CardState, LinkHandler, SnippetHandler, Visual},
     editing::{self, EditTarget},
     frame::{FrameTimer, FrameTiming, ListFrame, PaintedCallback, Snapshot, WidthHint},
     host::ItemHost,
@@ -725,7 +728,7 @@ impl ClipboardList {
             .mean()
             .filter(|_| self.heights.count >= MIN_HEIGHT_SAMPLES)
             .unwrap_or_else(|| {
-                dp(self.layout.placeholder_height())
+                space((self.layout.placeholder_height()) / 4.)
                     .to_pixels(self.rem)
                     .as_f32()
             })
@@ -826,6 +829,17 @@ impl ClipboardList {
             && index >= self.rows.pinned
         {
             self.motion.reveal = Some(index - self.rows.pinned);
+            cx.notify();
+        }
+    }
+
+    /// 自测在布局稳定后立即把目标行定位到视口，避免平滑 reveal 的小数像素差异。
+    pub(super) fn reveal_item_now(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(index) = self.model.index_of(id)
+            && index >= self.rows.pinned
+        {
+            self.motion.reveal = None;
+            self.state.scroll_to_reveal_item(index - self.rows.pinned);
             cx.notify();
         }
     }
@@ -958,7 +972,7 @@ impl ClipboardList {
 
     pub(super) fn on_wheel_lines(&mut self, lines: f32, cx: &mut Context<Self>) {
         self.close_pointer_preview(cx);
-        let distance = -lines * dp(WHEEL_LINE).to_pixels(self.rem).as_f32();
+        let distance = -lines * space((WHEEL_LINE) / 4.).to_pixels(self.rem).as_f32();
         if self.reduce_motion(cx) {
             self.state.scroll_by(px(distance));
         } else {
@@ -993,7 +1007,7 @@ impl ClipboardList {
 
         let scale = window.scale_factor();
         let to_physical = |value: f32| {
-            (dp(value).to_pixels(self.rem).as_f32() * scale)
+            (space((value) / 4.).to_pixels(self.rem).as_f32() * scale)
                 .round()
                 .max(1.) as u32
         };
@@ -1162,7 +1176,7 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let layout = self.layout;
         let env = CardEnv {
             tokens,
@@ -1220,7 +1234,7 @@ impl Render for ClipboardList {
         self.run_motion(window, cx);
         self.consume_reload_at_top(cx);
 
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let surface = crate::platform::material::panel_surface(cx);
         let layout = self.layout;
         let env = CardEnv {
@@ -1331,7 +1345,7 @@ impl Render for ClipboardList {
             .flex_col()
             .size_full()
             .bg(surface)
-            .text_color(tokens.text)
+            .text_color(tokens.text.primary)
             .when(!pinned.is_empty(), |root| {
                 // 置顶块固定在滚动区上方，不吸顶（材质上任何遮挡底色都会成为色块）。
                 root.child(div().flex().flex_col().flex_none().children(pinned))

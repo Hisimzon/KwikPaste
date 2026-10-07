@@ -14,6 +14,7 @@
 
 mod assets;
 mod button;
+mod chrome;
 mod confirm;
 mod dialog;
 mod icon;
@@ -37,6 +38,7 @@ use gpui::{AnyWindowHandle, App, AppContext, Entity, Render, Window, WindowOptio
 
 pub use assets::{Assets, group_icon_path, register_svg};
 pub use button::{Button, ButtonKind, ButtonSize};
+pub use chrome::{Glyph, Look as IconButtonLook, icon_button, separator};
 pub use confirm::{ConfirmBody, ConfirmSpec, confirm};
 pub use dialog::{DialogSpec, close_dialog, form_dialog, has_dialog};
 pub use icon::{Icon, IconName};

@@ -20,11 +20,11 @@ use kwikpaste_ui::{
     Button, ButtonSize, Checkbox, ConfirmSpec, DialogSpec, IconName, Input, KpStyled as _,
     MenuEntry, MenuItem, MenuTrigger, TextInput, TextInputEvent, confirm, form_dialog,
     group_icon_path,
-    theme::{self, TextSize, radius},
+    theme::{self, TextSize, radius, space},
     toast::{self, Toast},
 };
 
-use super::{card::dp, editing, pin};
+use super::{editing, pin};
 use crate::{
     clipboard::source::{ClipboardSource, Group, GroupInput},
     i18n::{t, t_args},
@@ -68,16 +68,16 @@ fn error_toast(label: &str, err: &anyhow::Error, window: &mut Window, cx: &mut A
 
 /// 表单项的标题（antd `Form.Item` 竖排的 label；必填项前面一个红色星号）。
 fn field_label(label: SharedString, required: bool, cx: &App) -> AnyElement {
-    let tokens = theme::tokens(cx);
+    let tokens = theme::semantic(cx);
 
     div()
         .flex()
         .items_center()
-        .gap(dp(4.))
+        .gap(space(1.))
         .kp_text(TextSize::Sm)
-        .text_color(tokens.text)
+        .text_color(tokens.text.primary)
         .when(required, |row| {
-            row.child(div().text_color(tokens.error).child("*"))
+            row.child(div().text_color(tokens.status.danger.solid).child("*"))
         })
         .child(label)
         .into_any_element()
@@ -196,7 +196,7 @@ impl GroupEditor {
     }
 
     fn preset_button(&self, icon: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let selected = *self.icon == *icon;
 
         div()
@@ -205,27 +205,27 @@ impl GroupEditor {
             .flex_none()
             .items_center()
             .justify_center()
-            .size(dp(36.))
+            .size(space((36.) / 4.))
             .rounded(radius::MD)
             .cursor_pointer()
             // 浅灰底的图标块（同分组栏的扁平按钮），选中的是实心主色。
             .map(|button| {
                 if selected {
-                    button.bg(tokens.primary)
+                    button.bg(tokens.accent.solid)
                 } else {
                     button
-                        .bg(tokens.fill_tertiary)
-                        .hover(|style| style.bg(tokens.fill_secondary))
+                        .bg(tokens.fill.subtle)
+                        .hover(|style| style.bg(tokens.fill.default))
                 }
             })
             .child(
                 svg()
                     .path(group_icon_path(icon))
-                    .size(dp(16.))
+                    .size(space((16.) / 4.))
                     .text_color(if selected {
-                        tokens.light_solid
+                        tokens.text.on_accent
                     } else {
-                        tokens.secondary
+                        tokens.text.secondary
                     }),
             )
             .on_click(cx.listener(move |editor, _, _, cx| editor.pick_icon(icon, cx)))
@@ -235,14 +235,14 @@ impl GroupEditor {
 
 impl Render for GroupEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let custom = is_custom(&self.icon);
         let rows: Vec<AnyElement> = PRESET_ICONS
             .chunks(6)
             .map(|row| {
                 div()
                     .flex()
-                    .gap(dp(8.))
+                    .gap(space((8.) / 4.))
                     .children(row.iter().map(|icon| self.preset_button(icon, cx)))
                     .into_any_element()
             })
@@ -256,20 +256,20 @@ impl Render for GroupEditor {
         div()
             .flex()
             .flex_col()
-            .gap(dp(24.))
-            .pb(dp(12.))
+            .gap(space((24.) / 4.))
+            .pb(space((12.) / 4.))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(dp(8.))
+                    .gap(space((8.) / 4.))
                     .child(field_label(t("clipboard:groups.name"), true, cx))
                     .child(Input::new(&self.name))
                     .when(self.missing_name, |field| {
                         field.child(
                             div()
                                 .kp_text(TextSize::Sm)
-                                .text_color(tokens.error)
+                                .text_color(tokens.status.danger.solid)
                                 .child(t("clipboard:groups.nameRequired")),
                         )
                     }),
@@ -278,14 +278,14 @@ impl Render for GroupEditor {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(dp(8.))
+                    .gap(space((8.) / 4.))
                     .child(field_label(t("clipboard:groups.icon"), false, cx))
-                    .child(div().flex().flex_col().gap(dp(8.)).children(rows))
+                    .child(div().flex().flex_col().gap(space((8.) / 4.)).children(rows))
                     .child(
                         div()
                             .flex()
-                            .gap(dp(8.))
-                            .mt(dp(4.))
+                            .gap(space((8.) / 4.))
+                            .mt(space(1.))
                             .child(
                                 div()
                                     .id("group-icon-custom")
@@ -294,26 +294,26 @@ impl Render for GroupEditor {
                                     .min_w_0()
                                     .items_center()
                                     .justify_center()
-                                    .gap(dp(8.))
-                                    .h(dp(32.))
-                                    .px(dp(15.))
+                                    .gap(space((8.) / 4.))
+                                    .h(space((32.) / 4.))
+                                    .px(space((15.) / 4.))
                                     .rounded(radius::MD)
                                     .border_1()
-                                    .border_color(tokens.border)
-                                    .bg(tokens.bg_container)
+                                    .border_color(tokens.border.default)
+                                    .bg(tokens.surface.panel)
                                     .cursor_pointer()
                                     .hover(|style| {
                                         style
-                                            .border_color(tokens.primary_hover)
-                                            .text_color(tokens.primary_hover)
+                                            .border_color(tokens.accent.hover)
+                                            .text_color(tokens.accent.hover)
                                     })
                                     .kp_text(TextSize::Sm)
                                     .child(
                                         svg()
                                             .path(group_icon_path(&self.icon))
                                             .flex_none()
-                                            .size(dp(16.))
-                                            .text_color(tokens.secondary),
+                                            .size(space((16.) / 4.))
+                                            .text_color(tokens.text.secondary),
                                     )
                                     .child(div().truncate().child(custom_label))
                                     .on_click(cx.listener(|editor, _, window, cx| {
@@ -481,26 +481,26 @@ struct DragPreview {
 
 impl Render for DragPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
 
         div()
             .flex()
             .items_center()
-            .gap(dp(8.))
-            .h(dp(32.))
-            .px(dp(12.))
+            .gap(space((8.) / 4.))
+            .h(space((32.) / 4.))
+            .px(space((12.) / 4.))
             .rounded(radius::MD)
             .border_1()
-            .border_color(tokens.primary)
-            .bg(tokens.bg_elevated)
-            .shadow(tokens.shadow_elevated.to_vec())
+            .border_color(tokens.accent.solid)
+            .bg(tokens.surface.raised)
+            .shadow(tokens.shadow.overlay.to_vec())
             .kp_text(TextSize::Sm)
-            .text_color(tokens.text)
+            .text_color(tokens.text.primary)
             .child(
                 svg()
                     .path(group_icon_path(&self.group.icon))
-                    .size(dp(16.))
-                    .text_color(tokens.secondary),
+                    .size(space((16.) / 4.))
+                    .text_color(tokens.text.secondary),
             )
             .child(self.group.name.to_string())
     }
@@ -625,7 +625,7 @@ impl GroupManager {
     }
 
     fn row(&self, index: usize, group: &Group, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let id = group.id.clone();
         let visible = self.visible.contains(&group.id);
         let dragged = DraggedGroup {
@@ -640,19 +640,19 @@ impl GroupManager {
             .id(SharedString::from(format!("manage-group-{}", group.id)))
             .flex()
             .items_center()
-            .gap(dp(8.))
-            .h(dp(36.))
-            .pl(dp(4.))
-            .pr(dp(4.))
+            .gap(space((8.) / 4.))
+            .h(space((36.) / 4.))
+            .pl(space(1.))
+            .pr(space(1.))
             .rounded(radius::MD)
             // 扁平的行：悬停浅灰底，拖到上面时淡主色底（同列表的勾选色）。
-            .hover(|style| style.bg(tokens.fill_quaternary))
+            .hover(|style| style.bg(tokens.fill.faint))
             .on_drag(dragged, |dragged, _, _, cx| {
                 cx.new(|_| DragPreview {
                     group: dragged.group.clone(),
                 })
             })
-            .drag_over::<DraggedGroup>(move |style, _, _, _| style.bg(tokens.primary_bg))
+            .drag_over::<DraggedGroup>(move |style, _, _, _| style.bg(tokens.accent.subtle))
             .on_drop(cx.listener(move |manager, dragged: &DraggedGroup, _, cx| {
                 manager.move_group(dragged.index, index, cx);
             }))
@@ -660,8 +660,8 @@ impl GroupManager {
                 div()
                     .flex_none()
                     .cursor_grab()
-                    .text_color(tokens.quaternary)
-                    .child(kwikpaste_ui::Icon::new(IconName::GripVertical).size(dp(14.))),
+                    .text_color(tokens.text.faint)
+                    .child(kwikpaste_ui::Icon::new(IconName::GripVertical).size(space((14.) / 4.))),
             )
             .child(
                 Checkbox::new(SharedString::from(format!(
@@ -682,8 +682,8 @@ impl GroupManager {
                 svg()
                     .path(group_icon_path(&group.icon))
                     .flex_none()
-                    .size(dp(16.))
-                    .text_color(tokens.secondary),
+                    .size(space((16.) / 4.))
+                    .text_color(tokens.text.secondary),
             )
             .child(
                 div()
@@ -691,7 +691,7 @@ impl GroupManager {
                     .min_w_0()
                     .truncate()
                     .kp_text(TextSize::Sm)
-                    .text_color(tokens.text)
+                    .text_color(tokens.text.primary)
                     .child(group.name.to_string()),
             )
             .child(
@@ -751,8 +751,8 @@ impl Render for GroupManager {
             .id("group-manager")
             .flex()
             .flex_col()
-            .gap(dp(2.))
-            .max_h(dp(360.))
+            .gap(space((2.) / 4.))
+            .max_h(space((360.) / 4.))
             .overflow_y_scroll()
             .children(
                 groups

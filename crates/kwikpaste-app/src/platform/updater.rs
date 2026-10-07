@@ -568,7 +568,7 @@ impl UpdateWindow {
 
 impl Render for UpdateWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let update = self.status.update.as_ref();
         let downloaded =
             self.downloaded.is_some() || update.is_some_and(|update| update.downloaded);
@@ -628,9 +628,9 @@ impl Render for UpdateWindow {
             .p(px(20.))
             .bg(crate::platform::material::shell_surface(
                 cx,
-                tokens.bg_container,
+                tokens.surface.panel,
             ))
-            .text_color(tokens.text)
+            .text_color(tokens.text.primary)
             .child(
                 div().flex_none().w(px(56.)).child(
                     img(ImageSource::Image(crate::clipboard::view::app_logo())).size(px(56.)),
@@ -647,7 +647,7 @@ impl Render for UpdateWindow {
                     .child(
                         div()
                             .kp_text(TextSize::Sm)
-                            .text_color(tokens.secondary)
+                            .text_color(tokens.text.secondary)
                             .child(description),
                     )
                     .when(show_release_notes, |element| {
@@ -660,10 +660,10 @@ impl Render for UpdateWindow {
                                     .role(gpui::Role::Link)
                                     .aria_label(label.clone())
                                     .kp_text(TextSize::Sm)
-                                    .text_color(tokens.primary)
+                                    .text_color(tokens.accent.solid)
                                     .cursor_pointer()
                                     .hover(|style| {
-                                        style.text_color(tokens.primary_hover).underline()
+                                        style.text_color(tokens.accent.hover).underline()
                                     })
                                     .child(label)
                                     .on_click(
@@ -680,13 +680,13 @@ impl Render for UpdateWindow {
                                 .w_full()
                                 .overflow_hidden()
                                 .rounded_full()
-                                .bg(tokens.fill_secondary)
+                                .bg(tokens.fill.default)
                                 .child(
                                     div()
                                         .h_full()
                                         .w(relative(progress_value))
                                         .rounded_full()
-                                        .bg(tokens.primary),
+                                        .bg(tokens.accent.solid),
                                 ),
                         )
                     })
@@ -694,7 +694,7 @@ impl Render for UpdateWindow {
                         element.child(
                             div()
                                 .kp_text(TextSize::Sm)
-                                .text_color(tokens.secondary)
+                                .text_color(tokens.text.secondary)
                                 .child(t_args(
                                     "common:update.progress",
                                     &[("progress", &progress)],

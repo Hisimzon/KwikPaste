@@ -40,6 +40,8 @@ pub struct CoreOptions {
     pub db_max_connections: u32,
     /// 系统语言标签（BCP 47，如 `zh-CN`），只在首次启动和恢复默认设置时决定界面语言。
     pub locale: Option<String>,
+    /// 自测用：来源应用列表换成固定清单，截图不受本机正在运行的进程影响。
+    pub fixture_apps: bool,
 }
 
 impl Default for CoreOptions {
@@ -47,6 +49,7 @@ impl Default for CoreOptions {
         Self {
             db_max_connections: 3,
             locale: None,
+            fixture_apps: false,
         }
     }
 }

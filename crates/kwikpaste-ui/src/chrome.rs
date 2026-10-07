@@ -1,17 +1,12 @@
-//! 头部、分组栏、页脚共用的小按钮：24 px 图标按钮，按住修饰键时图标换成快捷键角标（1.x
-//! `CustomIconButton` + `KeyHint`）。
+//! 剪贴板面板共用的图标按钮、快捷键角标与分隔线。
 
 use gpui::{
-    AnyElement, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, Rems,
-    Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
+    AnyElement, App, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
+    Rems, Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
     prelude::FluentBuilder as _, svg,
 };
-use kwikpaste_ui::{
-    Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _,
-    theme::{KpTokens, TextSize},
-};
 
-use super::card::dp;
+use crate::{Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _, theme};
 
 /// 按钮里的图标：内置图标或资源路径（自定义分组图标）。
 #[derive(Clone)]
@@ -34,34 +29,40 @@ impl Glyph {
     }
 }
 
-/// 按钮的外观。
+/// 面板图标按钮的外观。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Look {
     /// 无底，悬停出填充色、图标加深。
     Text,
     /// 选中：淡主色底、主色图标（固定窗口按钮）。
     Selected,
-    /// 分组栏选中项：中性填充底的胶囊，图标后面跟名称（主色只留给焦点与开关）。
+    /// 分组栏选中项：中性填充底的胶囊。
     Chip,
 }
 
 /// 图标按钮：`hint` 是按住修饰键时显示的角标（`None` 时不显示）。调用方挂点击。
 pub fn icon_button(
-    tokens: &KpTokens,
+    cx: &App,
     id: impl Into<ElementId>,
     glyph: Glyph,
     label: SharedString,
     hint: Option<SharedString>,
     look: Look,
 ) -> Stateful<Div> {
+    let semantic = theme::semantic(cx);
+    let button = &theme::components(cx).icon_button;
     let (color, background, hover) = match look {
-        Look::Text => (tokens.secondary, None, tokens.fill_secondary),
+        Look::Text => (semantic.text.secondary, None, button.hover),
         Look::Selected => (
-            tokens.primary,
-            Some(tokens.primary.opacity(0.13)),
-            tokens.primary.opacity(0.2),
+            semantic.accent.solid,
+            Some(button.selected),
+            button.selected_hover,
         ),
-        Look::Chip => (tokens.text, Some(tokens.fill_secondary), tokens.fill),
+        Look::Chip => (
+            button.chip_foreground,
+            Some(button.chip_background),
+            button.chip_hover,
+        ),
     };
     let chip = look == Look::Chip;
     let chip_label = chip.then(|| label.clone());
@@ -76,12 +77,14 @@ pub fn icon_button(
         .relative()
         .flex()
         .flex_none()
-        .h(dp(24.))
-        .when(!chip, |button| button.w(dp(24.)))
-        .when(chip, |button| button.px(dp(8.)).gap(dp(4.)))
+        .h(theme::space(6.))
+        .when(!chip, |button| button.w(theme::space(6.)))
+        .when(chip, |button| {
+            button.px(theme::space(2.)).gap(theme::space(1.))
+        })
         .items_center()
         .justify_center()
-        .rounded(dp(7.))
+        .rounded(theme::space(1.75))
         .cursor_pointer()
         .when_some(background, |button, background| button.bg(background))
         .hover(move |style| style.bg(hover))
@@ -89,14 +92,14 @@ pub fn icon_button(
             div()
                 .flex()
                 .when(hinted, |icon| icon.opacity(0.))
-                .child(glyph.render(TextSize::Base.font_size(), color)),
+                .child(glyph.render(theme::TextSize::Base.font_size(), color)),
         )
         .when_some(chip_label, |button, label| {
             button.child(
                 div()
-                    .kp_text(TextSize::Xs)
+                    .kp_text(theme::TextSize::Xs)
                     .text_color(color)
-                    .max_w(dp(72.))
+                    .max_w(theme::space(18.))
                     .truncate()
                     .when(hinted, |text| text.opacity(0.))
                     .child(label),
@@ -119,11 +122,11 @@ pub fn icon_button(
 }
 
 /// 分组栏里分隔范围、分类、自定义分组三段的竖线。
-pub fn separator(tokens: &KpTokens) -> Div {
+pub fn separator(cx: &App) -> Div {
     div()
         .flex_none()
-        .mx(dp(4.))
-        .h(dp(16.))
+        .mx(theme::space(1.))
+        .h(theme::space(4.))
         .w(gpui::px(1.))
-        .bg(tokens.split)
+        .bg(theme::semantic(cx).border.divider)
 }

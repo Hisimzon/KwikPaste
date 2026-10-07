@@ -18,13 +18,10 @@ use gpui::{
 use kwikpaste_core::db::models::{ClipboardKind, ClipboardSubKind};
 use kwikpaste_ui::{
     Button, Icon, IconName, KpStyled as _,
-    theme::{self, TextSize, radius},
+    theme::{self, TextSize, radius, space},
 };
 
-use super::{
-    card::dp,
-    image_cache::{ImageKey, ImageState, KpImageCache, path_of},
-};
+use super::image_cache::{ImageKey, ImageState, KpImageCache, path_of};
 use crate::{
     clipboard::{
         model::preview::{
@@ -146,7 +143,7 @@ impl PreviewPanel {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let payload = self.preview.as_ref().map(|preview| &preview.payload);
         let (title, meta) = match payload {
             None => (t("preview:title.loading"), t("preview:meta.contentViewer")),
@@ -196,13 +193,13 @@ impl PreviewPanel {
         div()
             .flex()
             .flex_none()
-            .h(dp(HEADER_HEIGHT as f32))
+            .h(space((HEADER_HEIGHT as f32) / 4.))
             .items_center()
             .justify_between()
-            .gap(dp(12.))
-            .px(dp(16.))
+            .gap(space((12.) / 4.))
+            .px(space((16.) / 4.))
             .border_b_1()
-            .border_color(tokens.split)
+            .border_color(tokens.border.divider)
             .child(
                 div()
                     .min_w_0()
@@ -218,7 +215,7 @@ impl PreviewPanel {
                         div()
                             .truncate()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.secondary)
+                            .text_color(tokens.text.secondary)
                             .child(meta),
                     ),
             )
@@ -228,18 +225,18 @@ impl PreviewPanel {
                         .flex()
                         .flex_none()
                         .items_center()
-                        .gap(dp(8.))
+                        .gap(space((8.) / 4.))
                         .when(self.can_pick_words(), |row| row.child(self.view_switch(cx)))
                         .child(
                             div()
                                 .flex()
-                                .h(dp(24.))
+                                .h(space((24.) / 4.))
                                 .items_center()
                                 .rounded(radius::SM)
-                                .bg(tokens.fill_tertiary)
-                                .px(dp(8.))
+                                .bg(tokens.fill.subtle)
+                                .px(space((8.) / 4.))
                                 .kp_text(TextSize::Xs)
-                                .text_color(tokens.secondary)
+                                .text_color(tokens.text.secondary)
                                 .child(t(type_key(payload.kind, payload.sub_kind))),
                         ),
                 )
@@ -249,11 +246,11 @@ impl PreviewPanel {
 
     /// 文本方式切换（1.x antd `Segmented size="small"`）。
     fn view_switch(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         // 选中段在亮色里是浮起的白块（带一层极淡的影），暗色里是亮一档的填充。
         let thumb = match theme::appearance(cx) {
-            theme::Appearance::Light => tokens.bg_container,
-            theme::Appearance::Dark => tokens.fill_secondary,
+            theme::Appearance::Light => tokens.surface.panel,
+            theme::Appearance::Dark => tokens.fill.default,
         };
         let segment = |view: PreviewTextView, key: &str, cx: &mut Context<Self>| {
             let selected = self.text_view == view;
@@ -261,8 +258,8 @@ impl PreviewPanel {
                 .id(SharedString::from(format!("preview-view-{key}")))
                 .flex()
                 .items_center()
-                .h(dp(20.))
-                .px(dp(8.))
+                .h(space((20.) / 4.))
+                .px(space((8.) / 4.))
                 .rounded(radius::XS)
                 .kp_text(TextSize::Xs)
                 .cursor_pointer()
@@ -270,12 +267,12 @@ impl PreviewPanel {
                     if selected {
                         segment
                             .bg(thumb)
-                            .shadow(tokens.shadow_card.to_vec())
-                            .text_color(tokens.text)
+                            .shadow(tokens.shadow.card.to_vec())
+                            .text_color(tokens.text.primary)
                     } else {
                         segment
-                            .text_color(tokens.secondary)
-                            .hover(|style| style.text_color(tokens.text))
+                            .text_color(tokens.text.secondary)
+                            .hover(|style| style.text_color(tokens.text.primary))
                     }
                 })
                 .child(t(key))
@@ -291,35 +288,35 @@ impl PreviewPanel {
 
         div()
             .flex()
-            .gap(dp(2.))
-            .p(dp(2.))
+            .gap(space((2.) / 4.))
+            .p(space((2.) / 4.))
             .rounded(radius::SM)
-            .bg(tokens.fill_tertiary)
+            .bg(tokens.fill.subtle)
             .child(segment(PreviewTextView::Plain, "preview:view.plain", cx))
             .child(segment(PreviewTextView::Words, "preview:view.words", cx))
             .into_any_element()
     }
 
     fn empty(key: &str, cx: &App) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
 
         div()
             .flex()
             .flex_col()
             .size_full()
-            .min_h(dp(96.))
+            .min_h(space((96.) / 4.))
             .items_center()
             .justify_center()
-            .gap(dp(8.))
+            .gap(space((8.) / 4.))
             .child(
                 Icon::new(IconName::Inbox)
-                    .size(dp(32.))
-                    .color(tokens.quaternary),
+                    .size(space((32.) / 4.))
+                    .color(tokens.text.faint),
             )
             .child(
                 div()
                     .kp_text(TextSize::Sm)
-                    .text_color(tokens.secondary)
+                    .text_color(tokens.text.secondary)
                     .child(t(key)),
             )
             .into_any_element()
@@ -380,7 +377,7 @@ impl PreviewPanel {
             .size_full()
             .items_center()
             .justify_center()
-            .p(dp(16.))
+            .p(space((16.) / 4.))
             .child(match state {
                 // 同列表缩略图：圆角，叠一圈不占位置的细描边。
                 ImageState::Ready(image) => div()
@@ -401,7 +398,7 @@ impl PreviewPanel {
                             .size_full()
                             .rounded(radius::SM)
                             .border_1()
-                            .border_color(theme::tokens(cx).split),
+                            .border_color(theme::semantic(cx).border.divider),
                     )
                     .into_any_element(),
                 ImageState::Loading => div().w(px(width)).h(px(height)).into_any_element(),
@@ -426,11 +423,11 @@ impl PreviewPanel {
                             .filter(|line| !line.is_empty())
                             .unwrap_or(" ");
                         div()
-                            .h(dp(TEXT_ROW_HEIGHT as f32))
-                            .px(dp(16.))
+                            .h(space((TEXT_ROW_HEIGHT as f32) / 4.))
+                            .px(space((16.) / 4.))
                             .kp_mono()
                             .kp_text(TextSize::Xs)
-                            .line_height(dp(TEXT_ROW_HEIGHT as f32))
+                            .line_height(space((TEXT_ROW_HEIGHT as f32) / 4.))
                             .whitespace_nowrap()
                             .child(SharedString::from(line.to_owned()))
                     })
@@ -439,12 +436,12 @@ impl PreviewPanel {
         )
         .track_scroll(&self.text_scroll)
         .size_full()
-        .py(dp(16.))
+        .py(space((16.) / 4.))
         .into_any_element()
     }
 
     fn words(&self, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let payload = &preview.payload;
         let text = payload.text.as_deref().unwrap_or_default();
         let mut chips: Vec<AnyElement> = Vec::with_capacity(payload.words.len() + 8);
@@ -463,19 +460,20 @@ impl PreviewPanel {
             chips.push(
                 div()
                     .id(("preview-word", index))
-                    .min_w(dp(24.))
+                    .min_w(space((24.) / 4.))
                     .max_w_full()
-                    .px(dp(6.))
-                    .py(dp(2.))
+                    .px(space((6.) / 4.))
+                    .py(space((2.) / 4.))
                     .rounded(radius::MD)
                     .kp_text(TextSize::Sm)
                     .cursor_pointer()
                     .map(|chip| {
                         if selected {
-                            chip.bg(tokens.primary).text_color(tokens.light_solid)
+                            chip.bg(tokens.accent.solid)
+                                .text_color(tokens.text.on_accent)
                         } else {
-                            chip.bg(tokens.fill_tertiary)
-                                .hover(|style| style.bg(tokens.fill_secondary))
+                            chip.bg(tokens.fill.subtle)
+                                .hover(|style| style.bg(tokens.fill.default))
                         }
                     })
                     .child(div().text_center().child(word))
@@ -515,17 +513,17 @@ impl PreviewPanel {
                             .flex()
                             .flex_wrap()
                             .content_start()
-                            .gap(dp(4.))
-                            .p(dp(16.))
+                            .gap(space(1.))
+                            .p(space((16.) / 4.))
                             .children(chips),
                     )
                     .when(payload.words_truncated, |area| {
                         area.child(
                             div()
-                                .px(dp(16.))
-                                .pb(dp(16.))
+                                .px(space((16.) / 4.))
+                                .pb(space((16.) / 4.))
                                 .kp_text(TextSize::Xs)
-                                .text_color(tokens.secondary)
+                                .text_color(tokens.text.secondary)
                                 .child(t("preview:words.truncated")),
                         )
                     }),
@@ -536,19 +534,19 @@ impl PreviewPanel {
                         .flex()
                         .flex_none()
                         .items_center()
-                        .gap(dp(8.))
+                        .gap(space((8.) / 4.))
                         .border_t_1()
-                        .border_color(tokens.split)
-                        .py(dp(8.))
-                        .pr(dp(12.))
-                        .pl(dp(16.))
+                        .border_color(tokens.border.divider)
+                        .py(space((8.) / 4.))
+                        .pr(space((12.) / 4.))
+                        .pl(space((16.) / 4.))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
                                 .kp_text(TextSize::Xs)
-                                .text_color(tokens.secondary)
+                                .text_color(tokens.text.secondary)
                                 .child(t_count(
                                     "preview:words.selected",
                                     i64::try_from(count).unwrap_or(i64::MAX),
@@ -585,7 +583,7 @@ impl PreviewPanel {
     }
 
     fn files(&self, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let payload = &preview.payload;
         if payload.files.is_empty() {
             return Self::empty("preview:empty.files", cx);
@@ -607,24 +605,26 @@ impl PreviewPanel {
                 t("preview:file.missingPath")
             };
 
-            div().px(dp(8.)).child(
+            div().px(space((8.) / 4.)).child(
                 div()
                     .flex()
-                    .min_h(dp(FILE_ROW_HEIGHT as f32))
+                    .min_h(space((FILE_ROW_HEIGHT as f32) / 4.))
                     .items_center()
-                    .gap(dp(8.))
+                    .gap(space((8.) / 4.))
                     .rounded(radius::MD)
-                    .px(dp(8.))
-                    .py(dp(6.))
-                    .when(!file.exists, |row| row.opacity(0.5))
+                    .px(space((8.) / 4.))
+                    .py(space((6.) / 4.))
+                    .when(!file.exists, |row| {
+                        row.opacity(theme::components(cx).preview_file.missing_opacity)
+                    })
                     .child(match &file.icon_path {
                         Some(icon) => img(path_of(icon))
                             .flex_none()
-                            .size(dp(24.))
+                            .size(space((24.) / 4.))
                             .into_any_element(),
                         None => Icon::new(IconName::Folder)
-                            .size(dp(20.))
-                            .color(tokens.secondary)
+                            .size(space((20.) / 4.))
+                            .color(tokens.text.secondary)
                             .into_any_element(),
                     })
                     .child(
@@ -642,7 +642,7 @@ impl PreviewPanel {
                                 div()
                                     .truncate()
                                     .kp_text(TextSize::Xs)
-                                    .text_color(tokens.secondary)
+                                    .text_color(tokens.text.secondary)
                                     .child(path),
                             ),
                     )
@@ -650,7 +650,7 @@ impl PreviewPanel {
                         div()
                             .flex_none()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.tertiary)
+                            .text_color(tokens.text.muted)
                             .child(size_label),
                     ),
             )
@@ -661,15 +661,15 @@ impl PreviewPanel {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
-            .py(dp(8.))
+            .py(space((8.) / 4.))
             .children(rows)
             .when(payload.total_files > payload.files.len(), |list| {
                 list.child(
                     div()
-                        .px(dp(16.))
-                        .py(dp(8.))
+                        .px(space((16.) / 4.))
+                        .py(space((8.) / 4.))
                         .kp_text(TextSize::Xs)
-                        .text_color(tokens.secondary)
+                        .text_color(tokens.text.secondary)
                         .child(t_args(
                             "preview:file.shownCount",
                             &[
@@ -700,7 +700,7 @@ fn type_key(kind: ClipboardKind, sub_kind: Option<ClipboardSubKind>) -> &'static
 
 impl Render for PreviewPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let content = self.content(window, cx);
 
         div()
@@ -711,11 +711,11 @@ impl Render for PreviewPanel {
             .overflow_hidden()
             .bg(crate::platform::material::shell_surface(
                 cx,
-                tokens.bg_elevated,
+                tokens.surface.raised,
             ))
             .border_1()
-            .border_color(tokens.border_secondary)
-            .text_color(tokens.text)
+            .border_color(tokens.border.subtle)
+            .text_color(tokens.text.primary)
             .on_hover(cx.listener(|_, hovered: &bool, _, cx| {
                 cx.emit(PreviewEvent::Pointer(*hovered));
             }))

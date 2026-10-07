@@ -47,6 +47,7 @@ pub fn start() -> anyhow::Result<StartedCore> {
     let paths = CorePaths::for_native(identity.identifier, identity.env)?;
     let options = CoreOptions {
         locale: kwikpaste_os::locale::system_locale(),
+        fixture_apps: crate::selftest::active(),
         ..CoreOptions::default()
     };
 

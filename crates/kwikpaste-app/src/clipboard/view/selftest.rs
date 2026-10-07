@@ -1843,18 +1843,35 @@ impl Driver {
                     log::warn!("no record for demo stage {stage}");
                     return;
                 };
+                // 预览阶段同时固定列表悬停项，避免上一次初始化时留下的颜色条目影响首帧。
+                self.list.update(cx, |list, cx| {
+                    list.hovered = Some(id.clone());
+                    cx.notify();
+                });
                 self.list.update(cx, |list, cx| list.reveal_item(&id, cx));
                 // 面板刚显示后 vsync 线程最多停 1 秒（见报告），等它醒来出帧，卡片位置才记得下。
                 self.pause(cx, 1200).await;
+                if stage == "preview-files" {
+                    self.list
+                        .update(cx, |list, cx| list.reveal_item_now(&id, cx));
+                }
                 self.list.update(cx, |list, cx| {
                     list.open_preview(id, PreviewTrigger::Keyboard, cx);
                 });
+                if stage == "preview-files" {
+                    // 文件图标由后台解码后才进入 GPUI 图集；自测等待一帧完整结果，避免首张截图落在 Loading。
+                    self.pause(cx, 4000).await;
+                }
             }
             "group-menu" => {
                 // 分组栏第一个自定义分组上按右键（1.x 的编辑、隐藏、删除菜单）。
                 self.pointer_at(cx, 190., 56.);
                 self.right_click(cx, 190., 56.);
                 self.settle_menu(cx, true).await;
+                self.pointer_at(cx, 20., 20.);
+                self.list.update(cx, |list, cx| {
+                    list.close_preview(cx);
+                });
             }
             "group-new" => {
                 self.key(cx, "secondary-n");
@@ -1884,6 +1901,10 @@ impl Driver {
                 };
                 self.right_click(cx, 180., 360.);
                 self.settle_menu(cx, true).await;
+                self.pointer_at(cx, 20., 20.);
+                self.list.update(cx, |list, cx| {
+                    list.close_preview(cx);
+                });
                 if stage == "menu-group" {
                     self.pointer_at(cx, 20., 20.);
                     self.pause(cx, 30).await;

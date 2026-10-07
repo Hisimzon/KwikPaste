@@ -1,6 +1,6 @@
 //! 列表卡片与占位骨架，按 1.x `ClipboardCard.tsx` / `cards/*` 的样子画（卡片风格、标准密度为默认）。
 //!
-//! 尺寸全部来自 [`LayoutSpec`] 的设计 px，经 [`dp`] 换成 rem，随文本缩放；颜色全部取 `KpTokens`。
+//! 尺寸全部来自 [`LayoutSpec`] 的设计 px，经 `space(px / 4)` 换成 rem，随文本缩放；颜色全部取角色 token。
 //! 交互（悬停、点击）由列表视图挂在返回的元素上；悬停快捷动作、多选复选框这类带回调的部件也由
 //! 列表画好后经 [`CardState`] 交进来，这里只管摆放。
 
@@ -9,13 +9,13 @@ use std::{rc::Rc, sync::Arc, time::Duration};
 use chrono::{DateTime, Local};
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Div, ElementId, Image, ImageSource,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems, RenderImage,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, RenderImage,
     SharedString, StatefulInteractiveElement as _, Styled, Window, div, img,
-    prelude::FluentBuilder as _, pulsating_between, relative, rems,
+    prelude::FluentBuilder as _, pulsating_between, relative,
 };
 use kwikpaste_ui::{
     Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _,
-    theme::{KpTokens, TextSize, css_color, radius},
+    theme::{TextSize, css_color, radius, semantic::SemanticTokens, space},
 };
 
 use crate::{
@@ -27,11 +27,6 @@ use crate::{
     i18n::{t, t_args},
 };
 
-/// 1.x 设计 px 换成 rem（基准 16 px）。
-pub fn dp(value: f32) -> Rems {
-    rems(value / 16.)
-}
-
 /// 骨架脉动的帧率上限（附录 D §2.1：循环动画限 10 fps）。
 const PULSE_MAX_FPS: f32 = 10.;
 /// Tailwind `animate-pulse` 的周期。
@@ -39,7 +34,7 @@ const PULSE_PERIOD: Duration = Duration::from_secs(2);
 
 /// 渲染卡片需要的环境。
 pub struct CardEnv<'a> {
-    pub tokens: &'static KpTokens,
+    pub tokens: &'static SemanticTokens,
     pub layout: &'a LayoutSpec,
     pub now: DateTime<Local>,
     pub reduce_motion: bool,
@@ -134,12 +129,12 @@ pub fn card(
     // 条目是扁平的行：平时没有底色和描边，悬停、当前项（中性灰）、勾选（淡主色）时才铺一层
     // 底色。卡片风格是圆角块、行间画细分隔线；无间风格贴边，用底边线分隔。
     let highlight = if state.checked {
-        Some(tokens.primary_bg)
+        Some(tokens.accent.subtle)
     } else if state.active {
-        Some(tokens.fill_secondary)
+        Some(tokens.fill.default)
     } else if state.hovered {
         // 比当前项浅一档，指针扫过时不会和当前项混淆。
-        Some(tokens.fill_quaternary)
+        Some(tokens.fill.faint)
     } else {
         None
     };
@@ -147,10 +142,10 @@ pub fn card(
         .relative()
         .flex()
         .overflow_hidden()
-        .py(dp(layout.card_padding_y))
-        .px(dp(layout.card_padding_x))
+        .py(space((layout.card_padding_y) / 4.))
+        .px(space((layout.card_padding_x) / 4.))
         .when(layout.seamless, |frame| {
-            frame.border_b_1().border_color(tokens.split)
+            frame.border_b_1().border_color(tokens.border.divider)
         })
         // 卡片风格保留 1 px 的透明描边：行高估算里算了这圈描边。
         .when(!layout.seamless, |frame| {
@@ -165,7 +160,7 @@ pub fn card(
         // 来源、类型、时间这行小号灰字在正文上方。
         frame
             .flex_col()
-            .gap(dp(layout.body_gap))
+            .gap(space((layout.body_gap) / 4.))
             .child(meta(
                 env,
                 item,
@@ -179,12 +174,12 @@ pub fn card(
     } else {
         frame
             .items_start()
-            .gap(dp(layout.body_gap))
+            .gap(space((layout.body_gap) / 4.))
             .child(
                 div()
                     .flex()
                     .flex_none()
-                    .h(dp(20.))
+                    .h(space((20.) / 4.))
                     .items_center()
                     .child(hinted_icon(env, item, hint)),
             )
@@ -194,7 +189,7 @@ pub fn card(
                     .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .gap(dp(2.))
+                    .gap(space((2.) / 4.))
                     .child(body)
                     .children(snippets(env, item, 0, on_snippet)),
             )
@@ -206,7 +201,7 @@ pub fn card(
                     div()
                         .flex()
                         .flex_none()
-                        .h(dp(20.))
+                        .h(space((20.) / 4.))
                         .items_center()
                         .child(checkbox),
                 )
@@ -216,14 +211,14 @@ pub fn card(
                 frame.child(
                     div()
                         .absolute()
-                        .top(dp(4.))
-                        .right(dp(4.))
-                        .p(dp(2.))
+                        .top(space(1.))
+                        .right(space(1.))
+                        .p(space((2.) / 4.))
                         .rounded(radius::MD)
                         .border_1()
-                        .border_color(tokens.border_secondary)
-                        .bg(tokens.bg_elevated)
-                        .shadow(tokens.shadow_card.to_vec())
+                        .border_color(tokens.border.subtle)
+                        .bg(tokens.surface.raised)
+                        .shadow(tokens.shadow.card.to_vec())
                         .child(actions),
                 )
             })
@@ -238,18 +233,18 @@ pub fn card(
         .aria_position_in_set(state.position)
         .aria_size_of_set(state.set_size)
         .relative()
-        .px(dp(layout.item_padding_x))
-        .pt(dp(layout.item_gap))
+        .px(space((layout.item_padding_x) / 4.))
+        .pt(space((layout.item_gap) / 4.))
         // 卡片风格的行间分隔线画在行上方的间距里，左右与正文对齐；第一行和挨着色块的不画。
         .when(divider, |row| {
             row.child(
                 div()
                     .absolute()
-                    .top(dp(layout.item_gap / 2.))
-                    .left(dp(divider_left))
-                    .right(dp(layout.item_padding_x + layout.card_padding_x))
+                    .top(space((layout.item_gap / 2.) / 4.))
+                    .left(space((divider_left) / 4.))
+                    .right(space((layout.item_padding_x + layout.card_padding_x) / 4.))
                     .h(gpui::px(1.))
-                    .bg(tokens.split),
+                    .bg(tokens.border.divider),
             )
         })
         .child(frame)
@@ -262,15 +257,15 @@ pub fn placeholder(env: &CardEnv<'_>) -> AnyElement {
     let layout = env.layout;
     let bar = |width: gpui::DefiniteLength| {
         div()
-            .h(dp(12.))
+            .h(space((12.) / 4.))
             .w(width)
             .rounded(radius::SM)
-            .bg(tokens.fill_secondary)
+            .bg(tokens.fill.default)
     };
     let line = |width: f32| {
         div()
             .flex()
-            .h(dp(20.))
+            .h(space((20.) / 4.))
             .items_center()
             .child(bar(relative(width)))
     };
@@ -282,17 +277,17 @@ pub fn placeholder(env: &CardEnv<'_>) -> AnyElement {
         .child(line(0.75))
         .child(line(0.5));
     let icon = div()
-        .size(dp(16.))
+        .size(space((16.) / 4.))
         .flex_none()
         .rounded(radius::SM)
-        .bg(tokens.fill_secondary);
+        .bg(tokens.fill.default);
 
     let frame = div()
         .flex()
-        .py(dp(layout.card_padding_y))
-        .px(dp(layout.card_padding_x))
+        .py(space((layout.card_padding_y) / 4.))
+        .px(space((layout.card_padding_x) / 4.))
         .border_color(if layout.seamless {
-            tokens.split
+            tokens.border.divider
         } else {
             kwikpaste_ui::theme::transparent()
         })
@@ -301,29 +296,32 @@ pub fn placeholder(env: &CardEnv<'_>) -> AnyElement {
             frame.border_1().rounded(radius::LG)
         });
     let frame = if layout.header_row {
-        frame.flex_col().gap(dp(layout.body_gap)).child(
+        frame.flex_col().gap(space((layout.body_gap) / 4.)).child(
             div()
                 .flex()
-                .h(dp(layout.header_height))
+                .h(space((layout.header_height) / 4.))
                 .items_center()
-                .gap(dp(4.))
+                .gap(space(1.))
                 .child(icon)
-                .child(bar(dp(64.).into())),
+                .child(bar(space((64.) / 4.).into())),
         )
     } else {
-        frame.items_start().gap(dp(layout.body_gap)).child(
-            div()
-                .flex()
-                .flex_none()
-                .h(dp(20.))
-                .items_center()
-                .child(icon),
-        )
+        frame
+            .items_start()
+            .gap(space((layout.body_gap) / 4.))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .h(space((20.) / 4.))
+                    .items_center()
+                    .child(icon),
+            )
     };
 
     div()
-        .px(dp(layout.item_padding_x))
-        .pt(dp(layout.item_gap))
+        .px(space((layout.item_padding_x) / 4.))
+        .pt(space((layout.item_gap) / 4.))
         .child(frame.child(lines))
         .into_any_element()
 }
@@ -375,24 +373,24 @@ fn meta(
 
     div()
         .flex()
-        .h(dp(env.layout.header_height))
+        .h(space((env.layout.header_height) / 4.))
         .items_center()
         .justify_between()
-        .gap(dp(6.))
+        .gap(space((6.) / 4.))
         .kp_text(TextSize::Xs)
-        .text_color(tokens.tertiary)
+        .text_color(tokens.text.muted)
         .child(
             div()
                 .flex()
                 .min_w_0()
                 .items_center()
-                .gap(dp(6.))
+                .gap(space((6.) / 4.))
                 .overflow_hidden()
                 .child(hinted_icon(env, item, hint))
                 .child(
                     div()
                         .truncate()
-                        .text_color(tokens.secondary)
+                        .text_color(tokens.text.secondary)
                         .child(type_label(item.type_key())),
                 )
                 .children(origin.map(|origin| {
@@ -411,7 +409,7 @@ fn meta(
                 .flex()
                 .flex_none()
                 .items_center()
-                .gap(dp(6.))
+                .gap(space((6.) / 4.))
                 .when(actions.is_none(), |side| side.child(marks))
                 .children(actions)
                 .children(checkbox),
@@ -483,9 +481,9 @@ pub fn accessibility_name(item: &ListItem, now: &DateTime<Local>) -> SharedStrin
 /// 头部行里配 12 px 的小字用 14 px，紧凑密度里和正文并排用 16 px，三种来源同一尺寸。
 fn app_icon(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
     let size = if env.layout.header_row {
-        dp(14.)
+        space((14.) / 4.)
     } else {
-        dp(16.)
+        space((16.) / 4.)
     };
     if item.source_app_id.is_some()
         && let Some(path) = &item.source_app_icon_path
@@ -503,7 +501,7 @@ fn app_icon(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
         };
         return div()
             .flex_none()
-            .child(Icon::new(icon).size(size).color(env.tokens.secondary))
+            .child(Icon::new(icon).size(size).color(env.tokens.text.secondary))
             .into_any_element();
     }
 
@@ -572,15 +570,15 @@ fn text_body(env: &CardEnv<'_>, item: &ListItem, on_link: Option<LinkHandler>) -
         return div()
             .flex()
             .items_center()
-            .gap(dp(8.))
+            .gap(space((8.) / 4.))
             .kp_text(TextSize::Sm)
             .child(
                 div()
-                    .size(dp(16.))
+                    .size(space((16.) / 4.))
                     .flex_none()
                     .rounded(radius::SM)
                     .border_1()
-                    .border_color(tokens.border_secondary)
+                    .border_color(tokens.border.subtle)
                     .bg(color),
             )
             .child(div().kp_mono().child(shared(value)))
@@ -606,7 +604,7 @@ fn text_body(env: &CardEnv<'_>, item: &ListItem, on_link: Option<LinkHandler>) -
         .kp_text(TextSize::Sm)
         .line_clamp(env.layout.text_max_lines)
         .text_ellipsis()
-        .text_color(tokens.primary)
+        .text_color(tokens.accent.solid)
         .underline()
         .cursor_pointer()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -622,13 +620,13 @@ fn note_annotation(env: &CardEnv<'_>, note: &Arc<str>) -> AnyElement {
     div()
         .flex()
         .items_start()
-        .gap(dp(4.))
+        .gap(space(1.))
         .kp_text(TextSize::Sm)
         .child(
-            div().flex_none().pt(dp(3.)).child(
+            div().flex_none().pt(space((3.) / 4.)).child(
                 Icon::new(IconName::NotebookPen)
-                    .size(dp(14.))
-                    .color(env.tokens.primary),
+                    .size(space((14.) / 4.))
+                    .color(env.tokens.accent.solid),
             ),
         )
         .child(div().flex_1().min_w_0().child(shared(note)))
@@ -645,7 +643,10 @@ fn image_body(
     let Some(target) = image_target(item, env.layout) else {
         return div().into_any_element();
     };
-    let (width, height) = (dp(target.display.width), dp(target.display.height));
+    let (width, height) = (
+        space((target.display.width) / 4.),
+        space((target.display.height) / 4.),
+    );
 
     match image.unwrap_or(Visual::Loading) {
         // 圆角缩略图，上面叠一圈不占位置的细描边：白底截图、浅色图片也有边界，行高不变。
@@ -670,7 +671,7 @@ fn image_body(
                             .size_full()
                             .rounded(radius::SM)
                             .border_1()
-                            .border_color(tokens.split),
+                            .border_color(tokens.border.divider),
                     ),
             )
             .into_any_element(),
@@ -685,11 +686,11 @@ fn image_body(
                     .items_center()
                     .justify_center()
                     .rounded(radius::SM)
-                    .bg(tokens.fill_tertiary)
+                    .bg(tokens.fill.subtle)
                     .child(
                         Icon::new(IconName::ImageOff)
-                            .size(dp(target.display.height.min(16.)))
-                            .color(tokens.quaternary),
+                            .size(space((target.display.height.min(16.)) / 4.))
+                            .color(tokens.text.faint),
                     ),
             )
             .into_any_element(),
@@ -699,7 +700,7 @@ fn image_body(
                 .w(width)
                 .h(height)
                 .rounded(radius::SM)
-                .bg(tokens.fill_tertiary);
+                .bg(tokens.fill.subtle);
             let skeleton = if env.reduce_motion {
                 skeleton.into_any_element()
             } else {
@@ -726,17 +727,17 @@ fn files_body(env: &CardEnv<'_>, rows: &[FileRow]) -> AnyElement {
     div()
         .flex()
         .flex_col()
-        .gap(dp(4.))
+        .gap(space(1.))
         .kp_text(TextSize::Sm)
         .children(rows.iter().map(|row| {
             div()
                 .flex()
                 .items_center()
-                .gap(dp(4.))
+                .gap(space(1.))
                 .min_w_0()
                 .children(row.icon_path.as_ref().map(|path| {
                     img(std::path::PathBuf::from(&**path))
-                        .size(dp(20.))
+                        .size(space((20.) / 4.))
                         .flex_none()
                 }))
                 .child(
@@ -744,7 +745,8 @@ fn files_body(env: &CardEnv<'_>, rows: &[FileRow]) -> AnyElement {
                         .min_w_0()
                         .truncate()
                         .when(!row.exists, |name| {
-                            name.line_through().text_decoration_color(tokens.text)
+                            name.line_through()
+                                .text_decoration_color(tokens.text.primary)
                         })
                         .child(shared(&row.name)),
                 )
@@ -774,10 +776,10 @@ fn snippets(
         div()
             .flex()
             .flex_wrap()
-            .h(dp(24.))
-            .gap(dp(4.))
+            .h(space((24.) / 4.))
+            .gap(space(1.))
             .overflow_hidden()
-            .pr(dp(reserve))
+            .pr(space((reserve) / 4.))
             .children(
                 item.quick_snippets
                     .iter()
@@ -786,14 +788,14 @@ fn snippets(
                         let chip = div()
                             .id(ElementId::NamedInteger("snippet".into(), index as u64))
                             .flex()
-                            .h(dp(24.))
+                            .h(space((24.) / 4.))
                             .max_w_full()
                             .items_center()
-                            .px(dp(8.))
+                            .px(space((8.) / 4.))
                             .rounded(radius::MD)
-                            .bg(tokens.fill_tertiary)
+                            .bg(tokens.fill.subtle)
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.secondary)
+                            .text_color(tokens.text.secondary)
                             .child(div().truncate().child(shared(snippet)));
                         let Some(on_pick) = on_pick.clone() else {
                             return chip.into_any_element();
@@ -803,7 +805,11 @@ fn snippets(
 
                         // 按下时拦住事件，不触发卡片的选中、单击粘贴和双击粘贴（1.x `SnippetChip`）。
                         chip.cursor_pointer()
-                            .hover(|style| style.bg(tokens.fill_secondary).text_color(tokens.text))
+                            .hover(|style| {
+                                style
+                                    .bg(tokens.fill.default)
+                                    .text_color(tokens.text.primary)
+                            })
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
@@ -818,29 +824,33 @@ fn snippets(
 }
 
 /// 置顶、敏感标记：有头部行时是右下角 20 px 的水印，没有时是正文右侧 16 px 的小图标。
-fn status_marks(tokens: &KpTokens, pinned: bool, sensitive: bool, inline: bool) -> Div {
-    let size = dp(14.);
+fn status_marks(tokens: &SemanticTokens, pinned: bool, sensitive: bool, inline: bool) -> Div {
+    let size = space((14.) / 4.);
     let marks = div()
         .flex()
-        .gap(dp(4.))
+        .gap(space(1.))
         .when(pinned, |marks| {
             marks.child(
                 Icon::new(IconName::PushPin)
                     .size(size)
-                    .color(tokens.warning),
+                    .color(tokens.status.warning.solid),
             )
         })
         .when(sensitive, |marks| {
             marks.child(
                 Icon::new(IconName::KeyRound)
                     .size(size)
-                    .color(tokens.quaternary),
+                    .color(tokens.text.faint),
             )
         });
 
     if inline {
-        marks.flex_none().h(dp(20.)).items_center()
+        marks.flex_none().h(space((20.) / 4.)).items_center()
     } else {
-        marks.absolute().right(dp(8.)).bottom(dp(8.)).items_end()
+        marks
+            .absolute()
+            .right(space((8.) / 4.))
+            .bottom(space((8.) / 4.))
+            .items_end()
     }
 }

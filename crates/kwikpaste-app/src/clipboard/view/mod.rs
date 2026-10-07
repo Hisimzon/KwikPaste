@@ -7,7 +7,6 @@
 
 pub mod bench;
 mod card;
-mod chrome;
 mod editing;
 mod frame;
 mod group_bar;

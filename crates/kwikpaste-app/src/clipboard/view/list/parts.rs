@@ -8,35 +8,30 @@ use gpui::{
     prelude::FluentBuilder as _, radians,
 };
 use kwikpaste_ui::{
-    Button, Checkbox, Icon, IconName, KpStyled as _, TooltipExt as _,
-    theme::{self, KpTokens, TextSize, radius},
+    Button, Checkbox, Glyph, Icon, IconButtonLook as Look, IconName, KpStyled as _,
+    TooltipExt as _, icon_button,
+    theme::{self, TextSize, radius, semantic::SemanticTokens, space},
 };
 
 use super::ClipboardList;
 use crate::{
-    clipboard::{
-        model::{
-            actions::{QuickAction, is_copy},
-            empty_state::{category_key, empty_text},
-            item::ListItem,
-            shortcut,
-        },
-        view::{
-            card::dp,
-            chrome::{Glyph, Look, icon_button},
-        },
+    clipboard::model::{
+        actions::{QuickAction, is_copy},
+        empty_state::{category_key, empty_text},
+        item::ListItem,
+        shortcut,
     },
     i18n::{t, t_args, t_count},
 };
 
 /// 一个快捷动作按钮的图标、文案和颜色（1.x `resolveItemActionPresentation`）。
 fn presentation(
-    tokens: &KpTokens,
+    tokens: &SemanticTokens,
     action: QuickAction,
     item: &ListItem,
     copied: bool,
 ) -> (IconName, SharedString, gpui::Hsla) {
-    let secondary = tokens.secondary;
+    let secondary = tokens.text.secondary;
     match action {
         QuickAction::Paste => (
             IconName::ClipboardPaste,
@@ -56,7 +51,7 @@ fn presentation(
         QuickAction::Copy | QuickAction::CopyPlain if copied => (
             IconName::CircleCheck,
             t("clipboard:quickActions.copySuccess"),
-            tokens.success,
+            tokens.status.success.solid,
         ),
         QuickAction::Copy => (IconName::Copy, t("clipboard:quickActions.copy"), secondary),
         QuickAction::CopyPlain => (
@@ -88,7 +83,7 @@ fn presentation(
             IconName::NotebookPen,
             t("clipboard:quickActions.note"),
             if item.note.is_some() {
-                tokens.primary
+                tokens.accent.solid
             } else {
                 secondary
             },
@@ -96,13 +91,13 @@ fn presentation(
         QuickAction::Star if item.is_favorite => (
             IconName::Star,
             t("clipboard:quickActions.starActive"),
-            tokens.warning,
+            tokens.status.warning.solid,
         ),
         QuickAction::Star => (IconName::Star, t("clipboard:quickActions.star"), secondary),
         QuickAction::PinItem if item.is_pinned => (
             IconName::PushPin,
             t("clipboard:quickActions.pinItemActive"),
-            tokens.primary,
+            tokens.accent.solid,
         ),
         QuickAction::PinItem => (
             IconName::PushPin,
@@ -112,7 +107,7 @@ fn presentation(
         QuickAction::Delete => (
             IconName::Trash,
             t("clipboard:quickActions.delete"),
-            tokens.error,
+            tokens.status.danger.solid,
         ),
     }
 }
@@ -144,7 +139,7 @@ impl ClipboardList {
         actions: Vec<QuickAction>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let buttons = actions.into_iter().map(|action| {
             let copied = is_copy(action)
                 && self
@@ -152,8 +147,8 @@ impl ClipboardList {
                     .as_ref()
                     .is_some_and(|(id, copied)| *id == item.id && *copied == action);
             let (icon, label, color) = presentation(tokens, action, item, copied);
-            let hover_color = if color == tokens.secondary {
-                tokens.text
+            let hover_color = if color == tokens.text.secondary {
+                tokens.text.primary
             } else {
                 color
             };
@@ -163,13 +158,13 @@ impl ClipboardList {
                 .id(ElementId::Name(action_name(action).into()))
                 .flex()
                 .flex_none()
-                .size(dp(20.))
+                .size(space((20.) / 4.))
                 .items_center()
                 .justify_center()
                 .rounded(radius::SM)
                 .cursor_pointer()
                 .text_color(color)
-                .hover(move |style| style.bg(tokens.fill_tertiary).text_color(hover_color))
+                .hover(move |style| style.bg(tokens.fill.subtle).text_color(hover_color))
                 .child(
                     Icon::new(icon)
                         .size(TextSize::Sm.font_size())
@@ -189,7 +184,7 @@ impl ClipboardList {
         div()
             .flex()
             .items_center()
-            .gap(dp(2.))
+            .gap(space((2.) / 4.))
             .children(buttons)
             .into_any_element()
     }
@@ -205,7 +200,7 @@ impl ClipboardList {
 
     /// 空列表：按筛选条件给出 16 种提示之一。
     pub(super) fn render_empty(&self, cx: &App) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let filter = self.filter();
         let text = empty_text(filter);
         let category = text.category.map(|kind| t(category_key(kind)));
@@ -240,25 +235,29 @@ impl ClipboardList {
             .flex_1()
             .items_center()
             .justify_center()
-            .gap(dp(12.))
-            .px(dp(24.))
-            .pb(dp(40.))
+            .gap(space((12.) / 4.))
+            .px(space((24.) / 4.))
+            .pb(space((40.) / 4.))
             .child(
                 div()
                     .flex()
                     .flex_none()
-                    .size(dp(48.))
+                    .size(space((48.) / 4.))
                     .items_center()
                     .justify_center()
                     .rounded_full()
-                    .bg(tokens.fill_tertiary)
-                    .child(Icon::new(icon).size(dp(24.)).color(tokens.tertiary)),
+                    .bg(tokens.fill.subtle)
+                    .child(
+                        Icon::new(icon)
+                            .size(space((24.) / 4.))
+                            .color(tokens.text.muted),
+                    ),
             )
             .child(
                 div()
-                    .max_w(dp(280.))
+                    .max_w(space((280.) / 4.))
                     .kp_text(TextSize::Sm)
-                    .text_color(tokens.tertiary)
+                    .text_color(tokens.text.muted)
                     .text_center()
                     .child(t_args(text.key, &args)),
             )
@@ -271,7 +270,7 @@ impl ClipboardList {
             return self.render_selection_bar(cx);
         }
 
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let total = i64::try_from(self.model.total()).unwrap_or(i64::MAX);
         let hint = |key: &str| self.key_hints.then(|| SharedString::from(key.to_owned()));
         let empty = total == 0;
@@ -279,10 +278,10 @@ impl ClipboardList {
         div()
             .flex()
             .flex_none()
-            .h(dp(32.))
+            .h(space((32.) / 4.))
             .items_center()
             .justify_between()
-            .px(dp(12.))
+            .px(space((12.) / 4.))
             .child(
                 div()
                     .flex()
@@ -292,7 +291,7 @@ impl ClipboardList {
                     .items_center()
                     .window_control_area(gpui::WindowControlArea::Drag)
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.tertiary)
+                    .text_color(tokens.text.muted)
                     .child(t_count("clipboard:footer.total", total, &[])),
             )
             .child(
@@ -300,17 +299,21 @@ impl ClipboardList {
                     .flex()
                     .flex_none()
                     .items_center()
-                    .gap(dp(4.))
+                    .gap(space(1.))
                     .child(
                         icon_button(
-                            tokens,
+                            cx,
                             "footer-select",
                             Glyph::Icon(IconName::ListChecks),
                             t("clipboard:footer.select"),
                             hint("A"),
                             Look::Text,
                         )
-                        .when(empty, |button| button.opacity(0.4).cursor_default())
+                        .when(empty, |button| {
+                            button
+                                .opacity(theme::components(cx).quick_action.disabled_opacity)
+                                .cursor_default()
+                        })
                         .on_click(cx.listener(move |list, _, _, cx| {
                             if !empty {
                                 list.enter_selection(cx);
@@ -319,7 +322,7 @@ impl ClipboardList {
                     )
                     .child(
                         icon_button(
-                            tokens,
+                            cx,
                             "footer-shortcuts",
                             Glyph::Icon(IconName::Keyboard),
                             t("clipboard:footer.shortcuts"),
@@ -336,7 +339,7 @@ impl ClipboardList {
 
     /// 多选栏（1.x `SelectionBar.tsx`）：左侧已选条数或操作提示，右侧全选、删除、取消。
     fn render_selection_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let count = self.selection.count();
         let busy = self.selection.busy();
         let status = if count > 0 {
@@ -357,17 +360,17 @@ impl ClipboardList {
         div()
             .flex()
             .flex_none()
-            .h(dp(32.))
+            .h(space((32.) / 4.))
             .items_center()
             .justify_between()
-            .gap(dp(8.))
-            .px(dp(12.))
+            .gap(space((8.) / 4.))
+            .px(space((12.) / 4.))
             .child(
                 div()
                     .min_w_0()
                     .truncate()
                     .kp_text(TextSize::Xs)
-                    .text_color(tokens.secondary)
+                    .text_color(tokens.text.secondary)
                     .child(status),
             )
             .child(
@@ -375,7 +378,7 @@ impl ClipboardList {
                     .flex()
                     .flex_none()
                     .items_center()
-                    .gap(dp(4.))
+                    .gap(space(1.))
                     .child(
                         Button::new("selection-toggle-all", toggle_label)
                             .small()

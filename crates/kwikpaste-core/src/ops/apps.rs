@@ -56,6 +56,10 @@ impl Core {
 
     /// 可过滤的应用：数据库里已知的应用加上本次枚举到的运行中应用，按名称排序。
     pub async fn list_all_apps(&self) -> Result<Vec<ClipboardAppView>> {
+        if self.0.fixture_apps {
+            return Ok(selftest_apps());
+        }
+
         let core = self.clone();
         self.hop(async move {
             let running = refresh_running_apps(&core.0).await?;
@@ -87,4 +91,27 @@ impl Core {
         self.hop(async move { apps_registry::delete_unreferenced_apps(&core.0, ids).await })
             .await
     }
+}
+
+/// 自测里的来源应用必须不受宿主机当前进程清单影响，截图才能逐像素复现。
+fn selftest_apps() -> Vec<ClipboardAppView> {
+    [
+        ("Fixture Browser", r"C:\KwikPaste\fixture-browser.exe"),
+        ("Fixture Editor", r"C:\KwikPaste\fixture-editor.exe"),
+        ("Fixture Mail", r"C:\KwikPaste\fixture-mail.exe"),
+        ("Fixture Notes", r"C:\KwikPaste\fixture-notes.exe"),
+        ("Fixture Terminal", r"C:\KwikPaste\fixture-terminal.exe"),
+        ("Fixture Writer", r"C:\KwikPaste\fixture-writer.exe"),
+    ]
+    .into_iter()
+    .map(|(name, id)| ClipboardAppView {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        icon_file: None,
+        icon_path: None,
+        platform: Platform::Windows,
+        created_at: DateTime::UNIX_EPOCH,
+        updated_at: DateTime::UNIX_EPOCH,
+    })
+    .collect()
 }

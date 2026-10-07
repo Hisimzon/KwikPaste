@@ -44,6 +44,8 @@ pub(crate) struct CoreInner {
     pub(crate) paths: CorePaths,
     /// 切换存储位置、覆盖导入后重开数据库时沿用启动时的连接池上限。
     pub(crate) db_max_connections: u32,
+    /// 见 [`CoreOptions::fixture_apps`]。
+    pub(crate) fixture_apps: bool,
     pub(crate) rt: Handle,
     pub(crate) events: Arc<dyn EventSink>,
     pub(crate) settings: SettingsStore,
@@ -94,6 +96,7 @@ impl Core {
                 info,
                 paths,
                 db_max_connections: options.db_max_connections,
+                fixture_apps: options.fixture_apps,
                 rt: handle,
                 events,
                 settings,

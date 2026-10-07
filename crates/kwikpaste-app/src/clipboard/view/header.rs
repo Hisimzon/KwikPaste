@@ -11,13 +11,12 @@ use gpui::{
     MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, Task, Window, WindowControlArea, div, img,
 };
-use kwikpaste_ui::{IconName, Input, TextInput, TextInputEvent, theme};
-
-use super::{
-    SEARCH_CONTEXT,
-    card::{dp, logo},
-    chrome::{Glyph, Look, icon_button},
+use kwikpaste_ui::{
+    Glyph, IconButtonLook as Look, IconName, Input, TextInput, TextInputEvent, icon_button,
+    theme::space,
 };
+
+use super::{SEARCH_CONTEXT, card::logo};
 use crate::{
     i18n::{self, t},
     platform::EditTrigger,
@@ -131,7 +130,6 @@ impl Header {
 
 impl Render for Header {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
         if self.language != i18n::language() {
             self.language = i18n::language();
             self.input
@@ -149,9 +147,9 @@ impl Render for Header {
             .flex_none()
             .w_full()
             .items_center()
-            .px(dp(12.))
-            .pt(dp(12.))
-            .pb(dp(8.))
+            .px(space((12.) / 4.))
+            .pt(space((12.) / 4.))
+            .pb(space((8.) / 4.))
             .child(
                 // logo 到搜索框之间的空白都能拖动窗口。
                 div()
@@ -160,14 +158,14 @@ impl Render for Header {
                     .self_stretch()
                     .items_center()
                     .window_control_area(WindowControlArea::Drag)
-                    .child(img(ImageSource::Image(logo())).size(dp(20.))),
+                    .child(img(ImageSource::Image(logo())).size(space((20.) / 4.))),
             )
             .child(
                 div()
                     .flex()
                     .flex_none()
                     .items_center()
-                    .gap(dp(4.))
+                    .gap(space(1.))
                     .child(
                         div()
                             .id("clipboard-search")
@@ -183,14 +181,14 @@ impl Render for Header {
                             .child(
                                 Input::search(&self.input)
                                     .small()
-                                    .width(dp(160.))
+                                    .width(space((160.) / 4.))
                                     .hint_key(hint("F"))
                                     .accessibility_label(t("clipboard:header.searchPlaceholder")),
                             ),
                     )
                     .child(
                         icon_button(
-                            tokens,
+                            cx,
                             "clipboard-header-pin",
                             Glyph::Icon(IconName::PinWindow),
                             pin_label,
@@ -205,7 +203,7 @@ impl Render for Header {
                     )
                     .child(
                         icon_button(
-                            tokens,
+                            cx,
                             "clipboard-header-preferences",
                             Glyph::Icon(IconName::SettingLine),
                             t("clipboard:header.openPreference"),

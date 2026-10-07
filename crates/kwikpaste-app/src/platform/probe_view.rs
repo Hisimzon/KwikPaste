@@ -12,7 +12,6 @@ use gpui::{
     actions, div,
 };
 use kwikpaste_core::db::models::ClipboardItemQuery;
-use kwikpaste_core::settings::Material;
 use kwikpaste_ui::{Input, TextInput, theme};
 
 use super::drag_out::{self, DragTracker};
@@ -120,13 +119,8 @@ impl ProbeView {
 impl Render for ProbeView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         probe::async_frame_rendered();
-        let tokens = theme::tokens(cx);
-        // 材质下根元素半透明（底色比例与 1.x 的 .kp-material-surface 相同），否则不透明。
-        let background = match super::material::current(cx).effective {
-            Material::Default => tokens.bg_container,
-            Material::Mica => tokens.bg_container.opacity(0.58),
-            Material::Acrylic => tokens.bg_container.opacity(0.34),
-        };
+        let tokens = theme::semantic(cx);
+        let background = super::material::panel_surface(cx);
         let status: SharedString = format!(
             "{} · selected {} · text scale {}",
             if self.editing { "editing" } else { "list" },
@@ -144,7 +138,7 @@ impl Render for ProbeView {
             .gap_2()
             .p_3()
             .bg(background)
-            .text_color(tokens.text)
+            .text_color(tokens.text.primary)
             .on_action(cx.listener(|_, _: &EnterEditing, _, cx| {
                 Self::request(PanelCommand::BeginEditing(EditTrigger::Keyboard), cx);
             }))
@@ -213,6 +207,6 @@ impl Render for ProbeView {
                     })
                     .child("KwikPaste platform probe"),
             )
-            .child(div().text_color(tokens.secondary).child(status))
+            .child(div().text_color(tokens.text.secondary).child(status))
     }
 }

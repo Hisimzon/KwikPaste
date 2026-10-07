@@ -78,38 +78,45 @@ pub fn current(cx: &App) -> WindowMaterial {
 }
 
 /// 返回面板内容层的不透明度；默认材质返回 `None`，由调用方使用不透明 token。
+#[allow(dead_code, reason = "保留供平台材质探针读取统一 alpha")]
 pub fn surface_alpha(cx: &App) -> Option<f32> {
+    let materials = theme::semantic(cx).materials;
     match current(cx).effective {
-        Material::Mica => Some(theme::MATERIAL_MICA_ALPHA),
-        Material::Acrylic => Some(theme::MATERIAL_ACRYLIC_ALPHA),
+        Material::Mica => Some(materials.panel_mica_alpha),
+        Material::Acrylic => Some(materials.panel_acrylic_alpha),
         Material::Default => None,
+    }
+}
+
+fn theme_kind(material: Material) -> theme::MaterialKind {
+    match material {
+        Material::Default => theme::MaterialKind::None,
+        Material::Mica => theme::MaterialKind::Mica,
+        Material::Acrylic => theme::MaterialKind::Acrylic,
     }
 }
 
 /// 窗口“框架”区（偏好设置的侧栏、标题栏）底色：默认材质与窗口底同色（`bg_layout`），
 /// 靠细分隔线区分；材质下照 1.x 叠一层很淡的 `bg_container`。
 pub fn chrome_surface(cx: &App) -> Hsla {
-    let tokens = theme::tokens(cx);
-    match current(cx).effective {
-        Material::Mica => tokens.bg_container.opacity(0.34),
-        Material::Acrylic => tokens.bg_container.opacity(0.2),
-        Material::Default => tokens.bg_layout,
-    }
+    let tokens = theme::semantic(cx);
+    theme::palette::material_chrome_surface(tokens, theme_kind(current(cx).effective))
 }
 
 /// 剪贴板面板的底色：默认材质是 `bg_container`，材质下是半透明的内容层。条目是扁平的行，
 /// 不再有自己的卡片底。
 pub fn panel_surface(cx: &App) -> Hsla {
-    let tokens = theme::tokens(cx);
-    surface_alpha(cx).map_or(tokens.bg_container, |alpha| tokens.material_surface(alpha))
+    let tokens = theme::semantic(cx);
+    theme::palette::material_surface(tokens, theme_kind(current(cx).effective))
 }
 
 /// 窗口外壳底色（1.x `.kp-material-surface`）：默认材质用窗口自己的 token；材质下统一是
 /// `bg_container` 按面板同样的比例半透明——暗色的 `bg_layout` 是纯黑，不能拿来透底。
 pub fn shell_surface(cx: &App, default: Hsla) -> Hsla {
-    match surface_alpha(cx) {
-        Some(alpha) => theme::tokens(cx).bg_container.opacity(alpha),
-        None => default,
+    if current(cx).effective == Material::Default {
+        default
+    } else {
+        theme::palette::material_surface(theme::semantic(cx), theme_kind(current(cx).effective))
     }
 }
 

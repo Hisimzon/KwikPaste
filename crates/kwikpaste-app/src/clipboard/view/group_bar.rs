@@ -12,13 +12,10 @@ use gpui::{
     WindowControlArea, div, prelude::FluentBuilder as _,
 };
 use kwikpaste_ui::{
-    IconName, MenuEntry, MenuItem, MenuTrigger, context_menu, group_icon_path, theme,
+    Glyph, IconButtonLook as Look, IconName, MenuEntry, MenuItem, MenuTrigger, context_menu,
+    group_icon_path, icon_button, separator, theme::space,
 };
 
-use super::{
-    card::dp,
-    chrome::{Glyph, Look, icon_button, separator},
-};
 use crate::{
     clipboard::{
         model::{
@@ -122,7 +119,6 @@ impl GroupBar {
     }
 
     fn range_button(&self, range: Range, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
         let (id, icon, label) = match range {
             Range::All => (
                 "group-range-all",
@@ -139,7 +135,7 @@ impl GroupBar {
         // Mod+Q 的角标标在按下去会切到的那个按钮上。
         let hint = (self.hints && self.range.toggled() == range).then(|| SharedString::from("Q"));
 
-        icon_button(tokens, id, Glyph::Icon(icon), label, hint, look(selected))
+        icon_button(cx, id, Glyph::Icon(icon), label, hint, look(selected))
             .role(Role::Tab)
             .aria_selected(selected)
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(GroupBarEvent::SelectRange(range))))
@@ -147,7 +143,6 @@ impl GroupBar {
     }
 
     fn category_button(&self, kind: ItemKind, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
         let (id, icon, label) = match kind {
             ItemKind::Text => (
                 "group-text",
@@ -167,7 +162,7 @@ impl GroupBar {
         };
 
         icon_button(
-            tokens,
+            cx,
             id,
             Glyph::Icon(icon),
             label,
@@ -181,14 +176,13 @@ impl GroupBar {
     }
 
     fn custom_button(&self, group: &Group, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
         let selected = self.group_id.as_deref() == Some(&*group.id);
         let id = group.id.clone();
         let entity = cx.entity().downgrade();
         let menu_group = group.clone();
 
         let button = icon_button(
-            tokens,
+            cx,
             SharedString::from(format!("group-custom-{}", group.id)),
             Glyph::Path(group_icon_path(&group.icon)),
             SharedString::from(group.name.to_string()),
@@ -205,7 +199,6 @@ impl GroupBar {
     }
 
     fn more_button(&self, overflow: Vec<Group>, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
         let selected = overflow
             .iter()
             .any(|group| self.group_id.as_deref() == Some(&*group.id));
@@ -215,7 +208,7 @@ impl GroupBar {
 
         MenuTrigger::new("group-more")
             .child(icon_button(
-                tokens,
+                cx,
                 "group-more-button",
                 Glyph::Icon(IconName::Ellipsis),
                 t("clipboard:groups.more"),
@@ -247,12 +240,11 @@ impl GroupBar {
     }
 
     fn create_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::tokens(cx);
         let entity = cx.entity().downgrade();
         let hint = self.hints.then(|| SharedString::from("N"));
 
         let button = icon_button(
-            tokens,
+            cx,
             "group-create",
             Glyph::Icon(IconName::Plus),
             t("clipboard:groups.add"),
@@ -340,7 +332,6 @@ fn create_entries(entity: gpui::WeakEntity<GroupBar>) -> Vec<MenuEntry> {
 
 impl Render for GroupBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
         let width = window.viewport_size().width.as_f32() / window.rem_size().as_f32() * 16.;
         let visible: Vec<Group> = self
             .groups
@@ -399,21 +390,21 @@ impl Render for GroupBar {
             .flex_none()
             .w_full()
             .items_center()
-            .gap(dp(GAP))
+            .gap(space((GAP) / 4.))
             .overflow_hidden()
-            .px(dp(12.))
-            .pb(dp(8.))
+            .px(space((12.) / 4.))
+            .pb(space((8.) / 4.))
             .children(ranges)
-            .child(separator(tokens))
+            .child(separator(cx))
             .children(categories)
-            .child(separator(tokens))
+            .child(separator(cx))
             .when(!customs.is_empty(), |bar| bar.children(customs))
             .child(action)
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .h(dp(32.))
+                    .h(space((32.) / 4.))
                     .window_control_area(WindowControlArea::Drag),
             )
     }

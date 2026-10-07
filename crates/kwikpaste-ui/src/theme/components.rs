@@ -10,6 +10,21 @@ pub struct IconButtonTokens {
     pub pressed: Hsla,
     pub selected: Hsla,
     pub selected_hover: Hsla,
+    pub chip_foreground: Hsla,
+    pub chip_background: Hsla,
+    pub chip_hover: Hsla,
+}
+
+/// 空状态快捷操作的禁用透明度。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QuickActionTokens {
+    pub disabled_opacity: f32,
+}
+
+/// 不存在的预览文件行的透明度。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreviewFileTokens {
+    pub missing_opacity: f32,
 }
 
 /// 输入和选择器的表面、边框、聚焦边框及占位符颜色。
@@ -115,7 +130,7 @@ pub struct ScrollbarTokens {
     pub thumb_hover: Hsla,
 }
 
-/// 由兼容 KpTokens 生成组件状态，避免本阶段改变像素。
+/// 由角色语义 token 生成组件状态，避免视图临时拼接透明度。
 pub fn icon_button(tokens: &super::semantic::SemanticTokens) -> IconButtonTokens {
     IconButtonTokens {
         foreground: tokens.text.secondary,
@@ -123,10 +138,13 @@ pub fn icon_button(tokens: &super::semantic::SemanticTokens) -> IconButtonTokens
         pressed: tokens.fill.strong,
         selected: tokens.accent.solid.opacity(0.13),
         selected_hover: tokens.accent.solid.opacity(0.2),
+        chip_foreground: tokens.text.primary,
+        chip_background: tokens.fill.default,
+        chip_hover: tokens.fill.strong,
     }
 }
 
-/// 由兼容 KpTokens 生成输入状态。
+/// 由角色语义 token 生成输入状态。
 pub fn input(tokens: &super::semantic::SemanticTokens) -> InputTokens {
     InputTokens {
         background: tokens.fill.subtle,
@@ -140,6 +158,8 @@ pub fn input(tokens: &super::semantic::SemanticTokens) -> InputTokens {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ComponentTokens {
     pub icon_button: IconButtonTokens,
+    pub quick_action: QuickActionTokens,
+    pub preview_file: PreviewFileTokens,
     pub input: InputTokens,
     pub group_chip: GroupChipTokens,
     pub card_row: CardRowTokens,
@@ -157,6 +177,12 @@ impl ComponentTokens {
     pub fn from_semantic(s: &super::semantic::SemanticTokens) -> Self {
         Self {
             icon_button: icon_button(s),
+            quick_action: QuickActionTokens {
+                disabled_opacity: 0.4,
+            },
+            preview_file: PreviewFileTokens {
+                missing_opacity: 0.5,
+            },
             input: input(s),
             group_chip: GroupChipTokens {
                 background: s.fill.faint,
