@@ -10,6 +10,7 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 
+use kwikpaste_core::app_ids::contains_app;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
@@ -227,10 +228,10 @@ fn is_listed(window: HWND) -> bool {
         .is_some_and(|(_, ids)| matches_app_ids(ids, &app_ids))
 }
 
-/// Windows 路径不区分大小写；两种 id 写法任一命中即可。
+/// 两种 id 写法任一命中即可；按应用比较（不区分大小写、不看商店与 Squirrel 应用的版本目录），
+/// 应用升级后列表里存的旧版本路径照样命中。
 fn matches_app_ids(ids: &[String; 2], app_ids: &[String]) -> bool {
-    ids.iter()
-        .any(|id| app_ids.iter().any(|wanted| wanted.eq_ignore_ascii_case(id)))
+    ids.iter().any(|id| contains_app(app_ids, id))
 }
 
 /// 判定全屏需要的窗口信息。
@@ -422,5 +423,25 @@ mod tests {
         ));
         assert!(!matches_app_ids(&ids, &[r"C:\Games\Other.exe".to_owned()]));
         assert!(!matches_app_ids(&ids, &[]));
+    }
+
+    #[test]
+    fn listed_apps_match_later_installed_versions() {
+        let store = |version: &str| {
+            format!(
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_{version}_x64__2p2nqsd0c76g0\app\ChatGPT.exe"
+            )
+        };
+        let running = store("26.930.3930.0");
+        assert!(matches_app_ids(
+            &[running.clone(), running],
+            &[store("26.930.2377.0")]
+        ));
+
+        let squirrel = r"C:\Users\a\AppData\Local\Discord\app-1.0.9170\Discord.exe".to_owned();
+        assert!(matches_app_ids(
+            &[squirrel.clone(), squirrel],
+            &[r"C:\Users\a\AppData\Local\Discord\app-1.0.9163\Discord.exe".to_owned()]
+        ));
     }
 }

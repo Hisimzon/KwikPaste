@@ -13,6 +13,7 @@ use chrono::Utc;
 
 use super::app_store::AppIconStore;
 use super::icon::icon_png;
+use crate::app_ids::app_family_key;
 use crate::db::apps;
 use crate::db::models::ClipboardApp;
 use crate::error::{AppError, Result};
@@ -230,6 +231,31 @@ pub(crate) fn merge_clipboard_apps(
     merged.into_values().collect()
 }
 
+/// 同一应用的多个安装版本（见 [`app_family_key`]）只留一项：最近更新的那个版本，运行中的应用
+/// 带着本次枚举的时间，因而就是当前装着的版本；它没有图标时借同一应用其他版本的图标。
+pub(crate) fn merge_app_versions(apps: Vec<ClipboardApp>) -> Vec<ClipboardApp> {
+    let mut merged: Vec<ClipboardApp> = Vec::with_capacity(apps.len());
+    let mut by_family: HashMap<String, usize> = HashMap::with_capacity(apps.len());
+
+    for mut app in apps {
+        let family = app_family_key(&app.id);
+        let Some(&index) = by_family.get(&family) else {
+            by_family.insert(family, merged.len());
+            merged.push(app);
+            continue;
+        };
+        let kept = &mut merged[index];
+        if (app.updated_at, &app.id) > (kept.updated_at, &kept.id) {
+            std::mem::swap(kept, &mut app);
+        }
+        if kept.icon_file.is_none() {
+            kept.icon_file = app.icon_file;
+        }
+    }
+
+    merged
+}
+
 /// 按名称（不区分大小写）和 id 稳定排序来源应用列表。
 pub(crate) fn sort_clipboard_apps(apps: &mut [ClipboardApp]) {
     apps.sort_by(|left, right| {
@@ -283,6 +309,43 @@ mod tests {
                 ("a", "Known A", Some("a.png")),
                 ("b", "Known B", Some("b.png")),
                 ("c", "Running C", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn versions_of_one_app_merge_into_the_newest() {
+        let store = |version: &str| {
+            format!(
+                r"C:\Program Files\WindowsApps\Claude_{version}_x64__pzs8sxrjxfjjc\app\claude.exe"
+            )
+        };
+        let at = |seconds: i64| DateTime::from_timestamp(seconds, 0).unwrap();
+        let merged = merge_app_versions(vec![
+            ClipboardApp {
+                updated_at: at(10),
+                ..app(&store("2.19675.0.0"), "claude", Some("old.png"))
+            },
+            ClipboardApp {
+                updated_at: at(30),
+                ..app(&store("2.19675.1.0"), "claude", None)
+            },
+            ClipboardApp {
+                updated_at: at(20),
+                ..app(&store("2.19600.0.0"), "Claude", None)
+            },
+            app(r"C:\Windows\explorer.exe", "explorer", None),
+        ]);
+
+        let summary: Vec<_> = merged
+            .iter()
+            .map(|app| (app.id.clone(), app.icon_file.as_deref()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (store("2.19675.1.0"), Some("old.png")),
+                (r"C:\Windows\explorer.exe".to_owned(), None),
             ]
         );
     }

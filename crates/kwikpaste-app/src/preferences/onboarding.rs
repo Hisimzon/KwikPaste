@@ -9,6 +9,7 @@ use gpui::{
     TitlebarOptions, Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _,
     px, rems, size,
 };
+use kwikpaste_core::app_ids;
 use kwikpaste_core::settings::Settings;
 use kwikpaste_ui::{
     Button, ButtonSize, Checkbox, KpStyled as _, ScrollArea, Select, SelectOption, SelectState,
@@ -357,23 +358,11 @@ impl Onboarding {
     }
 
     fn set_excluded_app(&mut self, id: String, excluded: bool, cx: &mut Context<Self>) {
-        if excluded {
-            if !self
-                .settings
-                .clipboard
-                .filters
-                .excluded_app_ids
-                .contains(&id)
-            {
-                self.settings.clipboard.filters.excluded_app_ids.push(id);
-            }
-        } else {
-            self.settings
-                .clipboard
-                .filters
-                .excluded_app_ids
-                .retain(|known| known != &id);
-        }
+        app_ids::set_app_listed(
+            &mut self.settings.clipboard.filters.excluded_app_ids,
+            &id,
+            excluded,
+        );
         self.update_settings(
             json!({ "clipboard": { "filters": { "excludedAppIds": self.settings.clipboard.filters.excluded_app_ids } } }),
             cx,
@@ -779,12 +768,8 @@ impl Onboarding {
             } else {
                 app.name.clone()
             };
-            let checked = self
-                .settings
-                .clipboard
-                .filters
-                .excluded_app_ids
-                .contains(&id);
+            let checked =
+                app_ids::contains_app(&self.settings.clipboard.filters.excluded_app_ids, &id);
             let path = (!app.name.is_empty()).then(|| id.clone());
             div()
                 .flex()

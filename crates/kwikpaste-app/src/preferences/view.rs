@@ -5,7 +5,7 @@ use gpui::{
     Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
-    CoreEvent,
+    CoreEvent, app_ids,
     backup::{self, BackupContainerMode, BackupExportMode, BackupImportStrategy},
     db::overview::{ClearScope, ContentCategory},
     ops::{PreferenceDirectory, StorageOverview},
@@ -22,7 +22,7 @@ use kwikpaste_ui::{
     toast::{self, Toast},
 };
 use serde_json::json;
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use super::{
     icons::PrefIcon,
@@ -1465,7 +1465,11 @@ impl Preferences {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let count = value
-            .and_then(|value| value.as_array().map(|items| items.len()))
+            .and_then(|value| {
+                value.as_array().map(|items| {
+                    app_ids::count_apps(items.iter().filter_map(serde_json::Value::as_str))
+                })
+            })
             .unwrap_or_default();
         let entity = cx.entity().downgrade();
         Button::new(
@@ -3296,18 +3300,16 @@ fn segment(
         .child(label)
 }
 
+/// 每个应用一行（同一应用的多个安装版本已在 core 合并）。设置里存的 id 原样保留，可能是旧版本的
+/// 路径；勾选状态与增删都按应用比较，见 [`app_ids`]。
 struct SourceAppsDialog {
     apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
-    selected: HashSet<String>,
+    selected: Vec<String>,
 }
 
 impl SourceAppsDialog {
     fn set_selected(&mut self, id: &str, checked: bool, cx: &mut Context<Self>) {
-        if checked {
-            self.selected.insert(id.to_owned());
-        } else {
-            self.selected.remove(id);
-        }
+        app_ids::set_app_listed(&mut self.selected, id, checked);
         cx.notify();
     }
 }
@@ -3486,7 +3488,7 @@ impl Render for SourceAppsDialog {
         let tokens = theme::semantic(cx);
         let rows = self.apps.iter().enumerate().map(|(index, app)| {
             let id = app.id.clone();
-            let checked = self.selected.contains(&id);
+            let checked = app_ids::contains_app(&self.selected, &id);
             let name = if app.name.is_empty() {
                 id.clone()
             } else {
@@ -3574,7 +3576,7 @@ fn open_source_apps_dialog(
 ) {
     let dialog = cx.new(|_| SourceAppsDialog {
         apps,
-        selected: excluded.into_iter().collect(),
+        selected: excluded,
     });
     let content = dialog.clone();
     let adder = dialog.downgrade();
@@ -3610,7 +3612,11 @@ fn open_source_apps_dialog(
                         match core.add_app_from_path(path).await {
                             Ok(app) => {
                                 let _ = adder.update(cx, |dialog, cx| {
-                                    if !dialog.apps.iter().any(|known| known.id == app.id) {
+                                    if !dialog
+                                        .apps
+                                        .iter()
+                                        .any(|known| app_ids::same_app(&known.id, &app.id))
+                                    {
                                         dialog.apps.push(app);
                                     }
                                     cx.notify();
@@ -3633,7 +3639,7 @@ fn open_source_apps_dialog(
                 return;
             }
             let selected = cx
-                .update(|_, cx| dialog.read(cx).selected.iter().cloned().collect::<Vec<_>>())
+                .update(|_, cx| dialog.read(cx).selected.clone())
                 .unwrap_or_default();
             let _ = parent.update(cx, |preferences, cx| {
                 preferences.update(settings_path, json!(selected), cx);

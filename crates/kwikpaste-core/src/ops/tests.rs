@@ -177,6 +177,27 @@ fn capture_skips_excluded_apps_self_writes_and_pauses() {
     assert_eq!(copy_in(&core, state), Some(id));
 }
 
+/// 勾选时存下的是商店应用旧版本的路径；应用升级换了包目录后，新版本复制的内容照样不入库。
+#[test]
+fn capture_skips_later_versions_of_excluded_apps() {
+    let old = r"C:\Program Files\WindowsApps\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc\app\claude.exe";
+    let new = r"C:\Program Files\WindowsApps\Claude_2.19675.1.0_x64__pzs8sxrjxfjjc\app\claude.exe";
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    block_on(core.update_settings(json!({"clipboard": {"filters": {"excludedAppIds": [old]}}})))
+        .unwrap();
+
+    fixture.platform.set_frontmost(new, "claude");
+    assert_eq!(copy_in(&core, text("from the updated app")), None);
+
+    fixture.platform.set_frontmost(
+        r"C:\Program Files\WindowsApps\OpenAI.Codex_26.930.3930.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+        "ChatGPT",
+    );
+    assert!(copy_in(&core, text("from another store app")).is_some());
+    assert_eq!(core.settings().clipboard.filters.excluded_app_ids, [old]);
+}
+
 #[test]
 fn captured_images_store_the_origin_and_thumbnail_lazily() {
     let fixture = Fixture::new();

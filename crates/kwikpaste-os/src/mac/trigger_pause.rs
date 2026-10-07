@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use block2::RcBlock;
+use kwikpaste_core::app_ids::contains_app;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{NSObjectProtocol, ProtocolObject};
 use objc2_app_kit::{NSWorkspace, NSWorkspaceDidActivateApplicationNotification};
@@ -93,7 +94,7 @@ fn frontmost_is_listed(app_ids: &[String]) -> bool {
         }
         app.bundleIdentifier()
             .map(|id| id.to_string())
-            .is_some_and(|id| app_ids.contains(&id))
+            .is_some_and(|id| contains_app(app_ids, &id))
     })
 }
 

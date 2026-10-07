@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::clipboard::apps_registry::{
-    self, merge_clipboard_apps, refresh_running_apps, sort_clipboard_apps,
+    self, merge_app_versions, merge_clipboard_apps, refresh_running_apps, sort_clipboard_apps,
 };
 use crate::clipboard::AppIconStore;
 use crate::db::models::{ClipboardApp, Platform};
@@ -54,7 +54,8 @@ impl Core {
         .await
     }
 
-    /// 可过滤的应用：数据库里已知的应用加上本次枚举到的运行中应用，按名称排序。
+    /// 可过滤的应用：数据库里已知的应用加上本次枚举到的运行中应用，同一应用的多个安装版本只列最新的
+    /// 那个（勾选与命中都按应用比较，见 [`crate::app_ids`]），按名称排序。
     pub async fn list_all_apps(&self) -> Result<Vec<ClipboardAppView>> {
         if self.0.fixture_apps {
             return Ok(selftest_apps());
@@ -64,7 +65,7 @@ impl Core {
         self.hop(async move {
             let running = refresh_running_apps(&core.0).await?;
             let known = crate::db::apps::list_all_apps(&core.0.db.pool().await).await?;
-            let mut apps = merge_clipboard_apps(known, running);
+            let mut apps = merge_app_versions(merge_clipboard_apps(known, running));
 
             sort_clipboard_apps(&mut apps);
             Ok(apps

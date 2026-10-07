@@ -20,6 +20,7 @@ use super::apps_registry::materialize_source;
 use super::backend::{ClipboardBackend, SystemClipboard};
 use super::ingest::build_item_with_settings;
 use super::read::ClipboardReader;
+use crate::app_ids::contains_app;
 use crate::db::models::{ClipboardApp, ClipboardItem};
 use crate::error::{AppError, Result};
 use crate::root::CoreInner;
@@ -133,15 +134,10 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
     let source = core.platform().frontmost_app();
     let settings = core.settings.snapshot();
 
-    // 用户在偏好里勾选了「过滤此应用」时整条丢弃，省掉无效的读取与图片解码。
+    // 用户在偏好里勾选了「过滤此应用」时整条丢弃，省掉无效的读取与图片解码。按应用比较：
+    // 商店、Squirrel 应用升级后路径换了版本号，勾选时存下的旧版本 id 照样命中。
     if let Some(src) = &source {
-        if settings
-            .clipboard
-            .filters
-            .excluded_app_ids
-            .iter()
-            .any(|id| id == &src.id)
-        {
+        if contains_app(&settings.clipboard.filters.excluded_app_ids, &src.id) {
             return None;
         }
     }
