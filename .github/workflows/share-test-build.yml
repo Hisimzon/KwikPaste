@@ -1,0 +1,97 @@
+name: Share Test Build
+
+# 把一个 2.x release（草稿也可以）里的 macOS dmg 传到七牛的独立目录，给测试人员直接下载：
+#   dl.fastthree.com/kwikpaste/test/<tag>-<7 位提交号>/<dmg 文件名>
+# 目录名带提交号：同一个版本号重新打包后是新地址，不会被 CDN 缓存成旧文件。
+# 不碰更新清单、渠道指针和官网读的 kwikpaste/<渠道>/<tag>/ 目录，也不发布 release。
+
+"on":
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "2.x release tag（草稿也可以），例如 v2.0.0-beta.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  MIRROR_BUCKET: kwikpaste
+  MIRROR_PREFIX: kwikpaste
+  MIRROR_BASE_URL: https://dl.fastthree.com/kwikpaste
+  MIRROR_S3_ENDPOINT: https://s3.cn-south-1.qiniucs.com
+  MIRROR_S3_REGION: cn-south-1
+
+jobs:
+  share:
+    name: Share macOS dmgs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upload the dmgs to Qiniu
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${TAG_NAME}" =~ ^v([0-9]+)\. ]] || (( BASH_REMATCH[1] < 2 )); then
+            echo "::error::Only 2.x tags can be shared here: ${TAG_NAME}."
+            exit 1
+          fi
+          if [[ -z "${QINIU_ACCESS_KEY}" || -z "${QINIU_SECRET_KEY}" ]]; then
+            echo "::error::QINIU_ACCESS_KEY / QINIU_SECRET_KEY are not configured."
+            exit 1
+          fi
+
+          # 按 tag 取 release 的接口不返回草稿，只能在列表里找。
+          release_id="$(gh api "repos/${GH_REPO}/releases" --paginate --jq ".[] | select(.tag_name == \"${TAG_NAME}\") | .id" | head -n 1)"
+          if [[ -z "${release_id}" ]]; then
+            echo "::error::No release for ${TAG_NAME}."
+            exit 1
+          fi
+          commit="$(gh api "repos/${GH_REPO}/commits/${TAG_NAME}" --jq .sha)"
+          dir="test/${TAG_NAME}-${commit:0:7}"
+
+          gh api "repos/${GH_REPO}/releases/${release_id}/assets?per_page=100" \
+            --jq '.[] | select(.name | endswith(".dmg")) | [.id, .name, .size] | @tsv' > dmgs.tsv
+          if [[ ! -s dmgs.tsv ]]; then
+            echo "::error::${TAG_NAME} has no dmg."
+            exit 1
+          fi
+
+          mkdir -p assets
+          while IFS=$'\t' read -r asset_id asset_name asset_size; do
+            gh api -H "Accept: application/octet-stream" "repos/${GH_REPO}/releases/assets/${asset_id}" > "assets/${asset_name}"
+            actual_size="$(stat -c %s "assets/${asset_name}")"
+            if [[ "${actual_size}" != "${asset_size}" ]]; then
+              echo "::error::Downloaded ${asset_name} is ${actual_size} bytes, expected ${asset_size}."
+              exit 1
+            fi
+          done < dmgs.tsv
+
+          export AWS_ACCESS_KEY_ID="${QINIU_ACCESS_KEY}"
+          export AWS_SECRET_ACCESS_KEY="${QINIU_SECRET_KEY}"
+          export AWS_DEFAULT_REGION="${MIRROR_S3_REGION}"
+          export AWS_EC2_METADATA_DISABLED=true
+          export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+          export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+          aws s3 --endpoint-url "${MIRROR_S3_ENDPOINT}" --only-show-errors \
+            cp assets/ "s3://${MIRROR_BUCKET}/${MIRROR_PREFIX}/${dir}/" --recursive --content-type application/x-apple-diskimage
+
+          echo "### ${TAG_NAME} (${commit:0:7}) macOS dmgs" >> "${GITHUB_STEP_SUMMARY}"
+          while IFS=$'\t' read -r _ asset_name _; do
+            url="${MIRROR_BASE_URL}/${dir}/${asset_name}"
+            code="$(curl -sS -o /dev/null -r 0-0 -w '%{http_code}' --retry 3 --retry-delay 5 "${url}")"
+            if [[ "${code}" != "200" && "${code}" != "206" ]]; then
+              echo "::error::Uploaded ${url} returned HTTP ${code}."
+              exit 1
+            fi
+            sha="$(sha256sum "assets/${asset_name}" | cut -d' ' -f1)"
+            echo "OK ${url} sha256 ${sha}"
+            echo "- ${url} (sha256 \`${sha}\`)" >> "${GITHUB_STEP_SUMMARY}"
+          done < dmgs.tsv
