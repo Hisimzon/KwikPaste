@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 
 use crate::clipboard::{
     self, build_item_with_settings, materialize_source, resolve_fragment, split_words,
-    validate_image_file_name, ClipboardFragment, ClipboardReader, WordSplit,
+    validate_image_file_name, ClipboardFragment, ClipboardPayload, ClipboardReader, WordSplit,
 };
 use crate::db::items::{
     clear_items, delete_item, delete_items, find_item_by_id, find_item_id_at,
@@ -89,6 +89,15 @@ impl QuickPasteGuard {
             kind: item.kind,
         }
     }
+
+    fn into_plain_ticket(mut self, kind: ClipboardKind) -> QuickPasteTicket {
+        let core = self.0.take().expect("quick paste guard already consumed");
+        QuickPasteTicket {
+            core,
+            item_id: "clipboard".to_owned(),
+            kind,
+        }
+    }
 }
 
 impl Drop for QuickPasteGuard {
@@ -119,6 +128,23 @@ pub(crate) fn should_write_plain_for_paste(
     force_plain
         || kind == ClipboardKind::Text && paste_plain
         || kind == ClipboardKind::Files && paste_files_as_path
+}
+
+/// 决定一次全局纯文本粘贴要写入的文本；空文本和图片返回 `None`。
+pub fn plain_paste_decision(payload: &ClipboardPayload) -> Option<String> {
+    match payload {
+        ClipboardPayload::Text(text) if !text.text.is_empty() => Some(text.text.clone()),
+        ClipboardPayload::Files(files) => {
+            let content = files
+                .iter()
+                .filter(|path| !path.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!content.is_empty()).then_some(content)
+        }
+        ClipboardPayload::Text(_) | ClipboardPayload::Image(_) => None,
+    }
 }
 
 /// 打开链接的目标：`mailto` 时补 `mailto:`，`www.` 开头补 `https://`；内容为空返回 `None`。
@@ -377,6 +403,35 @@ impl Core {
             write_item(&core.0, &item, write_plain)?;
             mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await?;
             Ok(Some(guard.into_ticket(&item)))
+        })
+        .await
+    }
+
+    /// 读取当前系统剪贴板并准备一次纯文本粘贴，不访问历史数据库。
+    /// 当前剪贴板的可粘贴内容统一写成单一纯文本，再交给粘贴注入。
+    pub async fn prepare_plain_paste_from_clipboard(&self) -> Result<Option<QuickPasteTicket>> {
+        let Some(guard) = QuickPasteGuard::acquire(&self.0) else {
+            return Ok(None);
+        };
+
+        let core = self.clone();
+        self.hop(async move {
+            let payload = {
+                let backend = core.0.clipboard()?;
+                ClipboardReader::with_backend(&*backend).read_current()?
+            };
+            let Some(payload) = payload else {
+                return Ok(None);
+            };
+            let Some(text) = plain_paste_decision(&payload) else {
+                return Ok(None);
+            };
+            write_fragment(&core.0, &text)?;
+            let kind = match payload {
+                ClipboardPayload::Files(_) => ClipboardKind::Files,
+                _ => ClipboardKind::Text,
+            };
+            Ok(Some(guard.into_plain_ticket(kind)))
         })
         .await
     }
@@ -716,6 +771,49 @@ mod tests {
 
         content.paste_files_as_path = true;
         assert!(writes_plain(&content, ClipboardKind::Files));
+    }
+
+    #[test]
+    fn plain_paste_decision_covers_text_rich_text_files_and_empty_payloads() {
+        use crate::clipboard::{ImagePayload, TextPayload};
+
+        let plain = ClipboardPayload::Text(TextPayload {
+            text: "hello".to_owned(),
+            html: None,
+            rtf: None,
+        });
+        assert_eq!(plain_paste_decision(&plain), Some("hello".to_owned()));
+
+        for rich in [Some("<b>hello</b>".to_owned()), None] {
+            let payload = ClipboardPayload::Text(TextPayload {
+                text: "hello".to_owned(),
+                html: rich,
+                rtf: Some(r"{\rtf1 hello}".to_owned()),
+            });
+            assert_eq!(plain_paste_decision(&payload), Some("hello".to_owned()));
+        }
+
+        let files = ClipboardPayload::Files(vec!["C:/a.txt".to_owned(), "C:/b.txt".to_owned()]);
+        assert_eq!(
+            plain_paste_decision(&files),
+            Some("C:/a.txt\nC:/b.txt".to_owned())
+        );
+        assert_eq!(
+            plain_paste_decision(&ClipboardPayload::Text(TextPayload {
+                text: String::new(),
+                html: Some("<b>".to_owned()),
+                rtf: None,
+            })),
+            None
+        );
+        assert_eq!(
+            plain_paste_decision(&ClipboardPayload::Image(ImagePayload {
+                bytes: vec![1],
+                width: 1,
+                height: 1,
+            })),
+            None
+        );
     }
 
     #[test]

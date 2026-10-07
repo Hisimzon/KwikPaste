@@ -130,6 +130,8 @@ pub struct Shortcuts {
     pub open_clipboard: String,
     /// 全局：打开偏好设置窗口。
     pub open_preference: String,
+    /// 全局：把当前系统剪贴板去除格式后直接粘贴。空字符串表示禁用。
+    pub paste_plain: String,
     /// 仅 Windows：用 Win+V 唤起剪贴板窗口，替代系统剪贴板历史面板。默认关闭。
     pub win_v: bool,
     /// 仅 Windows：单击这个鼠标按键打开或隐藏剪贴板窗口，按键原有的单击功能随之停用。默认关闭。
@@ -149,6 +151,7 @@ impl Default for Shortcuts {
         Self {
             open_clipboard: "Alt+C".into(),
             open_preference: "Alt+X".into(),
+            paste_plain: String::new(),
             win_v: false,
             mouse_trigger: MouseTrigger::Disabled,
             pause_in_fullscreen: true,

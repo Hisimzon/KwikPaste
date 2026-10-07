@@ -703,6 +703,7 @@ impl Onboarding {
                             current,
                             &self.settings,
                             self.recording == Some(id),
+                            cx,
                         )
                         .accessibility_label(text::setting_title(&setting))
                         .on_click(cx.listener(move |this, _, window, cx| {

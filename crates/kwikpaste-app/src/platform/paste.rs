@@ -13,6 +13,7 @@
 //! - **全局快速粘贴**（设置 `shortcuts.quickPaste` 的修饰键 + 1…9、0）由热键模块直接调用
 //!   [`quick_paste`]，UI 不用管：`Core::prepare_quick_paste` → 等修饰键全部松开（最多 2 s；超时就把内容
 //!   留在剪贴板上、不粘贴）→ 面板可见时让出前台并等 50 ms → 注入 → 丢弃凭据。
+//! - **全局纯文本粘贴**（设置 `shortcuts.pastePlain`）读取当前系统剪贴板，必要时通过回环抑制写成纯文本，再等待修饰键释放后注入粘贴键。
 //!
 //! 返回的 `Task` 可以 await 拿到 core 的错误（`AppError` 的消息是用户可读的根因，给 toast 用），
 //! 不关心就 `detach_and_log_err`（`gpui::TaskExt`）。粘贴键落到当前前台窗口：面板非编辑态从不激活，
@@ -141,6 +142,19 @@ pub fn quick_paste(cx: &mut App, offset: i64) -> Task<()> {
     })
 }
 
+/// 全局粘贴当前剪贴板的纯文本表示；没有可用文本时不注入按键。
+pub fn paste_plain(cx: &mut App) -> Task<()> {
+    let Some(core) = core_host::core(cx).cloned() else {
+        return Task::ready(());
+    };
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        if let Err(err) = run_plain_paste(&core, cx).await {
+            log::warn!("plain paste failed: {err}");
+        }
+    })
+}
+
 async fn run_quick_paste(core: &Core, offset: i64, cx: &mut AsyncApp) -> Result<()> {
     let _phase = super::enter_phase(crate::health::Phase::Paste);
     let started = Instant::now();
@@ -157,6 +171,24 @@ async fn run_quick_paste(core: &Core, offset: i64, cx: &mut AsyncApp) -> Result<
 
     let report = yield_and_inject(cx, false).await?;
     probe::pasted("quick", &ticket.item_id, false, report, started.elapsed());
+    drop(ticket);
+    Ok(())
+}
+
+async fn run_plain_paste(core: &Core, cx: &mut AsyncApp) -> Result<()> {
+    let _phase = super::enter_phase(crate::health::Phase::Paste);
+    let started = Instant::now();
+    let Some(ticket) = core.prepare_plain_paste_from_clipboard().await? else {
+        log::debug!("plain paste skipped: current clipboard has no text or files");
+        return Ok(());
+    };
+    if !wait_for_modifiers_released(cx).await {
+        log::warn!("plain paste left plain text on the clipboard: modifier keys are still held");
+        return Ok(());
+    }
+
+    let report = yield_and_inject(cx, false).await?;
+    probe::pasted("plain", &ticket.item_id, true, report, started.elapsed());
     drop(ticket);
     Ok(())
 }

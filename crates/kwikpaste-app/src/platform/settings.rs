@@ -65,6 +65,7 @@ pub fn follow(cx: &mut App) {
         };
         if delta.touches("shortcuts.openClipboard")
             || delta.touches("shortcuts.openPreference")
+            || delta.touches("shortcuts.pastePlain")
             || delta.touches("shortcuts.quickPaste")
         {
             hotkey::apply(&settings.shortcuts, cx);

@@ -6,6 +6,7 @@
 //!   （见 [`super::paste::quick_paste`]）。
 //! - 偏好设置：`shortcuts.openPreference`（默认 Alt+X），发 [`HostRequest::OpenPreferences`]，由 UI
 //!   打开偏好窗（见 [`super::host`]）。
+//! - 纯文本粘贴：`shortcuts.pastePlain` 注册后直接处理当前系统剪贴板。
 //!
 //! 设置变更时重新注册。管理器在主线程创建，`WM_HOTKEY` / Carbon 事件由 GPUI 的消息循环顺带派发；
 //! 事件经「专用线程阻塞 `recv()` → `async_channel` → 主线程」送回，不轮询。线程里只转发、不碰 GPUI，
@@ -51,6 +52,7 @@ enum Action {
     TogglePanel,
     QuickPaste(i64),
     OpenPreference,
+    PastePlain,
 }
 
 /// 当前注册的热键 id → 动作，事件桥线程据此分发。
@@ -61,11 +63,21 @@ struct Hotkeys {
     manager: GlobalHotKeyManager,
     toggle: Option<HotKey>,
     preference: Option<HotKey>,
+    paste_plain: Option<HotKey>,
     quick_paste: Vec<HotKey>,
     actions: Actions,
     recording: bool,
     paused: bool,
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RegistrationStatus {
+    pub open_clipboard_failed: bool,
+    pub open_preference_failed: bool,
+    pub paste_plain_failed: bool,
+}
+
+impl Global for RegistrationStatus {}
 
 impl Global for Hotkeys {}
 
@@ -75,6 +87,7 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
     let actions = Actions::default();
     let (quick_sender, quick_receiver) = async_channel::unbounded();
     let (preference_sender, preference_receiver) = async_channel::unbounded();
+    let (plain_sender, plain_receiver) = async_channel::unbounded();
 
     let bridge_actions = actions.clone();
     std::thread::Builder::new()
@@ -100,6 +113,12 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
                         quick_sender.send_blocking(offset).is_ok()
                     }
                     Some(Action::OpenPreference) => preference_sender.send_blocking(()).is_ok(),
+                    Some(Action::PastePlain) => {
+                        if let Err(err) = kwikpaste_os::keystroke::mask_modifier_release() {
+                            log::warn!("modifier release could not be masked: {err}");
+                        }
+                        plain_sender.send_blocking(()).is_ok()
+                    }
                     None => true,
                 };
                 if !delivered {
@@ -111,6 +130,13 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Ok(offset) = quick_receiver.recv().await {
             cx.update(|cx| paste::quick_paste(cx, offset)).detach();
+        }
+    })
+    .detach();
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while plain_receiver.recv().await.is_ok() {
+            cx.update(paste::paste_plain).detach();
         }
     })
     .detach();
@@ -133,6 +159,7 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
         manager,
         toggle: None,
         preference: None,
+        paste_plain: None,
         quick_paste: Vec::new(),
         actions,
         recording: false,
@@ -153,57 +180,82 @@ pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
     }
     let toggle = wanted_toggle(shortcuts);
     let preference = wanted_preference(shortcuts);
+    let paste_plain = wanted_paste_plain(shortcuts);
     let quick_paste = wanted_quick_paste(shortcuts);
 
-    let hotkeys = cx.global_mut::<Hotkeys>();
-    if !registration_allowed(hotkeys.recording, hotkeys.paused) {
-        return;
-    }
-    if hotkeys.toggle != toggle {
-        if let Some(previous) = hotkeys.toggle.take() {
-            hotkeys.unregister(previous);
+    let status = {
+        let hotkeys = cx.global_mut::<Hotkeys>();
+        if !registration_allowed(hotkeys.recording, hotkeys.paused) {
+            return;
         }
-        if let Some(hotkey) = toggle
-            && hotkeys.register(hotkey, Action::TogglePanel)
-        {
-            hotkeys.toggle = Some(hotkey);
-            log::info!("panel hotkey registered: {hotkey}");
+        if hotkeys.toggle != toggle {
+            if let Some(previous) = hotkeys.toggle.take() {
+                hotkeys.unregister(previous);
+            }
+            if let Some(hotkey) = toggle
+                && hotkeys.register(hotkey, Action::TogglePanel)
+            {
+                hotkeys.toggle = Some(hotkey);
+                log::info!("panel hotkey registered: {hotkey}");
+            }
         }
-    }
-    if hotkeys.preference != preference {
-        if let Some(previous) = hotkeys.preference.take() {
-            hotkeys.unregister(previous);
+        if hotkeys.preference != preference {
+            if let Some(previous) = hotkeys.preference.take() {
+                hotkeys.unregister(previous);
+            }
+            if let Some(hotkey) = preference
+                && hotkeys.register(hotkey, Action::OpenPreference)
+            {
+                hotkeys.preference = Some(hotkey);
+                log::info!("preference hotkey registered: {hotkey}");
+            }
         }
-        if let Some(hotkey) = preference
-            && hotkeys.register(hotkey, Action::OpenPreference)
-        {
-            hotkeys.preference = Some(hotkey);
-            log::info!("preference hotkey registered: {hotkey}");
-        }
-    }
 
-    let current: Vec<HotKey> = hotkeys.quick_paste.clone();
-    if current
-        != quick_paste
-            .iter()
-            .map(|(hotkey, _)| *hotkey)
-            .collect::<Vec<_>>()
-    {
-        for previous in current {
-            hotkeys.unregister(previous);
+        if hotkeys.paste_plain != paste_plain {
+            if let Some(previous) = hotkeys.paste_plain.take() {
+                hotkeys.unregister(previous);
+            }
+            if let Some(hotkey) = paste_plain
+                && hotkeys.register(hotkey, Action::PastePlain)
+            {
+                hotkeys.paste_plain = Some(hotkey);
+                log::info!("plain paste hotkey registered: {hotkey}");
+            }
         }
-        hotkeys.quick_paste = quick_paste
-            .into_iter()
-            .filter(|&(hotkey, offset)| hotkeys.register(hotkey, Action::QuickPaste(offset)))
-            .map(|(hotkey, _)| hotkey)
-            .collect();
-        if !hotkeys.quick_paste.is_empty() {
-            log::info!(
-                "quick paste hotkeys registered: {}",
-                hotkeys.quick_paste.len()
-            );
+
+        let current: Vec<HotKey> = hotkeys.quick_paste.clone();
+        if current
+            != quick_paste
+                .iter()
+                .map(|(hotkey, _)| *hotkey)
+                .collect::<Vec<_>>()
+        {
+            for previous in current {
+                hotkeys.unregister(previous);
+            }
+            hotkeys.quick_paste = quick_paste
+                .into_iter()
+                .filter(|&(hotkey, offset)| hotkeys.register(hotkey, Action::QuickPaste(offset)))
+                .map(|(hotkey, _)| hotkey)
+                .collect();
+            if !hotkeys.quick_paste.is_empty() {
+                log::info!(
+                    "quick paste hotkeys registered: {}",
+                    hotkeys.quick_paste.len()
+                );
+            }
         }
-    }
+        RegistrationStatus {
+            open_clipboard_failed: toggle.is_some() && hotkeys.toggle != toggle,
+            open_preference_failed: preference.is_some() && hotkeys.preference != preference,
+            paste_plain_failed: paste_plain.is_some() && hotkeys.paste_plain != paste_plain,
+        }
+    };
+    publish_registration_status(cx, status);
+}
+
+fn publish_registration_status(cx: &mut App, status: RegistrationStatus) {
+    cx.set_global(status);
 }
 
 fn registration_allowed(recording: bool, paused: bool) -> bool {
@@ -215,8 +267,7 @@ pub fn unregister_all(cx: &mut App) {
     if !cx.has_global::<Hotkeys>() {
         return;
     }
-    let hotkeys = cx.global_mut::<Hotkeys>();
-    clear_registered(hotkeys);
+    clear_registered(cx);
 }
 
 /// 暂停全局热键，给偏好设置里的物理按键录制让出输入。
@@ -224,9 +275,8 @@ pub fn suspend(cx: &mut App) {
     if !cx.has_global::<Hotkeys>() {
         return;
     }
-    let hotkeys = cx.global_mut::<Hotkeys>();
-    hotkeys.recording = true;
-    clear_registered(hotkeys);
+    cx.global_mut::<Hotkeys>().recording = true;
+    clear_registered(cx);
 }
 
 /// 恢复全局热键，并按最新设置重新注册。
@@ -249,13 +299,16 @@ pub fn set_paused(paused: bool, cx: &mut App) {
     if !cx.has_global::<Hotkeys>() {
         return;
     }
-    let hotkeys = cx.global_mut::<Hotkeys>();
-    hotkeys.paused = paused;
+    let recording = {
+        let hotkeys = cx.global_mut::<Hotkeys>();
+        hotkeys.paused = paused;
+        hotkeys.recording
+    };
     if paused {
-        clear_registered(hotkeys);
+        clear_registered(cx);
         return;
     }
-    if hotkeys.recording {
+    if recording {
         return;
     }
     let shortcuts = core_host::core(cx).map(|core| core.settings().shortcuts);
@@ -264,17 +317,22 @@ pub fn set_paused(paused: bool, cx: &mut App) {
     }
 }
 
-fn clear_registered(hotkeys: &mut Hotkeys) {
-    let all: Vec<HotKey> = hotkeys
-        .toggle
-        .take()
-        .into_iter()
-        .chain(hotkeys.preference.take())
-        .chain(hotkeys.quick_paste.drain(..))
-        .collect();
-    for hotkey in all {
-        hotkeys.unregister(hotkey);
+fn clear_registered(cx: &mut App) {
+    {
+        let hotkeys = cx.global_mut::<Hotkeys>();
+        let all: Vec<HotKey> = hotkeys
+            .toggle
+            .take()
+            .into_iter()
+            .chain(hotkeys.preference.take())
+            .chain(hotkeys.paste_plain.take())
+            .chain(hotkeys.quick_paste.drain(..))
+            .collect();
+        for hotkey in all {
+            hotkeys.unregister(hotkey);
+        }
     }
+    publish_registration_status(cx, RegistrationStatus::default());
 }
 
 impl Hotkeys {
@@ -332,6 +390,36 @@ fn wanted_preference(shortcuts: &Shortcuts) -> Option<HotKey> {
             log::error!("preference hotkey {accelerator:?} is invalid: {err}");
             None
         }
+    }
+}
+
+fn wanted_paste_plain(shortcuts: &Shortcuts) -> Option<HotKey> {
+    match parse(&shortcuts.paste_plain) {
+        Ok(hotkey) => hotkey,
+        Err(err) => {
+            log::error!(
+                "plain paste hotkey {:?} is invalid: {err}",
+                shortcuts.paste_plain
+            );
+            None
+        }
+    }
+}
+
+/// 查询热键注册失败状态；禁用、录制或主动暂停不算注册失败。
+pub fn registration_status(cx: &App) -> RegistrationStatus {
+    cx.try_global::<RegistrationStatus>()
+        .copied()
+        .unwrap_or_default()
+}
+
+pub fn registration_failed(id: &str, cx: &App) -> bool {
+    let status = registration_status(cx);
+    match id {
+        "shortcuts.openClipboard" => status.open_clipboard_failed,
+        "shortcuts.openPreference" => status.open_preference_failed,
+        "shortcuts.pastePlain" => status.paste_plain_failed,
+        _ => false,
     }
 }
 

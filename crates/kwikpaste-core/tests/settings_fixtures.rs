@@ -137,6 +137,7 @@ fn customized_settings_round_trip_exactly() {
     let mut expected = original.clone();
     expected["shortcuts"]["pauseInFullscreen"] = Value::Bool(true);
     expected["shortcuts"]["pauseAppIds"] = Value::Array(Vec::new());
+    expected["shortcuts"]["pastePlain"] = Value::String(String::new());
     assert_eq!(serde_json::to_value(store.snapshot()).unwrap(), expected);
 
     // 夹具的每个叶子都不是默认值，否则它覆盖不到对应字段的取值写法。

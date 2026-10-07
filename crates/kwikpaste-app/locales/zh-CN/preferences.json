@@ -72,7 +72,8 @@
   "controls": {
     "recordShortcut": "录制快捷键",
     "saving": "保存中…",
-    "shortcutConflict": "此快捷键与另一个全局快捷键冲突"
+    "shortcutConflict": "此快捷键与另一个全局快捷键冲突",
+    "shortcutInUse": "已被其他程序占用"
   },
   "lanSync": {
     "connect": {
@@ -899,6 +900,10 @@
           "description": "打开或隐藏偏好设置窗口。",
           "placeholder": "Alt+X",
           "title": "打开偏好设置窗口"
+        },
+        "pastePlain": {
+          "description": "不打开剪贴板窗口，把当前剪贴板内容去掉格式后直接粘贴。",
+          "title": "粘贴为纯文本"
         },
         "pauseApps": {
           "description": "",

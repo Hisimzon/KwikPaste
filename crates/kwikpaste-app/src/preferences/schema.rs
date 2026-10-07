@@ -459,6 +459,17 @@ pub(super) fn shortcut_settings() -> Vec<Setting> {
         Setting::new("shortcuts.openPreference", Control::ShortcutRecorder)
             .path("shortcuts.openPreference")
             .keywords(&["shortcut", "hotkey", "preference"]),
+        Setting::new("shortcuts.pastePlain", Control::ShortcutRecorder)
+            .path("shortcuts.pastePlain")
+            .keywords(&[
+                "shortcut",
+                "hotkey",
+                "plain",
+                "text",
+                "paste",
+                "format",
+                "纯文本",
+            ]),
     ];
     #[cfg(target_os = "windows")]
     settings.extend([

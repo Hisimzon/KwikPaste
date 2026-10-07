@@ -385,6 +385,8 @@ impl Preferences {
         // 材质切换后窗口重套背板，分层底色也要跟着重画；选项显示的仍是用户的设置值（同 1.x）。
         let material_subscription =
             cx.observe_global::<crate::platform::material::WindowMaterial>(|_, cx| cx.notify());
+        let hotkey_status_subscription =
+            cx.observe_global::<hotkey::RegistrationStatus>(|_, cx| cx.notify());
         // 截图验收（只在自测里）：`KP_PREFERENCES_DEMO` 为 rule / export / export-readable / apps
         // 时打开对应的弹框。
         // 弹框挂在窗口的 Root 上，要等 `open_window` 装好 Root 之后才能弹。
@@ -438,6 +440,7 @@ impl Preferences {
                 retention_value_sub,
                 retention_unit_sub,
                 material_subscription,
+                hotkey_status_subscription,
             ])
             .chain(setting_subscriptions)
             .collect();
@@ -2242,7 +2245,7 @@ impl Preferences {
                     .unwrap_or_default();
                 let recording = self.recording == Some(setting.id);
                 let id = setting.id;
-                shortcut_recorder_button(id, current, &self.settings, recording)
+                shortcut_recorder_button(id, current, &self.settings, recording, cx)
                     .accessibility_label(title.clone())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.begin_recording(id, window, cx);
@@ -3986,11 +3989,25 @@ pub(crate) fn shortcut_conflicts_with_settings(
         return false;
     }
     let other = match setting_id {
-        "shortcuts.openClipboard" => Some(settings.shortcuts.open_preference.as_str()),
-        "shortcuts.openPreference" => Some(settings.shortcuts.open_clipboard.as_str()),
+        "shortcuts.openClipboard" => Some([
+            settings.shortcuts.open_preference.as_str(),
+            settings.shortcuts.paste_plain.as_str(),
+        ]),
+        "shortcuts.openPreference" => Some([
+            settings.shortcuts.open_clipboard.as_str(),
+            settings.shortcuts.paste_plain.as_str(),
+        ]),
+        "shortcuts.pastePlain" => Some([
+            settings.shortcuts.open_clipboard.as_str(),
+            settings.shortcuts.open_preference.as_str(),
+        ]),
         _ => None,
     };
-    if other.is_some_and(|other| shortcut_conflicts(candidate, other)) {
+    if other.is_some_and(|others| {
+        others
+            .iter()
+            .any(|other| shortcut_conflicts(candidate, other))
+    }) {
         return true;
     }
     settings.shortcuts.quick_paste.enabled
@@ -4041,6 +4058,7 @@ fn shortcut_path(id: &str) -> Option<&'static str> {
     match id {
         "shortcuts.openClipboard" => Some("shortcuts.openClipboard"),
         "shortcuts.openPreference" => Some("shortcuts.openPreference"),
+        "shortcuts.pastePlain" => Some("shortcuts.pastePlain"),
         _ => None,
     }
 }
@@ -4094,21 +4112,27 @@ pub(crate) fn shortcut_recorder_button(
     current: &str,
     settings: &Settings,
     recording: bool,
+    cx: &App,
 ) -> Button {
     let conflict = shortcut_conflicts_with_settings(id, current, settings);
+    let occupied = !conflict && !current.trim().is_empty() && hotkey::registration_failed(id, cx);
     let label: gpui::SharedString = if recording {
         i18n::t("preferences:controls.recordShortcut")
-    } else if conflict {
+    } else if conflict || occupied {
         format!("{} ⚠", text::format_shortcut(current)).into()
     } else {
         text::format_shortcut(current).into()
     };
     Button::new(format!("shortcut-{id}"), label)
-        .when(conflict && !recording, |button| button.danger())
+        .when((conflict || occupied) && !recording, |button| {
+            button.danger()
+        })
         .tooltip(if recording {
             i18n::t("preferences:controls.recordShortcut")
         } else if conflict {
             i18n::t("preferences:controls.shortcutConflict")
+        } else if occupied {
+            i18n::t("preferences:controls.shortcutInUse")
         } else {
             i18n::t("preferences:controls.recordShortcut")
         })
@@ -4129,10 +4153,11 @@ mod tests {
 
     use kwikpaste_core::backup::BackupContainerMode;
     use kwikpaste_core::settings::CaptureKind;
+    use kwikpaste_core::settings::Settings;
 
     use super::{
         backup_confirmation_required, format_socket_address, reorder_capture_kinds, search_matches,
-        shortcut_conflicts, shortcut_from_keystroke,
+        shortcut_conflicts, shortcut_conflicts_with_settings, shortcut_from_keystroke,
     };
 
     #[test]
@@ -4140,6 +4165,26 @@ mod tests {
         assert!(shortcut_conflicts("Alt+X", "X+Alt"));
         assert!(!shortcut_conflicts("Alt+X", "Alt+C"));
         assert!(!shortcut_conflicts("", "Alt+X"));
+    }
+
+    #[test]
+    fn shortcut_conflicts_include_plain_paste_and_quick_paste() {
+        let mut settings = Settings::default();
+        settings.shortcuts.paste_plain = "Alt+P".to_owned();
+        assert!(shortcut_conflicts_with_settings(
+            "shortcuts.openClipboard",
+            "P+Alt",
+            &settings
+        ));
+
+        settings.shortcuts.quick_paste.enabled = true;
+        settings.shortcuts.quick_paste.modifiers =
+            kwikpaste_core::settings::QuickPasteModifiers::ControlAlt;
+        assert!(shortcut_conflicts_with_settings(
+            "shortcuts.pastePlain",
+            "Alt+Control+1",
+            &settings
+        ));
     }
 
     #[test]

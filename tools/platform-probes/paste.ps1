@@ -1,7 +1,7 @@
 # H4 paste: Enter in the panel pastes back into the app that was in front, exactly once.
 #
 #   powershell -STA -NoProfile -ExecutionPolicy Bypass -File tools\platform-probes\installed-app.ps1 -Action Prepare
-#   powershell -STA -NoProfile -ExecutionPolicy Bypass -File tools\platform-probes\paste.ps1 [-Exe <KwikPaste.exe>] [-Rounds 20] [-Targets form,rich] [-UiPanel] [-QuickPaste]
+#   powershell -STA -NoProfile -ExecutionPolicy Bypass -File tools\platform-probes\paste.ps1 [-Exe <KwikPaste.exe>] [-Rounds 20] [-Targets form,rich] [-UiPanel] [-QuickPaste] [-PastePlain]
 #   powershell -STA -NoProfile -ExecutionPolicy Bypass -File tools\platform-probes\installed-app.ps1 -Action Restore
 #
 # Real system clipboard (--selftest-real-clipboard): the installed app must not be running. Each round
@@ -13,7 +13,9 @@
 # in a second window). Apps that restore the user's session (Notepad, Edge, Office) are never used.
 # Word is not installed on this machine. -UiPanel uses the real clipboard list (ListIntent::Paste) instead of the
 # platform probe view. -QuickPaste also checks the global quick paste (Ctrl+Alt+1 with the modifiers held
-# 300 ms, and held 2.6 s, past the 2 s wait, which must not paste).
+# 300 ms, and held 2.6 s, past the 2 s wait, which must not paste). -PastePlain checks the global plain
+# paste hotkey (shortcuts.pastePlain = Ctrl+Alt+F11) with rich text, files and an image-only clipboard
+# into the RichTextBox; -Targets none skips the Enter rounds.
 param(
     [string]$Exe = '',
     [int]$Rounds = 20,
@@ -21,6 +23,7 @@ param(
     [int]$IdleSeconds = 30,
     [switch]$UiPanel,
     [switch]$QuickPaste,
+    [switch]$PastePlain,
     # Wait this long after the watcher stored the token before opening the panel (a user takes a moment).
     [int]$SettleMs = 0
 )
@@ -85,6 +88,7 @@ try {
     $form = New-TargetForm
 
     foreach ($target in $Targets.Split(',')) {
+        if ($target -eq 'none') { continue }
         Note "Enter pastes into $target"
         if ($target -eq 'form') {
             $window = $form.Handle
@@ -174,6 +178,70 @@ try {
         Expect 'modifiers held past 2 s: no paste, the item stays on the clipboard' ([int]($null -eq $pasted -and $form.Box.Text -eq $before -and [Clip]::GetText() -eq $token)) 1
         Expect 'the form never entered menu mode (Alt release masked)' ([int]($form.MenuActivations -eq $menuBefore)) 1
         Send-ProbeCommand $Exe '--selftest-settings={"shortcuts":{"quickPaste":{"enabled":false}}}'
+    }
+
+    if ($PastePlain) {
+        Note 'plain paste Ctrl+Alt+F11 into the RichTextBox'
+        # The targets are PowerShell windows; a listed pause app would release every hotkey.
+        Send-ProbeCommand $Exe '--selftest-settings={"shortcuts":{"pastePlain":"Control+Alt+F11","pauseAppIds":[]}}'
+        [Probe]::Pump(500)
+        if ($null -eq $rich) {
+            $rich = New-Object RichTarget
+            $work = [Probe]::PrimaryWorkArea()
+            $rich.Bounds = New-Object System.Drawing.Rectangle(($work[0] + 700), ($work[1] + 60), 560, 240)
+            $rich.Show()
+            [Probe]::Pump(400)
+        }
+        $center = $rich.Box.PointToScreen((New-Object System.Drawing.Point(200, 100)))
+        if (-not [Probe]::ClickIntoForegroundAt($rich.Handle, $center.X, $center.Y)) { throw 'the RichTextBox window did not take the foreground' }
+        $VK_F11 = [uint16]0x7A
+        function Invoke-PlainPaste {
+            [void](Get-ProbeEvents 'pasted')
+            [void](Get-ProbeEvents 'clipboard')
+            [Probe]::ChordFor($rich.Handle, $panel, [uint16[]]@($VK_CONTROL, $VK_MENU), $VK_F11, 300)
+            $pasted = Wait-ProbeEvent 'pasted' 3000
+            [Probe]::Pump(600)
+            return $pasted
+        }
+
+        # Rich text (text + RTF + HTML): pasted unformatted, the clipboard keeps only the text, no new history item.
+        $token = "kp-$stamp-plain"
+        $rich.Box.Clear()
+        $formats = New-Object 'System.Collections.Generic.Dictionary[string,byte[]]'
+        $formats['#13'] = [Clip]::Text($token)
+        $formats['Rich Text Format'] = [Clip]::Ascii('{\rtf1\ansi{\fonttbl\f0\fswiss Arial;}\f0\b ' + $token + '\b0\par}')
+        $formats['HTML Format'] = [Clip]::Html("<b>$token</b>")
+        [Clip]::Set($formats)
+        if ($null -eq (Wait-Captured $token)) { Note '  the rich token was not stored' }
+        $pasted = Invoke-PlainPaste
+        $rich.Box.SelectAll()
+        $bold = $rich.Box.SelectionFont -ne $null -and $rich.Box.SelectionFont.Bold
+        $left = [Clip]::Formats() | Where-Object { $_ -eq 'Rich Text Format' -or $_ -eq 'HTML Format' }
+        $recorded = @(Get-ProbeEvents 'clipboard')
+        Expect 'plain paste injected for rich text' ([int]($null -ne $pasted -and $pasted.kind -eq 'plain')) 1
+        Expect 'rich text pasted once, unformatted' ([int]($rich.Box.Text.TrimEnd() -eq $token -and -not $bold)) 1
+        Expect 'clipboard left as plain text' ([int]($null -eq $left -and [Clip]::GetText() -eq $token)) 1
+        Expect 'no history item for the stripped write' ([int]($recorded.Count -eq 0)) 1
+
+        # Files: the paths are pasted as text.
+        $file = Join-Path $env:WINDIR 'win.ini'
+        $rich.Box.Clear()
+        $formats = New-Object 'System.Collections.Generic.Dictionary[string,byte[]]'
+        $formats['#15'] = [Clip]::Files(@($file))
+        [Clip]::Set($formats)
+        [Probe]::Pump(600)
+        $pasted = Invoke-PlainPaste
+        Expect 'files pasted as their path' ([int]($null -ne $pasted -and $rich.Box.Text.TrimEnd() -eq $file)) 1
+
+        # Image only: nothing to paste.
+        $rich.Box.Clear()
+        $formats = New-Object 'System.Collections.Generic.Dictionary[string,byte[]]'
+        $formats['#8'] = [Clip]::Dib(16, 16, [System.Drawing.Color]::Red, [System.Drawing.Color]::Blue)
+        [Clip]::Set($formats)
+        [Probe]::Pump(600)
+        $pasted = Invoke-PlainPaste
+        Expect 'image-only clipboard: no paste' ([int]($null -eq $pasted -and $rich.Box.Text -eq '')) 1
+        Send-ProbeCommand $Exe '--selftest-settings={"shortcuts":{"pastePlain":""}}'
     }
 } catch {
     $failures.Add("ERROR: $($_.Exception.Message)")

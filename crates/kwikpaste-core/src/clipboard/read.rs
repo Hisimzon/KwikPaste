@@ -76,6 +76,15 @@ impl<B: ClipboardBackend> ClipboardReader<B> {
         Ok(None)
     }
 
+    /// 读取当前剪贴板而不受采集设置影响，供一次性的全局纯文本粘贴使用。
+    /// 文件优先于文本；图片即使和文本一起存在也会被忽略。
+    pub fn read_current(&self) -> Result<Option<ClipboardPayload>> {
+        if let Some(files) = self.read_files()? {
+            return Ok(Some(ClipboardPayload::Files(files)));
+        }
+        Ok(self.read_text_payload()?.map(ClipboardPayload::Text))
+    }
+
     /// 读取剪贴板文件路径列表；空列表视为无可用文件内容。
     fn read_files(&self) -> Result<Option<Vec<String>>> {
         if !self.backend.has(ClipboardFormat::Files) {

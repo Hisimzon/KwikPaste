@@ -72,7 +72,8 @@
   "controls": {
     "recordShortcut": "Record shortcut",
     "saving": "Saving…",
-    "shortcutConflict": "This shortcut conflicts with another global shortcut"
+    "shortcutConflict": "This shortcut conflicts with another global shortcut",
+    "shortcutInUse": "In use by another app"
   },
   "lanSync": {
     "connect": {
@@ -909,6 +910,10 @@
           "description": "Open or hide the preferences window.",
           "placeholder": "Alt+X",
           "title": "Open Preferences Window"
+        },
+        "pastePlain": {
+          "description": "Paste what's on the clipboard without formatting, without opening the clipboard window.",
+          "title": "Paste as plain text"
         },
         "pauseApps": {
           "description": "",

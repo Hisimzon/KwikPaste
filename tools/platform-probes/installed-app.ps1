@@ -7,10 +7,11 @@
 # The installed app is the user's everyday KwikPaste (2.0 since the overwrite install; 1.x before). Both
 # put the same tray-icon window and menu up, so the same steps quit either one.
 #
-# Prepare: waits for the user to be idle, saves the clipboard text and the autostart (HKCU Run) value,
+# Prepare: waits for the user to be idle, saves the clipboard (every memory format, so images and files
+#          survive too) and the autostart (HKCU Run) value,
 #          then quits the installed KwikPaste through its own tray menu (Exit), like the user would; it
 #          never kills the process.
-# Restore: puts the clipboard text back, deletes the backup, starts the installed app again with
+# Restore: puts the clipboard back, deletes the backup, starts the installed app again with
 #          --auto-launch (it starts silently in the tray), waits until it runs and checks the autostart
 #          value is unchanged.
 # Both refuse while %TEMP%\kwikpaste-installed-app.lock exists: the packaging session is then installing
@@ -57,7 +58,11 @@ public static class InstalledTray {
 }
 "@
 
-$backup = Join-Path $env:TEMP 'kwikpaste-probe-clipboard-backup.txt'
+$backup = Join-Path $env:TEMP 'kwikpaste-probe-clipboard-backup.json'
+# Not restored: GDI-handle formats (bitmap, metafiles, palette) are not memory blocks and Windows
+# synthesizes them from the restored DIB / text; the OLE markers point into the previous owner's
+# process and would make the restored content look like a dead OLE data object.
+$skippedFormats = @('#2', '#3', '#9', '#14', 'DataObject', 'Ole Private Data')
 $runBackup = Join-Path $env:TEMP 'kwikpaste-probe-run-value.txt'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 # Exit menu item of the tray (kwikpaste-core's tray strings, same as 1.x) in zh-CN and en-US; zh-CN as
@@ -78,19 +83,27 @@ function Get-RunValue {
 
 if ($Action -eq 'Prepare') {
     Assert-Desktop -IdleSeconds $IdleSeconds -NeedsInput
-    $text = [Clip]::GetText()
-    if ($null -eq $text) { $text = '' }
-    [System.IO.File]::WriteAllText($backup, $text, [System.Text.Encoding]::UTF8)
+    $saved = [ordered]@{}
+    foreach ($format in [Clip]::Formats()) {
+        if ($skippedFormats -contains $format) { continue }
+        $bytes = [Clip]::Get($format)
+        if ($null -ne $bytes) { $saved[$format] = [Convert]::ToBase64String($bytes) }
+    }
+    [System.IO.File]::WriteAllText($backup, ($saved | ConvertTo-Json -Compress), [System.Text.Encoding]::UTF8)
     [System.IO.File]::WriteAllText($runBackup, (Get-RunValue), [System.Text.Encoding]::UTF8)
-    Write-Host "clipboard text saved ($($text.Length) chars); autostart: $(Get-RunValue)"
+    Write-Host "clipboard saved ($($saved.Count) formats); autostart: $(Get-RunValue)"
 
     $running = Get-Installed
     if ($running.Count -eq 0) { Write-Host 'the installed app is not running'; exit 0 }
-    $process = $running[0]
-    # Open the handle now: ExitCode is only readable when it was opened before the exit.
-    $null = $process.Handle
+    # Open the handles now: ExitCode is only readable when it was opened before the exit.
+    foreach ($candidate in $running) { $null = $candidate.Handle }
     $userForeground = [Probe]::GetForegroundWindow()
-    $tray = [InstalledTray]::Find([uint32]$process.Id, 'tray_icon_app', $false)
+    # 2.0 runs as two processes; the tray belongs to the one with the UI.
+    $process = $null; $tray = [IntPtr]::Zero
+    foreach ($candidate in $running) {
+        $tray = [InstalledTray]::Find([uint32]$candidate.Id, 'tray_icon_app', $false)
+        if ($tray -ne [IntPtr]::Zero) { $process = $candidate; break }
+    }
     if ($tray -eq [IntPtr]::Zero) { throw 'The installed app has no tray window.' }
     [void][InstalledTray]::PostMessageW($tray, 6002, [IntPtr]::Zero, [IntPtr]0x0205)
     $menu = [IntPtr]::Zero
@@ -110,20 +123,21 @@ if ($Action -eq 'Prepare') {
     }
     for ($i = 0; $i -le $index; $i++) { [void][InstalledTray]::PostMessageW($menu, 0x0100, [IntPtr]0x28, [IntPtr]::Zero); Start-Sleep -Milliseconds 80 }
     [void][InstalledTray]::PostMessageW($menu, 0x0100, [IntPtr]0x0D, [IntPtr]::Zero)
-    if (-not $process.WaitForExit(10000)) { throw 'The installed app did not exit.' }
+    foreach ($candidate in $running) { if (-not $candidate.WaitForExit(10000)) { throw 'The installed app did not exit.' } }
     if ($userForeground -ne [IntPtr]::Zero) { [void][Probe]::SetForegroundWindow($userForeground) }
     Write-Host "the installed app exited through its tray menu (exit code $($process.ExitCode))"
     exit 0
 }
 
 # Restore
-$text = ''
+$formats = New-Object 'System.Collections.Generic.Dictionary[string,byte[]]'
 if (Test-Path $backup) {
-    $text = [System.IO.File]::ReadAllText($backup, [System.Text.Encoding]::UTF8)
-    Remove-Item $backup
+    $saved = [System.IO.File]::ReadAllText($backup, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    foreach ($property in $saved.PSObject.Properties) { $formats[$property.Name] = [Convert]::FromBase64String($property.Value) }
 }
-[Clip]::SetText($text)
-Write-Host "clipboard text restored ($($text.Length) chars)"
+if ($formats.Count -gt 0) { [Clip]::Set($formats) } else { [Clip]::SetText('') }
+if (Test-Path $backup) { Remove-Item $backup }
+Write-Host "clipboard restored ($($formats.Count) formats)"
 if ((Get-Installed).Count -eq 0) {
     Start-Process -FilePath $Installed -ArgumentList '--auto-launch'
     $watch = [Diagnostics.Stopwatch]::StartNew()

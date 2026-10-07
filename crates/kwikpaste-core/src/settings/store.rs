@@ -286,19 +286,19 @@ fn validate_settings(settings: &Settings) -> Result<()> {
     validate_retention_rules(&settings.clipboard.history.rules)?;
     validate_lan_sync(&settings.sync.lan)?;
 
-    let open_clipboard = normalize_shortcut_value(&settings.shortcuts.open_clipboard);
-    let open_preference = normalize_shortcut_value(&settings.shortcuts.open_preference);
-
-    if open_clipboard.is_empty() || open_preference.is_empty() {
-        return Ok(());
+    let mut shortcuts = std::collections::HashSet::new();
+    for value in [
+        &settings.shortcuts.open_clipboard,
+        &settings.shortcuts.open_preference,
+        &settings.shortcuts.paste_plain,
+    ] {
+        let normalized = normalize_shortcut_value(value);
+        if !normalized.is_empty() && !shortcuts.insert(normalized) {
+            return Err(AppError::Other(anyhow::anyhow!(
+                "global shortcuts must be unique"
+            )));
+        }
     }
-
-    if open_clipboard == open_preference {
-        return Err(AppError::Other(anyhow::anyhow!(
-            "global shortcuts must be unique"
-        )));
-    }
-
     Ok(())
 }
 
@@ -362,13 +362,14 @@ fn validate_lan_sync(lan: &LanSync) -> Result<()> {
 
 /// 归一化快捷键字面量，供跨字段校验忽略大小写和多余空白。
 fn normalize_shortcut_value(value: &str) -> String {
-    value
+    let mut keys = value
         .split('+')
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(str::to_ascii_lowercase)
-        .collect::<Vec<_>>()
-        .join("+")
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.join("+")
 }
 
 fn deep_merge(base: &mut serde_json::Value, patch: serde_json::Value) {
@@ -438,6 +439,22 @@ mod tests {
     fn validate_settings_allows_empty_global_shortcuts() {
         let mut settings = Settings::default();
         settings.shortcuts.open_preference = String::new();
+
+        assert!(validate_settings(&settings).is_ok());
+    }
+
+    #[test]
+    fn validate_settings_rejects_duplicate_plain_paste_shortcut() {
+        let mut settings = Settings::default();
+        settings.shortcuts.paste_plain = settings.shortcuts.open_clipboard.clone();
+
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn validate_settings_allows_empty_plain_paste_shortcut() {
+        let mut settings = Settings::default();
+        settings.shortcuts.paste_plain = String::new();
 
         assert!(validate_settings(&settings).is_ok());
     }
