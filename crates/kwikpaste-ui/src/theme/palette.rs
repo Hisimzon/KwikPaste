@@ -208,6 +208,17 @@ const RADII: Radii = Radii {
     md: 5.,
     lg: 6.,
 };
+/// 材质下面板色的不透明度。Windows 的 Mica 本身不透明，不再铺底色；Acrylic 背后是模糊的窗口内容，
+/// 铺一层面板色压住花色，侧栏这类框架区比内容区更透一些。
+#[cfg(not(target_os = "macos"))]
+const MATERIALS: Materials = Materials {
+    panel_mica_alpha: 0.,
+    panel_acrylic_alpha: 0.6,
+    chrome_mica_alpha: 0.,
+    chrome_acrylic_alpha: 0.45,
+};
+/// macOS 面板以外的窗口只有不带色调的模糊（GPUI `Blurred`），两种材质都要铺底色。
+#[cfg(target_os = "macos")]
 const MATERIALS: Materials = Materials {
     panel_mica_alpha: 0.58,
     panel_acrylic_alpha: 0.34,

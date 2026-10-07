@@ -10,18 +10,23 @@
 //! 生效的材质套到面板上：default 用 GPUI `Opaque`（拿回 ClearType）加圆角；mica / acrylic 用
 //! `Transparent`，清掉 GPUI 的 accent 再设 DWM 背板（Windows 11 22H2 之前的 acrylic 用 GPUI
 //! `Blurred`）。窗口深浅色跟随 `appearance.theme`（auto 跟系统），与 1.x `setTheme` 相同。
+//! DWM 对非活动窗口只画背板的纯色回退，面板、预览这类从不激活的浮层因此把框架状态留在活动
+//! （`kwikpaste_os::win::material::keep_popup_frame_active`）；偏好设置等普通窗口照系统惯例，
+//! 失焦时回退。
 //! 设置变化、系统设置变化（透明效果、深浅色、高对比度）时重新套。这里是全应用唯一调用
 //! `set_background_appearance` 的地方：别处调用会重设 accent，打掉 DWM 背板。
 //!
 //! # UI 怎么接
 //! 窗口外层 gpui-component `Root` 的不透明底色在材质下已经去掉（`kwikpaste_ui::set_root_translucent`），
-//! 根元素的底色按 [`current`]`(cx).effective` 选，订阅 `cx.observe_global::<WindowMaterial>()`：
-//! - `Default`：不透明的 token 底色（如 `bg_layout`），窗口本身不透明；
-//! - `Mica`：`bg_container` 58% 不透明度，叠 135° 渐变（`primary` 10% → 透明 42% → 白 5%），
-//!   顶部 1 px 内阴影白 12%（1.x `global.scss` 的 `.kp-material-surface[data-material="mica"]`）；
-//! - `Acrylic`：`bg_container` 34%，145° 渐变（`primary` 16% → `bg_container` 20% @48% → 白 10%），
-//!   内阴影白 18%。
+//! 根元素的底色按 [`current`]`(cx).effective` 选（[`panel_surface`]、[`shell_surface`]、
+//! [`chrome_surface`]），订阅 `cx.observe_global::<WindowMaterial>()`：
+//! - `Default`：不透明的 token 底色，窗口本身不透明；
+//! - `Mica`：不铺底色，直接露出系统 Mica（Mica 本身不透明，色调来自桌面壁纸）；
+//! - `Acrylic`：面板色按主题色板的 `materials` 比例半透明，压住背后模糊内容的花色、保证文字可读。
 //!
+//! （以上是 Windows；macOS 面板以外的窗口只有无色模糊，两种材质都铺底色，见色板的 `MATERIALS`。）
+//!
+//! 每个窗口只铺一层材质底色：子视图再铺一层会叠成接近不透明，材质就看不出来了。
 //! 材质下不要用不透明的浮层盖住滚动内容：不透明底色在材质上是一块实色，模糊也盖不住下面滚过的行；
 //! 需要一直可见的东西（置顶行、表头）放在滚动容器外面。
 //!
@@ -59,14 +64,12 @@ impl Global for WindowMaterial {}
 
 impl WindowMaterial {
     /// 窗口是半透明的（有系统背板），根元素要用半透明底色。
-    #[allow(dead_code, reason = "UI 接线用的接口，见本模块文档")]
     pub fn is_translucent(&self) -> bool {
         self.effective != Material::Default
     }
 }
 
 /// 当前窗口材质；平台层启动之前为 default。
-#[allow(dead_code, reason = "UI 接线用的接口，见本模块文档")]
 pub fn current(cx: &App) -> WindowMaterial {
     cx.try_global::<WindowMaterial>()
         .copied()
@@ -236,7 +239,8 @@ fn build() -> u32 {
 #[cfg(target_os = "windows")]
 pub(super) fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
     use kwikpaste_os::win::material::{
-        Backdrop, acrylic_uses_backdrop, set_backdrop, set_dark_mode, set_round_corners,
+        Backdrop, acrylic_uses_backdrop, keep_popup_frame_active, set_backdrop, set_dark_mode,
+        set_round_corners,
     };
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -259,6 +263,7 @@ pub(super) fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
     set_dark_mode(hwnd, material.dark);
     set_backdrop(hwnd, backdrop, build);
     set_round_corners(hwnd);
+    keep_popup_frame_active(hwnd);
     window.refresh();
 }
 

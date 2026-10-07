@@ -4165,7 +4165,10 @@ impl Render for Preferences {
             }))
             .flex()
             .overflow_hidden()
-            .bg(theme::tokens(cx).bg_layout)
+            .when(
+                !crate::platform::material::current(cx).is_translucent(),
+                |root| root.bg(theme::tokens(cx).bg_layout),
+            )
             .text_color(theme::tokens(cx).text)
             .child(self.render_sidebar(cx))
             .child(self.render_page(cx))

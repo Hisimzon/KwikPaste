@@ -1235,7 +1235,6 @@ impl Render for ClipboardList {
         self.consume_reload_at_top(cx);
 
         let tokens = theme::semantic(cx);
-        let surface = crate::platform::material::panel_surface(cx);
         let layout = self.layout;
         let env = CardEnv {
             tokens,
@@ -1344,7 +1343,6 @@ impl Render for ClipboardList {
             .flex()
             .flex_col()
             .size_full()
-            .bg(surface)
             .text_color(tokens.text.primary)
             .when(!pinned.is_empty(), |root| {
                 // 置顶块固定在滚动区上方，不吸顶（材质上任何遮挡底色都会成为色块）。

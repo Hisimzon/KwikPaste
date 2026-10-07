@@ -9,18 +9,25 @@
 //! 先把 accent 清成 0（[`clear_accent`]）。`DwmGetWindowAttribute(38)` 读回值不可信（属性留着、画面
 //! 没了），验收只认截图。
 //!
+//! DWM 只给「框架活动」的窗口画背板，非活动窗口只画一块纯色回退（Acrylic 是平灰，Mica 是平涂底色）。
+//! 面板和预览这类从不激活的浮层用 [`keep_popup_frame_active`] 把框架状态一直留在活动。
+//!
 //! 另有：深浅色（`DWMWA_USE_IMMERSIVE_DARK_MODE`，跟随应用主题，GPUI 只会按系统设）、圆角、
 //! 系统「透明效果」开关（`EnableTransparency`）和系统深色（`AppsUseLightTheme`）。
 
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
     DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     DwmSetWindowAttribute,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GWL_EXSTYLE, GetWindowLongPtrW, SendMessageW, WM_NCACTIVATE, WM_NCDESTROY, WS_EX_TOOLWINDOW,
+};
 use windows::core::{BOOL, s, w};
 use windows_registry::{CURRENT_USER, LOCAL_MACHINE};
 
@@ -32,6 +39,8 @@ const BUILD_MICA: u32 = 22000;
 const BUILD_BACKDROP_TYPE: u32 = 22523;
 const BUILD_ACRYLIC: u32 = 17763;
 const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+/// [`keep_popup_frame_active`] 的子类 id（"KPMA"）。
+const ACTIVE_FRAME_SUBCLASS: usize = 0x4b50_4d41;
 
 /// 当前系统对两种材质的支持（与 1.x 的 `MaterialSupport` 相同的门槛）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +129,47 @@ pub fn set_backdrop(hwnd: isize, backdrop: Backdrop, build: u32) {
                 DWMSBT_TRANSIENTWINDOW.0 as u32,
             );
         }
+    }
+}
+
+/// 让从不激活的浮层窗口（`WS_EX_TOOLWINDOW`：面板、预览）一直按活动窗口画背板：子类把
+/// `WM_NCACTIVATE(FALSE)` 改成 TRUE，并立即发一次 TRUE。普通窗口（偏好设置等）不处理，失焦时照系统
+/// 惯例回退成纯色。可重复调用：同一个子类只装一次。
+pub fn keep_popup_frame_active(hwnd: isize) {
+    let window = HWND(hwnd as *mut c_void);
+    let ex_style = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+    if ex_style & WS_EX_TOOLWINDOW.0 as isize == 0 {
+        return;
+    }
+    let installed =
+        unsafe { SetWindowSubclass(window, Some(active_frame_proc), ACTIVE_FRAME_SUBCLASS, 0) };
+    if !installed.as_bool() {
+        log::debug!("active frame subclass could not be installed");
+        return;
+    }
+    // lParam = -1：只改框架状态，不重画非客户区。
+    unsafe { SendMessageW(window, WM_NCACTIVATE, Some(WPARAM(1)), Some(LPARAM(-1))) };
+}
+
+unsafe extern "system" fn active_frame_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    match msg {
+        WM_NCACTIVATE if wparam.0 == 0 => unsafe {
+            DefSubclassProc(hwnd, msg, WPARAM(1), LPARAM(-1))
+        },
+        WM_NCDESTROY => {
+            let _ = unsafe {
+                RemoveWindowSubclass(hwnd, Some(active_frame_proc), ACTIVE_FRAME_SUBCLASS)
+            };
+            unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+        }
+        _ => unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
     }
 }
 

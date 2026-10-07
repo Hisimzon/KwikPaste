@@ -134,7 +134,7 @@ impl Panel {
                     Material::Default => unreachable!(),
                 });
                 effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-                effect.setState(NSVisualEffectState::FollowsWindowActiveState);
+                effect.setState(NSVisualEffectState::Active);
                 effect.setFrame(content.bounds());
             }
         }
