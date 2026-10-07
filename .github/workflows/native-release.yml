@@ -212,6 +212,8 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+      # 只有这里打出的包会上报使用统计（kwikpaste-updater 的 usage.rs 编译时读取）。
+      KWIKPASTE_OFFICIAL_BUILD: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

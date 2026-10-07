@@ -187,8 +187,9 @@ impl Updater {
         &self.0.kind
     }
 
-    /// 开始后台调度（重复调用无效）：清理上次更新留下的临时文件，按需上报启动，8 秒后拉公告，
-    /// 之后按设置的频率自动检查，发现更新时调用 [`UpdaterUi::update_available`]。
+    /// 开始后台调度（重复调用无效）：清理上次更新留下的临时文件，8 秒后拉公告，
+    /// 之后按设置的频率自动检查，发现更新时调用 [`UpdaterUi::update_available`]；
+    /// 每轮（至多一小时）看一次当天的使用统计是否已送达。
     pub fn start(&self) {
         let mut scheduler = lock(&self.0.scheduler);
         if scheduler.is_some() {
@@ -198,7 +199,6 @@ impl Updater {
         let updater = self.clone();
         *scheduler = Some(self.0.core.runtime().spawn(async move {
             updater.clean_leftovers();
-            usage::schedule(&updater.0.core, &updater.0.usage, usage::Trigger::Launch);
             tokio::time::sleep(scheduler::INITIAL_DELAY).await;
             announcement::schedule(
                 &updater.0.core,
@@ -208,6 +208,7 @@ impl Updater {
             );
 
             loop {
+                usage::schedule(&updater.0.core, &updater.0.usage, usage::Trigger::Daily);
                 let settings = updater.0.core.settings().update;
                 let delay = scheduler::next_auto_check_delay(&settings, Utc::now());
                 if !delay.is_zero() {

@@ -1,10 +1,12 @@
-//! 检查更新时附带的最小化使用统计（从 1.x 的 `update/usage.rs` 搬来，字段与语义不变），
-//! 用来估算每日活跃安装、新增安装和版本分布；更新本身不依赖它。
+//! 最小化使用统计（上报协议 v2），用来统计每日 / 每周 / 每月活跃安装、新增安装、留存、升级路径和版本分布；
+//! 更新本身不依赖它。
 //!
-//! 请求只带每日随机 ID、上报类型、软件版本、系统、架构和界面语言。每日 ID 按 UTC 日轮换，
-//! 不从机器指纹、账号或局域网同步身份派生；发送失败静默跳过，不影响检查更新。
+//! 开着「自动检查更新」时每个 UTC 日上报一次（启动后和运行中每小时看一次当天是否已送达），版本变了也补报一次；
+//! 关掉自动检查后只在手动检查更新时上报。请求带每日随机 ID、上报类型、软件版本、系统、架构、界面语言，
+//! 以及距上次送达的天数、新安装所在的 ISO 周和升级前的版本：服务端靠这些在不持有长期 ID 的情况下精确去重。
+//! 每日 ID 按 UTC 日轮换，不从机器指纹、账号或局域网同步身份派生；发送失败静默跳过，不影响检查更新。
 //! 状态文件 `<bootstrap>/update-usage.json` 与 1.x 共用：同一台电脑从 1.x 换到 2.0 不算新增安装。
-//! 开发构建默认不上报。
+//! 只有发布流水线打出的包上报：本地打包、开发和测试构建都不发。
 
 use std::fs;
 use std::io::Write;
@@ -12,13 +14,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use kwikpaste_core::settings::{Language, Settings};
 use kwikpaste_core::{AppEnv, Core};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-const ENDPOINT: &str = "https://paste.fastthree.com/api/v1/update-usage";
+const ENDPOINT: &str = "https://paste.fastthree.com/api/v2/usage";
 const STATE_FILENAME: &str = "update-usage.json";
 const STATE_VERSION: u16 = 1;
 const SYSTEM: &str = if cfg!(target_os = "macos") {
@@ -26,6 +28,8 @@ const SYSTEM: &str = if cfg!(target_os = "macos") {
 } else {
     "windows"
 };
+/// `native-release.yml` 构建时设置；本机打包、自测和其它 CI 构建都没有，不会混进线上统计。
+const OFFICIAL_BUILD: bool = option_env!("KWIKPASTE_OFFICIAL_BUILD").is_some();
 
 #[derive(Default)]
 pub(crate) struct UsageState {
@@ -34,8 +38,8 @@ pub(crate) struct UsageState {
 
 #[derive(Clone, Copy)]
 pub(crate) enum Trigger {
-    /// 应用启动：只在首次上报还没送达时发送。
-    Launch,
+    /// 启动后和运行中每小时一次：开着自动检查更新时，当天还没送达或版本变了就上报。
+    Daily,
     /// 实际执行了一次检查更新（手动或到期的自动检查）。
     Check,
 }
@@ -44,9 +48,10 @@ pub(crate) enum Trigger {
 #[serde(rename_all = "lowercase")]
 enum Kind {
     First,
-    Check,
+    Active,
 }
 
+/// 新增字段都可缺省：1.x 读写同一个文件时会忽略、丢掉它们，2.0 读到缺失时按“不知道”处理。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DailyState {
@@ -55,6 +60,15 @@ struct DailyState {
     daily_id: String,
     /// 新安装的首次上报还没送达；送达前每次上报都标成首次。
     first_pending: bool,
+    /// 上次送达的 UTC 日。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_sent_day: Option<String>,
+    /// 上次送达时的软件版本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_sent_version: Option<String>,
+    /// 新安装所在的 ISO 周（`2026-W41`）；统计上线前就装好的为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    install_week: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -66,9 +80,12 @@ struct Payload {
     system: &'static str,
     arch: &'static str,
     language: Language,
+    days_since_last: Option<i64>,
+    install_week: Option<String>,
+    previous_version: Option<String>,
 }
 
-/// 在 core runtime 后台发送，检查更新不等网络和磁盘；多次触发排队执行，首次上报的状态读写不会交错。
+/// 在 core runtime 后台发送，检查更新不等网络和磁盘；多次触发排队执行，状态读写不会交错。
 pub(crate) fn schedule(core: &Core, state: &Arc<UsageState>, trigger: Trigger) {
     let Some(endpoint) = endpoint(core.info().env) else {
         return;
@@ -84,47 +101,88 @@ pub(crate) fn schedule(core: &Core, state: &Arc<UsageState>, trigger: Trigger) {
     });
 }
 
-/// 开发构建默认不发，避免本地调试混进线上统计；`e2e-overrides` 下可以指定地址（开发构建也发）。
+/// 只有正式发布的包发往线上；`e2e-overrides` 下可以指定地址（开发构建也发）。
 fn endpoint(env: AppEnv) -> Option<String> {
     if let Some(endpoint) = crate::overrides::var(crate::overrides::USAGE_ENDPOINT) {
         return Some(endpoint);
     }
-    (env == AppEnv::Prod).then(|| ENDPOINT.to_owned())
+    (env == AppEnv::Prod && OFFICIAL_BUILD).then(|| ENDPOINT.to_owned())
 }
 
-/// 每日 ID 在发送前落盘，重启或发送失败都不会让同一天换出第二个 ID；首次上报送达后才清掉待发标记。
+/// 每日 ID 在发送前落盘，重启或发送失败都不会让同一天换出第二个 ID；送达后才记下当天和版本。
 async fn report(core: &Core, trigger: Trigger, endpoint: &str) -> Result<()> {
     let settings = core.settings();
+    let now = Utc::now();
     let path = core.paths().bootstrap_dir().join(STATE_FILENAME);
-    let mut state = load_state(&path, Utc::now(), || is_fresh_install(&settings))?;
-    let Some(kind) = kind_for(trigger, state.first_pending) else {
+    let mut state = load_state(&path, now, || is_fresh_install(&settings))?;
+    let version = core.info().version.to_string();
+    let Some(kind) = kind_for(
+        trigger,
+        &state,
+        &version,
+        now.date_naive(),
+        settings.update.auto_check,
+    ) else {
         return Ok(());
     };
+    if state.first_pending && state.install_week.is_none() {
+        state.install_week = Some(iso_week(now.date_naive()));
+        write_state(&path, &state)?;
+    }
 
     let payload = Payload {
         daily_id: state.daily_id.clone(),
         kind,
-        version: core.info().version.to_string(),
+        version: version.clone(),
         system: SYSTEM,
         arch: std::env::consts::ARCH,
         language: settings.appearance.language,
+        days_since_last: days_since_last(&state, now.date_naive()),
+        install_week: state.install_week.clone(),
+        previous_version: state
+            .last_sent_version
+            .clone()
+            .filter(|previous| previous != &version),
     };
     send_payload(&payload, endpoint).await?;
 
-    if state.first_pending {
-        state.first_pending = false;
-        write_state(&path, &state)?;
-    }
-
-    Ok(())
+    state.first_pending = false;
+    state.last_sent_day = Some(now.date_naive().to_string());
+    state.last_sent_version = Some(version);
+    write_state(&path, &state)
 }
 
-fn kind_for(trigger: Trigger, first_pending: bool) -> Option<Kind> {
-    match (trigger, first_pending) {
-        (_, true) => Some(Kind::First),
-        (Trigger::Check, false) => Some(Kind::Check),
-        (Trigger::Launch, false) => None,
+/// 这次要不要发、发哪种：首次上报没送达前总是发；之后当天没送达或版本变了才发，
+/// 每日触发还要求开着自动检查更新。
+fn kind_for(
+    trigger: Trigger,
+    state: &DailyState,
+    version: &str,
+    today: NaiveDate,
+    auto_check: bool,
+) -> Option<Kind> {
+    if state.first_pending {
+        return Some(Kind::First);
     }
+    let due = state.last_sent_day.as_deref() != Some(today.to_string().as_str())
+        || state.last_sent_version.as_deref() != Some(version);
+    let allowed = match trigger {
+        Trigger::Daily => auto_check,
+        Trigger::Check => true,
+    };
+    (due && allowed).then_some(Kind::Active)
+}
+
+/// 距上次送达的 UTC 天数；没有记录或时钟倒退时为空，服务端按“之前没见过”处理。
+fn days_since_last(state: &DailyState, today: NaiveDate) -> Option<i64> {
+    let last = NaiveDate::parse_from_str(state.last_sent_day.as_deref()?, "%Y-%m-%d").ok()?;
+    let days = (today - last).num_days();
+    (days >= 0).then_some(days)
+}
+
+fn iso_week(day: NaiveDate) -> String {
+    let week = day.iso_week();
+    format!("{}-W{:02}", week.year(), week.week())
 }
 
 /// 状态文件第一次创建时判断是否新安装：引导没走完、也从没检查过更新。
@@ -182,6 +240,9 @@ fn state_for_day(
             day,
             daily_id: Uuid::new_v4().to_string(),
             first_pending: fresh_install(),
+            last_sent_day: None,
+            last_sent_version: None,
+            install_week: None,
         };
         return (state, true);
     };
@@ -227,14 +288,33 @@ mod tests {
             .with_timezone(&Utc)
     }
 
+    fn date(value: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
+    }
+
+    fn sent(day: &str, version: &str) -> DailyState {
+        DailyState {
+            version: STATE_VERSION,
+            day: day.to_owned(),
+            daily_id: Uuid::new_v4().to_string(),
+            first_pending: false,
+            last_sent_day: Some(day.to_owned()),
+            last_sent_version: Some(version.to_owned()),
+            install_week: None,
+        }
+    }
+
     fn payload(kind: Kind) -> Payload {
         Payload {
             daily_id: Uuid::new_v4().to_string(),
             kind,
-            version: "1.3.8".to_owned(),
+            version: "2.0.0".to_owned(),
             system: "windows",
             arch: "x86_64",
             language: Language::EnUS,
+            days_since_last: Some(3),
+            install_week: None,
+            previous_version: Some("1.4.0".to_owned()),
         }
     }
 
@@ -252,8 +332,9 @@ mod tests {
     }
 
     #[test]
-    fn next_utc_day_replaces_id_but_keeps_first_report_status() {
-        let (state, _) = state_for_day(None, at("2026-09-30T23:59:59Z"), || true);
+    fn next_utc_day_replaces_id_but_keeps_report_history() {
+        let mut state = sent("2026-09-30", "2.0.0");
+        state.install_week = Some("2026-W40".to_owned());
         let old = state.daily_id.clone();
 
         let (state, changed) = state_for_day(Some(state), at("2026-10-01T00:00:00Z"), || false);
@@ -261,7 +342,8 @@ mod tests {
         assert!(changed);
         assert_ne!(state.daily_id, old);
         assert_eq!(state.day, "2026-10-01");
-        assert!(state.first_pending);
+        assert_eq!(state.last_sent_day.as_deref(), Some("2026-09-30"));
+        assert_eq!(state.install_week.as_deref(), Some("2026-W40"));
     }
 
     #[test]
@@ -282,9 +364,9 @@ mod tests {
         assert!(!state.first_pending);
     }
 
-    /// 1.x 写下的状态文件 2.0 原样读回：同一台电脑换到 2.0 不重新算新增安装。
+    /// 1.x 写下的状态文件 2.0 原样读回（新字段为空）；2.0 加的字段 1.x 读时会忽略。
     #[test]
-    fn state_written_by_1x_is_reused() {
+    fn state_is_shared_with_1x() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(STATE_FILENAME);
         let id = Uuid::new_v4().to_string();
@@ -298,7 +380,13 @@ mod tests {
 
         assert_eq!(state.daily_id, id);
         assert!(!state.first_pending);
-        assert_eq!(kind_for(Trigger::Launch, state.first_pending), None);
+        assert_eq!(state.last_sent_day, None);
+        assert_eq!(days_since_last(&state, date("2026-10-02")), None);
+
+        let written = serde_json::to_value(sent("2026-10-02", "2.0.0")).unwrap();
+        for key in ["version", "day", "dailyId", "firstPending"] {
+            assert!(written.get(key).is_some(), "{key}");
+        }
     }
 
     #[test]
@@ -315,35 +403,84 @@ mod tests {
     }
 
     #[test]
-    fn pending_first_report_wins_and_launch_alone_stays_quiet() {
-        assert_eq!(kind_for(Trigger::Launch, true), Some(Kind::First));
-        assert_eq!(kind_for(Trigger::Check, true), Some(Kind::First));
-        assert_eq!(kind_for(Trigger::Check, false), Some(Kind::Check));
-        assert_eq!(kind_for(Trigger::Launch, false), None);
+    fn reports_once_a_day_and_again_after_an_upgrade() {
+        let today = date("2026-10-07");
+        let done = sent("2026-10-07", "2.0.0");
+        assert_eq!(kind_for(Trigger::Daily, &done, "2.0.0", today, true), None);
+        assert_eq!(kind_for(Trigger::Check, &done, "2.0.0", today, true), None);
+        assert_eq!(
+            kind_for(Trigger::Daily, &done, "2.0.1", today, true),
+            Some(Kind::Active)
+        );
+
+        let yesterday = sent("2026-10-06", "2.0.0");
+        assert_eq!(
+            kind_for(Trigger::Daily, &yesterday, "2.0.0", today, true),
+            Some(Kind::Active)
+        );
+        // 关掉自动检查后只在检查更新时上报。
+        assert_eq!(
+            kind_for(Trigger::Daily, &yesterday, "2.0.0", today, false),
+            None
+        );
+        assert_eq!(
+            kind_for(Trigger::Check, &yesterday, "2.0.0", today, false),
+            Some(Kind::Active)
+        );
+
+        let mut pending = sent("2026-10-06", "2.0.0");
+        pending.first_pending = true;
+        assert_eq!(
+            kind_for(Trigger::Daily, &pending, "2.0.0", today, false),
+            Some(Kind::First)
+        );
     }
 
     #[test]
-    fn payload_contains_exactly_the_six_fields() {
+    fn gap_and_install_week() {
+        let state = sent("2026-10-01", "2.0.0");
+        assert_eq!(days_since_last(&state, date("2026-10-07")), Some(6));
+        assert_eq!(days_since_last(&state, date("2026-09-30")), None);
+        assert_eq!(iso_week(date("2026-10-07")), "2026-W41");
+        assert_eq!(iso_week(date("2027-01-01")), "2026-W53");
+    }
+
+    #[test]
+    fn payload_contains_exactly_the_nine_fields() {
         let json = serde_json::to_value(payload(Kind::First)).unwrap();
         let object = json.as_object().unwrap();
 
-        assert_eq!(object.len(), 6);
-        for key in ["dailyId", "kind", "version", "system", "arch", "language"] {
+        assert_eq!(object.len(), 9);
+        for key in [
+            "dailyId",
+            "kind",
+            "version",
+            "system",
+            "arch",
+            "language",
+            "daysSinceLast",
+            "installWeek",
+            "previousVersion",
+        ] {
             assert!(object.contains_key(key), "{key}");
         }
         assert_eq!(json["kind"], "first");
         assert_eq!(json["language"], "en-US");
-        assert_eq!(serde_json::to_value(Kind::Check).unwrap(), "check");
+        assert_eq!(json["installWeek"], serde_json::Value::Null);
+        assert_eq!(serde_json::to_value(Kind::Active).unwrap(), "active");
     }
 
-    /// 开发构建默认不上报；正式构建发往线上地址（这里只比较地址，不发请求）。
+    /// 开发构建和本机打的包默认不上报；只有发布流水线的正式构建发往线上（这里只比较地址，不发请求）。
     #[test]
-    fn development_builds_stay_quiet_by_default() {
+    fn only_official_builds_report_by_default() {
         if cfg!(feature = "e2e-overrides") {
             return;
         }
         assert_eq!(endpoint(AppEnv::Dev), None);
-        assert_eq!(endpoint(AppEnv::Prod).as_deref(), Some(ENDPOINT));
+        assert_eq!(
+            endpoint(AppEnv::Prod).as_deref(),
+            OFFICIAL_BUILD.then_some(ENDPOINT)
+        );
     }
 
     #[test]
@@ -360,22 +497,20 @@ mod tests {
             let server = Server::start(vec![
                 Reply::status(status).header("Location", "http://127.0.0.1:1/must-not-follow"),
             ]);
-            let endpoint = server.url("/api/v1/update-usage");
+            let endpoint = server.url("/api/v2/usage");
 
-            let result = runtime.block_on(send_payload(&payload(Kind::Check), &endpoint));
+            let result = runtime.block_on(send_payload(&payload(Kind::Active), &endpoint));
 
             assert_eq!(result.is_ok(), ok, "{status}");
             let requests = server.requests();
             assert_eq!(requests.len(), 1);
-            assert!(
-                requests[0]
-                    .line
-                    .starts_with("POST /api/v1/update-usage HTTP/1.1")
-            );
+            assert!(requests[0].line.starts_with("POST /api/v2/usage HTTP/1.1"));
             let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
-            assert_eq!(body.as_object().unwrap().len(), 6);
-            assert_eq!(body["kind"], "check");
-            assert_eq!(body["version"], "1.3.8");
+            assert_eq!(body.as_object().unwrap().len(), 9);
+            assert_eq!(body["kind"], "active");
+            assert_eq!(body["version"], "2.0.0");
+            assert_eq!(body["daysSinceLast"], 3);
+            assert_eq!(body["previousVersion"], "1.4.0");
         }
     }
 }
