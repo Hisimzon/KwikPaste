@@ -511,14 +511,24 @@ impl ClipboardList {
                 pointer.x.as_f32() < window.viewport_size().width.as_f32() / 2.
             });
         let text_scale = f64::from(theme::text_scale(cx));
-        let measured_metrics = preview.as_ref().map(|preview| {
-            preview::measure_metrics(
+        let wrap_width = preview::text_wrap_width(&place.monitor, text_scale);
+        let rows = preview
+            .as_ref()
+            .and_then(|preview| preview.payload.text.as_deref())
+            .map(|text| preview::text_rows(text, wrap_width, text_scale, cx))
+            .unwrap_or_default();
+        let measured_metrics = preview.as_ref().map(|preview| match preview.metrics {
+            // core 只能按字数估行数，这里换成按正文字体实际折出的行数。
+            PreviewContentMetrics::Text { .. } => PreviewContentMetrics::Text {
+                rows: u32::try_from(rows.len()).unwrap_or(u32::MAX),
+            },
+            _ => preview::measure_metrics(
                 &preview.metrics,
                 preview.payload.text.as_deref(),
                 &preview.payload.words,
                 text_scale,
                 window,
-            )
+            ),
         });
         let geometry = preview::geometry(
             place.card,
@@ -532,9 +542,9 @@ impl ClipboardList {
             .and_then(|preview| image_box(preview, geometry.panel, text_scale));
         let text_view = self.settings.clipboard.preview.text_view;
         let preview_window = self.previewing.window.as_ref()?;
-        preview_window
-            .panel
-            .update(cx, |panel, cx| panel.set(preview, text_view, image_box, cx));
+        preview_window.panel.update(cx, |panel, cx| {
+            panel.set(preview, rows, text_view, image_box, cx)
+        });
 
         Some((
             preview_window.native.clone(),

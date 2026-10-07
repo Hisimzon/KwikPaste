@@ -1,10 +1,10 @@
 //! 预览窗的模型（1.x `window/preview.rs` 的几何与 `pages/Preview` 的排版规则）：面板尺寸按内容度量算，
-//! 放在卡片的左右（按指针在主窗口的哪一半）或上下，夹在显示器内；文本按 32 个字符软切成行；
-//! 选词按起点到当前词连续勾选或取消。全部是纯函数，可以 headless 单测。
+//! 放在卡片的左右（按指针在主窗口的哪一半）或上下，夹在显示器内；文本按面板宽度和正文字体折成行；
+//! 选词按起点到当前词连续勾选或取消。除了用文字系统量宽的几个函数，都是纯函数，可以 headless 单测。
 
 use std::{collections::BTreeSet, ops::Range};
 
-use gpui::{FontWeight, TextRun, Window, font, px};
+use gpui::{App, FontWeight, TextRun, Window, font, px};
 use kwikpaste_core::{clipboard::WordSpan, presenter::PreviewContentMetrics};
 use kwikpaste_ui::theme::{TextSize, fonts};
 
@@ -24,6 +24,8 @@ const EMPTY_HEIGHT: f64 = 96.;
 /// 纯文本视图一行的高度（`leading-5.5`）。
 pub const TEXT_ROW_HEIGHT: f64 = 22.;
 const TEXT_VERTICAL_PADDING: f64 = 32.;
+/// 纯文本视图左右各自的内边距。
+pub const TEXT_PADDING_X: f64 = 16.;
 /// 文件视图一行的高度。
 pub const FILE_ROW_HEIGHT: f64 = 40.;
 const FILE_VERTICAL_PADDING: f64 = 16.;
@@ -38,8 +40,6 @@ pub const WORDS_PADDING: f64 = 16.;
 /// 词块实际会比测得的略宽；宁可多留一行空白也不能裁掉最后一行）。
 const WORDS_EDGE: f64 = 3.;
 const FALLBACK_SIZE: (f64, f64) = (320., 240.);
-/// 纯文本视图每行最多的字符数（1.x `PREVIEW_TEXT_SOFT_WRAP_CHARS`）。
-pub const SOFT_WRAP_CHARS: usize = 32;
 
 /// 逻辑像素的矩形。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -348,30 +348,17 @@ fn raw_panel(
     }
 }
 
-/// 纯文本视图的行：按换行拆开，每行再按 [`SOFT_WRAP_CHARS`] 个字符软切（1.x
-/// `buildTextPreviewRows`，按 UTF-16 长度计）。返回每行的字节区间。
-pub fn text_rows(text: &str) -> Vec<Range<usize>> {
-    let mut rows = Vec::new();
-    let mut line_start = 0;
+/// 纯文本视图的折行宽度：文本内容的面板与显示器能给的最大宽度一样，再减去两侧 1 px 边框和左右内边距。
+pub fn text_wrap_width(monitor: &RectF, scale: f64) -> f64 {
+    let panel = (MAX_WIDTH * scale).min(monitor.inset(MARGIN).width);
+    panel - 2. - TEXT_PADDING_X * 2. * scale
+}
 
-    for line in text.split('\n') {
-        let mut row_start = line_start;
-        let mut units = 0;
-        for (offset, c) in line.char_indices() {
-            let at = line_start + offset;
-            if units + c.len_utf16() > SOFT_WRAP_CHARS {
-                rows.push(row_start..at);
-                row_start = at;
-                units = 0;
-            }
-            units += c.len_utf16();
-        }
-        let line_end = line_start + line.len();
-        rows.push(row_start..line_end);
-        line_start = line_end + 1;
-    }
-
-    rows
+/// 纯文本视图的行：按换行拆开，每行再按正文字体（`text-sm`）在 `width` 内折开，不把句末标点放到行首。
+/// 返回每行的字节区间。
+pub fn text_rows(text: &str, width: f64, scale: f64, cx: &App) -> Vec<Range<usize>> {
+    let font_size = px(TextSize::Sm.font_size().0 * 16. * scale as f32);
+    kwikpaste_ui::wrap_rows(text, px(width as f32), font_size, cx)
 }
 
 /// UTF-16 区间（core 的词区间）换成字节区间；越界时截到文本末尾。
@@ -610,37 +597,20 @@ mod tests {
     }
 
     #[test]
-    fn text_rows_soft_wrap_at_32_characters() {
-        let text = format!("{}\n\nshort", "a".repeat(70));
-        let rows = text_rows(&text);
-        assert_eq!(rows, vec![0..32, 32..64, 64..70, 71..71, 72..77]);
-
-        let wide = "中".repeat(33);
-        assert_eq!(text_rows(&wide), vec![0..96, 96..99]);
-    }
-
-    #[test]
-    fn mixed_cjk_latin_urls_wrap_and_scroll_instead_of_clipping() {
-        let text = format!(
-            "联系 support@example.com https://paste.fastthree.com/docs/getting-started?from=clipboard 中文 {}",
-            "a".repeat(700)
-        );
-        let rows = text_rows(&text);
-        assert!(rows.len() > 1);
-        assert!(rows.iter().all(|row| {
-            text.get(row.clone())
-                .is_some_and(|line| line.encode_utf16().count() <= SOFT_WRAP_CHARS)
-        }));
-
+    fn long_text_fills_the_panel_and_scrolls() {
         let (width, height) = panel_size(
-            Some(&PreviewContentMetrics::Text {
-                rows: u32::try_from(rows.len()).unwrap_or(u32::MAX),
-            }),
+            Some(&PreviewContentMetrics::Text { rows: 40 }),
             &MONITOR.inset(MARGIN),
             1.,
         );
         assert_eq!(width, 480.);
         assert_eq!(height, 480.);
+    }
+
+    #[test]
+    fn text_wraps_inside_the_borders_and_padding() {
+        assert_eq!(text_wrap_width(&MONITOR, 1.), 480. - 2. - 32.);
+        assert_eq!(text_wrap_width(&MONITOR, 1.25), 600. - 2. - 40.);
     }
 
     #[test]

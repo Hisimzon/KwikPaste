@@ -243,10 +243,7 @@ fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextVie
         presenter::{ClipboardPreviewFileEntry, PreviewWordChip},
     };
 
-    use crate::clipboard::model::{
-        item::{ItemKind, SubKind},
-        preview::text_rows,
-    };
+    use crate::clipboard::model::item::{ItemKind, SubKind};
 
     let text = (item.kind == ItemKind::Text)
         .then(|| item.summary.as_deref().unwrap_or_default().to_owned());
@@ -287,8 +284,9 @@ fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextVie
                         .collect(),
                 }
             } else {
+                // 实际行数由预览按面板宽度折行后算，这里只按换行估。
                 PreviewContentMetrics::Text {
-                    rows: u32::try_from(text_rows(text).len()).unwrap_or(u32::MAX),
+                    rows: u32::try_from(text.split('\n').count()).unwrap_or(u32::MAX),
                 }
             }
         }

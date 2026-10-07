@@ -25,8 +25,8 @@ use super::image_cache::{ImageKey, ImageState, KpImageCache, path_of};
 use crate::{
     clipboard::{
         model::preview::{
-            FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, TEXT_ROW_HEIGHT, WordSelection, format_bytes,
-            text_rows, utf16_range,
+            FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, TEXT_PADDING_X, TEXT_ROW_HEIGHT, WordSelection,
+            format_bytes, utf16_range,
         },
         source::{Preview, PreviewTextView},
     },
@@ -79,10 +79,11 @@ impl PreviewPanel {
         }
     }
 
-    /// 换内容：选词清空，滚动回到顶部。
+    /// 换内容：选词清空，滚动回到顶部。`rows` 是纯文本视图按面板宽度折好的行。
     pub fn set(
         &mut self,
         preview: Option<Preview>,
+        rows: Vec<Range<usize>>,
         text_view: PreviewTextView,
         image_box: Option<(f32, f32)>,
         cx: &mut Context<Self>,
@@ -97,13 +98,7 @@ impl PreviewPanel {
             self.text_scroll
                 .scroll_to_item(0, gpui::ScrollStrategy::Top);
         }
-        self.rows = Rc::new(
-            preview
-                .as_ref()
-                .and_then(|preview| preview.payload.text.as_deref())
-                .map(text_rows)
-                .unwrap_or_default(),
-        );
+        self.rows = Rc::new(rows);
         self.missing = preview.is_none();
         self.preview = preview;
         self.text_view = text_view;
@@ -424,9 +419,8 @@ impl PreviewPanel {
                             .unwrap_or(" ");
                         div()
                             .h(space((TEXT_ROW_HEIGHT as f32) / 4.))
-                            .px(space((16.) / 4.))
-                            .kp_mono()
-                            .kp_text(TextSize::Xs)
+                            .px(space((TEXT_PADDING_X as f32) / 4.))
+                            .kp_text(TextSize::Sm)
                             .line_height(space((TEXT_ROW_HEIGHT as f32) / 4.))
                             .whitespace_nowrap()
                             .child(SharedString::from(line.to_owned()))
