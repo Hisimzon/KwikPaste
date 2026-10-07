@@ -11,9 +11,10 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 
+use futures::channel::oneshot;
 use gpui::{
-    AnyElement, Bounds, Context, IntoElement as _, Pixels, Point, Styled as _, Subscription, Task,
-    Window, canvas,
+    AnyElement, AnyWindowHandle, AsyncApp, Bounds, Context, IntoElement as _, Pixels, Point,
+    Styled as _, Subscription, Task, Window, canvas,
 };
 use kwikpaste_core::{clipboard::ClipboardFragment, settings::PreviewHoverDelayMs};
 use kwikpaste_ui::theme;
@@ -238,8 +239,10 @@ impl ClipboardList {
     }
 
     /// 悬停式预览在指针离开卡片和预览窗 240 ms 后关上。
+    ///
+    /// 不取消悬停计时器：换到相邻卡片时 GPUI 可能先发新卡片的进入、再发旧卡片的离开，
+    /// 计时器到点时自己核对指针还在不在目标卡片上。
     fn schedule_preview_hide(&mut self, cx: &mut Context<Self>) {
-        self.previewing.hover_timer = None;
         let pointer_session = self
             .previewing
             .session
@@ -326,20 +329,26 @@ impl ClipboardList {
         let window = self.window;
 
         cx.spawn(async move |list, cx| {
-            let result = future.await;
+            let preview = match future.await {
+                Ok(preview) => preview,
+                Err(err) => {
+                    log::warn!("preview of {id} is unavailable: {err:#}");
+                    None
+                }
+            };
+            // 指针刚换到这张卡片时，它的位置要等面板画完下一帧才记下；数据往往先到。
+            let anchored = list
+                .read_with(cx, |list, _| list.previewing.anchor(&id).is_some())
+                .unwrap_or(true);
+            if !anchored {
+                after_next_paint(window, cx).await;
+            }
             let placed = window
                 .update(cx, |_, window, cx| {
                     list.update(cx, |list, cx| {
                         if list.previewing.request != request {
                             return None;
                         }
-                        let preview = match result {
-                            Ok(preview) => preview,
-                            Err(err) => {
-                                log::warn!("preview of {id} is unavailable: {err:#}");
-                                None
-                            }
-                        };
                         list.place_preview(&id, trigger, preview, window, cx)
                     })
                     .ok()
@@ -532,6 +541,22 @@ impl ClipboardList {
             place.to_screen(geometry.panel),
             place.dpi,
         ))
+    }
+}
+
+/// 等 `window` 画完一帧。GPUI 在帧开头、绘制之前调用 next-frame 回调，所以要等到再下一帧的开头；
+/// 窗口隐藏期间一直挂着，窗口关掉时随回调一起丢弃。
+async fn after_next_paint(window: AnyWindowHandle, cx: &mut AsyncApp) {
+    let (painted, wait) = oneshot::channel();
+    let scheduled = window.update(cx, |_, window, _| {
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |_, _| {
+                painted.send(()).ok();
+            });
+        });
+    });
+    if scheduled.is_ok() {
+        wait.await.ok();
     }
 }
 
