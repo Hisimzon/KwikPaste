@@ -385,7 +385,8 @@ impl Preferences {
         // 材质切换后窗口重套背板，分层底色也要跟着重画；选项显示的仍是用户的设置值（同 1.x）。
         let material_subscription =
             cx.observe_global::<crate::platform::material::WindowMaterial>(|_, cx| cx.notify());
-        // 截图验收（只在自测里）：`KP_PREFERENCES_DEMO` 为 rule / export / apps 时打开对应的弹框。
+        // 截图验收（只在自测里）：`KP_PREFERENCES_DEMO` 为 rule / export / export-readable / apps
+        // 时打开对应的弹框。
         // 弹框挂在窗口的 Root 上，要等 `open_window` 装好 Root 之后才能弹。
         if crate::selftest::active()
             && let Ok(demo) = std::env::var("KP_PREFERENCES_DEMO")
@@ -393,7 +394,8 @@ impl Preferences {
             cx.spawn_in(window, async move |this, cx| {
                 let _ = this.update_in(cx, |this, window, cx| match demo.as_str() {
                     "rule" => this.add_retention_rule(window, cx),
-                    "export" => this.export_readable(window, cx),
+                    "export" => this.open_export(ExportKind::Backup, window, cx),
+                    "export-readable" => this.open_export(ExportKind::Readable, window, cx),
                     "apps" => this.open_source_apps(window, cx),
                     other => log::warn!("unknown preferences demo {other}"),
                 });
@@ -728,9 +730,8 @@ impl Preferences {
                     return;
                 };
                 entity.update(cx, |this, cx| match id {
-                    "backup.exportHistory" => this.export_backup(window, cx),
+                    "backup.export" => this.open_export(ExportKind::Backup, window, cx),
                     "backup.importHistory" => this.import_backup(window, cx),
-                    "backup.exportReadable" => this.export_readable(window, cx),
                     "localData.cleanCache" => this.clean_resource_cache(cx),
                     "history.cleanupStatus" | "localData.clearHistory" => {
                         this.run_history_cleanup(cx)
@@ -1766,42 +1767,43 @@ impl Preferences {
             .into_any_element()
     }
 
-    fn export_backup(&self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 「导出」弹框：备份包和 Excel / Markdown 共用一个弹框，`kind` 决定先显示哪一种。
+    fn open_export(&self, kind: ExportKind, window: &mut Window, cx: &mut Context<Self>) {
         let Some(core) = core_host::core(cx).cloned() else {
             return;
         };
-        let mode = SelectState::new(
-            vec![
-                SelectOption::new(
-                    "encrypted",
-                    i18n::t("preferences:backup.export.modeEncrypted"),
-                ),
-                SelectOption::new("plain", i18n::t("preferences:backup.export.modePlain")),
-            ],
-            Some("encrypted"),
-            window,
-            cx,
-        );
-        let password = TextInput::new(i18n::t("preferences:backup.export.password"), window, cx);
-        let mode_content = mode.clone();
-        let password_content = password.clone();
+        let dialog = cx.new(|cx| ExportDialog::new(kind, core.clone(), window, cx));
+        let readable = dialog.read(cx).readable.downgrade();
+        let groups_core = core.clone();
+        window
+            .spawn(cx, async move |cx| match groups_core.list_groups().await {
+                Ok(groups) => {
+                    let _ = readable.update(cx, |dialog, cx| {
+                        dialog.groups = groups;
+                        dialog.groups_ready = true;
+                        cx.notify();
+                    });
+                }
+                Err(error) => log::warn!("load readable export groups failed: {error:#}"),
+            })
+            .detach();
+        let content = dialog.clone();
+        let validation_dialog = dialog.downgrade();
         let answer = form_dialog(
-            DialogSpec::new(i18n::t("preferences:backup.export.title"))
-                .ok_text(i18n::t("common:actions.save"))
-                .cancel_text(i18n::t("common:actions.cancel")),
-            move |_, _cx| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(space(2.))
-                    .child(
-                        Select::new(&mode_content)
-                            .width(rems(16.))
-                            .accessibility_label(i18n::t("preferences:backup.export.mode")),
-                    )
-                    .child(Input::new(&password_content))
-                    .into_any_element()
-            },
+            DialogSpec::new(i18n::t("preferences:backup.export.dialogTitle"))
+                .ok_text(i18n::t("preferences:readableExport.export"))
+                .cancel_text(i18n::t("common:actions.cancel"))
+                .validate(move |window, cx| {
+                    let Some(dialog) = validation_dialog.upgrade() else {
+                        return false;
+                    };
+                    let Some(error) = dialog.read(cx).validation_error(cx) else {
+                        return true;
+                    };
+                    toast::show(Toast::error(error), window, cx);
+                    false
+                }),
+            move |_, _| content.clone().into_any_element(),
             window,
             cx,
         );
@@ -1810,52 +1812,17 @@ impl Preferences {
                 if !answer.await.unwrap_or(false) {
                     return;
                 }
-                let (mode, password) = cx
-                    .update(|_, cx| {
-                        (
-                            mode.selected_value(cx)
-                                .unwrap_or_else(|| "encrypted".into()),
-                            password.value(cx).to_string(),
-                        )
-                    })
-                    .unwrap_or_default();
-                let Ok(prompt) = cx.update(|_, cx| {
-                    let directory = core
-                        .preference_directory(PreferenceDirectory::Data)
-                        .unwrap_or_else(|_| std::env::temp_dir());
-                    clipboard::view::pin::prompt_for_new_path(
-                        &directory,
-                        "KwikPaste-history.kwikpastebak",
-                        cx,
-                    )
-                }) else {
-                    log::warn!("could not open backup save dialog");
+                let Ok(kind) = cx.update(|_, cx| dialog.read(cx).kind) else {
                     return;
                 };
-                let Some(path) = prompt.await else {
-                    return;
-                };
-                let export_mode = if mode == "plain" {
-                    BackupExportMode::Plain
-                } else {
-                    BackupExportMode::Encrypted
-                };
-                match core
-                    .export_history_backup(
-                        path,
-                        backup::ExportHistoryBackupOptions {
-                            mode: export_mode,
-                            password: (!password.is_empty()).then_some(password),
-                        },
-                    )
-                    .await
-                {
-                    Ok(result) => log::info!("history backup exported: {}", result.path),
-                    Err(error) => log::warn!("history backup export failed: {error:#}"),
+                match kind {
+                    ExportKind::Backup => export_backup_file(core, dialog, cx).await,
+                    ExportKind::Readable => export_readable_files(core, dialog, cx).await,
                 }
             })
             .detach();
     }
+
     fn import_backup(&self, _window: &mut Window, cx: &mut Context<Self>) {
         let prompt = clipboard::view::pin::prompt_for_paths(
             gpui::PathPromptOptions {
@@ -1966,128 +1933,6 @@ impl Preferences {
                         result.requires_restart
                     ),
                     Err(error) => log::warn!("history backup import failed: {error:#}"),
-                }
-            })
-            .detach();
-    }
-
-    fn export_readable(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(core) = core_host::core(cx).cloned() else {
-            return;
-        };
-        let dialog = cx.new(|cx| ReadableExportDialog::new(core.clone(), window, cx));
-        let groups_dialog = dialog.downgrade();
-        let groups_core = core.clone();
-        window
-            .spawn(cx, async move |cx| match groups_core.list_groups().await {
-                Ok(groups) => {
-                    let _ = groups_dialog.update(cx, |dialog, cx| {
-                        dialog.groups = groups;
-                        dialog.groups_ready = true;
-                        cx.notify();
-                    });
-                }
-                Err(error) => log::warn!("load readable export groups failed: {error:#}"),
-            })
-            .detach();
-        let content = dialog.clone();
-        let validation_dialog = dialog.downgrade();
-        let answer = form_dialog(
-            DialogSpec::new(i18n::t("preferences:readableExport.title"))
-                .ok_text(i18n::t("preferences:readableExport.export"))
-                .cancel_text(i18n::t("common:actions.cancel"))
-                .validate(move |window, cx| {
-                    let Some(dialog) = validation_dialog.upgrade() else {
-                        return false;
-                    };
-                    let valid = dialog.read(cx).preview.as_ref().is_some_and(|preview| {
-                        preview.item_count > 0
-                            && (!dialog.read(cx).include_sensitive
-                                || dialog.read(cx).sensitive_confirmed)
-                    });
-                    if !valid {
-                        toast::show(
-                            Toast::error(i18n::t("preferences:readableExport.previewRequired")),
-                            window,
-                            cx,
-                        );
-                    }
-                    valid
-                }),
-            move |_, _| content.clone().into_any_element(),
-            window,
-            cx,
-        );
-        window
-            .spawn(cx, async move |cx| {
-                if !answer.await.unwrap_or(false) {
-                    return;
-                }
-                let (options, fingerprint) = cx
-                    .update(|_, cx| {
-                        let dialog = dialog.read(cx);
-                        (
-                            dialog.export_options(cx),
-                            dialog
-                                .preview
-                                .as_ref()
-                                .map(|preview| preview.fingerprint.clone()),
-                        )
-                    })
-                    .unwrap_or((
-                        ExportOptions {
-                            format: ExportFormat::Xlsx,
-                            favorites_only: false,
-                            group_ids: None,
-                            include_ungrouped: true,
-                            split_by_group: false,
-                            include_sensitive: false,
-                        },
-                        None,
-                    ));
-                let Some(fingerprint) = fingerprint else {
-                    log::warn!("readable export confirmed without a preview");
-                    return;
-                };
-                let path = if options.split_by_group {
-                    let Ok(prompt) = cx.update(|_, cx| {
-                        clipboard::view::pin::prompt_for_paths(
-                            gpui::PathPromptOptions {
-                                files: false,
-                                directories: true,
-                                multiple: false,
-                                prompt: None,
-                            },
-                            cx,
-                        )
-                    }) else {
-                        log::warn!("could not open readable export directory dialog");
-                        return;
-                    };
-                    prompt.await.and_then(|paths| paths.into_iter().next())
-                } else {
-                    let Ok(prompt) = cx.update(|_, cx| {
-                        let directory = core
-                            .preference_directory(PreferenceDirectory::Data)
-                            .unwrap_or_else(|_| std::env::temp_dir());
-                        let name = if options.format == ExportFormat::Markdown {
-                            "KwikPaste-readable.md"
-                        } else {
-                            "KwikPaste-readable.xlsx"
-                        };
-                        clipboard::view::pin::prompt_for_new_path(&directory, name, cx)
-                    }) else {
-                        log::warn!("could not open readable export save dialog");
-                        return;
-                    };
-                    prompt.await
-                };
-                let Some(path) = path else {
-                    return;
-                };
-                match core.export_readable_data(options, fingerprint, path).await {
-                    Ok(result) => log::info!("readable export written: {}", result.path),
-                    Err(error) => log::warn!("readable export failed: {error:#}"),
                 }
             })
             .detach();
@@ -2553,6 +2398,299 @@ impl Preferences {
                     .child(Input::search(&self.search).small().width(rems(16.))),
             )
             .child(div().flex_1().min_h_0().overflow_hidden().child(content))
+    }
+}
+
+/// 导出弹框的两种产物：可完整恢复的 `.kwikpastebak` 备份包，或给人看的 Excel / Markdown。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExportKind {
+    Backup,
+    Readable,
+}
+
+/// 备份密码的最短长度，与 core 导出时的校验一致。
+const BACKUP_PASSWORD_MIN_CHARS: usize = 8;
+
+/// 「导出」弹框的内容：顶部分段切换导出类型，下面是对应的表单；可读导出沿用 [`ReadableExportDialog`]。
+struct ExportDialog {
+    kind: ExportKind,
+    backup_mode: SelectState,
+    password: TextInput,
+    readable: gpui::Entity<ReadableExportDialog>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl ExportDialog {
+    fn new(
+        kind: ExportKind,
+        core: kwikpaste_core::Core,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let backup_mode = SelectState::new(
+            vec![
+                SelectOption::new(
+                    "encrypted",
+                    i18n::t("preferences:backup.export.modeEncrypted"),
+                ),
+                SelectOption::new("plain", i18n::t("preferences:backup.export.modePlain")),
+            ],
+            Some("encrypted"),
+            window,
+            cx,
+        );
+        let mode_subscription = backup_mode.on_change(cx, |_, _, cx| cx.notify());
+
+        Self {
+            kind,
+            backup_mode,
+            password: TextInput::new(i18n::t("preferences:backup.export.passwordMin"), window, cx),
+            readable: cx.new(|cx| ReadableExportDialog::new(core, window, cx)),
+            _subscriptions: vec![mode_subscription],
+        }
+    }
+
+    fn backup_encrypted(&self, cx: &App) -> bool {
+        self.backup_mode
+            .selected_value(cx)
+            .is_none_or(|mode| mode != "plain")
+    }
+
+    /// 点导出前的校验：返回要提示的错误，`None` 表示可以导出。
+    fn validation_error(&self, cx: &App) -> Option<gpui::SharedString> {
+        match self.kind {
+            ExportKind::Backup => {
+                if !self.backup_encrypted(cx) {
+                    return None;
+                }
+                let length = self.password.value(cx).chars().count();
+                if length == 0 {
+                    Some(i18n::t("preferences:backup.export.passwordRequired"))
+                } else if length < BACKUP_PASSWORD_MIN_CHARS {
+                    Some(i18n::t("preferences:backup.export.passwordMin"))
+                } else {
+                    None
+                }
+            }
+            ExportKind::Readable => {
+                let readable = self.readable.read(cx);
+                let valid = readable.preview.as_ref().is_some_and(|preview| {
+                    preview.item_count > 0
+                        && (!readable.include_sensitive || readable.sensitive_confirmed)
+                });
+                (!valid).then(|| i18n::t("preferences:readableExport.previewRequired"))
+            }
+        }
+    }
+}
+
+impl Render for ExportDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::semantic(cx);
+        let kinds = div()
+            .flex()
+            .flex_none()
+            .gap(space(0.5))
+            .p(space(0.5))
+            .rounded(theme::radius::MD)
+            .bg(tokens.fill.subtle)
+            .children([ExportKind::Backup, ExportKind::Readable].map(|kind| {
+                let (id, label) = match kind {
+                    ExportKind::Backup => (
+                        "export-kind-backup",
+                        i18n::t("preferences:backup.export.kindBackup"),
+                    ),
+                    ExportKind::Readable => (
+                        "export-kind-readable",
+                        i18n::t("preferences:backup.export.kindReadable"),
+                    ),
+                };
+                segment(id, label, self.kind == kind, cx).on_click(cx.listener(
+                    move |dialog, _, _, cx| {
+                        if dialog.kind != kind {
+                            dialog.kind = kind;
+                            cx.notify();
+                        }
+                    },
+                ))
+            }));
+        let hint = match self.kind {
+            ExportKind::Backup => i18n::t("preferences:backup.export.kindBackupHint"),
+            ExportKind::Readable => i18n::t("preferences:readableExport.notBackup"),
+        };
+        let body = match self.kind {
+            ExportKind::Backup => div()
+                .flex()
+                .flex_col()
+                .gap(space(4.))
+                .pb(space(1.))
+                .child(form_field(
+                    i18n::t("preferences:backup.export.mode"),
+                    div()
+                        .flex()
+                        .child(
+                            Select::new(&self.backup_mode)
+                                .width(CONTROL_WIDTH)
+                                .accessibility_label(i18n::t("preferences:backup.export.mode")),
+                        )
+                        .into_any_element(),
+                    tokens,
+                ))
+                .map(|form| {
+                    if self.backup_encrypted(cx) {
+                        form.child(form_field(
+                            i18n::t("preferences:backup.export.password"),
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(space(1.5))
+                                .child(Input::new(&self.password))
+                                .child(
+                                    div()
+                                        .kp_text(TextSize::Xs)
+                                        .text_color(tokens.text.secondary)
+                                        .child(i18n::t("preferences:backup.export.encryptedHint")),
+                                )
+                                .into_any_element(),
+                            tokens,
+                        ))
+                    } else {
+                        form.child(
+                            div()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.status.warning.solid)
+                                .child(i18n::t("preferences:backup.export.plainWarning")),
+                        )
+                    }
+                })
+                .into_any_element(),
+            ExportKind::Readable => self.readable.clone().into_any_element(),
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(space(4.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(2.))
+                    .child(div().flex().child(kinds))
+                    .child(
+                        div()
+                            .kp_text(TextSize::Xs)
+                            .text_color(tokens.text.secondary)
+                            .child(hint),
+                    ),
+            )
+            .child(body)
+    }
+}
+
+/// 按弹框里的选项导出备份包：先选保存位置，再交给 core 打包（加密时带密码）。
+async fn export_backup_file(
+    core: kwikpaste_core::Core,
+    dialog: gpui::Entity<ExportDialog>,
+    cx: &mut gpui::AsyncWindowContext,
+) {
+    let Ok((encrypted, password)) = cx.update(|_, cx| {
+        let dialog = dialog.read(cx);
+        (
+            dialog.backup_encrypted(cx),
+            dialog.password.value(cx).to_string(),
+        )
+    }) else {
+        return;
+    };
+    let Ok(prompt) = cx.update(|_, cx| {
+        let directory = core
+            .preference_directory(PreferenceDirectory::Data)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        clipboard::view::pin::prompt_for_new_path(&directory, "KwikPaste-history.kwikpastebak", cx)
+    }) else {
+        log::warn!("could not open backup save dialog");
+        return;
+    };
+    let Some(path) = prompt.await else {
+        return;
+    };
+    // 明文备份不能带密码（core 会拒绝），切到明文前输过的密码在这里丢掉。
+    let options = backup::ExportHistoryBackupOptions {
+        mode: if encrypted {
+            BackupExportMode::Encrypted
+        } else {
+            BackupExportMode::Plain
+        },
+        password: encrypted.then_some(password),
+    };
+    match core.export_history_backup(path, options).await {
+        Ok(result) => log::info!("history backup exported: {}", result.path),
+        Err(error) => log::warn!("history backup export failed: {error:#}"),
+    }
+}
+
+/// 按弹框里预览过的选项导出 Excel / Markdown：按分组拆分时选目录，否则选文件。
+async fn export_readable_files(
+    core: kwikpaste_core::Core,
+    dialog: gpui::Entity<ExportDialog>,
+    cx: &mut gpui::AsyncWindowContext,
+) {
+    let Ok((options, fingerprint)) = cx.update(|_, cx| {
+        let readable = dialog.read(cx).readable.read(cx);
+        (
+            readable.export_options(cx),
+            readable
+                .preview
+                .as_ref()
+                .map(|preview| preview.fingerprint.clone()),
+        )
+    }) else {
+        return;
+    };
+    let Some(fingerprint) = fingerprint else {
+        log::warn!("readable export confirmed without a preview");
+        return;
+    };
+    let path = if options.split_by_group {
+        let Ok(prompt) = cx.update(|_, cx| {
+            clipboard::view::pin::prompt_for_paths(
+                gpui::PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: None,
+                },
+                cx,
+            )
+        }) else {
+            log::warn!("could not open readable export directory dialog");
+            return;
+        };
+        prompt.await.and_then(|paths| paths.into_iter().next())
+    } else {
+        let Ok(prompt) = cx.update(|_, cx| {
+            let directory = core
+                .preference_directory(PreferenceDirectory::Data)
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let name = if options.format == ExportFormat::Markdown {
+                "KwikPaste-readable.md"
+            } else {
+                "KwikPaste-readable.xlsx"
+            };
+            clipboard::view::pin::prompt_for_new_path(&directory, name, cx)
+        }) else {
+            log::warn!("could not open readable export save dialog");
+            return;
+        };
+        prompt.await
+    };
+    let Some(path) = path else {
+        return;
+    };
+    match core.export_readable_data(options, fingerprint, path).await {
+        Ok(result) => log::info!("readable export written: {}", result.path),
+        Err(error) => log::warn!("readable export failed: {error:#}"),
     }
 }
 

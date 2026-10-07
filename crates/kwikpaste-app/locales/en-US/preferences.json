@@ -7,7 +7,12 @@
     "export": {
       "confirmPassword": "Confirm password",
       "confirmRequired": "Enter the backup password again",
+      "dialogTitle": "Export Data",
       "encryptedHint": "The backup will be encrypted with this password. KwikPaste will not save it, and forgotten passwords cannot be recovered.",
+      "kind": "Export type",
+      "kindBackup": "Backup",
+      "kindBackupHint": "Includes all records, images and settings. Restore it with Import Backup.",
+      "kindReadable": "Excel / Markdown",
       "mode": "Backup mode",
       "modeEncrypted": "Encrypted backup (Recommended)",
       "modePlain": "Plain backup",
@@ -570,15 +575,10 @@
         }
       },
       "backup": {
-        "exportHistory": {
+        "export": {
           "controlLabel": "Export",
-          "description": "Export a .kwikpastebak backup, encrypted with a password by default.",
-          "title": "Export Backup"
-        },
-        "exportReadable": {
-          "controlLabel": "Export to files",
-          "description": "Export Excel or Markdown with favorites, group and split options.",
-          "title": "Export to files"
+          "description": "Export a .kwikpastebak backup for full restore, or Excel / Markdown for reading and sharing.",
+          "title": "Export"
         },
         "importHistory": {
           "controlLabel": "Import",

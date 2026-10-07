@@ -907,10 +907,16 @@ fn data_sections() -> Vec<Section> {
         Section {
             id: "backup",
             settings: vec![
-                Setting::new("backup.exportHistory", Control::Action { danger: false })
-                    .keywords(&["export", "backup", "history"]),
-                Setting::new("backup.exportReadable", Control::Action { danger: false })
-                    .keywords(&["export", "excel", "xlsx", "markdown", "groups", "favorites"]),
+                Setting::new("backup.export", Control::Action { danger: false }).keywords(&[
+                    "export",
+                    "backup",
+                    "history",
+                    "excel",
+                    "xlsx",
+                    "markdown",
+                    "groups",
+                    "favorites",
+                ]),
                 Setting::new("backup.importHistory", Control::Action { danger: false })
                     .keywords(&["import", "backup", "history"]),
             ],
