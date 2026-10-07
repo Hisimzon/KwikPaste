@@ -8,7 +8,8 @@ run="$(mktemp -d "${TMPDIR:-/tmp}/kwikpaste-native-update-e2e.XXXXXX")"
 key_dir="$run/key"; old_out="$run/old"; new_out="$run/new"; server_dir="$run/server"
 mkdir -p "$key_dir" "$old_out" "$new_out" "$server_dir"
 manifest="$server_dir/latest.json"
-port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+port_file="$run/http.port"
+http_log="$run/http.log"
 old_version=2.0.0-e2e.1
 new_version=2.0.0-e2e.2
 target=aarch64-apple-darwin
@@ -16,6 +17,7 @@ arch=aarch64
 original_manifest="$(cat "$root/Cargo.toml")"
 original_lock="$(cat "$root/Cargo.lock")"
 server_pid=''
+port=''
 
 cleanup() {
   [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true
@@ -24,6 +26,62 @@ cleanup() {
   rm -rf "$run"
 }
 trap cleanup EXIT
+
+# Everything that decides whether a loopback request reaches the local server.
+diagnose() {
+  echo '--- loopback diagnostics'
+  sw_vers || true
+  env | grep -i '_proxy=' || echo 'no proxy environment variables'
+  scutil --proxy || true
+  for flag in --getglobalstate --getblockall --getstealthmode --getallowsigned; do
+    /usr/libexec/ApplicationFirewall/socketfilterfw "$flag" || true
+  done
+  python3 -c 'import sys; print("python", sys.executable, sys.version.split()[0])' || true
+  [[ -z "$port" ]] || lsof -nP -iTCP:"$port" -sTCP:LISTEN || true
+  echo '--- local server log'
+  cat "$http_log" 2>/dev/null || true
+}
+
+fail() {
+  diagnose
+  echo "$1" >&2
+  exit 1
+}
+
+# The server binds port 0 itself, so nothing can take the port between choosing and listening.
+start_server() {
+  cat > "$run/serve.py" <<'PY'
+import functools
+import http.server
+import os
+import sys
+
+directory, port_file = sys.argv[1:]
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
+with http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
+    with open(port_file + '.tmp', 'w', encoding='utf-8') as output:
+        output.write(str(server.server_address[1]))
+    os.replace(port_file + '.tmp', port_file)
+    server.serve_forever()
+PY
+  python3 -u "$run/serve.py" "$server_dir" "$port_file" > "$http_log" 2>&1 &
+  server_pid=$!
+  for _ in $(seq 50); do
+    [[ -s "$port_file" ]] && break
+    sleep 0.2
+  done
+  port="$(cat "$port_file" 2>/dev/null || true)"
+  [[ -n "$port" ]] || fail 'local HTTP server did not start'
+}
+
+probe() {
+  curl -v --noproxy '*' --fail --max-time 5 "http://127.0.0.1:$port/$1" || fail "loopback probe of /$1 failed"
+}
+
+# Serve and probe before the 15-minute builds, so a broken loopback fails in seconds.
+start_server
+echo ready > "$server_dir/ready"
+probe ready
 
 password="e2e-$(uuidgen | tr -d '-')"
 pnpm tauri signer generate --ci -p "$password" -w "$key_dir/e2e.key" -f >/dev/null
@@ -65,8 +123,7 @@ with open(path, 'w', encoding='utf-8') as output:
                'version': version, 'platforms': platforms}, output, indent=2)
     output.write('\n')
 PY
-(cd "$server_dir" && python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) & server_pid=$!
-sleep 1
+probe latest.json
 
 old_archive="$old_out/KwikPasteBundleTest_${old_version}_${arch}.app.tar.gz"
 mkdir -p "$run/App"
@@ -76,10 +133,13 @@ exe="$app/Contents/MacOS/KwikPasteBundleTest"
 [[ -x "$exe" ]] || { echo "missing $exe" >&2; exit 1; }
 export KWIKPASTE_SELFTEST=1
 export KWIKPASTE_UPDATE_ENDPOINT="http://127.0.0.1:$port/latest.json"
+# Both channels read the local manifest: a published beta must not decide this test.
+export KWIKPASTE_UPDATE_BETA_ENDPOINT="$KWIKPASTE_UPDATE_ENDPOINT"
 export KWIKPASTE_UPDATE_PUBLIC_KEY="$(cat "$key_dir/e2e.key.pub")"
 old_hash="$(shasum -a 256 "$exe" | awk '{print $1}')"
-"$exe" --selftest-update-e2e 2>&1 | tee "$run/update.log"
+app_status=0
+"$exe" --selftest-update-e2e 2>&1 | tee "$run/update.log" || app_status=$?
 new_hash="$(shasum -a 256 "$exe" | awk '{print $1}')"
-[[ "$old_hash" != "$new_hash" ]] || { echo 'macOS app was not replaced' >&2; exit 1; }
-grep -Eq 'downloaded|installing' "$run/update.log"
+[[ "$old_hash" != "$new_hash" ]] || fail "macOS app was not replaced (exit $app_status)"
+grep -Eq 'downloaded|installing' "$run/update.log" || fail 'update log has no download or install step'
 echo "ok macOS app swap: $old_hash -> $new_hash"
