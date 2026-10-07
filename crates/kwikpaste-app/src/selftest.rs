@@ -400,8 +400,7 @@ fn update_e2e(cx: &mut App) {
                 }
                 if let Err(err) = core
                     .update_settings(serde_json::json!({
-                        "general": { "autoStart": true },
-                        "update": { "includeBeta": false }
+                        "general": { "autoStart": true }
                     }))
                     .await
                 {

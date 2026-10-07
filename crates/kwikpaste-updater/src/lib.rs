@@ -12,7 +12,7 @@
 //! 「回到经典版」和老更新器兼容，便携版也不做健康检查回滚。
 
 mod announcement;
-mod channels;
+mod channel;
 mod download;
 mod handoff;
 mod http;
@@ -38,7 +38,6 @@ use serde::Serialize;
 use tokio::task::JoinHandle;
 
 pub use announcement::{AnnouncementButton, AnnouncementOutcome, AnnouncementPrompt, ButtonRole};
-pub use channels::Channel;
 pub use download::{DownloadProgress, MAX_PACKAGE_BYTES};
 pub use handoff::{HandoffHost, HandoffRecord, HostFuture, take_handoff};
 #[cfg(feature = "e2e-overrides")]
@@ -46,7 +45,7 @@ pub use overrides::SENTINEL as E2E_OVERRIDES_SENTINEL;
 pub use target::InstallKind;
 
 use announcement::AnnouncementState;
-use channels::{Candidate, Criteria};
+use channel::{Candidate, Criteria};
 use download::Package;
 use handoff::{Handoff, Launcher, SystemLauncher};
 use usage::UsageState;
@@ -91,7 +90,6 @@ pub struct UpdateStatus {
 pub struct UpdateMetadata {
     pub current_version: String,
     pub version: String,
-    pub channel: &'static str,
     pub date: Option<String>,
     pub body: Option<String>,
     /// 清单里用到的平台键。
@@ -112,7 +110,7 @@ struct Inner {
     launcher: Box<dyn Launcher>,
     kind: InstallKind,
     client: reqwest::Client,
-    /// 各渠道的清单地址；测试换成本机地址。
+    /// 清单地址；测试换成本机地址。
     endpoints: EndpointSource,
     /// 验签公钥；测试换成一次性密钥。
     public_key: String,
@@ -127,7 +125,7 @@ struct Pending {
     package: Option<Package>,
 }
 
-type EndpointSource = Box<dyn Fn(Channel) -> anyhow::Result<Vec<url::Url>> + Send + Sync>;
+type EndpointSource = Box<dyn Fn() -> anyhow::Result<Vec<url::Url>> + Send + Sync>;
 
 /// 正式运行时从环境里取的部分；测试换成假的。
 struct Parts {
@@ -147,7 +145,7 @@ impl Updater {
             Parts {
                 kind: InstallKind::detect(),
                 launcher: Box::new(SystemLauncher),
-                endpoints: Box::new(channels::endpoints),
+                endpoints: Box::new(channel::endpoints),
                 public_key: verify::public_key(),
             },
         )
@@ -233,7 +231,7 @@ impl Updater {
         self.0.status()
     }
 
-    /// 检查更新：v2 清单，稳定版总是检查，开着「测试版」时也检查测试版。顺带上报统计、拉公告。
+    /// 检查更新：读 v2 清单（只有一个渠道），顺带上报统计、拉公告。
     pub async fn check(&self, mode: CheckMode) -> Result<UpdateStatus> {
         let updater = self.clone();
         hop(self.0.core.runtime(), async move {
@@ -292,17 +290,14 @@ impl Updater {
         );
 
         if inner.kind.is_managed() {
-            let channels = channels::channels(settings.include_beta)
-                .into_iter()
-                .map(|channel| Ok((channel, (inner.endpoints)(channel)?)))
-                .collect::<anyhow::Result<Vec<_>>>()?;
+            let mirrors = (inner.endpoints)()?;
             let criteria = Criteria {
                 current: inner.core.info().version.clone(),
                 skipped: settings.skipped_version.clone(),
                 os: os::current(),
                 platform_keys: inner.kind.platform_keys(),
             };
-            let found = channels::check_all(&inner.client, channels, &criteria).await?;
+            let found = channel::check(&inner.client, &mirrors, &criteria).await?;
             inner.set_candidate(found);
         }
 
@@ -423,7 +418,6 @@ impl Inner {
         UpdateMetadata {
             current_version: self.core.info().version.to_string(),
             version: candidate.version.to_string(),
-            channel: candidate.channel.name(),
             date: candidate.pub_date.clone(),
             body: candidate.notes.clone(),
             target: candidate.target.clone(),

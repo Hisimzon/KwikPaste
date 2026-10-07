@@ -896,13 +896,13 @@ pub struct Feedback {
     pub copy_sound: bool,
 }
 
+/// 1.x 的渠道开关 `includeBeta` / `includeNightly` 在 2.x 删掉了（2.x 只有一个更新渠道）：读取时忽略，
+/// 下次写盘不再写出。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Update {
     pub auto_check: bool,
     pub frequency: UpdateFrequency,
-    pub include_beta: bool,
-    pub include_nightly: bool,
     pub last_checked_at: Option<String>,
     pub skipped_version: Option<String>,
 }
@@ -913,8 +913,6 @@ impl Default for Update {
         Self {
             auto_check: true,
             frequency: UpdateFrequency::default(),
-            include_beta: true,
-            include_nightly: true,
             last_checked_at: None,
             skipped_version: None,
         }

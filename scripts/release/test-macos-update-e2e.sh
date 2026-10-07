@@ -146,8 +146,6 @@ exe="$app/Contents/MacOS/KwikPasteBundleTest"
 [[ -x "$exe" ]] || { echo "missing $exe" >&2; exit 1; }
 export KWIKPASTE_SELFTEST=1
 export KWIKPASTE_UPDATE_ENDPOINT="http://127.0.0.1:$port/latest.json"
-# Both channels read the local manifest: a published beta must not decide this test.
-export KWIKPASTE_UPDATE_BETA_ENDPOINT="$KWIKPASTE_UPDATE_ENDPOINT"
 export KWIKPASTE_UPDATE_PUBLIC_KEY="$(cat "$key_dir/e2e.key.pub")"
 old_hash="$(shasum -a 256 "$exe" | awk '{print $1}')"
 app_status=0

@@ -1,10 +1,10 @@
 name: Publish 2.x Update Channels
 
-# 把已发布的 2.x release 推到 kwikpaste-updater 读的两个地址（见 crates/kwikpaste-updater/src/channels.rs）：
-#   七牛（国内主通道）  dl.fastthree.com/kwikpaste/v2/<渠道>/latest.json，安装包传到 kwikpaste/<渠道>/<tag>/
+# 把已发布的 2.x release 推到 kwikpaste-updater 读的两个地址（见 crates/kwikpaste-updater/src/channel.rs）：
+#   七牛（国内主通道）  dl.fastthree.com/kwikpaste/v2/stable/latest.json，安装包传到 kwikpaste/stable/<tag>/
 #                      （与 1.x 相同的目录结构，官网下载链接规则不变）。
-#   GitHub（兜底）      channel-v2-<渠道> 指针 release 里的 latest-v2.json（预发布，永远不会成为 latest）。
-# 渠道：-beta.N / -rc.N 是 beta，其余是 stable。
+#   GitHub（兜底）      channel-v2-stable 指针 release 里的 latest-v2.json（预发布，永远不会成为 latest）。
+# 2.x 只有一个更新渠道（地址里沿用 stable 这个名字）：-beta.N、-rc.N 和正式版发布后都推到这里，其他预发布后缀拒绝。
 #
 # 只处理主版本 ≥2 的 tag；1.x 仍由 channel-pointer.yml 处理，它对 2.x 直接跳过。老通道（七牛 stable/beta/nightly、
 # GitHub latest、channel-beta、channel-nightly）永远只有 1.x；2.x 在 GitHub 上的资产也永远不叫 latest.json。
@@ -67,18 +67,11 @@ jobs:
           fi
           # <<< v1-skip
 
-          case "${tag_name}" in
-            *-beta.* | *-rc.*)
-              channel=beta
-              ;;
-            *-*)
-              echo "::error::${tag_name} is a prerelease kind 2.x has no channel for."
-              exit 1
-              ;;
-            *)
-              channel=stable
-              ;;
-          esac
+          if [[ "${tag_name}" == *-* && "${tag_name}" != *-beta.* && "${tag_name}" != *-rc.* ]]; then
+            echo "::error::${tag_name} is a prerelease kind 2.x does not publish."
+            exit 1
+          fi
+          channel=stable
 
           release_id="$(gh api "repos/${GH_REPO}/releases/tags/${tag_name}" --jq .id)"
           gh api --paginate "repos/${GH_REPO}/releases/${release_id}/assets?per_page=100" \
@@ -122,7 +115,7 @@ jobs:
           set -euo pipefail
 
           pointer_tag="channel-v2-${CHANNEL}"
-          notes="$(printf '2.x %s 渠道的更新指针，始终指向该渠道的最新版本。\n\n当前指向：%s\n\n这个 release 只存放 latest-v2.json，安装包请到对应版本的 release 里下载。' "${CHANNEL}" "${TAG_NAME}")"
+          notes="$(printf '2.x 的更新指针（%s），始终指向最新发布的 2.x 版本。\n\n当前指向：%s\n\n这个 release 只存放 latest-v2.json，安装包请到对应版本的 release 里下载。' "${CHANNEL}" "${TAG_NAME}")"
 
           if gh release view "${pointer_tag}" > /dev/null 2>&1; then
             gh release edit "${pointer_tag}" --prerelease --latest=false --title "${pointer_tag}" --notes "${notes}"

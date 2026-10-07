@@ -65,7 +65,7 @@ struct Setup {
     journal: Journal,
 }
 
-fn setup(kind: InstallKind, endpoints: Vec<(Channel, Url)>, key: &TestKey, fails: bool) -> Setup {
+fn setup(kind: InstallKind, endpoint: Url, key: &TestKey, fails: bool) -> Setup {
     let test = TestCore::start("2.0.0");
     let (host, launcher, journal): (RecordingHost, FakeLauncher, Journal) = recorders(fails);
     let updater = Updater::with_parts(
@@ -75,13 +75,7 @@ fn setup(kind: InstallKind, endpoints: Vec<(Channel, Url)>, key: &TestKey, fails
         Parts {
             kind,
             launcher: Box::new(launcher),
-            endpoints: Box::new(move |channel| {
-                Ok(endpoints
-                    .iter()
-                    .filter(|(candidate, _)| *candidate == channel)
-                    .map(|(_, url)| url.clone())
-                    .collect())
-            }),
+            endpoints: Box::new(move || Ok(vec![endpoint.clone()])),
             public_key: key.public_key(),
         },
     )
@@ -110,23 +104,12 @@ fn check_download_and_install_through_the_nsis_handoff() {
         test,
         updater,
         journal,
-    } = setup(
-        InstallKind::Nsis,
-        vec![(Channel::Stable, stable)],
-        &key,
-        false,
-    );
-    test.block_on(
-        test.core
-            .update_settings(json!({"update": {"includeBeta": false}})),
-    )
-    .unwrap();
+    } = setup(InstallKind::Nsis, stable, &key, false);
 
     let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
     let update = status.update.unwrap();
     assert!(status.supported);
     assert_eq!(update.version, "2.0.1");
-    assert_eq!(update.channel, "stable");
     assert_eq!(update.download_url, installer_url);
     assert!(!update.downloaded);
     assert_eq!(
@@ -201,12 +184,7 @@ fn a_tampered_package_is_never_installed() {
         test,
         updater,
         journal,
-    } = setup(
-        InstallKind::Nsis,
-        vec![(Channel::Stable, stable)],
-        &key,
-        false,
-    );
+    } = setup(InstallKind::Nsis, stable, &key, false);
 
     test.block_on(updater.check(CheckMode::Manual)).unwrap();
     assert!(
@@ -218,15 +196,11 @@ fn a_tampered_package_is_never_installed() {
     assert!(!updater.status().update.unwrap().downloaded);
 }
 
+/// 测试版与正式版走同一个渠道：发布了测试版就提供，跳过之后不再提供，直到渠道换成更新的版本。
 #[test]
-fn beta_follows_the_existing_setting_and_skipped_versions_stay_hidden() {
+fn prereleases_are_offered_and_skipped_versions_stay_hidden() {
     let key = TestKey::generate();
-    let stable = Server::start(vec![
-        Reply::ok(manifest("2.0.1", "https://dl.example.com/a.exe", "c2ln")),
-        Reply::ok(manifest("2.0.1", "https://dl.example.com/a.exe", "c2ln")),
-        Reply::ok(manifest("2.0.1", "https://dl.example.com/a.exe", "c2ln")),
-    ]);
-    let beta = Server::start(vec![
+    let server = Server::start(vec![
         Reply::ok(manifest(
             "2.1.0-beta.1",
             "https://dl.example.com/b.exe",
@@ -237,37 +211,15 @@ fn beta_follows_the_existing_setting_and_skipped_versions_stay_hidden() {
             "https://dl.example.com/b.exe",
             "c2ln",
         )),
+        Reply::ok(manifest("2.1.0", "https://dl.example.com/a.exe", "c2ln")),
     ]);
     let Setup { test, updater, .. } = setup(
         InstallKind::Nsis,
-        vec![
-            (
-                Channel::Stable,
-                Url::parse(&stable.url("/latest.json")).unwrap(),
-            ),
-            (
-                Channel::Beta,
-                Url::parse(&beta.url("/latest.json")).unwrap(),
-            ),
-        ],
+        Url::parse(&server.url("/latest.json")).unwrap(),
         &key,
         false,
     );
 
-    test.block_on(
-        test.core
-            .update_settings(json!({"update": {"includeBeta": false, "includeNightly": true}})),
-    )
-    .unwrap();
-    let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
-    assert_eq!(status.update.unwrap().version, "2.0.1");
-    assert!(beta.requests().is_empty());
-
-    test.block_on(
-        test.core
-            .update_settings(json!({"update": {"includeBeta": true}})),
-    )
-    .unwrap();
     let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
     assert_eq!(status.update.unwrap().version, "2.1.0-beta.1");
 
@@ -280,7 +232,10 @@ fn beta_follows_the_existing_setting_and_skipped_versions_stay_hidden() {
         Some("2.1.0-beta.1")
     );
     let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
-    assert_eq!(status.update.unwrap().version, "2.0.1");
+    assert!(status.update.is_none());
+
+    let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
+    assert_eq!(status.update.unwrap().version, "2.1.0");
 }
 
 /// 自动检查没到频率设定的时间就不发请求。
@@ -294,10 +249,7 @@ fn automatic_checks_wait_for_the_configured_frequency() {
     ))]);
     let Setup { test, updater, .. } = setup(
         InstallKind::Nsis,
-        vec![(
-            Channel::Stable,
-            Url::parse(&server.url("/latest.json")).unwrap(),
-        )],
+        Url::parse(&server.url("/latest.json")).unwrap(),
         &key,
         false,
     );
@@ -326,10 +278,7 @@ fn unmanaged_builds_never_check_or_install() {
         journal,
     } = setup(
         InstallKind::Unmanaged,
-        vec![(
-            Channel::Stable,
-            Url::parse(&server.url("/latest.json")).unwrap(),
-        )],
+        Url::parse(&server.url("/latest.json")).unwrap(),
         &key,
         false,
     );

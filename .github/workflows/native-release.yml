@@ -6,7 +6,7 @@ name: Native Release
 #                      （CLI 精确 2.11.4）→ 用 secrets 里的 TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) 签名 → 断言 →
 #                      上传到草稿 release → 在 runner 上实装、检查、卸载 → 生成 latest-v2.json 上传到草稿。
 #                      负责人检查草稿后手动发布；发布后由 channel-pointer-v2.yml 镜像到七牛
-#                      kwikpaste/v2/<渠道>/latest.json，GitHub 兜底是 channel-v2-<渠道> 里的 latest-v2.json。
+#                      kwikpaste/v2/stable/latest.json（2.x 唯一的更新渠道），GitHub 兜底是 channel-v2-stable 里的 latest-v2.json。
 #   workflow_dispatch  干跑：同样构建、打包、断言、实装测试、生成清单，只是用 prepare 里临时生成的一次性密钥签名；
 #                      不建 release、不读任何 secrets，产物留在 artifact 里（保留 7 天）。
 #

@@ -977,12 +977,6 @@ fn about_sections() -> Vec<Section> {
                 .path("update.frequency")
                 .keywords(&["update", "frequency", "schedule"])
                 .child_of("updates.autoCheck", |settings| !settings.update.auto_check),
-                Setting::new("updates.beta", Control::Switch)
-                    .path("update.includeBeta")
-                    .keywords(&["beta", "update"]),
-                Setting::new("updates.nightly", Control::Switch)
-                    .path("update.includeNightly")
-                    .keywords(&["nightly", "update"]),
             ],
         },
         Section {

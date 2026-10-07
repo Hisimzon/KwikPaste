@@ -979,9 +979,6 @@
         "autoCheck": {
           "title": "自动检查更新"
         },
-        "beta": {
-          "title": "接收测试版更新"
-        },
         "frequency": {
           "options": {
             "daily": "每天",
@@ -989,9 +986,6 @@
             "weekly": "每周"
           },
           "title": "自动检查频率"
-        },
-        "nightly": {
-          "title": "接收每日构建更新"
         }
       },
       "window": {

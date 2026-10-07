@@ -990,9 +990,6 @@
         "autoCheck": {
           "title": "Automatically Check for Updates"
         },
-        "beta": {
-          "title": "Receive Beta Updates"
-        },
         "frequency": {
           "options": {
             "daily": "Daily",
@@ -1000,9 +997,6 @@
             "weekly": "Weekly"
           },
           "title": "Update Check Frequency"
-        },
-        "nightly": {
-          "title": "Receive Nightly Updates"
         }
       },
       "window": {

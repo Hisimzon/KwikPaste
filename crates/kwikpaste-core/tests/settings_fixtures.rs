@@ -138,6 +138,10 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pauseInFullscreen"] = Value::Bool(true);
     expected["shortcuts"]["pauseAppIds"] = Value::Array(Vec::new());
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
+    // 2.x 删掉了 1.x 的更新渠道开关。
+    let update = expected["update"].as_object_mut().unwrap();
+    update.remove("includeBeta");
+    update.remove("includeNightly");
     assert_eq!(serde_json::to_value(store.snapshot()).unwrap(), expected);
 
     // 夹具的每个叶子都不是默认值，否则它覆盖不到对应字段的取值写法。

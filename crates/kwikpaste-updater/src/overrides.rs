@@ -3,10 +3,8 @@
 //! 只有编进 `e2e-overrides` 特性时才读环境变量；发布产物不开这个特性，环境变量一律忽略，
 //! 从旧进程继承来的也一样。开了特性的构建里留有哨兵字符串 [`SENTINEL`]，发布流水线据此确认没混进来。
 
-/// 稳定版渠道的清单地址（只用这一个，不再读默认镜像）。
-pub(crate) const STABLE_ENDPOINT: &str = "KWIKPASTE_UPDATE_ENDPOINT";
-/// 测试版渠道的清单地址。
-pub(crate) const BETA_ENDPOINT: &str = "KWIKPASTE_UPDATE_BETA_ENDPOINT";
+/// 更新清单地址（只用这一个，不再读默认镜像）。
+pub(crate) const ENDPOINT: &str = "KWIKPASTE_UPDATE_ENDPOINT";
 /// 验签公钥（与 `tauri.conf.json` 里 `plugins.updater.pubkey` 同格式），测试用一次性密钥。
 pub(crate) const PUBLIC_KEY: &str = "KWIKPASTE_UPDATE_PUBLIC_KEY";
 /// 使用统计的上报地址；设置后开发构建也上报。

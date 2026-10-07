@@ -136,7 +136,6 @@ pub fn selftest_update_window(cx: &mut App) {
     status.update = Some(UpdateMetadata {
         current_version: status.current_version.clone(),
         version: "9.9.9-selftest".to_owned(),
-        channel: "stable",
         date: Some("2026-10-03".to_owned()),
         body: Some("Self-test release notes\n\nThis window is a local UI preview.".to_owned()),
         target: "selftest".to_owned(),

@@ -54,8 +54,6 @@ mod tests {
         UpdateSettings {
             auto_check,
             frequency,
-            include_beta: false,
-            include_nightly: false,
             last_checked_at,
             skipped_version: None,
         }
