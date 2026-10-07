@@ -752,6 +752,25 @@ mod tests {
             parsed.shortcuts.mouse_trigger,
             crate::settings::MouseTrigger::Disabled
         );
+        assert!(parsed.shortcuts.pause_in_fullscreen);
+        assert!(parsed.shortcuts.pause_app_ids.is_empty());
+    }
+
+    #[test]
+    fn pause_shortcut_settings_default_and_round_trip() {
+        let parsed: Settings =
+            serde_json::from_str(r#"{"shortcuts":{"openClipboard":"Alt+C"}}"#).unwrap();
+        assert!(parsed.shortcuts.pause_in_fullscreen);
+        assert!(parsed.shortcuts.pause_app_ids.is_empty());
+
+        let mut changed = parsed;
+        changed.shortcuts.pause_in_fullscreen = false;
+        changed.shortcuts.pause_app_ids = vec!["C:\\Games\\Game.exe".to_owned()];
+        let json = serde_json::to_value(&changed).unwrap();
+        assert_eq!(json["shortcuts"]["pauseInFullscreen"], false);
+        assert_eq!(json["shortcuts"]["pauseAppIds"][0], "C:\\Games\\Game.exe");
+        let round_trip: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(round_trip.shortcuts, changed.shortcuts);
     }
 
     #[test]

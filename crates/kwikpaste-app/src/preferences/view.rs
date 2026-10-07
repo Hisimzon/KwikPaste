@@ -724,7 +724,12 @@ impl Preferences {
                     "localData.dataDirectory" => this.open_directory(PreferenceDirectory::Data, cx),
                     "localData.logDirectory" => this.open_directory(PreferenceDirectory::Logs, cx),
                     "organizing.customGroups" => this.open_group_manager(window, cx),
-                    "source.excludedApps" => this.open_source_apps(window, cx),
+                    "source.excludedApps" => {
+                        this.open_source_apps_for("source.excludedApps", window, cx)
+                    }
+                    "shortcuts.pauseApps" => {
+                        this.open_source_apps_for("shortcuts.pauseApps", window, cx)
+                    }
                     "actions.visible" => this.open_action_visibility(window, cx),
                     "control.reopenOnboarding" => {
                         if let Err(error) = super::open_onboarding(cx) {
@@ -886,7 +891,9 @@ impl Preferences {
             let label = capture_kind_label(kind);
             let icon = capture_kind_icon(kind);
             sortable::row(format!("capture-order-{index}"), tokens)
-                .when(index > 0, |row| row.border_t_1().border_color(tokens.border.divider))
+                .when(index > 0, |row| {
+                    row.border_t_1().border_color(tokens.border.divider)
+                })
                 .on_drag(CaptureOrderDrag { kind }, |dragged, _, _, cx| {
                     cx.new(|_| *dragged)
                 })
@@ -1453,6 +1460,7 @@ impl Preferences {
 
     fn render_app_exclusion(
         &self,
+        setting_id: &'static str,
         value: Option<serde_json::Value>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -1461,7 +1469,7 @@ impl Preferences {
             .unwrap_or_default();
         let entity = cx.entity().downgrade();
         Button::new(
-            "excluded-apps",
+            setting_id,
             i18n::t_args(
                 "preferences:schema.settings.source.excludedApps.count",
                 &[("count", &count.to_string())],
@@ -1469,7 +1477,9 @@ impl Preferences {
         )
         .on_click(move |_, window, cx| {
             if let Some(entity) = entity.upgrade() {
-                entity.update(cx, |this, cx| this.open_source_apps(window, cx));
+                entity.update(cx, |this, cx| {
+                    this.open_source_apps_for(setting_id, window, cx)
+                });
             }
         })
         .into_any_element()
@@ -2448,10 +2458,31 @@ impl Preferences {
     }
 
     fn open_source_apps(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_source_apps_for("source.excludedApps", window, cx);
+    }
+
+    fn open_source_apps_for(
+        &self,
+        setting_id: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(core) = core_host::core(cx).cloned() else {
             return;
         };
-        let excluded = self.settings.clipboard.filters.excluded_app_ids.clone();
+        let (title_key, settings_path, excluded) = if setting_id == "shortcuts.pauseApps" {
+            (
+                "preferences:schema.settings.shortcuts.pauseApps.title",
+                "shortcuts.pauseAppIds",
+                self.settings.shortcuts.pause_app_ids.clone(),
+            )
+        } else {
+            (
+                "preferences:schema.settings.source.excludedApps.title",
+                "clipboard.filters.excludedAppIds",
+                self.settings.clipboard.filters.excluded_app_ids.clone(),
+            )
+        };
         let entity = cx.entity().downgrade();
         window
             .spawn(cx, async move |cx| {
@@ -2463,7 +2494,16 @@ impl Preferences {
                     }
                 };
                 let _ = cx.update(|window, cx| {
-                    open_source_apps_dialog(apps, excluded, core, entity, window, cx);
+                    open_source_apps_dialog(
+                        apps,
+                        excluded,
+                        core,
+                        entity,
+                        title_key,
+                        settings_path,
+                        window,
+                        cx,
+                    );
                 });
             })
             .detach();
@@ -2729,7 +2769,7 @@ impl Preferences {
             Control::CaptureOrder => self.render_capture_order(cx),
             Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
-            Control::AppExclusion => self.render_app_exclusion(value, cx),
+            Control::AppExclusion => self.render_app_exclusion(setting.id, value, cx),
             Control::Action { .. } | Control::CleanupStatus => self.render_action(setting.id, cx),
             _ => self.render_action(setting.id, cx),
         };
@@ -3382,7 +3422,9 @@ impl Render for ActionVisibilityDialog {
             let checkbox_entity = entity.clone();
             let label_entity = entity.clone();
             sortable::row(format!("visible-action-{index}"), tokens)
-                .when(index > 0, |row| row.border_t_1().border_color(tokens.border.divider))
+                .when(index > 0, |row| {
+                    row.border_t_1().border_color(tokens.border.divider)
+                })
                 .on_drag(ActionVisibilityDrag { action }, |dragged, _, _, cx| {
                     cx.new(|_| ActionVisibilityPreview {
                         action: dragged.action,
@@ -3519,11 +3561,14 @@ impl Render for SourceAppsDialog {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn open_source_apps_dialog(
     apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
     excluded: Vec<String>,
     core: kwikpaste_core::Core,
     parent: WeakEntity<Preferences>,
+    title_key: &'static str,
+    settings_path: &'static str,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -3534,51 +3579,50 @@ fn open_source_apps_dialog(
     let content = dialog.clone();
     let adder = dialog.downgrade();
     let answer = form_dialog(
-        DialogSpec::new(i18n::t(
-            "preferences:schema.settings.source.excludedApps.title",
-        ))
-        .ok_text(i18n::t("common:actions.save"))
-        .cancel_text(i18n::t("common:actions.cancel"))
-        .footer_extra(move |_, _cx| {
-            let adder = adder.clone();
-            let core = core.clone();
-            Button::new(
-                "source-app-add",
-                i18n::t("preferences:schema.settings.source.appTransfer.addApp"),
-            )
-            .ghost()
-            .on_click(move |_, _, cx| {
-                let prompt = clipboard::view::pin::prompt_for_paths(
-                    gpui::PathPromptOptions {
-                        files: true,
-                        directories: false,
-                        multiple: false,
-                        prompt: None,
-                    },
-                    cx,
-                );
+        DialogSpec::new(i18n::t(title_key))
+            .ok_text(i18n::t("common:actions.save"))
+            .cancel_text(i18n::t("common:actions.cancel"))
+            .footer_extra(move |_, _cx| {
                 let adder = adder.clone();
                 let core = core.clone();
-                cx.spawn(async move |cx| {
-                    let Some(path) = prompt.await.and_then(|paths| paths.into_iter().next()) else {
-                        return;
-                    };
-                    match core.add_app_from_path(path).await {
-                        Ok(app) => {
-                            let _ = adder.update(cx, |dialog, cx| {
-                                if !dialog.apps.iter().any(|known| known.id == app.id) {
-                                    dialog.apps.push(app);
-                                }
-                                cx.notify();
-                            });
+                Button::new(
+                    "source-app-add",
+                    i18n::t("preferences:schema.settings.source.appTransfer.addApp"),
+                )
+                .ghost()
+                .on_click(move |_, _, cx| {
+                    let prompt = clipboard::view::pin::prompt_for_paths(
+                        gpui::PathPromptOptions {
+                            files: true,
+                            directories: false,
+                            multiple: false,
+                            prompt: None,
+                        },
+                        cx,
+                    );
+                    let adder = adder.clone();
+                    let core = core.clone();
+                    cx.spawn(async move |cx| {
+                        let Some(path) = prompt.await.and_then(|paths| paths.into_iter().next())
+                        else {
+                            return;
+                        };
+                        match core.add_app_from_path(path).await {
+                            Ok(app) => {
+                                let _ = adder.update(cx, |dialog, cx| {
+                                    if !dialog.apps.iter().any(|known| known.id == app.id) {
+                                        dialog.apps.push(app);
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                            Err(error) => log::warn!("could not add source app: {error:#}"),
                         }
-                        Err(error) => log::warn!("could not add source app: {error:#}"),
-                    }
+                    })
+                    .detach();
                 })
-                .detach();
-            })
-            .into_any_element()
-        }),
+                .into_any_element()
+            }),
         move |_, _| content.clone().into_any_element(),
         window,
         cx,
@@ -3592,7 +3636,7 @@ fn open_source_apps_dialog(
                 .update(|_, cx| dialog.read(cx).selected.iter().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             let _ = parent.update(cx, |preferences, cx| {
-                preferences.update("clipboard.filters.excludedAppIds", json!(selected), cx);
+                preferences.update(settings_path, json!(selected), cx);
             });
         })
         .detach();

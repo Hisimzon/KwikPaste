@@ -134,11 +134,17 @@ fn handle(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
             return false;
         }
         // 按住 V 会重复触发按下：只在第一次开合，重复期间仍然吞掉。
-        if !V_CONSUMED.swap(true, Ordering::SeqCst) {
-            suppress_start_menu();
-            if let Some(sink) = SINK.get() {
-                sink();
-            }
+        if V_CONSUMED.load(Ordering::SeqCst) {
+            return true;
+        }
+        // 让给前台应用时按下不吞，松开随之放行，系统照常处理 Win+V。
+        if super::trigger_pause::recheck_for_input() {
+            return false;
+        }
+        V_CONSUMED.store(true, Ordering::SeqCst);
+        suppress_start_menu();
+        if let Some(sink) = SINK.get() {
+            sink();
         }
         return true;
     }

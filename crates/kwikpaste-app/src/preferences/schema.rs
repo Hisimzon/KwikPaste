@@ -441,6 +441,16 @@ fn general_sections(portable: bool) -> Vec<Section> {
     sections
 }
 
+const PAUSE_KEYWORDS: &[&str] = &[
+    "游戏",
+    "全屏",
+    "game",
+    "fullscreen",
+    "full screen",
+    "exclude",
+    "pause",
+];
+
 pub(super) fn shortcut_settings() -> Vec<Setting> {
     let mut settings = vec![
         Setting::new("shortcuts.openClipboard", Control::ShortcutRecorder)
@@ -485,6 +495,18 @@ pub(super) fn shortcut_settings() -> Vec<Setting> {
             !settings.shortcuts.quick_paste.enabled
         }),
     ]);
+    // TODO: macOS 还没有全屏判断（见 `kwikpaste_os::mac::trigger_pause`），先只在 Windows 显示。
+    #[cfg(target_os = "windows")]
+    settings.push(
+        Setting::new("shortcuts.pauseInFullscreen", Control::Switch)
+            .path("shortcuts.pauseInFullscreen")
+            .keywords(PAUSE_KEYWORDS),
+    );
+    settings.push(
+        Setting::new("shortcuts.pauseApps", Control::AppExclusion)
+            .path("shortcuts.pauseAppIds")
+            .keywords(PAUSE_KEYWORDS),
+    );
     settings
 }
 

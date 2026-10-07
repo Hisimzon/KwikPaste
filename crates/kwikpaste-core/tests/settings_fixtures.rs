@@ -133,7 +133,11 @@ fn customized_settings_round_trip_exactly() {
     let (_temp, paths, store) = load(&content);
     let original: Value = serde_json::from_str(&content).unwrap();
 
-    assert_eq!(serde_json::to_value(store.snapshot()).unwrap(), original);
+    // 旧版夹具没有暂停字段，读取后应补上新版本默认值。
+    let mut expected = original.clone();
+    expected["shortcuts"]["pauseInFullscreen"] = Value::Bool(true);
+    expected["shortcuts"]["pauseAppIds"] = Value::Array(Vec::new());
+    assert_eq!(serde_json::to_value(store.snapshot()).unwrap(), expected);
 
     // 夹具的每个叶子都不是默认值，否则它覆盖不到对应字段的取值写法。
     let defaults = serde_json::to_value(Settings::default()).unwrap();

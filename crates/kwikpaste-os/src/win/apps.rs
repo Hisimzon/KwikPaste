@@ -92,6 +92,18 @@ pub fn app_from_path(path: &Path) -> Result<ScannedApp> {
     })
 }
 
+/// 进程 exe 的两种 id 写法：系统给的原样路径（剪贴板来源记录沿用 1.x 用它）和规范化路径（运行中
+/// 应用、手动选择用它）。应用列表里两种都可能出现，匹配时两种都要比。
+pub fn process_app_ids(pid: u32) -> Option<[String; 2]> {
+    let raw = PathBuf::from(OsString::from_wide(&process_image_name(pid)?));
+    let normalized = normalize_exe_path(raw.clone());
+
+    Some([
+        raw.to_string_lossy().into_owned(),
+        normalized.to_string_lossy().into_owned(),
+    ])
+}
+
 /// Windows 没有按 id 找应用的能力。
 pub fn app_from_id(_id: &str) -> Option<ScannedApp> {
     None

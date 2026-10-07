@@ -38,7 +38,8 @@ pub fn set_sink(sink: impl Fn(MouseEvent) + 'static) -> io::Result<()> {
                 .borrow()
                 .is_some_and(|button| matches_number(button, number))
         });
-        if matched {
+        // 前台是设置列表里的应用时让给它（见 `super::trigger_pause`）。
+        if matched && !super::trigger_pause::recheck() {
             sink(MouseEvent::Trigger);
         }
     });

@@ -900,6 +900,14 @@
           "placeholder": "Alt+X",
           "title": "打开偏好设置窗口"
         },
+        "pauseApps": {
+          "description": "",
+          "title": "在这些应用中停用快捷键"
+        },
+        "pauseInFullscreen": {
+          "description": "前台应用全屏时（如游戏），快贴的快捷键和鼠标按键唤起都交还给该应用。",
+          "title": "全屏应用中停用快捷键"
+        },
         "quickPaste": {
           "description": "不打开窗口，按住修饰键再按 1–9、0 直接粘贴「全部」列表的前 10 条。",
           "title": "快速粘贴"

@@ -63,7 +63,8 @@ struct Hotkeys {
     preference: Option<HotKey>,
     quick_paste: Vec<HotKey>,
     actions: Actions,
-    suspended: bool,
+    recording: bool,
+    paused: bool,
 }
 
 impl Global for Hotkeys {}
@@ -134,10 +135,11 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
         preference: None,
         quick_paste: Vec::new(),
         actions,
-        suspended: false,
+        recording: false,
+        paused: false,
     });
-    if let Some(core) = core_host::core(cx) {
-        let shortcuts = core.settings().shortcuts;
+    let shortcuts = core_host::core(cx).map(|core| core.settings().shortcuts);
+    if let Some(shortcuts) = shortcuts {
         apply(&shortcuts, cx);
     }
 
@@ -154,7 +156,7 @@ pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
     let quick_paste = wanted_quick_paste(shortcuts);
 
     let hotkeys = cx.global_mut::<Hotkeys>();
-    if hotkeys.suspended {
+    if !registration_allowed(hotkeys.recording, hotkeys.paused) {
         return;
     }
     if hotkeys.toggle != toggle {
@@ -204,6 +206,10 @@ pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
     }
 }
 
+fn registration_allowed(recording: bool, paused: bool) -> bool {
+    !recording && !paused
+}
+
 /// 注销全部热键（更新交接停输入时用）。
 pub fn unregister_all(cx: &mut App) {
     if !cx.has_global::<Hotkeys>() {
@@ -219,7 +225,7 @@ pub fn suspend(cx: &mut App) {
         return;
     }
     let hotkeys = cx.global_mut::<Hotkeys>();
-    hotkeys.suspended = true;
+    hotkeys.recording = true;
     clear_registered(hotkeys);
 }
 
@@ -228,9 +234,32 @@ pub fn resume(cx: &mut App) {
     if !cx.has_global::<Hotkeys>() {
         return;
     }
-    cx.global_mut::<Hotkeys>().suspended = false;
+    cx.global_mut::<Hotkeys>().recording = false;
+    if cx.global::<Hotkeys>().paused {
+        return;
+    }
     if let Some(core) = core_host::core(cx) {
         let shortcuts = core.settings().shortcuts;
+        apply(&shortcuts, cx);
+    }
+}
+
+/// 设置「前台应用暂停」这一独立原因；录制按键仍保持自己的暂停状态。
+pub fn set_paused(paused: bool, cx: &mut App) {
+    if !cx.has_global::<Hotkeys>() {
+        return;
+    }
+    let hotkeys = cx.global_mut::<Hotkeys>();
+    hotkeys.paused = paused;
+    if paused {
+        clear_registered(hotkeys);
+        return;
+    }
+    if hotkeys.recording {
+        return;
+    }
+    let shortcuts = core_host::core(cx).map(|core| core.settings().shortcuts);
+    if let Some(shortcuts) = shortcuts {
         apply(&shortcuts, cx);
     }
 }
@@ -425,5 +454,13 @@ mod tests {
                 9
             )
         );
+    }
+
+    #[test]
+    fn recording_and_pause_reasons_both_block_registration() {
+        assert!(registration_allowed(false, false));
+        assert!(!registration_allowed(true, false));
+        assert!(!registration_allowed(false, true));
+        assert!(!registration_allowed(true, true));
     }
 }

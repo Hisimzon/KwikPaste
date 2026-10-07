@@ -134,6 +134,12 @@ pub struct Shortcuts {
     pub win_v: bool,
     /// 仅 Windows：单击这个鼠标按键打开或隐藏剪贴板窗口，按键原有的单击功能随之停用。默认关闭。
     pub mouse_trigger: MouseTrigger,
+    /// 仅 Windows（macOS 待实现）：前台应用全屏时（如游戏），全局快捷键、鼠标按键唤起和 Win+V
+    /// 都交还给它。默认开启。
+    pub pause_in_fullscreen: bool,
+    /// 前台是这些应用时同样交还。id 写法与 `clipboard.filters.excludedAppIds` 相同（Windows 为
+    /// exe 路径，macOS 为 bundle id）。默认为空。
+    pub pause_app_ids: Vec<String>,
     /// 全局：修饰键 + 数字直接粘贴历史记录，不唤起剪贴板窗口。默认关闭。
     pub quick_paste: QuickPaste,
 }
@@ -145,6 +151,8 @@ impl Default for Shortcuts {
             open_preference: "Alt+X".into(),
             win_v: false,
             mouse_trigger: MouseTrigger::Disabled,
+            pause_in_fullscreen: true,
+            pause_app_ids: Vec::new(),
             quick_paste: QuickPaste::default(),
         }
     }

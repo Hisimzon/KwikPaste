@@ -8,7 +8,7 @@ use gpui::{App, AppContext as _, Entity, EventEmitter, Global};
 use kwikpaste_core::CoreEvent;
 use kwikpaste_core::settings::{Language, Theme};
 
-use super::{autostart, hotkey, material, mouse, tray};
+use super::{autostart, hotkey, material, mouse, tray, trigger_pause};
 use crate::core_host;
 
 /// core 事件的发送者：订阅它即可收到 [`CoreEvent`]（设置变更、记录入库、清理……）。
@@ -68,6 +68,9 @@ pub fn follow(cx: &mut App) {
             || delta.touches("shortcuts.quickPaste")
         {
             hotkey::apply(&settings.shortcuts, cx);
+        }
+        if delta.touches("shortcuts.pauseInFullscreen") || delta.touches("shortcuts.pauseAppIds") {
+            trigger_pause::apply(&settings.shortcuts);
         }
         let language_changed = delta.touches("appearance.language");
         if language_changed {

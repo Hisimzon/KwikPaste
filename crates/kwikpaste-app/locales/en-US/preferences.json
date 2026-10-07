@@ -906,6 +906,14 @@
           "placeholder": "Alt+X",
           "title": "Open Preferences Window"
         },
+        "pauseApps": {
+          "description": "",
+          "title": "Pause shortcuts in these apps"
+        },
+        "pauseInFullscreen": {
+          "description": "When the foreground app is full screen, such as a game, KwikPaste's shortcuts and mouse button trigger go to that app.",
+          "title": "Pause shortcuts in full-screen apps"
+        },
         "quickPaste": {
           "description": "Hold the modifier keys and press 1–9 or 0 to paste the first 10 items of the All list without opening the window.",
           "title": "Quick Paste"

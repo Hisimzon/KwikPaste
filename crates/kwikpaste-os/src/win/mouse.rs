@@ -8,6 +8,7 @@
 //!   侧键按住时鼠标移动多远都算单击；中键按住拖出阈值（系统拖动阈值的两倍）就把吞掉的按下补发
 //!   给应用（打上 [`OWN_INPUT_MARKER`]，钩子放行），自动滚动、平移画布照常。光标在本进程窗口上时
 //!   中键照常交给窗口；侧键照样接管。松开按按下时记下的按键配对，按下后改了设置也不会漏掉。
+//!   前台是全屏应用或设置列表里的应用时，按下连同松开整组放行给它（见 [`super::trigger_pause`]）。
 //!
 //! 钩子每 2 秒重装一次排到钩子链最前面：其它软件后装的钩子最多只能抢先这么久，钩子因回调超时被
 //! 系统悄悄摘掉时也能借此找回。两项都关掉时钩子线程退出。
@@ -190,7 +191,12 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
 
     if let Some(trigger) = current_trigger() {
-        match judge(trigger, message, event) {
+        match judge(
+            trigger,
+            message,
+            event,
+            super::trigger_pause::recheck_for_input,
+        ) {
             Verdict::Pass => {}
             Verdict::Swallow => return LRESULT(1),
             Verdict::Toggle => {
@@ -248,7 +254,14 @@ fn button_of(message: u32, mouse_data: u32) -> Option<(TriggerButton, bool)> {
 }
 
 /// 判定唤起按键怎么处理这个事件；只更新按下状态，开合面板与补发按下留给调用方（与 1.x 相同）。
-fn judge(trigger: TriggerButton, message: u32, event: &MSLLHOOKSTRUCT) -> Verdict {
+/// `yield_press` 在唤起按键按下时调用，返回真表示这次让给前台应用（全屏或列表里的应用）：按下放行，
+/// 松开随之放行。
+fn judge(
+    trigger: TriggerButton,
+    message: u32,
+    event: &MSLLHOOKSTRUCT,
+    yield_press: impl FnOnce() -> bool,
+) -> Verdict {
     if event.dwExtraInfo == OWN_INPUT_MARKER {
         return Verdict::Pass;
     }
@@ -271,7 +284,7 @@ fn judge(trigger: TriggerButton, message: u32, event: &MSLLHOOKSTRUCT) -> Verdic
         if button != trigger {
             return Verdict::Pass;
         }
-        if button == TriggerButton::Middle && is_own_window_at(event.pt) {
+        if yield_press() || (button == TriggerButton::Middle && is_own_window_at(event.pt)) {
             PRESS.set(Press::Idle);
             return Verdict::Pass;
         }
@@ -364,7 +377,8 @@ mod tests {
     fn a_bound_side_button_is_taken_over_even_while_the_mouse_moves() {
         let back = event(XBUTTON1, 100, 100);
         let forward = event(XBUTTON2, 100, 100);
-        let judge = |message, event: &MSLLHOOKSTRUCT| judge(TriggerButton::Back, message, event);
+        let judge =
+            |message, event: &MSLLHOOKSTRUCT| judge(TriggerButton::Back, message, event, || false);
 
         assert_eq!(judge(WM_XBUTTONDOWN, &back), Verdict::Swallow);
         assert_eq!(judge(WM_MOUSEMOVE, &event(0, 400, 100)), Verdict::Pass);
@@ -376,7 +390,9 @@ mod tests {
 
     #[test]
     fn a_middle_drag_goes_back_to_the_app_while_a_click_toggles() {
-        let judge = |message, event: &MSLLHOOKSTRUCT| judge(TriggerButton::Middle, message, event);
+        let judge = |message, event: &MSLLHOOKSTRUCT| {
+            judge(TriggerButton::Middle, message, event, || false)
+        };
         let at = |x, y| event(0, x, y);
         let mut replayed = at(400, 100);
         replayed.dwExtraInfo = OWN_INPUT_MARKER;
@@ -392,5 +408,21 @@ mod tests {
 
         assert_eq!(judge(WM_MBUTTONDOWN, &at(100, 100)), Verdict::Swallow);
         assert_eq!(judge(WM_MBUTTONUP, &at(101, 101)), Verdict::Toggle);
+    }
+
+    #[test]
+    fn a_yielded_press_passes_with_its_release() {
+        let back = event(XBUTTON1, 100, 100);
+        let yielded =
+            |message, event: &MSLLHOOKSTRUCT| judge(TriggerButton::Back, message, event, || true);
+        let normal =
+            |message, event: &MSLLHOOKSTRUCT| judge(TriggerButton::Back, message, event, || false);
+
+        assert_eq!(yielded(WM_XBUTTONDOWN, &back), Verdict::Pass);
+        assert_eq!(normal(WM_XBUTTONUP, &back), Verdict::Pass);
+
+        // 按下时没有让出，松开就照常开合，不会漏出孤立的松开。
+        assert_eq!(normal(WM_XBUTTONDOWN, &back), Verdict::Swallow);
+        assert_eq!(yielded(WM_XBUTTONUP, &back), Verdict::Toggle);
     }
 }
