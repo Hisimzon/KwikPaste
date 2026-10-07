@@ -105,7 +105,7 @@ pub fn form_dialog(
     let content = Rc::new(content);
 
     window.open_dialog(cx, move |dialog, window, cx| {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let strings = ui_strings(cx);
         let ok_text = spec.ok_text.clone().unwrap_or(strings.ok);
         let cancel_text = spec.cancel_text.clone().unwrap_or(strings.cancel);
@@ -126,7 +126,7 @@ pub fn form_dialog(
             .width(width)
             .close_button(false)
             .overlay_closable(false)
-            .bg(tokens.bg_elevated)
+            .bg(tokens.surface.raised)
             .border_0()
             .rounded(radius::LG)
             .px(rems(1.5))
@@ -143,7 +143,7 @@ pub fn form_dialog(
                             div()
                                 .kp_text(TextSize::Base)
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(theme::tokens(cx).text)
+                                .text_color(theme::semantic(cx).text.primary)
                                 .child(title.clone()),
                         )
                         .child(content(window, cx))

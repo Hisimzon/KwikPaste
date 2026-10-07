@@ -126,7 +126,7 @@ impl NumberInput {
 
 impl RenderOnce for NumberInput {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
 
         KitInput::new(&self.state.state)
             .when_some(self.width, |input, width| input.w(width).max_w_full())
@@ -137,9 +137,9 @@ impl RenderOnce for NumberInput {
                         .flex_none()
                         .kp_text(theme::TextSize::Sm)
                         .text_color(if self.disabled {
-                            tokens.disabled
+                            tokens.border_disabled
                         } else {
-                            tokens.secondary
+                            tokens.text.secondary
                         })
                         .child(suffix),
                 )

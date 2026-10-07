@@ -229,12 +229,12 @@ impl ToastCapsule {
 
 impl RenderOnce for ToastCapsule {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let icon_color = match self.kind {
-            ToastKind::Info => tokens.info,
-            ToastKind::Success => tokens.success,
-            ToastKind::Warning => tokens.warning,
-            ToastKind::Error => tokens.error,
+            ToastKind::Info => tokens.status.info.solid,
+            ToastKind::Success => tokens.status.success.solid,
+            ToastKind::Warning => tokens.status.warning.solid,
+            ToastKind::Error => tokens.status.danger.solid,
         };
 
         // antd message：内边距 9 px 12 px（(controlHeightLG − 22) / 2、paddingSM），圆角 borderRadiusLG，
@@ -247,9 +247,9 @@ impl RenderOnce for ToastCapsule {
             .px(space(3.))
             .py(rems(0.5625))
             .rounded(radius::LG)
-            .bg(tokens.bg_elevated)
-            .shadow(tokens.shadow_elevated.to_vec())
-            .text_color(tokens.text)
+            .bg(tokens.surface.raised)
+            .shadow(tokens.shadow.overlay.to_vec())
+            .text_color(tokens.text.primary)
             .kp_text(TextSize::Sm)
             .line_height(rems(1.375))
             .child(

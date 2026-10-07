@@ -164,7 +164,7 @@ impl RenderOnce for Switch {
         let Some(label) = self.label else {
             return switch.into_any_element();
         };
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
 
         h_flex()
             .gap(space(2.))
@@ -175,9 +175,9 @@ impl RenderOnce for Switch {
                     .id((self.id, "label"))
                     .kp_text(TextSize::Sm)
                     .text_color(if self.disabled {
-                        tokens.disabled
+                        tokens.border_disabled
                     } else {
-                        tokens.text
+                        tokens.text.primary
                     })
                     .when(!self.disabled, |label| {
                         label.when_some(self.on_change, |label, on_change| {

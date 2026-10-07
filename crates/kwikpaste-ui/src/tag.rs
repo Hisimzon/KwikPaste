@@ -1,15 +1,14 @@
 //! 标签（antd Tag）、按键徽标（1.x 快捷键列表的 Kbd）与修饰键提示角标（1.x KeyHint）。
 
 use gpui::{
-    App, Hsla, IntoElement, ParentElement as _, RenderOnce, SharedString, Styled as _, Window, div,
-    rems,
+    App, IntoElement, ParentElement as _, RenderOnce, SharedString, Styled as _, Window, div, rems,
 };
 use gpui_base::h_flex;
 use gpui_component::tag::Tag as KitTag;
 
 use crate::{
     styled::KpStyled as _,
-    theme::{self, TextSize, antd, radius, space},
+    theme::{self, TextSize, radius, space},
 };
 
 /// 标签颜色，对应 antd Tag 的默认与状态色。
@@ -54,48 +53,19 @@ impl Tag {
     }
 }
 
-/// `(底色, 字色, 描边)`。
-fn tag_colors(color: TagColor, colors: &antd::AntdColors) -> (Hsla, Hsla, Hsla) {
-    let (bg, fg, border) = match color {
-        TagColor::Default => (
-            colors.color_fill_quaternary,
-            colors.color_text,
-            colors.color_border,
-        ),
-        TagColor::Primary => (
-            colors.color_primary_bg,
-            colors.color_primary,
-            colors.color_primary_border,
-        ),
-        TagColor::Success => (
-            colors.color_success_bg,
-            colors.color_success,
-            colors.color_success_border,
-        ),
-        TagColor::Warning => (
-            colors.color_warning_bg,
-            colors.color_warning,
-            colors.color_warning_border,
-        ),
-        TagColor::Error => (
-            colors.color_error_bg,
-            colors.color_error,
-            colors.color_error_border,
-        ),
-    };
-
-    (bg.to_hsla(), fg.to_hsla(), border.to_hsla())
-}
-
 impl RenderOnce for Tag {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let colors = match theme::appearance(cx) {
-            theme::Appearance::Light => &theme::palette::LIGHT,
-            theme::Appearance::Dark => &theme::palette::DARK,
+        let tokens = &theme::components(cx).tag;
+        let index = match self.color {
+            TagColor::Default => 0,
+            TagColor::Primary => 1,
+            TagColor::Success => 2,
+            TagColor::Warning => 3,
+            TagColor::Error => 4,
         };
-        let (bg, fg, border) = tag_colors(self.color, colors);
+        let state = tokens.variants.get(index).copied().unwrap_or_default();
 
-        KitTag::custom(bg, fg, border)
+        KitTag::custom(state.background, state.foreground, state.border)
             .rounded(radius::SM)
             .px(rems(0.4375))
             .py_0()
@@ -121,7 +91,7 @@ impl Kbd {
 
 impl RenderOnce for Kbd {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = &theme::components(cx).tag;
 
         div()
             .flex()
@@ -132,8 +102,8 @@ impl RenderOnce for Kbd {
             .min_w(space(6.))
             .px(space(1.5))
             .rounded(radius::MD)
-            .bg(tokens.fill_secondary)
-            .text_color(tokens.secondary)
+            .bg(tokens.background)
+            .text_color(tokens.foreground)
             .kp_mono()
             .kp_text(TextSize::Xs)
             .child(self.label)
@@ -157,7 +127,7 @@ impl Shortcut {
 impl RenderOnce for Shortcut {
     /// 每个键一个键帽；单独的 `/` 表示“或”，画成键帽之间的灰色分隔字。
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = &theme::components(cx).tag;
 
         h_flex()
             .gap(space(1.))
@@ -167,7 +137,7 @@ impl RenderOnce for Shortcut {
                     return div()
                         .px(space(0.5))
                         .kp_text(TextSize::Xs)
-                        .text_color(tokens.tertiary)
+                        .text_color(tokens.separator)
                         .child(key)
                         .into_any_element();
                 }
@@ -192,7 +162,7 @@ impl KeyHint {
 
 impl RenderOnce for KeyHint {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = &theme::components(cx).tag;
 
         div()
             .flex()
@@ -201,8 +171,8 @@ impl RenderOnce for KeyHint {
             .justify_center()
             .size(space(4.))
             .rounded(radius::SM)
-            .bg(tokens.bg_spotlight)
-            .text_color(tokens.light_solid)
+            .bg(tokens.key_background)
+            .text_color(tokens.key_foreground)
             .kp_mono()
             .kp_text(TextSize::Xs)
             .font_weight(gpui::FontWeight::BOLD)

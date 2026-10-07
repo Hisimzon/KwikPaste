@@ -33,7 +33,7 @@ impl TooltipBubble {
 
 impl RenderOnce for TooltipBubble {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
 
         // antd：内边距 6 px 8 px，最小高 controlHeight，最宽 250 px，圆角 borderRadius，阴影 boxShadow。
         // 不用 flex：flex 子项不会收缩到内容宽度以下，长文字就不换行了。
@@ -43,9 +43,9 @@ impl RenderOnce for TooltipBubble {
             .px(space(2.))
             .py(rems(0.375))
             .rounded(radius::MD)
-            .bg(tokens.bg_spotlight)
-            .text_color(tokens.light_solid)
-            .shadow(tokens.shadow_elevated.to_vec())
+            .bg(tokens.surface.spotlight)
+            .text_color(tokens.text.on_accent)
+            .shadow(tokens.shadow.overlay.to_vec())
             .kp_text(TextSize::Sm)
             .line_height(rems(1.375))
             .child(self.text)

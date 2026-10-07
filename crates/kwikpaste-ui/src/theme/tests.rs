@@ -151,12 +151,12 @@ fn semantic_tokens_follow_the_palette() {
         (Appearance::Dark, palette::DARK),
     ] {
         let tokens = tokens_for(appearance);
-        assert_eq!(tokens.text, colors.color_text.to_hsla());
-        assert_eq!(tokens.secondary, colors.color_text_secondary.to_hsla());
-        assert_eq!(tokens.primary, colors.color_primary.to_hsla());
-        assert_eq!(tokens.bg_spotlight, colors.color_bg_spotlight.to_hsla());
+        assert_eq!(tokens.text, colors.text.primary.hsla());
+        assert_eq!(tokens.secondary, colors.text.secondary.hsla());
+        assert_eq!(tokens.primary, colors.accent.solid.hsla());
+        assert_eq!(tokens.bg_spotlight, colors.surfaces.spotlight.hsla());
         // `disabled` 沿用 1.x 的取法：`text-ant-disabled` 实际解析到 `colorBorderDisabled`。
-        assert_eq!(tokens.disabled, colors.color_border_disabled.to_hsla());
+        assert_eq!(tokens.disabled, colors.borders.disabled.hsla());
 
         let swatches = tokens.swatches();
         let mut names: Vec<&str> = swatches.iter().map(|(name, _, _)| *name).collect();
@@ -164,6 +164,17 @@ fn semantic_tokens_follow_the_palette() {
         names.dedup();
         assert_eq!(names.len(), swatches.len(), "swatch names are unique");
     }
+}
+
+#[test]
+fn role_tokens_preserve_compatibility_values() {
+    let compat = tokens_for(Appearance::Light);
+    let semantic = semantic::SemanticTokens::from_palette(&palette::LIGHT);
+    assert_eq!(semantic.surface.window, compat.bg_layout);
+    assert_eq!(semantic.surface.panel, compat.bg_container);
+    assert_eq!(semantic.text.primary, compat.text);
+    assert_eq!(semantic.accent.solid, compat.primary);
+    assert_eq!(semantic.border.divider, compat.split);
 }
 
 #[test]
@@ -214,4 +225,19 @@ fn type_scale_matches_wind4() {
     assert_eq!(radius::MD.0 * 16., palette::RADIUS);
     assert_eq!(control_height::MD.0 * 16., antd::CONTROL_HEIGHT);
     assert_eq!(space(1.5).0, 0.375);
+}
+
+#[test]
+fn token_sets_are_interned() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        assert!(std::ptr::eq(tokens_for(appearance), tokens_for(appearance)));
+        assert!(std::ptr::eq(
+            semantic_for(appearance),
+            semantic_for(appearance)
+        ));
+        assert!(std::ptr::eq(
+            components_for(appearance),
+            components_for(appearance)
+        ));
+    }
 }

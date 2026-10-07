@@ -220,7 +220,7 @@ impl Input {
 
 impl RenderOnce for Input {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let focused = self.input.is_focused(window, cx);
         let icon_size = match self.size {
             InputSize::Small => theme::TextSize::Sm.font_size(),
@@ -238,12 +238,12 @@ impl RenderOnce for Input {
                 // 搜索图标换成主色，不要描边和光晕。
                 // 角标叠在图标的位置上，图标只是隐去，宽度不变，输入文字不会跳动。
                 let icon_color = if focused {
-                    tokens.primary
+                    tokens.accent.solid
                 } else {
-                    tokens.quaternary
+                    tokens.text.faint
                 };
                 input
-                    .bg(tokens.fill_tertiary)
+                    .bg(tokens.fill.subtle)
                     .border_color(theme::transparent())
                     .focus_ring(false)
                     .rounded_full()

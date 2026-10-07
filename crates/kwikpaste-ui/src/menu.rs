@@ -167,15 +167,19 @@ fn build_menu(
 }
 
 fn menu_item(item: MenuItem, cx: &App) -> PopupMenuItem {
-    let tokens = theme::tokens(cx);
+    let tokens = theme::semantic(cx);
     let label = item.label;
     let shortcut = item.shortcut;
     let danger = item.danger;
-    let color = if danger { tokens.error } else { tokens.text };
+    let color = if danger {
+        tokens.status.danger.solid
+    } else {
+        tokens.text.primary
+    };
     let handler = item.on_click;
 
     PopupMenuItem::element(move |_, cx| {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
 
         div()
             .flex()
@@ -198,7 +202,7 @@ fn menu_item(item: MenuItem, cx: &App) -> PopupMenuItem {
                         .flex_none()
                         .whitespace_nowrap()
                         .kp_text(TextSize::Xs)
-                        .text_color(tokens.description)
+                        .text_color(tokens.text.muted)
                         .child(shortcut),
                 )
             })
@@ -209,7 +213,7 @@ fn menu_item(item: MenuItem, cx: &App) -> PopupMenuItem {
     .when_some(item.icon, |entry, icon| {
         let icon = icon.kit_icon();
         entry.icon(if danger {
-            icon.text_color(tokens.error)
+            icon.text_color(tokens.status.danger.solid)
         } else {
             icon
         })

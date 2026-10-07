@@ -6,9 +6,11 @@
 
 use gpui::{BoxShadow, Hsla, Rems, rems};
 
-use super::antd::{self, AntdColors, AntdShadows, CubicBezier};
+use super::antd::{self, CubicBezier};
 
 /// 应用可用的颜色 token。
+///
+/// 这是过渡兼容视图：所有字段在第三阶段会被角色化语义 token 替换。
 #[derive(Clone, Debug, PartialEq)]
 pub struct KpTokens {
     /// antd `colorText`（`text-ant-text`，全局正文色）。
@@ -42,16 +44,36 @@ pub struct KpTokens {
     pub primary_border: Hsla,
     /// antd `colorSuccess`（`text/bg-ant-success`）。
     pub success: Hsla,
+    /// antd `colorSuccessBg`。
+    pub success_bg: Hsla,
+    /// antd `colorSuccessBorder`。
+    pub success_border: Hsla,
     /// antd `colorWarning`（`text/bg-ant-warning`）。
     pub warning: Hsla,
     /// antd `colorWarningHover`（`text-ant-warning-hover`）。
     pub warning_hover: Hsla,
+    /// antd `colorWarningBg`。
+    pub warning_bg: Hsla,
+    /// antd `colorWarningBorder`。
+    pub warning_border: Hsla,
     /// antd `colorError`（`text/bg-ant-error`）。
     pub error: Hsla,
     /// antd `colorErrorHover`。
     pub error_hover: Hsla,
+    /// antd `colorErrorBg`。
+    pub error_bg: Hsla,
+    /// antd `colorErrorBorder`。
+    pub error_border: Hsla,
     /// antd `colorInfo`。
     pub info: Hsla,
+    /// antd `colorInfoHover`。
+    pub info_hover: Hsla,
+    /// antd `colorInfoActive`。
+    pub info_active: Hsla,
+    /// antd `colorInfoBg`。
+    pub info_bg: Hsla,
+    /// antd `colorInfoBorder`。
+    pub info_border: Hsla,
 
     /// antd `colorBgContainer`（`bg-ant-container`）。
     pub bg_container: Hsla,
@@ -106,50 +128,59 @@ impl KpTokens {
         self.bg_container.opacity(alpha)
     }
 
-    pub fn from_antd(colors: &AntdColors, shadows: &AntdShadows) -> Self {
+    /// 从新的角色语义层构建第三阶段前的兼容视图。
+    pub fn from_semantic(s: &super::semantic::SemanticTokens) -> Self {
         Self {
-            text: colors.color_text.to_hsla(),
-            secondary: colors.color_text_secondary.to_hsla(),
-            tertiary: colors.color_text_tertiary.to_hsla(),
-            quaternary: colors.color_text_quaternary.to_hsla(),
-            disabled: colors.color_border_disabled.to_hsla(),
-            description: colors.color_text_description.to_hsla(),
-            placeholder: colors.color_text_placeholder.to_hsla(),
-            light_solid: colors.color_text_light_solid.to_hsla(),
-            primary: colors.color_primary.to_hsla(),
-            primary_hover: colors.color_primary_hover.to_hsla(),
-            primary_active: colors.color_primary_active.to_hsla(),
-            primary_bg: colors.color_primary_bg.to_hsla(),
-            primary_border: colors.color_primary_border.to_hsla(),
-            success: colors.color_success.to_hsla(),
-            warning: colors.color_warning.to_hsla(),
-            warning_hover: colors.color_warning_hover.to_hsla(),
-            error: colors.color_error.to_hsla(),
-            error_hover: colors.color_error_hover.to_hsla(),
-            info: colors.color_info.to_hsla(),
-            bg_container: colors.color_bg_container.to_hsla(),
-            bg_elevated: colors.color_bg_elevated.to_hsla(),
-            bg_layout: colors.color_bg_layout.to_hsla(),
-            bg_spotlight: colors.color_bg_spotlight.to_hsla(),
-            mask: colors.color_bg_mask.to_hsla(),
-            text_hover: colors.color_bg_text_hover.to_hsla(),
-            white: colors.color_white.to_hsla(),
-            border: colors.color_border.to_hsla(),
-            border_secondary: colors.color_border_secondary.to_hsla(),
-            split: colors.color_split.to_hsla(),
-            fill: colors.color_fill.to_hsla(),
-            fill_secondary: colors.color_fill_secondary.to_hsla(),
-            fill_tertiary: colors.color_fill_tertiary.to_hsla(),
-            fill_quaternary: colors.color_fill_quaternary.to_hsla(),
-            blue_1: colors.blue_1.to_hsla(),
-            blue_6: colors.blue_6.to_hsla(),
-            cyan_6: colors.cyan_6.to_hsla(),
-            orange_6: colors.orange_6.to_hsla(),
-            gold_3: colors.gold_3.to_hsla(),
-            shadow_elevated: shadows.box_shadow.map(|layer| layer.to_box_shadow()),
-            shadow_card: shadows
-                .box_shadow_tertiary
-                .map(|layer| layer.to_box_shadow()),
+            text: s.text.primary,
+            secondary: s.text.secondary,
+            tertiary: s.text.muted,
+            quaternary: s.text.faint,
+            disabled: s.border_disabled,
+            description: s.text.muted,
+            placeholder: s.text.placeholder,
+            light_solid: s.text.on_accent,
+            primary: s.accent.solid,
+            primary_hover: s.accent.hover,
+            primary_active: s.accent.active,
+            primary_bg: s.accent.subtle,
+            primary_border: s.accent.border,
+            success: s.status.success.solid,
+            success_bg: s.status.success.subtle,
+            success_border: s.status.success.border,
+            warning: s.status.warning.solid,
+            warning_hover: s.status.warning.hover,
+            warning_bg: s.status.warning.subtle,
+            warning_border: s.status.warning.border,
+            error: s.status.danger.solid,
+            error_hover: s.status.danger.hover,
+            error_bg: s.status.danger.subtle,
+            error_border: s.status.danger.border,
+            info: s.status.info.solid,
+            info_hover: s.status.info.hover,
+            info_active: s.status.info.active,
+            info_bg: s.status.info.subtle,
+            info_border: s.status.info.border,
+            bg_container: s.surface.panel,
+            bg_elevated: s.surface.raised,
+            bg_layout: s.surface.window,
+            bg_spotlight: s.surface.spotlight,
+            mask: s.surface.mask,
+            text_hover: s.item.text_hover,
+            white: s.white,
+            border: s.border.default,
+            border_secondary: s.border.subtle,
+            split: s.border.divider,
+            fill: s.fill.strong,
+            fill_secondary: s.fill.default,
+            fill_tertiary: s.fill.subtle,
+            fill_quaternary: s.fill.faint,
+            blue_1: s.hues.blue_1,
+            blue_6: s.hues.blue_6,
+            cyan_6: s.hues.cyan_6,
+            orange_6: s.hues.orange_6,
+            gold_3: s.hues.gold_3,
+            shadow_elevated: s.shadow.overlay.clone(),
+            shadow_card: s.shadow.card.clone(),
         }
     }
 
@@ -205,7 +236,6 @@ impl KpTokens {
         ]
     }
 }
-
 /// 标准语义字号，与 1.x UnoCSS wind4 一致：字号 / 行高（rem）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextSize {

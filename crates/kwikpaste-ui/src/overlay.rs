@@ -66,7 +66,7 @@ impl RootPlugin for Overlays {
     /// 1.x 的 `body { text-sm text-ant-text }`，外加显式的中文、Emoji 字体回退。
     fn style(&self, surface: &mut Stateful<Div>, _: &mut Window, cx: &mut App) {
         let text = surface.text_style();
-        text.color = Some(theme::tokens(cx).text);
+        text.color = Some(theme::semantic(cx).text.primary);
         text.font_size = Some(TextSize::Sm.font_size().into());
         text.line_height = Some(TextSize::Sm.line_height().into());
         text.font_fallbacks = Some(fonts::ui_fallbacks());

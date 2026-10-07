@@ -5,24 +5,23 @@
 //! 装的观察者转发到这里。gpui-component 的主题只有 App 级一份，所有窗口同时切换。
 
 pub mod antd;
+pub mod components;
 mod css_color;
 pub mod fonts;
 mod kit;
 pub mod palette;
+pub mod semantic;
 mod tokens;
-
-use std::sync::LazyLock;
 
 use gpui::{App, Global, Hsla, Window, WindowAppearance, px};
 use gpui_component::{Theme, ThemeMode};
 
+use components::ComponentTokens;
 pub use css_color::css_color;
+pub use palette::{MATERIAL_ACRYLIC_ALPHA, MATERIAL_MICA_ALPHA, MaterialKind};
+use semantic::SemanticTokens;
+use std::sync::OnceLock;
 pub use tokens::{KpTokens, TextSize, control_height, motion, radius, space};
-
-/// 面板在 Windows Mica 材质上的内容层不透明度（与 1.x material surface 一致）。
-pub const MATERIAL_MICA_ALPHA: f32 = 0.58;
-/// 面板在 Windows Acrylic 材质上的内容层不透明度（与 1.x material surface 一致）。
-pub const MATERIAL_ACRYLIC_ALPHA: f32 = 0.34;
 
 /// 用户的主题设置，对应 1.x `appearance.theme` 的 `auto` / `light` / `dark`。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -56,15 +55,12 @@ const MONO_BASE: f32 = 13.;
 /// 文本缩放系数的范围，与 1.x 读 Windows“文本大小”时的钳制一致。
 const TEXT_SCALE_RANGE: (f32, f32) = (1., 2.25);
 
-static LIGHT_TOKENS: LazyLock<KpTokens> =
-    LazyLock::new(|| KpTokens::from_antd(&palette::LIGHT, &palette::LIGHT_SHADOWS));
-static DARK_TOKENS: LazyLock<KpTokens> =
-    LazyLock::new(|| KpTokens::from_antd(&palette::DARK, &palette::DARK_SHADOWS));
-
 struct KpTheme {
     preference: ThemePreference,
     system: Appearance,
     text_scale: f32,
+    /// 当前明暗对应的运行时 token；切换外观时替换而不是修改静态色板。
+    set: &'static ThemeSet,
 }
 
 impl Global for KpTheme {}
@@ -75,6 +71,33 @@ impl KpTheme {
     }
 }
 
+struct ThemeSet {
+    palette: &'static palette::Palette,
+    semantic: SemanticTokens,
+    components: ComponentTokens,
+    compat: KpTokens,
+}
+
+/// 每个色板与明暗组合只构建一次，所有访问器共享同一个驻留集合。
+fn intern(appearance: Appearance) -> &'static ThemeSet {
+    static LIGHT: OnceLock<&'static ThemeSet> = OnceLock::new();
+    static DARK: OnceLock<&'static ThemeSet> = OnceLock::new();
+    let (slot, palette) = match appearance {
+        Appearance::Light => (&LIGHT, &palette::LIGHT),
+        Appearance::Dark => (&DARK, &palette::DARK),
+    };
+    slot.get_or_init(|| {
+        let semantic = SemanticTokens::from_palette(palette);
+        let components = ComponentTokens::from_semantic(&semantic);
+        let compat = KpTokens::from_semantic(&semantic);
+        Box::leak(Box::new(ThemeSet {
+            palette,
+            semantic,
+            components,
+            compat,
+        }))
+    })
+}
 /// 完全透明。有系统材质的窗口让 `Root` 不画底色时用。
 pub fn transparent() -> Hsla {
     gpui::transparent_black()
@@ -103,23 +126,45 @@ pub(crate) fn init(cx: &mut App) {
         preference: ThemePreference::System,
         system: cx.window_appearance().into(),
         text_scale: 1.,
+        set: intern(Appearance::from(cx.window_appearance())),
     });
     apply(cx);
 }
 
 /// 指定明暗的颜色 token。
 pub fn tokens_for(appearance: Appearance) -> &'static KpTokens {
-    match appearance {
-        Appearance::Light => &LIGHT_TOKENS,
-        Appearance::Dark => &DARK_TOKENS,
-    }
+    &intern(appearance).compat
+}
+
+/// 指定明暗的角色语义 token，测试和无全局主题的初始化路径使用。
+pub fn semantic_for(appearance: Appearance) -> &'static SemanticTokens {
+    &intern(appearance).semantic
+}
+
+/// 指定明暗的组件状态 token，测试和无全局主题的初始化路径使用。
+pub fn components_for(appearance: Appearance) -> &'static ComponentTokens {
+    &intern(appearance).components
 }
 
 /// 当前生效的颜色 token，应用读颜色的唯一入口。
 pub fn tokens(cx: &App) -> &'static KpTokens {
-    tokens_for(appearance(cx))
+    cx.try_global::<KpTheme>()
+        .map_or_else(|| tokens_for(appearance(cx)), |theme| &theme.set.compat)
 }
 
+/// 当前角色语义 token，新界面只通过这个入口读取颜色。
+pub fn semantic(cx: &App) -> &'static SemanticTokens {
+    cx.try_global::<KpTheme>()
+        .map_or_else(|| semantic_for(appearance(cx)), |theme| &theme.set.semantic)
+}
+
+/// 当前组件状态 token，避免视图临时调制颜色。
+pub fn components(cx: &App) -> &'static ComponentTokens {
+    cx.try_global::<KpTheme>().map_or_else(
+        || components_for(appearance(cx)),
+        |theme| &theme.set.components,
+    )
+}
 pub fn appearance(cx: &App) -> Appearance {
     cx.try_global::<KpTheme>()
         .map_or(Appearance::Light, KpTheme::appearance)
@@ -145,6 +190,8 @@ pub fn set_preference(preference: ThemePreference, cx: &mut App) {
     }
 
     cx.global_mut::<KpTheme>().preference = preference;
+    let appearance = cx.global::<KpTheme>().appearance();
+    cx.global_mut::<KpTheme>().set = intern(appearance);
     apply(cx);
 }
 
@@ -179,6 +226,7 @@ pub(crate) fn sync_system_appearance(window: &Window, cx: &mut App) {
     let follows_system = theme.preference == ThemePreference::System;
     cx.global_mut::<KpTheme>().system = system;
     if follows_system {
+        cx.global_mut::<KpTheme>().set = intern(system);
         apply(cx);
     }
 }
@@ -189,15 +237,16 @@ fn apply(cx: &mut App) {
         return;
     };
     let scale = theme.text_scale;
-    let (mode, colors) = match theme.appearance() {
-        Appearance::Light => (ThemeMode::Light, &palette::LIGHT),
-        Appearance::Dark => (ThemeMode::Dark, &palette::DARK),
+    let set = theme.set;
+    let mode = match theme.appearance() {
+        Appearance::Light => ThemeMode::Light,
+        Appearance::Dark => ThemeMode::Dark,
     };
 
     // `change` 会先装上 gpui-component 自带的主题，随后的 `update` 再整体覆盖成快贴的配色。
     Theme::change(mode, None, cx);
     Theme::update(cx, |theme| {
-        theme.colors = kit::theme_color(colors);
+        theme.colors = kit::theme_color(set.palette, &set.semantic);
         theme.font_family = fonts::UI_FAMILY.into();
         theme.mono_font_family = fonts::MONO_FAMILY.into();
         theme.font_size = px(REM_BASE * scale);

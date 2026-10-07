@@ -89,7 +89,7 @@ pub fn confirm(spec: ConfirmSpec, window: &mut Window, cx: &mut App) -> oneshot:
     let answer = Answer(Rc::new(RefCell::new(Some(sender))));
 
     window.open_dialog(cx, move |dialog, window, cx| {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let strings = ui_strings(cx);
         let body = ConfirmBody {
             spec: spec.clone(),
@@ -106,7 +106,7 @@ pub fn confirm(spec: ConfirmSpec, window: &mut Window, cx: &mut App) -> oneshot:
             .width(dialog_width(window))
             .close_button(false)
             .overlay_closable(false)
-            .bg(tokens.bg_elevated)
+            .bg(tokens.surface.raised)
             .border_0()
             .rounded(radius::LG)
             .px(rems(1.5))
@@ -160,7 +160,7 @@ const CONTENT_INSET: Rems = Rems(5.125);
 
 impl RenderOnce for ConfirmBody {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let tokens = theme::tokens(cx);
+        let tokens = theme::semantic(cx);
         let rem_size = window.rem_size();
         let content = self.spec.content.as_ref().map(|content| {
             kinsoku_wrap(
@@ -204,7 +204,7 @@ impl RenderOnce for ConfirmBody {
                         svg()
                             .flex_none()
                             .size(rems(1.375))
-                            .text_color(tokens.warning)
+                            .text_color(tokens.status.warning.solid)
                             .data(EXCLAMATION_CIRCLE_FILLED),
                     )
                     .child(
@@ -216,14 +216,14 @@ impl RenderOnce for ConfirmBody {
                                 gpui::div()
                                     .kp_text(TextSize::Base)
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(tokens.text)
+                                    .text_color(tokens.text.primary)
                                     .child(self.spec.title),
                             )
                             .children(content.map(|content| {
                                 gpui::div()
                                     .kp_text(TextSize::Sm)
                                     .line_height(rems(1.375))
-                                    .text_color(tokens.text)
+                                    .text_color(tokens.text.primary)
                                     .child(content)
                             })),
                     ),

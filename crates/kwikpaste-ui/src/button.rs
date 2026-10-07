@@ -192,7 +192,7 @@ impl Button {
     /// 对不上 antd，所以自己画：底色 `colorBgContainer`，描边和文字 `colorError`，悬停换
     /// `colorErrorHover`；禁用时与 antd 默认按钮的禁用态相同。
     fn render_danger_outline(self, cx: &App) -> AnyElement {
-        let tokens = crate::theme::tokens(cx);
+        let tokens = crate::theme::semantic(cx);
         let label = self.label.unwrap_or_default();
         let accessibility_label = self
             .accessibility_label
@@ -230,19 +230,19 @@ impl Button {
             .map(|button| {
                 if disabled {
                     button
-                        .border_color(tokens.border)
-                        .bg(tokens.fill_tertiary)
-                        .text_color(tokens.quaternary)
+                        .border_color(tokens.border.default)
+                        .bg(tokens.fill.subtle)
+                        .text_color(tokens.text.faint)
                 } else {
                     button
                         .cursor_pointer()
-                        .border_color(tokens.error)
-                        .bg(tokens.bg_container)
-                        .text_color(tokens.error)
+                        .border_color(tokens.status.danger.solid)
+                        .bg(tokens.surface.panel)
+                        .text_color(tokens.status.danger.solid)
                         .hover(|style| {
                             style
-                                .border_color(tokens.error_hover)
-                                .text_color(tokens.error_hover)
+                                .border_color(tokens.status.danger.hover)
+                                .text_color(tokens.status.danger.hover)
                         })
                 }
             })
