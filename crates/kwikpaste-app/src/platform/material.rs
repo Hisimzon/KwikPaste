@@ -24,14 +24,15 @@
 //! - `Mica`：不铺底色，直接露出系统 Mica（Mica 本身不透明，色调来自桌面壁纸）；
 //! - `Acrylic`：面板色按主题色板的 `materials` 比例半透明，压住背后模糊内容的花色、保证文字可读。
 //!
-//! （以上是 Windows；macOS 面板以外的窗口只有无色模糊，两种材质都铺底色，见色板的 `MATERIALS`。）
+//! （以上是 Windows；macOS 的系统材质自带色调但不压花色，两种材质都铺底色，见色板的 `MATERIALS`。）
 //!
 //! 每个窗口只铺一层材质底色：子视图再铺一层会叠成接近不透明，材质就看不出来了。
 //! 材质下不要用不透明的浮层盖住滚动内容：不透明底色在材质上是一块实色，模糊也盖不住下面滚过的行；
 //! 需要一直可见的东西（置顶行、表头）放在滚动容器外面。
 //!
-//! macOS：default 用不透明窗口，mica / acrylic 用 `Blurred` 加 `NSVisualEffectView`；系统关闭
-//! 透明效果或高对比度时回退 default。
+//! macOS：default 用不透明窗口，mica / acrylic 用 `Transparent` 加系统 `NSVisualEffectView`
+//! （`kwikpaste_os::mac::material`，所有窗口都一样，面板另加圆角）；系统关闭透明效果或高对比度时
+//! 回退 default。
 
 use gpui::{AnyWindowHandle, App, Global, Hsla, Window, WindowBackgroundAppearance};
 use kwikpaste_core::settings::{Material, Theme};
@@ -269,12 +270,24 @@ pub(super) fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
 
 #[cfg(target_os = "macos")]
 pub(super) fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
     let appearance = if material.effective == Material::Default {
         WindowBackgroundAppearance::Opaque
     } else {
-        WindowBackgroundAppearance::Blurred
+        WindowBackgroundAppearance::Transparent
     };
+    // 顺序要紧：GPUI 先拿掉它自己的无色模糊视图，再放系统材质层。
     window.set_background_appearance(appearance);
+    let ns_view = match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()) {
+        Ok(RawWindowHandle::AppKit(handle)) => handle.ns_view,
+        _ => return,
+    };
+    // SAFETY: 在 GPUI 的窗口更新里调用，窗口视图存活且在主线程。
+    if let Err(err) = unsafe { kwikpaste_os::mac::material::apply(ns_view, material.effective) } {
+        log::warn!("macOS window material not applied: {err}");
+    }
+    window.refresh();
 }
 
 #[cfg(test)]

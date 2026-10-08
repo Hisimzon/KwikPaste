@@ -12,11 +12,9 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, class, msg_send};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy,
-    NSAutoresizingMaskOptions, NSEvent, NSEventMask, NSRunningApplication, NSScreen, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowButton, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
-    NSWorkspace,
+    NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy, NSEvent,
+    NSEventMask, NSRunningApplication, NSScreen, NSView, NSWindow, NSWindowButton,
+    NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -44,7 +42,6 @@ pub fn set_dock_icon_visible(visible: bool) -> io::Result<()> {
 /// GPUI 创建的 NSView 对应的非激活 NSPanel。
 pub struct Panel {
     view: NonNull<c_void>,
-    effect_view: RefCell<Option<Retained<NSVisualEffectView>>>,
     outside_monitor: RefCell<Option<Retained<AnyObject>>>,
     previous_foreground: RefCell<Option<Retained<NSRunningApplication>>>,
 }
@@ -57,7 +54,6 @@ impl Panel {
     pub unsafe fn from_raw(ns_view: NonNull<c_void>) -> Self {
         Self {
             view: ns_view,
-            effect_view: RefCell::new(None),
             outside_monitor: RefCell::new(None),
             previous_foreground: RefCell::new(None),
         }
@@ -99,7 +95,7 @@ impl Panel {
         }
     }
 
-    /// 在窗口下放置 AppKit 材质层；默认材质移除它并恢复不透明窗口。
+    /// 在窗口下放置 AppKit 材质层（[`crate::mac::material`]）；默认材质移除它并恢复不透明窗口。
     ///
     /// 不透明窗口由系统按窗口自己的圆角裁切，内容层不再另加圆角：系统圆角比 16 小，
     /// 两道圆角之间会露出 GPUI 给不透明窗口铺的黑底。材质窗口是透明的，圆角由内容层给。
@@ -110,44 +106,16 @@ impl Panel {
         let content = window
             .contentView()
             .ok_or_else(|| io::Error::other("the panel window has no content view"))?;
-        match material {
-            Material::Default => {
+        let view = unsafe { self.view.cast::<NSView>().as_ref() };
+        match crate::mac::material::apply_to_view(view, material)? {
+            None => {
                 set_corner_radius(&content, 0.);
                 window.setOpaque(true);
-                if let Some(effect) = self.effect_view.borrow_mut().take() {
-                    effect.removeFromSuperview();
-                }
             }
-            Material::Mica | Material::Acrylic => {
+            Some(effect) => {
                 set_corner_radius(&content, MATERIAL_CORNER_RADIUS);
                 window.setOpaque(false);
-                let effect = if let Some(effect) = self.effect_view.borrow().as_ref() {
-                    effect.clone()
-                } else {
-                    let marker = main_thread()?;
-                    let effect =
-                        NSVisualEffectView::initWithFrame(marker.alloc(), content.bounds());
-                    effect.setAutoresizingMask(
-                        NSAutoresizingMaskOptions::ViewWidthSizable
-                            | NSAutoresizingMaskOptions::ViewHeightSizable,
-                    );
-                    content.addSubview_positioned_relativeTo(
-                        &effect,
-                        NSWindowOrderingMode::Below,
-                        None,
-                    );
-                    *self.effect_view.borrow_mut() = Some(effect.clone());
-                    effect
-                };
                 set_corner_radius(&effect, MATERIAL_CORNER_RADIUS);
-                effect.setMaterial(match material {
-                    Material::Mica => NSVisualEffectMaterial::UnderWindowBackground,
-                    Material::Acrylic => NSVisualEffectMaterial::Popover,
-                    Material::Default => unreachable!(),
-                });
-                effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-                effect.setState(NSVisualEffectState::Active);
-                effect.setFrame(content.bounds());
             }
         }
         Ok(())
