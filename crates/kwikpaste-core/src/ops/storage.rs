@@ -15,7 +15,7 @@ use sqlx::SqlitePool;
 
 use crate::clipboard;
 use crate::db::overview::HistoryOverview;
-use crate::disk::{dir_size, file_size};
+use crate::disk::{available_space, dir_size, file_size};
 use crate::error::{AppError, Result};
 use crate::events::CoreEvent;
 use crate::i18n::commands::{label, Key};
@@ -234,12 +234,23 @@ pub(crate) async fn storage_usage(core: &CoreInner) -> Result<StorageUsage> {
 }
 
 /// 便携版的数据根固定在 exe 旁，偏好页不提供迁移入口，这里兜住绕过界面的调用。
+///
+/// 自定义目录启动时不可用、本次临时用默认目录时也不能迁移：此时改 manifest 会丢掉原位置，
+/// 再迁回原位置会用临时数据覆盖那里的真实历史。
 fn ensure_storage_relocatable(core: &CoreInner) -> Result<()> {
-    if !core.paths.is_portable() {
-        return Ok(());
+    if core.paths.is_portable() {
+        return Err(anyhow::anyhow!(label(core.language(), Key::PortableStorageFixed)).into());
+    }
+    if core
+        .paths
+        .storage_location()?
+        .unavailable_custom_path
+        .is_some()
+    {
+        return Err(anyhow::anyhow!(label(core.language(), Key::StorageCustomUnavailable)).into());
     }
 
-    Err(anyhow::anyhow!(label(core.language(), Key::PortableStorageFixed)).into())
+    Ok(())
 }
 
 async fn switch_storage_location(
@@ -253,8 +264,22 @@ async fn switch_storage_location(
     }
 
     reject_nested_storage_move(&current, &target)?;
+    let target_preexisting = target.exists();
     if target != paths.default_data_dir() {
         paths.validate_storage_target(&target)?;
+        if paths.storage_target_has_data(&target)? {
+            return Err(anyhow::anyhow!(label(core.language(), Key::StorageTargetHasData)).into());
+        }
+    }
+    let bytes_to_copy = storage_bytes_to_copy(&current)?;
+    let available = available_space(&target).map_err(|error| {
+        anyhow::anyhow!(
+            "{}: {error}",
+            label(core.language(), Key::StorageSpaceUnavailable)
+        )
+    })?;
+    if available < bytes_to_copy {
+        return Err(anyhow::anyhow!(label(core.language(), Key::StorageInsufficientSpace)).into());
     }
 
     {
@@ -277,7 +302,13 @@ async fn switch_storage_location(
                     Ok(pool) => Ok(pool),
                     Err(err) => {
                         *lock(&switch_error) = Some(err);
+                        // manifest 没能指回原位置时不能删目标：下次启动还要从那里读。
                         paths.set_app_data_dir(current.clone())?;
+                        if let Err(cleanup) = cleanup_partial_target(&target, target_preexisting) {
+                            log::warn!(
+                                "failed to clean partial storage target {target:?}: {cleanup:#}"
+                            );
+                        }
                         crate::db::init(paths, core.db_max_connections).await
                     }
                 }
@@ -290,7 +321,9 @@ async fn switch_storage_location(
 
         let settings = rebase_storage_states(core).await?;
         crate::sync::settings_changed(core);
-        remove_old_storage_data(paths, &current)?;
+        if let Err(error) = remove_old_storage_data(paths, &current) {
+            log::warn!("old storage cleanup failed; keeping completed switch: {error:#}");
+        }
         core.events.emit(CoreEvent::SettingsUpdated {
             settings: Arc::new(settings),
             delta: SettingsDelta::replaced(),
@@ -322,12 +355,37 @@ fn reject_nested_storage_move(current: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+fn storage_bytes_to_copy(current: &Path) -> Result<u64> {
+    let mut total: u64 = 0;
+    for name in STORAGE_CONTENT_DIRS {
+        total = total.saturating_add(dir_size(&current.join(name))?);
+    }
+    Ok(total)
+}
+
+/// 回滚复制失败时只移除本次迁移写入的目标内容；预先存在的空目录与 identity 保留。
+fn cleanup_partial_target(target: &Path, preexisting: bool) -> Result<()> {
+    if !preexisting {
+        return remove_path(target);
+    }
+    for name in STORAGE_CONTENT_DIRS {
+        let path = target.join(name);
+        if path.exists() {
+            remove_path(&path)?;
+        }
+    }
+    Ok(())
+}
+
 fn copy_storage_data(paths: &CorePaths, src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst).with_context(|| format!("failed to create storage dir {dst:?}"))?;
     for name in STORAGE_CONTENT_DIRS {
         replace_path(&src.join(name), &dst.join(name))?;
     }
-    paths.write_storage_identity(dst)?;
+    let identity = dst.join(".kwikpaste-storage.json");
+    if !identity.exists() {
+        paths.write_storage_identity(dst)?;
+    }
     Ok(())
 }
 

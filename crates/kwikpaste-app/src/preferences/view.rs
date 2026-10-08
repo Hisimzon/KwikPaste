@@ -6,7 +6,7 @@ use gpui::{
     prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
-    CoreEvent, app_ids,
+    CoreEvent, StorageLocation, app_ids,
     backup::{self, BackupContainerMode, BackupExportMode, BackupImportStrategy, BackupScope},
     db::overview::{ClearScope, ContentCategory},
     ops::{PreferenceDirectory, StorageOverview},
@@ -23,7 +23,15 @@ use kwikpaste_ui::{
     toast::{self, Toast},
 };
 use serde_json::json;
-use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc};
+use std::{
+    cell::Cell,
+    path::PathBuf,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use super::{
     icons::PrefIcon,
@@ -92,6 +100,8 @@ fn initial_tab() -> TabId {
     }
 }
 
+static STORAGE_WARNING_SHOWN: AtomicBool = AtomicBool::new(false);
+
 pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     if let Some(handle) = cx
         .try_global::<PreferencesWindow>()
@@ -113,6 +123,19 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
         view.update(cx, |this, cx| this.refresh_storage_overview(cx));
+        if view
+            .read(cx)
+            .storage_location
+            .as_ref()
+            .is_some_and(|location| location.unavailable_custom_path.is_some())
+            && !STORAGE_WARNING_SHOWN.swap(true, Ordering::Relaxed)
+        {
+            toast::show(
+                Toast::warning(i18n::t("preferences:storageLocation.unavailableToast")),
+                window,
+                cx,
+            );
+        }
         crate::platform::reveal_after_first_frame(window, cx, |window, _| {
             bring_window_to_front(window);
         });
@@ -193,6 +216,8 @@ struct Preferences {
     focus: FocusHandle,
     recording: Option<&'static str>,
     storage_overview: Option<StorageOverview>,
+    storage_location: Option<StorageLocation>,
+    storage_migrating: bool,
     lan_state: Option<LanSyncState>,
     lan_code_hidden: bool,
     lan_name: TextInput,
@@ -335,6 +360,7 @@ impl Preferences {
             this.update("sync.lan.maxImageMb", json!(value), cx);
         });
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
+        let storage_location = core_host::core(cx).and_then(|core| core.storage_location().ok());
         let mut selects = std::collections::HashMap::new();
         let mut number_inputs = std::collections::HashMap::new();
         let mut setting_subscriptions = Vec::new();
@@ -515,6 +541,12 @@ impl Preferences {
                         cx.notify();
                     }
                     // 停在数据概览页时，新采集、清理和分组变化都实时反映到统计上。
+                    if matches!(event, CoreEvent::ClipboardReloaded) {
+                        this.storage_location =
+                            core_host::core(cx).and_then(|core| core.storage_location().ok());
+                        this.icons.update(cx, |icons, cx| icons.clear(None, cx));
+                        cx.notify();
+                    }
                     if this.tab == TabId::Overview
                         && matches!(
                             event,
@@ -557,6 +589,8 @@ impl Preferences {
             focus: cx.focus_handle(),
             recording: None,
             storage_overview: None,
+            storage_location,
+            storage_migrating: false,
             lan_state,
             lan_code_hidden: false,
             lan_name,
@@ -942,6 +976,207 @@ impl Preferences {
                 });
             })
             .detach();
+    }
+
+    /// 数据目录行右侧的打开 / 更改 / 还原；迁移中或自定义目录不可用时只能打开。
+    fn render_storage_actions(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let location = self.storage_location.as_ref();
+        let fallback = location.and_then(|location| location.unavailable_custom_path.as_deref());
+        let disabled = self.storage_migrating || fallback.is_some();
+        let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
+        let open = Button::new("storage-open", i18n::t("preferences:storageLocation.open"))
+            .disabled(self.storage_migrating)
+            .on_click(
+                cx.listener(|this, _, _, cx| this.open_directory(PreferenceDirectory::Data, cx)),
+            );
+        let change = Button::new(
+            "storage-change",
+            i18n::t("preferences:storageLocation.change"),
+        )
+        .disabled(disabled)
+        .loading(self.storage_migrating)
+        .on_click(cx.listener(|this, _, window, cx| this.change_storage_directory(window, cx)));
+        let reset = Button::new(
+            "storage-reset",
+            i18n::t("preferences:storageLocation.reset"),
+        )
+        .disabled(disabled || !location.is_some_and(|location| location.is_custom))
+        .on_click(cx.listener(|this, _, window, cx| this.reset_storage_directory(window, cx)));
+        let mut actions = div().flex().items_center().gap(space(2.)).child(open);
+        if !portable {
+            actions = actions.child(change);
+        }
+        if !portable
+            && location.is_some_and(|location| {
+                location.is_custom || location.unavailable_custom_path.is_some()
+            })
+        {
+            actions = actions.child(reset);
+        }
+        actions.into_any_element()
+    }
+
+    fn change_storage_directory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.storage_migrating
+            || self
+                .storage_location
+                .as_ref()
+                .is_some_and(|location| location.unavailable_custom_path.is_some())
+        {
+            return;
+        }
+        let task = crate::clipboard::view::pin::prompt_for_paths(
+            gpui::PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: false,
+                prompt: Some(i18n::t("preferences:storageLocation.pickTitle")),
+            },
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                let Some(paths) = task.await else {
+                    return;
+                };
+                let Some(parent) = paths.into_iter().next() else {
+                    return;
+                };
+                let _ = entity.update_in(cx, |this, window, cx| {
+                    if kwikpaste_core::cloud_sync_provider(&parent).is_some() {
+                        let answer = kwikpaste_ui::confirm(
+                            ConfirmSpec::new(i18n::t(
+                                "preferences:storageLocation.cloudConfirmTitle",
+                            ))
+                            .content(i18n::t("preferences:storageLocation.cloudConfirmContent"))
+                            .ok_text(i18n::t("common:actions.continue"))
+                            .cancel_text(i18n::t("common:actions.cancel")),
+                            window,
+                            cx,
+                        );
+                        let entity = cx.entity().downgrade();
+                        window
+                            .spawn(cx, async move |cx| {
+                                if answer.await.unwrap_or(false) {
+                                    let _ = entity.update(cx, |this, cx| {
+                                        this.start_storage_change(parent, cx)
+                                    });
+                                }
+                            })
+                            .detach();
+                    } else {
+                        this.start_storage_change(parent, cx);
+                    }
+                });
+            })
+            .detach();
+    }
+
+    fn start_storage_change(&mut self, parent: PathBuf, cx: &mut Context<Self>) {
+        if self.storage_migrating {
+            return;
+        }
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        self.storage_migrating = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = core.change_storage_location(parent).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.storage_migrating = false;
+                match result {
+                    Ok(result) => {
+                        this.storage_location = Some(result.location);
+                        this.storage_overview = None;
+                        this.refresh_storage_overview(cx);
+                        toast::show(
+                            Toast::success(i18n::t("preferences:storageLocation.changed")),
+                            window,
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!("storage location switch failed: {error:#}");
+                        let message = i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.changeStorageLocation")),
+                                ("message", &error.to_string()),
+                            ],
+                        );
+                        toast::show(Toast::error(message), window, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn reset_storage_directory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.storage_migrating {
+            return;
+        }
+        let answer = kwikpaste_ui::confirm(
+            ConfirmSpec::new(i18n::t("preferences:storageLocation.resetConfirmTitle"))
+                .content(i18n::t("preferences:storageLocation.resetConfirmContent"))
+                .ok_text(i18n::t("preferences:storageLocation.reset"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            window,
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if answer.await.unwrap_or(false) {
+                    let _ = entity.update(cx, |this, cx| this.start_storage_reset(cx));
+                }
+            })
+            .detach();
+    }
+
+    fn start_storage_reset(&mut self, cx: &mut Context<Self>) {
+        if self.storage_migrating {
+            return;
+        }
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        self.storage_migrating = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = core.reset_storage_location().await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.storage_migrating = false;
+                match result {
+                    Ok(result) => {
+                        this.storage_location = Some(result.location);
+                        this.storage_overview = None;
+                        this.refresh_storage_overview(cx);
+                        toast::show(
+                            Toast::success(i18n::t("preferences:storageLocation.restored")),
+                            window,
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!("storage location switch failed: {error:#}");
+                        let message = i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.resetStorageLocation")),
+                                ("message", &error.to_string()),
+                            ],
+                        );
+                        toast::show(Toast::error(message), window, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn open_directory(&self, target: PreferenceDirectory, cx: &mut Context<Self>) {
@@ -2477,6 +2712,47 @@ impl Preferences {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let title = text::setting_title(setting);
+        if setting.id == "localData.dataDirectory" {
+            let tokens = theme::semantic(cx);
+            let location = self.storage_location.as_ref();
+            let description = match location {
+                _ if self.storage_migrating => {
+                    i18n::t("preferences:storageLocation.migrating").to_string()
+                }
+                Some(location) if location.is_custom => format!(
+                    "{} · {}",
+                    i18n::t("preferences:storageLocation.custom"),
+                    location.current_path
+                ),
+                Some(location) => location.current_path.clone(),
+                None => text::setting_description(setting).to_string(),
+            };
+            let warning = location
+                .and_then(|location| location.unavailable_custom_path.as_deref())
+                .map(|path| {
+                    div()
+                        .kp_text(TextSize::Xs)
+                        .text_color(tokens.status.warning.solid)
+                        .child(i18n::t_args(
+                            "preferences:storageLocation.unavailable",
+                            &[("path", path)],
+                        ))
+                });
+            return row_frame(first, tokens)
+                .child(
+                    row_label(title, description.into(), tokens)
+                        .when_some(warning, |label, warning| label.child(warning)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_end()
+                        .child(self.render_storage_actions(cx)),
+                )
+                .into_any_element();
+        }
         let description = text::setting_description(setting);
         let path = setting.path;
         let settings_json = values::to_json(&self.settings);
