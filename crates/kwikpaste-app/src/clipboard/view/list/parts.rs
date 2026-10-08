@@ -22,6 +22,7 @@ use crate::{
         shortcut,
     },
     i18n::{t, t_args, t_count},
+    platform::window_drag::WindowDragArea as _,
 };
 
 /// 快捷动作的常规图标和文案（未激活态），卡片按钮和偏好设置里的快捷动作管理共用。
@@ -258,7 +259,7 @@ impl ClipboardList {
                     .min_w_0()
                     .h_full()
                     .items_center()
-                    .window_control_area(gpui::WindowControlArea::Drag)
+                    .window_drag_area()
                     .kp_text(TextSize::Xs)
                     .text_color(tokens.text.muted)
                     .child(t_count("clipboard:footer.total", total, &[])),

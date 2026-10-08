@@ -9,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 use gpui::{
     Context, EventEmitter, ImageSource, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, WindowControlArea, div, img,
+    Styled as _, Subscription, Task, Window, div, img,
 };
 use kwikpaste_ui::{
     Glyph, IconButtonLook as Look, IconName, Input, TextInput, TextInputEvent, icon_button,
@@ -19,7 +19,7 @@ use kwikpaste_ui::{
 use super::{SEARCH_CONTEXT, card::logo};
 use crate::{
     i18n::{self, t},
-    platform::EditTrigger,
+    platform::{EditTrigger, window_drag::WindowDragArea as _},
 };
 
 /// 1.x `useDebounceFn(..., { wait: 200 })`。
@@ -157,7 +157,7 @@ impl Render for Header {
                     .flex_1()
                     .self_stretch()
                     .items_center()
-                    .window_control_area(WindowControlArea::Drag)
+                    .window_drag_area()
                     .child(img(ImageSource::Image(logo())).size(space((20.) / 4.))),
             )
             .child(

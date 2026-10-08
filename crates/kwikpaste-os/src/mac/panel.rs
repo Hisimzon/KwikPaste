@@ -361,9 +361,14 @@ impl Panel {
         let Some(window) = self.window() else {
             return Err(io::Error::other("the panel view has no window"));
         };
+        // global monitor 本该只收到发给别的应用的按下，但按住面板顶部（系统标题栏区域）拖动时面板会被隐藏，
+        // 说明这类按下也会进来；`locationInWindow` 对别的窗口的事件也不是屏幕坐标。
+        // 所以按窗口号认出自己的窗口，位置改用屏幕坐标。
         let monitor = RcBlock::new(move |event: NonNull<NSEvent>| {
-            let point = unsafe { event.as_ref() }.locationInWindow();
-            if !contains(window.frame(), point) {
+            if is_own_window(unsafe { event.as_ref() }.windowNumber()) {
+                return;
+            }
+            if !contains(window.frame(), NSEvent::mouseLocation()) {
                 callback();
             }
         });
@@ -429,6 +434,16 @@ fn hide_window_buttons(window: &NSWindow) {
             button.setHidden(true);
         }
     }
+}
+
+/// 窗口号是不是本应用的窗口（面板、预览窗、偏好设置等）。
+fn is_own_window(number: isize) -> bool {
+    number > 0
+        && MainThreadMarker::new().is_some_and(|marker| {
+            NSApplication::sharedApplication(marker)
+                .windowWithWindowNumber(number)
+                .is_some()
+        })
 }
 
 fn contains(rect: NSRect, point: NSPoint) -> bool {

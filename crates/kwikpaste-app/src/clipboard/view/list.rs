@@ -67,7 +67,9 @@ use crate::{
         },
         source::{ClipboardSource, Group, ListQuery, core_source::item_kind},
     },
-    platform::{CoreEvents, Panel, PanelEvent, drag_out::DragTracker},
+    platform::{
+        CoreEvents, Panel, PanelEvent, drag_out::DragTracker, window_drag::WindowDragArea as _,
+    },
 };
 
 /// 列表上下各多排版的距离（px）。
@@ -1258,7 +1260,7 @@ impl Render for ClipboardList {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .window_control_area(gpui::WindowControlArea::Drag)
+                .window_drag_area()
                 .child(self.render_empty(cx))
                 .into_any_element()
         } else {

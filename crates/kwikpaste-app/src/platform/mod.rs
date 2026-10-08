@@ -51,6 +51,7 @@ mod tray;
 mod trigger_pause;
 pub(crate) mod updater;
 mod watchdog;
+pub mod window_drag;
 mod window_state;
 
 #[cfg(target_os = "macos")]

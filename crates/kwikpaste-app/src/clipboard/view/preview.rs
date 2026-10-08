@@ -12,8 +12,8 @@ use gpui::{
     FontWeight, ImageSource, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
     MouseMoveEvent, ParentElement as _, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, Window, WindowBounds,
-    WindowControlArea, WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px,
-    size, uniform_list,
+    WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
+    uniform_list,
 };
 use kwikpaste_core::db::models::{ClipboardKind, ClipboardSubKind};
 use kwikpaste_ui::{
@@ -31,6 +31,7 @@ use crate::{
         source::{Preview, PreviewTextView},
     },
     i18n::{t, t_args, t_count},
+    platform::window_drag::WindowDragArea as _,
 };
 
 /// 预览窗发给列表的事件。
@@ -203,7 +204,7 @@ impl PreviewPanel {
                             .truncate()
                             .kp_text(TextSize::Sm)
                             .font_weight(FontWeight::MEDIUM)
-                            .window_control_area(WindowControlArea::Drag)
+                            .window_drag_area()
                             .child(title),
                     )
                     .child(

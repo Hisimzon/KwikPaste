@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, Context, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    WindowControlArea, div, prelude::FluentBuilder as _,
+    Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _,
 };
 use kwikpaste_ui::{
     Glyph, IconButtonLook as Look, IconName, MenuEntry, MenuItem, MenuTrigger, context_menu,
@@ -25,6 +25,7 @@ use crate::{
         source::Group,
     },
     i18n::t,
+    platform::window_drag::WindowDragArea as _,
 };
 
 /// 1.x 分组按钮的尺寸与间距（设计 px），用来算一行放得下几个自定义分组。
@@ -405,7 +406,7 @@ impl Render for GroupBar {
                     .flex_1()
                     .min_w_0()
                     .h(space((32.) / 4.))
-                    .window_control_area(WindowControlArea::Drag),
+                    .window_drag_area(),
             )
     }
 }
