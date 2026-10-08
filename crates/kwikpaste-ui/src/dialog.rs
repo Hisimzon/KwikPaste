@@ -32,6 +32,7 @@ pub struct DialogSpec {
     validate: Option<DialogCheck>,
     footer_extra: Option<FooterExtra>,
     show_cancel: bool,
+    danger: bool,
 }
 
 impl DialogSpec {
@@ -43,6 +44,7 @@ impl DialogSpec {
             validate: None,
             footer_extra: None,
             show_cancel: true,
+            danger: false,
         }
     }
 
@@ -76,6 +78,12 @@ impl DialogSpec {
     /// 取消按钮文字；不给时用注入的默认文案（`UiStrings::cancel`）。
     pub fn cancel_text(mut self, text: impl Into<SharedString>) -> Self {
         self.cancel_text = Some(text.into());
+        self
+    }
+
+    /// 危险操作：确定按钮为红色（antd `okButtonProps: { danger: true }`）。
+    pub fn danger(mut self) -> Self {
+        self.danger = true;
         self
     }
 }
@@ -117,6 +125,7 @@ pub fn form_dialog(
         let validate = spec.validate.clone();
         let footer_extra = spec.footer_extra.clone();
         let show_cancel = spec.show_cancel;
+        let danger = spec.danger;
         // antd Modal 默认宽 520 px；面板只有 360 px 宽，左右各留 16 px。
         let width = rems(32.5)
             .to_pixels(window.rem_size())
@@ -163,7 +172,13 @@ pub fn form_dialog(
                                 })
                                 .child(
                                     Button::new("kp-dialog-ok", ok_text.clone())
-                                        .primary()
+                                        .map(|button| {
+                                            if danger {
+                                                button.danger()
+                                            } else {
+                                                button.primary()
+                                            }
+                                        })
                                         .on_click(move |_, window, cx| {
                                             if let Some(validate) = &validate
                                                 && !validate(window, cx)

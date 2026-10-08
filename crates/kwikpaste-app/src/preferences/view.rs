@@ -16,14 +16,14 @@ use kwikpaste_core::{
     sync::{LanDeviceView, LanNearbyView, LanSyncState, PairTarget},
 };
 use kwikpaste_ui::{
-    Button, Checkbox, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
+    Button, Checkbox, ConfirmSpec, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
     NumberInputState, ScrollArea, Select, SelectOption, SelectState, Switch, TextInput,
     form_dialog,
     theme::{self, SemanticTokens, TextSize, space},
     toast::{self, Toast},
 };
 use serde_json::json;
-use std::{path::PathBuf, sync::Arc};
+use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc};
 
 use super::{
     icons::PrefIcon,
@@ -724,6 +724,155 @@ impl Preferences {
             .detach();
     }
 
+    /// 清空记录（1.x `confirmClearClipboardItems`）：收藏和置顶默认保留，勾选后连带删除。
+    fn clear_history(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let delete_favorites = Rc::new(Cell::new(false));
+        let delete_pinned = Rc::new(Cell::new(false));
+        let answer = form_dialog(
+            DialogSpec::new(i18n::t("commands:clearConfirm.title"))
+                .ok_text(i18n::t("common:actions.clear"))
+                .cancel_text(i18n::t("common:actions.cancel"))
+                .danger(),
+            {
+                let delete_favorites = delete_favorites.clone();
+                let delete_pinned = delete_pinned.clone();
+                move |_, _| {
+                    let toggle = |id: &'static str, key: &str, flag: &Rc<Cell<bool>>| {
+                        let flag = flag.clone();
+                        Checkbox::new(id)
+                            .label(i18n::t(key))
+                            .checked(flag.get())
+                            .on_change(move |checked, window, _| {
+                                flag.set(checked);
+                                window.refresh();
+                            })
+                    };
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(space(3.))
+                        .kp_text(TextSize::Sm)
+                        .child(i18n::t("commands:clearConfirm.content"))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap_x(space(5.))
+                                .gap_y(space(2.))
+                                .child(toggle(
+                                    "clear-history-favorites",
+                                    "commands:clearConfirm.deleteFavorites",
+                                    &delete_favorites,
+                                ))
+                                .child(toggle(
+                                    "clear-history-pinned",
+                                    "commands:clearConfirm.deletePinned",
+                                    &delete_pinned,
+                                )),
+                        )
+                        .into_any_element()
+                }
+            },
+            window,
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if !answer.await.unwrap_or(false) {
+                    return;
+                }
+                let result = core
+                    .clear_items(delete_favorites.get(), delete_pinned.get())
+                    .await;
+                let _ = entity.update_in(cx, |this, window, cx| match result {
+                    Ok(removed) => {
+                        toast::show(
+                            Toast::success(i18n::t_args(
+                                "preferences:overview.clear.done",
+                                &[("count", &removed.to_string())],
+                            )),
+                            window,
+                            cx,
+                        );
+                        this.refresh_storage_overview(cx);
+                    }
+                    Err(error) => {
+                        log::warn!("clearing history failed: {error:#}");
+                        let message = i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.clearClipboardItems")),
+                                ("message", &error.to_string()),
+                            ],
+                        );
+                        toast::show(Toast::error(message), window, cx);
+                    }
+                });
+            })
+            .detach();
+    }
+
+    /// 确认后恢复默认偏好（历史记录不动）。各控件的状态只在构造时按设置初始化，
+    /// 所以重置后整个视图按新设置重建，只保留当前页和滚动位置。
+    fn reset_preferences(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let answer = kwikpaste_ui::confirm(
+            ConfirmSpec::new(i18n::t(
+                "preferences:schema.settings.diagnostics.resetPreferences.confirmTitle",
+            ))
+            .content(i18n::t(
+                "preferences:schema.settings.diagnostics.resetPreferences.confirmContent",
+            ))
+            .ok_text(i18n::t("common:actions.reset"))
+            .cancel_text(i18n::t("common:actions.cancel"))
+            .danger(),
+            window,
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if !answer.await.unwrap_or(false) {
+                    return;
+                }
+                let result = core.reset_settings().await;
+                let _ = entity.update_in(cx, |this, window, cx| match result {
+                    Ok(_) => {
+                        crate::platform::apply_language(cx);
+                        let (tab, scroll) = (this.tab, this.scroll.clone());
+                        *this = Self::new(window, cx);
+                        this.tab = tab;
+                        this.scroll = scroll;
+                        this.refresh_storage_overview(cx);
+                        toast::show(
+                            Toast::success(i18n::t("commands:messages.settingsReset")),
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        log::warn!("resetting preferences failed: {error:#}");
+                        let message = i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.resetSettings")),
+                                ("message", &error.to_string()),
+                            ],
+                        );
+                        toast::show(Toast::error(message), window, cx);
+                    }
+                });
+            })
+            .detach();
+    }
+
     fn open_directory(&self, target: PreferenceDirectory, cx: &mut Context<Self>) {
         let Some(core) = core_host::core(cx) else {
             return;
@@ -734,30 +883,30 @@ impl Preferences {
         }
     }
 
-    fn render_action(&self, id: &'static str, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let label = if id == "about.checkUpdates" {
-            i18n::t("preferences:schema.settings.about.checkUpdates.controlLabel")
-        } else if id == "localData.cleanCache" {
-            i18n::t("preferences:schema.settings.localData.cleanCache.controlLabel")
-        } else if id == "localData.clearHistory" {
-            i18n::t("preferences:schema.settings.localData.clearHistory.controlLabel")
-        } else if id == "organizing.customGroups" {
-            i18n::t("preferences:schema.settings.organizing.customGroups.controlLabel")
-        } else if id == "source.excludedApps" {
-            i18n::t("preferences:schema.settings.source.excludedApps.controlLabel")
-        } else if id == "history.cleanupStatus" {
-            i18n::t("preferences:schema.settings.history.cleanupStatus.controlLabel")
-        } else if id == "capture.order" {
-            i18n::t("preferences:schema.settings.capture.order.title")
-        } else if id == "actions.visible" {
-            i18n::t("preferences:schema.settings.actions.visible.controlLabel")
-        } else if id == "history.rules" {
-            i18n::t("preferences:schema.settings.history.rules.title")
-        } else {
-            i18n::t("common:actions.open")
+    /// 操作按钮的文字取设置项的 `controlLabel`，没有时显示“打开”；危险操作用红色描边按钮。
+    fn render_action(
+        &self,
+        id: &'static str,
+        danger: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let label = match id {
+            "capture.order" | "history.rules" => {
+                i18n::t(&format!("preferences:schema.settings.{id}.title"))
+            }
+            _ => {
+                let label =
+                    text::optional(&format!("preferences:schema.settings.{id}.controlLabel"));
+                if label.is_empty() {
+                    i18n::t("common:actions.open")
+                } else {
+                    label
+                }
+            }
         };
         let entity = cx.entity().downgrade();
         Button::new(format!("action-{id}"), label)
+            .when(danger, |button| button.danger_outline())
             .on_click(move |_, window, cx| {
                 let Some(entity) = entity.upgrade() else {
                     return;
@@ -766,9 +915,8 @@ impl Preferences {
                     "backup.export" => this.open_export(ExportKind::Backup, window, cx),
                     "backup.importHistory" => this.import_backup(window, cx),
                     "localData.cleanCache" => this.clean_resource_cache(cx),
-                    "history.cleanupStatus" | "localData.clearHistory" => {
-                        this.run_history_cleanup(cx)
-                    }
+                    "history.cleanupStatus" => this.run_history_cleanup(cx),
+                    "localData.clearHistory" => this.clear_history(window, cx),
                     "localData.dataDirectory" => this.open_directory(PreferenceDirectory::Data, cx),
                     "localData.logDirectory" => this.open_directory(PreferenceDirectory::Logs, cx),
                     "organizing.customGroups" => this.open_group_manager(window, cx),
@@ -785,6 +933,9 @@ impl Preferences {
                         }
                     }
                     "about.checkUpdates" => crate::platform::updater::check_now(cx),
+                    "about.website" => cx.open_url(text::WEBSITE_URL),
+                    "about.github" => cx.open_url(text::REPOSITORY_URL),
+                    "diagnostics.resetPreferences" => this.reset_preferences(window, cx),
                     _ => log::info!("preferences action requested: {id}"),
                 });
             })
@@ -2302,8 +2453,8 @@ impl Preferences {
             Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
             Control::AppExclusion => self.render_app_exclusion(setting.id, value, cx),
-            Control::Action { .. } | Control::CleanupStatus => self.render_action(setting.id, cx),
-            _ => self.render_action(setting.id, cx),
+            Control::Action { danger } => self.render_action(setting.id, danger, cx),
+            _ => self.render_action(setting.id, false, cx),
         };
         let tokens = theme::semantic(cx);
         let full_width = setting.control.full_width();

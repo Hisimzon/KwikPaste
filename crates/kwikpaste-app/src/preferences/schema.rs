@@ -985,11 +985,6 @@ fn about_sections() -> Vec<Section> {
                 Setting::new("localData.logDirectory", Control::Action { danger: false })
                     .keywords(&["log", "diagnostic"]),
                 Setting::new(
-                    "diagnostics.windowLifecycle",
-                    Control::Action { danger: false },
-                )
-                .keywords(&["window", "lifecycle", "debug", "phase"]),
-                Setting::new(
                     "diagnostics.resetPreferences",
                     Control::Action { danger: true },
                 )

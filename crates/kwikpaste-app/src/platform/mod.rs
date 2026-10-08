@@ -85,7 +85,7 @@ use crate::{health, i18n::t, selftest};
 pub use editing::EditTrigger;
 pub use panel::{Panel, PanelCommand, PanelEvent, Trigger, TriggerSource, rendered_frames};
 #[allow(unused_imports, reason = "UI 接线用的接口，见本模块文档")]
-pub use settings::{CoreEvents, core_events};
+pub use settings::{CoreEvents, apply_language, core_events};
 #[allow(unused_imports, reason = "UI 接线用的接口，见本模块文档")]
 pub use system::SystemSignals;
 

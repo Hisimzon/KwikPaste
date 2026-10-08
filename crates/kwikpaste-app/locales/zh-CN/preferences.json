@@ -662,50 +662,6 @@
           "controlLabel": "重置",
           "description": "恢复所有偏好默认值，同时保留历史记录。",
           "title": "重置所有偏好"
-        },
-        "windowLifecycle": {
-          "columns": {
-            "generation": "可见代次",
-            "label": "窗口",
-            "locks": "销毁保护",
-            "phase": "阶段",
-            "timing": "时间"
-          },
-          "controlLabel": "查看",
-          "description": "查看窗口生命周期、销毁保护和轻量模式状态，用于排查隐藏窗口资源占用。",
-          "durationSeparator": " ",
-          "durationUnits": {
-            "days": "{{count}} 天",
-            "hours": "{{count}} 小时",
-            "minutes": "{{count}} 分钟",
-            "seconds": "{{count}} 秒"
-          },
-          "empty": "暂无窗口生命周期数据",
-          "generationHint": "从非可见变为可见时加 1；重复显示已可见窗口不增加。",
-          "hiddenFor": "已隐藏 {{duration}}",
-          "lastActive": "最近活跃 {{duration}}前",
-          "locksHint": "格式为脏状态/保活租约；任一不为 0 时会暂缓销毁。",
-          "modalTitle": "窗口生命周期",
-          "phases": {
-            "created": "已创建",
-            "destroyed": "已销毁",
-            "destroyPending": "等待销毁",
-            "dormant": "休眠",
-            "hiddenWarm": "隐藏待机",
-            "notCreated": "未创建",
-            "ready": "已就绪",
-            "visible": "可见"
-          },
-          "title": "窗口生命周期",
-          "windows": {
-            "clipboard": "剪贴板窗口",
-            "contextMenu": "右键菜单窗口",
-            "contextSubmenu": "右键子菜单窗口",
-            "onboarding": "引导窗口",
-            "preference": "偏好设置窗口",
-            "preview": "剪贴板预览窗口",
-            "update": "软件更新窗口"
-          }
         }
       },
       "history": {

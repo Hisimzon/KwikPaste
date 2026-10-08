@@ -672,50 +672,6 @@
           "controlLabel": "Reset",
           "description": "Restore all preference defaults while keeping history records.",
           "title": "Reset All Preferences"
-        },
-        "windowLifecycle": {
-          "columns": {
-            "generation": "Visible generation",
-            "label": "Window",
-            "locks": "Destroy guards",
-            "phase": "Phase",
-            "timing": "Timing"
-          },
-          "controlLabel": "View",
-          "description": "Inspect window lifecycle, destroy protection, and lightweight-mode state for troubleshooting hidden-window resource usage.",
-          "durationSeparator": " ",
-          "durationUnits": {
-            "days": "{{count}}d",
-            "hours": "{{count}}h",
-            "minutes": "{{count}}m",
-            "seconds": "{{count}}s"
-          },
-          "empty": "No window lifecycle data yet",
-          "generationHint": "Adds 1 when moving from non-visible to visible; re-showing an already visible window does not add.",
-          "hiddenFor": "Hidden for {{duration}}",
-          "lastActive": "Active {{duration}} ago",
-          "locksHint": "Shown as dirty owners / keepalive leases; any nonzero value delays destroy.",
-          "modalTitle": "Window Lifecycle",
-          "phases": {
-            "created": "Created",
-            "destroyed": "Destroyed",
-            "destroyPending": "Destroy pending",
-            "dormant": "Dormant",
-            "hiddenWarm": "Hidden warm",
-            "notCreated": "Not created",
-            "ready": "Ready",
-            "visible": "Visible"
-          },
-          "title": "Window Lifecycle",
-          "windows": {
-            "clipboard": "Clipboard Window",
-            "contextMenu": "Context Menu Window",
-            "contextSubmenu": "Context Submenu Window",
-            "onboarding": "Onboarding Window",
-            "preference": "Preferences Window",
-            "preview": "Clipboard Preview Window",
-            "update": "Software Update Window"
-          }
         }
       },
       "history": {
