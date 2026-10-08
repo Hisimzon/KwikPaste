@@ -1,6 +1,13 @@
 //! 快捷键的显示文案，移植自 1.x `utils/shortcut.ts` 的 `formatShortcutDisplay`：按 `+` 拆开，
 //! 每个键换成平台写法，再用 ` + ` 连起来（`CmdOrCtrl+Backspace` → Windows `Ctrl + ⌫`、macOS `⌘ + ⌫`）。
 
+/// 删除选中记录的主快捷键：Windows 单按 Delete；macOS 笔记本没有 ⌦，沿用 ⌘⌫。
+pub const DELETE_SELECTED: &str = if cfg!(target_os = "macos") {
+    "CmdOrCtrl+Backspace"
+} else {
+    "Delete"
+};
+
 /// 当前平台的显示文案。
 pub fn display(pattern: &str) -> String {
     display_for(pattern, cfg!(target_os = "macos"))

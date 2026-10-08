@@ -364,7 +364,7 @@ impl ClipboardList {
                             .small()
                             .danger_outline()
                             .disabled(busy || count == 0)
-                            .tooltip(shortcut::display("CmdOrCtrl+Backspace"))
+                            .tooltip(shortcut::display(shortcut::DELETE_SELECTED))
                             .on_click(cx.listener(|list, _, window, cx| {
                                 list.delete_checked(window, cx);
                             })),

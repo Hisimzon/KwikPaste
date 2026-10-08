@@ -86,7 +86,7 @@ impl MenuAction {
             Self::ToggleFavorite => Some("CmdOrCtrl+D"),
             Self::TogglePinned => Some("CmdOrCtrl+T"),
             Self::EditNote => Some("CmdOrCtrl+M"),
-            Self::Delete => Some("CmdOrCtrl+Backspace"),
+            Self::Delete => Some(super::shortcut::DELETE_SELECTED),
             Self::SaveImage | Self::MoveToGroup | Self::Select => None,
         }
     }
