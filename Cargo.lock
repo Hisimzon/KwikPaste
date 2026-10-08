@@ -4233,7 +4233,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-app"
-version = "2.0.0-beta.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4263,7 +4263,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-core"
-version = "2.0.0-beta.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4301,7 +4301,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-os"
-version = "2.0.0-beta.1"
+version = "2.0.0"
 dependencies = [
  "auto-launch",
  "block2 0.6.2",
@@ -4322,7 +4322,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ui"
-version = "2.0.0-beta.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -4335,7 +4335,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-updater"
-version = "2.0.0-beta.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

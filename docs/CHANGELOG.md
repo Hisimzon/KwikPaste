@@ -2,6 +2,18 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.0 - 2026-10-08
+
+- KwikPaste 2.0 is here. The whole app is rewritten with a native Rust interface and no longer uses a WebView, so it uses far less memory and opens faster. It also comes with a refreshed look.
+- Install it over 1.x and your records, groups, settings and images carry over. 1.x does not update to 2.0 on its own; download 2.0 from the website or GitHub. After the upgrade 1.x can no longer open the same data, so if you may want to go back, choose Export Backup in 1.x first.
+- Added LAN Sync. Turn it on in Preference › Sync and pair devices on the same network with a 6-digit pairing code; copied text and images then reach each other in real time. You can choose whether to sync text and images, cap the image size, and add a device by its address.
+- Added a Paste as plain text global shortcut. It pastes the current clipboard content without formatting, without opening the clipboard window.
+- Added Pause shortcuts in full-screen apps and Pause shortcuts in these apps. While a full-screen app, such as a game, or a listed app is in front, KwikPaste's shortcuts and mouse button trigger go back to that app.
+- The shortcut recorder now tells you when a shortcut is already used by another app or conflicts with another KwikPaste shortcut.
+- Pinned records and favorites can be reordered by dragging them in the clipboard window.
+- Export Backup and Export to files are merged into one Export dialog. A backup can now hold only favorites or chosen groups; such a backup can only be merged on import. When importing a backup you can choose whether to import its settings too.
+- Updates now come through a single channel, so the Receive Beta Updates and Receive Nightly Updates options are gone. The Taskbar Icon option on Windows, which had no effect, is also gone.
+
 ## 2.0.0-beta.1 - 2026-10-07
 
 - The first beta of KwikPaste 2.0. The whole app is rewritten with a native Rust interface and no longer uses a WebView, so it uses less memory and opens faster.
