@@ -12,6 +12,9 @@ pub fn label(key: Key) -> &'static str {
         Key::ExportExcelLimit => {
             "Content exceeds Excel cell or row limits. Use Markdown or a smaller scope"
         }
+        Key::BackupPartialOverwrite => {
+            "This backup contains only some records. Import it with Merge instead"
+        }
 
         Key::DragSourceFilesMissing => "The dragged source files no longer exist",
         Key::DragImageMissing => "The image file no longer exists",

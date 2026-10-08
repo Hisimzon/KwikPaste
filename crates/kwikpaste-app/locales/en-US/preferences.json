@@ -19,6 +19,7 @@
       "ok": "Choose Save Location",
       "okReadConfirm": "Read the warning and check",
       "okReadCountdown": "Read and check ({{seconds}}s)",
+      "partialHint": "Includes only the selected records and their images, without settings. On import it can only be merged, not used to overwrite.",
       "password": "Backup password",
       "passwordMin": "Backup password must be at least 8 characters",
       "passwordMismatch": "The two passwords do not match",
@@ -27,11 +28,13 @@
       "plainConfirmRequired": "Confirm the plain backup risk",
       "plainWarning": "Anyone with the file can read the backup contents directly.",
       "plainWarningTitle": "Plain backups are not password protected",
+      "scope": "Records",
       "title": "Export KwikPaste Backup"
     },
     "fileFilter": "KwikPaste Backup",
     "import": {
       "fileFallback": "KwikPaste backup file",
+      "importSettings": "Also import the backup's settings",
       "ok": "Import",
       "overwriteConfirm": "I have read the warning and confirm overwriting current data",
       "overwriteConfirmRequired": "Confirm the overwrite import risk",

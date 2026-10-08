@@ -28,6 +28,7 @@ pub enum CommandKey {
     ExportEmpty,
     ExportInvalidTarget,
     ExportExcelLimit,
+    BackupPartialOverwrite,
 
     DragSourceFilesMissing,
     DragImageMissing,

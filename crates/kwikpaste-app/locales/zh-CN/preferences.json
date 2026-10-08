@@ -19,6 +19,7 @@
       "ok": "选择保存位置",
       "okReadConfirm": "阅读风险并勾选",
       "okReadCountdown": "阅读风险并勾选（{{seconds}}s）",
+      "partialHint": "只包含所选记录和它们的图片，不含设置。导入时只能合并，不能覆盖。",
       "password": "备份密码",
       "passwordMin": "备份密码至少需要 8 个字符",
       "passwordMismatch": "两次输入的密码不一致",
@@ -27,11 +28,13 @@
       "plainConfirmRequired": "请确认明文备份风险",
       "plainWarning": "任何拿到文件的人都可以直接读取备份内容。",
       "plainWarningTitle": "明文备份不受密码保护",
+      "scope": "导出范围",
       "title": "导出 快贴 备份"
     },
     "fileFilter": "快贴 备份",
     "import": {
       "fileFallback": "快贴 备份文件",
+      "importSettings": "同时导入备份里的设置",
       "ok": "导入",
       "overwriteConfirm": "我已阅读风险提示，确认覆盖当前数据",
       "overwriteConfirmRequired": "请确认覆盖导入风险",

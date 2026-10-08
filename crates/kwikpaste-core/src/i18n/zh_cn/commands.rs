@@ -10,6 +10,7 @@ pub fn label(key: Key) -> &'static str {
         Key::ExportExcelLimit => {
             "内容超过 Excel 的单元格或行数限制，请改用 Markdown 或缩小导出范围"
         }
+        Key::BackupPartialOverwrite => "这个备份只包含部分记录，请用合并导入",
 
         Key::DragSourceFilesMissing => "拖拽源文件已不存在",
         Key::DragImageMissing => "图片文件已不存在",

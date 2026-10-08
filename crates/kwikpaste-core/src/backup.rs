@@ -5,8 +5,12 @@
 //! - 加密模式是 KwikPaste 自有容器：`KWIKPASTEBAK` + u32 LE 头长度 + JSON 头 + 密文。
 //!   密钥由 Argon2id（64 MiB、t=3、p=1、16 字节盐）从密码派生，XChaCha20-Poly1305 加密整个 ZIP。
 //!
+//! 导出默认是整库；按 [`BackupScope`] 只要收藏或部分分组时是「部分备份」：裁剪过的库、
+//! 这些记录引用的资源文件和空设置（`{}`），manifest 里记下范围，导入时只能合并。
+//!
 //! 导入有两种：合并（按 `kind + content_hash` 去重插入、补齐缺少的资源文件、设置按 patch 合并）
 //! 与覆盖（热替换数据库、资源目录和设置）。覆盖前先在暂存副本上跑完迁移，失败时当前数据原样保留。
+//! 两种都可以不导入设置。
 //!
 //! 系统「打开文件」、拖入文件、偏好窗口的接收事件都归宿主；这里提供 [`inspect_backup_file`]、
 //! [`is_backup_path`] 与 [`backup_path_from_args`] 给宿主识别备份文件。
@@ -37,6 +41,7 @@ use crate::disk::dir_size;
 use crate::env::AppInfo;
 use crate::error::{AppError, Result};
 use crate::events::CoreEvent;
+use crate::i18n::commands::{label, Key};
 use crate::paths::CorePaths;
 use crate::root::{Core, CoreInner};
 use crate::settings::SettingsDelta;
@@ -76,6 +81,24 @@ const SQLITE_SIDECARS: [&str; 2] = ["-wal", "-shm"];
 pub struct ExportHistoryBackupOptions {
     pub mode: BackupExportMode,
     pub password: Option<String>,
+    #[serde(default)]
+    pub scope: BackupScope,
+}
+
+/// 备份里放哪些记录。默认是全部；只要收藏或指定分组时导出部分备份。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupScope {
+    pub favorites_only: bool,
+    /// `None` 为全部分组；`Some` 为指定分组，未分组的记录由 `include_ungrouped` 决定。
+    pub group_ids: Option<Vec<String>>,
+    pub include_ungrouped: bool,
+}
+
+impl BackupScope {
+    pub fn is_all(&self) -> bool {
+        !self.favorites_only && self.group_ids.is_none()
+    }
 }
 
 /// 要导入的备份文件；加密备份必须带密码，明文备份不能带密码。
@@ -84,6 +107,13 @@ pub struct ExportHistoryBackupOptions {
 pub struct ImportHistoryBackupInput {
     pub path: PathBuf,
     pub password: Option<String>,
+    /// 关掉时只导入记录，当前设置不动。
+    #[serde(default = "import_settings_default")]
+    pub import_settings: bool,
+}
+
+fn import_settings_default() -> bool {
+    true
 }
 
 impl fmt::Debug for ExportHistoryBackupOptions {
@@ -91,6 +121,7 @@ impl fmt::Debug for ExportHistoryBackupOptions {
         f.debug_struct("ExportHistoryBackupOptions")
             .field("mode", &self.mode)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("scope", &self.scope)
             .finish()
     }
 }
@@ -100,6 +131,7 @@ impl fmt::Debug for ImportHistoryBackupInput {
         f.debug_struct("ImportHistoryBackupInput")
             .field("path", &self.path)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("import_settings", &self.import_settings)
             .finish()
     }
 }
@@ -191,6 +223,9 @@ struct BackupManifest {
     image_count: i64,
     files_count: i64,
     resource_bytes: u64,
+    /// 只在部分备份里出现；导入时据此拒绝覆盖。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<BackupScope>,
 }
 
 #[derive(Debug, Serialize)]
@@ -253,18 +288,31 @@ async fn export_history_backup(
     let password = validate_password_options(&options)?;
     let exported_at = Utc::now();
     let pool = core.db.pool().await;
-    let counts = load_counts(&pool).await?;
-    let source_paths = backup_source_paths(&core.paths)?;
+    // 部分备份的源文件在临时目录里，打包完才能删。
+    let mut _staged = None;
+    let (source_paths, counts) = if options.scope.is_all() {
+        let counts = load_counts(&pool).await?;
+        checkpoint_database(&pool).await?;
+        (backup_source_paths(&core.paths)?, counts)
+    } else {
+        let (staged, counts) = stage_scoped_source(core, &pool, &options.scope).await?;
+        let paths = BackupSourcePaths {
+            db_path: staged.path().join(DB_FILENAME),
+            resources_dir: staged.path().join(RESOURCES_ARCHIVE_DIR),
+            settings_path: staged.path().join(SETTINGS_FILENAME),
+        };
+        _staged = Some(staged);
+        (paths, counts)
+    };
     let resource_bytes = dir_size(&source_paths.resources_dir)?;
-    let manifest = build_manifest(
+    let mut manifest = build_manifest(
         &core.info,
         exported_at,
         options.mode,
         counts,
         resource_bytes,
     );
-
-    checkpoint_database(&pool).await?;
+    manifest.scope = (!options.scope.is_all()).then(|| options.scope.clone());
 
     let mode = options.mode;
     let written_to = target.clone();
@@ -296,7 +344,11 @@ async fn import_history_backup(
 ) -> Result<ImportHistoryBackupResult> {
     validate_import_input(&input)?;
 
-    let ImportHistoryBackupInput { path, password } = input;
+    let ImportHistoryBackupInput {
+        path,
+        password,
+        import_settings,
+    } = input;
     let password = password.map(Zeroizing::new);
     let temp = blocking(move || {
         ensure_backup_extension(&path)?;
@@ -308,9 +360,20 @@ async fn import_history_backup(
     .await?;
 
     match strategy {
-        BackupImportStrategy::Merge => merge_import(core, temp.path()).await,
-        BackupImportStrategy::Overwrite => overwrite_import(core, temp.path()).await,
+        BackupImportStrategy::Merge => merge_import(core, temp.path(), import_settings).await,
+        BackupImportStrategy::Overwrite => {
+            if is_partial_backup(temp.path())? {
+                return app_error(label(core.language(), Key::BackupPartialOverwrite));
+            }
+            overwrite_import(core, temp.path(), import_settings).await
+        }
     }
+}
+
+/// manifest 里带 `scope` 的是部分备份。1.x 与更早的 2.0 写出的备份没有这个字段，都是整库。
+fn is_partial_backup(root: &Path) -> Result<bool> {
+    let manifest = read_json_file(&root.join(MANIFEST_FILENAME))?;
+    Ok(manifest.get("scope").is_some_and(|scope| !scope.is_null()))
 }
 
 /// 识别 `.kwikpastebak` 文件头并返回容器模式；不解密、不导入。
@@ -476,6 +539,7 @@ fn build_manifest(
         image_count: counts.image_count,
         files_count: counts.files_count,
         resource_bytes,
+        scope: None,
     }
 }
 
@@ -494,6 +558,156 @@ fn backup_source_paths(paths: &CorePaths) -> Result<BackupSourcePaths> {
         resources_dir: paths.resources_dir()?,
         settings_path: paths.config_dir()?.join(SETTINGS_FILENAME),
     })
+}
+
+/// 在临时目录里摆出部分备份的源文件：裁剪到 `scope` 的库、这些记录引用的图片与来源应用图标，
+/// 以及空设置。布局与 [`BackupSourcePaths`] 对应：`clipboard.db`、`resources/`、`settings.json`。
+async fn stage_scoped_source(
+    core: &CoreInner,
+    pool: &SqlitePool,
+    scope: &BackupScope,
+) -> Result<(TempDir, BackupCounts)> {
+    let lang = core.language();
+    if scope.group_ids.as_ref().is_some_and(Vec::is_empty) && !scope.include_ungrouped {
+        return app_error(label(lang, Key::ExportNoGroups));
+    }
+
+    let staged = tempfile::tempdir().context("failed to create partial backup directory")?;
+    let db_path = staged.path().join(DB_FILENAME);
+    sqlx::query("VACUUM INTO ?")
+        .bind(db_path.to_string_lossy().into_owned())
+        .execute(pool)
+        .await
+        .context("failed to copy the database for a partial backup")?;
+
+    let copy = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&db_path)
+                .journal_mode(SqliteJournalMode::Wal)
+                .foreign_keys(true)
+                .disable_statement_logging(),
+        )
+        .await
+        .context("failed to open the partial backup database")?;
+    let pruned = async {
+        prune_to_scope(&copy, scope).await?;
+        let counts = load_counts(&copy).await?;
+        let images = sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT content FROM clipboard_items WHERE kind = 'image'",
+        )
+        .fetch_all(&copy)
+        .await
+        .context("failed to read partial backup images")?;
+        let app_icons = sqlx::query_scalar::<_, String>(
+            "SELECT icon_file FROM clipboard_apps WHERE icon_file IS NOT NULL",
+        )
+        .fetch_all(&copy)
+        .await
+        .context("failed to read partial backup app icons")?;
+        checkpoint_database(&copy).await?;
+        Ok::<_, AppError>((counts, images, app_icons))
+    }
+    .await;
+    copy.close().await;
+    let (counts, images, app_icons) = pruned?;
+    if counts.item_count == 0 {
+        return app_error(label(lang, Key::ExportEmpty));
+    }
+
+    let resources_dir = core.paths.resources_dir()?;
+    let files: Vec<PathBuf> = images
+        .iter()
+        .flat_map(|name| {
+            [
+                core.images.origin_path(name),
+                core.images.thumbnail_path(name),
+            ]
+        })
+        .chain(
+            app_icons
+                .iter()
+                .filter(|name| is_plain_file_name(name))
+                .map(|name| core.app_icons.icon_path(name)),
+        )
+        .collect();
+    let staged_resources = staged.path().join(RESOURCES_ARCHIVE_DIR);
+    let staged_settings = staged.path().join(SETTINGS_FILENAME);
+    blocking(move || {
+        fs::write(&staged_settings, b"{}")
+            .with_context(|| format!("failed to write {staged_settings:?}"))?;
+        fs::create_dir_all(&staged_resources)
+            .with_context(|| format!("failed to create {staged_resources:?}"))?;
+        for file in files {
+            let Ok(relative) = file.strip_prefix(&resources_dir) else {
+                continue;
+            };
+            if file.is_file() {
+                link_or_copy(&file, &staged_resources.join(relative))?;
+            }
+        }
+        Ok(())
+    })
+    .await?;
+
+    Ok((staged, counts))
+}
+
+/// 删掉范围外的记录，以及不再被引用的分组、来源应用和全部文件类型图标（缓存，键里可能有完整路径）。
+/// 全文索引整个重建、库再 VACUUM 一遍：删掉的内容不能留在索引段或空闲页里被带出去。
+async fn prune_to_scope(pool: &SqlitePool, scope: &BackupScope) -> Result<()> {
+    let group_ids = serde_json::to_string(scope.group_ids.as_deref().unwrap_or_default())
+        .context("failed to serialize backup groups")?;
+    sqlx::query(
+        "DELETE FROM clipboard_items WHERE NOT ( \
+           (? = 0 OR is_favorite = 1) \
+           AND (? = 0 OR CASE WHEN group_id IS NULL THEN ? = 1 \
+                ELSE group_id IN (SELECT value FROM json_each(?)) END))",
+    )
+    .bind(scope.favorites_only)
+    .bind(scope.group_ids.is_some())
+    .bind(scope.include_ungrouped)
+    .bind(group_ids)
+    .execute(pool)
+    .await
+    .context("failed to prune partial backup items")?;
+
+    for statement in [
+        "DELETE FROM clipboard_groups WHERE id NOT IN \
+         (SELECT group_id FROM clipboard_items WHERE group_id IS NOT NULL)",
+        "DELETE FROM clipboard_apps WHERE id NOT IN \
+         (SELECT source_app_id FROM clipboard_items WHERE source_app_id IS NOT NULL)",
+        "DELETE FROM file_type_icons",
+        "INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES ('rebuild')",
+        "VACUUM",
+    ] {
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .with_context(|| format!("failed to prune partial backup: {statement}"))?;
+    }
+
+    Ok(())
+}
+
+/// 单层文件名：来源应用图标的名字来自库里，拼路径前挡掉分隔符和 `..`。
+fn is_plain_file_name(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
+}
+
+/// 资源文件按内容命名、写下后不再改：能硬链接就不复制，跨盘时退回复制。
+fn link_or_copy(src: &Path, dst: &Path) -> Result<()> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("failed to create {parent:?}"))?;
+    }
+    if fs::hard_link(src, dst).is_ok() {
+        return Ok(());
+    }
+    fs::copy(src, dst).with_context(|| format!("failed to copy {src:?} to {dst:?}"))?;
+
+    Ok(())
 }
 
 fn write_payload_zip(
@@ -937,7 +1151,11 @@ fn read_container_header_after_magic<R: Read>(reader: &mut R) -> Result<Containe
     Ok(header)
 }
 
-async fn merge_import(core: &CoreInner, root: &Path) -> Result<ImportHistoryBackupResult> {
+async fn merge_import(
+    core: &CoreInner,
+    root: &Path,
+    import_settings: bool,
+) -> Result<ImportHistoryBackupResult> {
     let pool = core.db.pool().await;
     let db_path = root.join(DB_ARCHIVE_DIR).join(DB_FILENAME);
     let backup_pool = open_backup_db(&db_path).await?;
@@ -952,26 +1170,42 @@ async fn merge_import(core: &CoreInner, root: &Path) -> Result<ImportHistoryBack
     refresh_apps_registry(core).await;
     core.events.emit(CoreEvent::ClipboardReloaded);
 
-    let settings_path = root.join(CONFIG_ARCHIVE_DIR).join(SETTINGS_FILENAME);
-    let patch = read_json_file(&settings_path)?;
-    let delta = SettingsDelta::from_patch(&patch);
-    let next = core.settings.update(patch)?;
-    apply_imported_settings(core, next, delta);
+    let mut imported_settings = false;
+    if import_settings {
+        let settings_path = root.join(CONFIG_ARCHIVE_DIR).join(SETTINGS_FILENAME);
+        let patch = read_json_file(&settings_path)?;
+        // 部分备份的设置是 `{}`：没有可合并的，也就不用通知宿主重新应用。
+        if patch.as_object().is_none_or(|object| !object.is_empty()) {
+            let delta = SettingsDelta::from_patch(&patch);
+            let next = core.settings.update(patch)?;
+            apply_imported_settings(core, next, delta);
+            imported_settings = true;
+        }
+    }
 
     Ok(ImportHistoryBackupResult {
         strategy: BackupImportStrategy::Merge,
         imported_items: outcome.imported_items,
         skipped_items: outcome.skipped_items,
         imported_resources,
-        imported_settings: true,
+        imported_settings,
         requires_restart: false,
     })
 }
 
-async fn overwrite_import(core: &CoreInner, root: &Path) -> Result<ImportHistoryBackupResult> {
+async fn overwrite_import(
+    core: &CoreInner,
+    root: &Path,
+    import_settings: bool,
+) -> Result<ImportHistoryBackupResult> {
     // 设置先读进来校验：读不懂就什么都不动，避免换了库却换不了设置。
-    let settings =
-        crate::settings::read_replacement(&root.join(CONFIG_ARCHIVE_DIR).join(SETTINGS_FILENAME))?;
+    let settings = if import_settings {
+        Some(crate::settings::read_replacement(
+            &root.join(CONFIG_ARCHIVE_DIR).join(SETTINGS_FILENAME),
+        )?)
+    } else {
+        None
+    };
 
     {
         // 先停新的采集，再等在途的入库与清理结束，换库期间没有人写库或删图片文件。
@@ -1003,15 +1237,18 @@ async fn overwrite_import(core: &CoreInner, root: &Path) -> Result<ImportHistory
         core.events.emit(CoreEvent::ClipboardReloaded);
     }
 
-    let next = core.settings.replace(settings)?;
-    apply_imported_settings(core, next, SettingsDelta::replaced());
+    let imported_settings = settings.is_some();
+    if let Some(settings) = settings {
+        let next = core.settings.replace(settings)?;
+        apply_imported_settings(core, next, SettingsDelta::replaced());
+    }
 
     Ok(ImportHistoryBackupResult {
         strategy: BackupImportStrategy::Overwrite,
         imported_items: 0,
         skipped_items: 0,
         imported_resources: 0,
-        imported_settings: true,
+        imported_settings,
         requires_restart: false,
     })
 }

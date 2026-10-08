@@ -7,7 +7,7 @@ use gpui::{
 };
 use kwikpaste_core::{
     CoreEvent, app_ids,
-    backup::{self, BackupContainerMode, BackupExportMode, BackupImportStrategy},
+    backup::{self, BackupContainerMode, BackupExportMode, BackupImportStrategy, BackupScope},
     db::overview::{ClearScope, ContentCategory},
     ops::{PreferenceDirectory, StorageOverview},
     readable_export::{ExportFormat, ExportOptions, ExportPreview},
@@ -1956,10 +1956,15 @@ impl Preferences {
         };
         let dialog = cx.new(|cx| ExportDialog::new(kind, core.clone(), window, cx));
         let readable = dialog.read(cx).readable.downgrade();
+        let backup_dialog = dialog.downgrade();
         let groups_core = core.clone();
         window
             .spawn(cx, async move |cx| match groups_core.list_groups().await {
                 Ok(groups) => {
+                    let _ = backup_dialog.update(cx, |dialog, cx| {
+                        dialog.groups = groups.clone();
+                        cx.notify();
+                    });
                     let _ = readable.update(cx, |dialog, cx| {
                         dialog.groups = groups;
                         dialog.groups_ready = true;
@@ -2048,13 +2053,16 @@ impl Preferences {
             window,
             cx,
         );
+        let import_settings = Rc::new(Cell::new(true));
         let password_for_content = password.clone();
         let strategy_for_content = strategy.clone();
+        let settings_for_content = import_settings.clone();
         let answer = form_dialog(
             DialogSpec::new(i18n::t("preferences:backup.import.title"))
                 .ok_text(i18n::t("preferences:backup.import.ok"))
                 .cancel_text(i18n::t("common:actions.cancel")),
             move |_, _cx| {
+                let settings_flag = settings_for_content.clone();
                 div()
                     .flex()
                     .flex_col()
@@ -2072,6 +2080,15 @@ impl Preferences {
                         Select::new(&strategy_for_content)
                             .width(rems(16.))
                             .accessibility_label(i18n::t("preferences:backup.import.strategy")),
+                    )
+                    .child(
+                        Checkbox::new("backup-import-settings")
+                            .label(i18n::t("preferences:backup.import.importSettings"))
+                            .checked(settings_flag.get())
+                            .on_change(move |checked, window, _| {
+                                settings_flag.set(checked);
+                                window.refresh();
+                            }),
                     )
                     .into_any_element()
             },
@@ -2098,24 +2115,49 @@ impl Preferences {
                 } else {
                     BackupImportStrategy::Merge
                 };
-                match core
+                let result = core
                     .import_history_backup(
                         backup::ImportHistoryBackupInput {
                             path: path.clone(),
                             password: (!password.is_empty()).then_some(password),
+                            import_settings: import_settings.get(),
                         },
                         strategy,
                     )
-                    .await
-                {
-                    Ok(result) => log::info!(
-                        "history backup imported: {} items, {} skipped, restart_required={}",
-                        result.imported_items,
-                        result.skipped_items,
-                        result.requires_restart
-                    ),
-                    Err(error) => log::warn!("history backup import failed: {error:#}"),
-                }
+                    .await;
+                let message = match result {
+                    Ok(result) => {
+                        log::info!(
+                            "history backup imported: {} items, {} skipped, restart_required={}",
+                            result.imported_items,
+                            result.skipped_items,
+                            result.requires_restart
+                        );
+                        Toast::success(match result.strategy {
+                            BackupImportStrategy::Merge => i18n::t_args(
+                                "commands:messages.backupImported",
+                                &[
+                                    ("imported", &result.imported_items.to_string()),
+                                    ("skipped", &result.skipped_items.to_string()),
+                                ],
+                            ),
+                            BackupImportStrategy::Overwrite => {
+                                i18n::t("commands:messages.backupOverwriteImported")
+                            }
+                        })
+                    }
+                    Err(error) => {
+                        log::warn!("history backup import failed: {error:#}");
+                        Toast::error(i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.importBackup")),
+                                ("message", &error.to_string()),
+                            ],
+                        ))
+                    }
+                };
+                let _ = cx.update(|window, cx| toast::show(message, window, cx));
             })
             .detach();
     }
@@ -2590,6 +2632,14 @@ enum ExportKind {
     Readable,
 }
 
+/// 备份包里放哪些记录：全部、只要收藏，或指定分组。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackupRange {
+    All,
+    Favorites,
+    Groups,
+}
+
 /// 备份密码的最短长度，与 core 导出时的校验一致。
 const BACKUP_PASSWORD_MIN_CHARS: usize = 8;
 
@@ -2598,6 +2648,10 @@ struct ExportDialog {
     kind: ExportKind,
     backup_mode: SelectState,
     password: TextInput,
+    backup_range: BackupRange,
+    backup_group_ids: Vec<String>,
+    backup_include_ungrouped: bool,
+    groups: Vec<kwikpaste_core::db::models::ClipboardGroup>,
     readable: gpui::Entity<ReadableExportDialog>,
     _subscriptions: Vec<Subscription>,
 }
@@ -2627,6 +2681,10 @@ impl ExportDialog {
             kind,
             backup_mode,
             password: TextInput::new(i18n::t("preferences:backup.export.passwordMin"), window, cx),
+            backup_range: BackupRange::All,
+            backup_group_ids: Vec::new(),
+            backup_include_ungrouped: false,
+            groups: Vec::new(),
             readable: cx.new(|cx| ReadableExportDialog::new(core, window, cx)),
             _subscriptions: vec![mode_subscription],
         }
@@ -2638,10 +2696,31 @@ impl ExportDialog {
             .is_none_or(|mode| mode != "plain")
     }
 
+    fn backup_scope(&self) -> BackupScope {
+        match self.backup_range {
+            BackupRange::All => BackupScope::default(),
+            BackupRange::Favorites => BackupScope {
+                favorites_only: true,
+                ..BackupScope::default()
+            },
+            BackupRange::Groups => BackupScope {
+                favorites_only: false,
+                group_ids: Some(self.backup_group_ids.clone()),
+                include_ungrouped: self.backup_include_ungrouped,
+            },
+        }
+    }
+
     /// 点导出前的校验：返回要提示的错误，`None` 表示可以导出。
     fn validation_error(&self, cx: &App) -> Option<gpui::SharedString> {
         match self.kind {
             ExportKind::Backup => {
+                if self.backup_range == BackupRange::Groups
+                    && self.backup_group_ids.is_empty()
+                    && !self.backup_include_ungrouped
+                {
+                    return Some(i18n::t("preferences:readableExport.noGroups"));
+                }
                 if !self.backup_encrypted(cx) {
                     return None;
                 }
@@ -2663,6 +2742,91 @@ impl ExportDialog {
                 (!valid).then(|| i18n::t("preferences:readableExport.previewRequired"))
             }
         }
+    }
+
+    /// 备份范围：分段切换全部 / 仅收藏 / 指定分组，选指定分组时下面列出分组勾选框。
+    fn render_backup_range(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let tokens = theme::semantic(cx);
+        let entity = cx.entity().downgrade();
+        let ranges = div()
+            .flex()
+            .flex_none()
+            .gap(space(0.5))
+            .p(space(0.5))
+            .rounded(theme::radius::MD)
+            .bg(tokens.fill.subtle)
+            .children(
+                [
+                    (
+                        BackupRange::All,
+                        "backup-range-all",
+                        "preferences:readableExport.allRecords",
+                    ),
+                    (
+                        BackupRange::Favorites,
+                        "backup-range-favorites",
+                        "preferences:readableExport.favorites",
+                    ),
+                    (
+                        BackupRange::Groups,
+                        "backup-range-groups",
+                        "preferences:readableExport.selectedGroups",
+                    ),
+                ]
+                .map(|(range, id, key)| {
+                    segment(id, i18n::t(key), self.backup_range == range, cx).on_click(cx.listener(
+                        move |dialog, _, _, cx| {
+                            if dialog.backup_range != range {
+                                dialog.backup_range = range;
+                                cx.notify();
+                            }
+                        },
+                    ))
+                }),
+            );
+        let groups = (self.backup_range == BackupRange::Groups).then(|| {
+            let rows = self.groups.iter().map(|group| {
+                let id = group.id.clone();
+                let entity = entity.clone();
+                Checkbox::new(format!("backup-group-{id}"))
+                    .label(group.name.clone())
+                    .checked(self.backup_group_ids.contains(&id))
+                    .on_change(move |checked, _, cx| {
+                        if let Some(entity) = entity.upgrade() {
+                            entity.update(cx, |dialog, cx| {
+                                dialog.backup_group_ids.retain(|value| value != &id);
+                                if checked {
+                                    dialog.backup_group_ids.push(id.clone());
+                                }
+                                cx.notify();
+                            });
+                        }
+                    })
+            });
+            div().flex().flex_col().gap(space(1.)).children(rows).child(
+                Checkbox::new("backup-ungrouped")
+                    .label(i18n::t("preferences:readableExport.ungrouped"))
+                    .checked(self.backup_include_ungrouped)
+                    .on_change(move |checked, _, cx| {
+                        if let Some(entity) = entity.upgrade() {
+                            entity.update(cx, |dialog, cx| {
+                                dialog.backup_include_ungrouped = checked;
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
+        });
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(space(2.))
+            .child(div().flex().child(ranges))
+            .when_some(groups, |field, rows| {
+                field.child(list_tile(tokens).px(space(3.)).py(space(2.5)).child(rows))
+            })
+            .into_any_element()
     }
 }
 
@@ -2696,9 +2860,12 @@ impl Render for ExportDialog {
                     },
                 ))
             }));
-        let hint = match self.kind {
-            ExportKind::Backup => i18n::t("preferences:backup.export.kindBackupHint"),
-            ExportKind::Readable => i18n::t("preferences:readableExport.notBackup"),
+        let hint = match (self.kind, self.backup_range) {
+            (ExportKind::Backup, BackupRange::All) => {
+                i18n::t("preferences:backup.export.kindBackupHint")
+            }
+            (ExportKind::Backup, _) => i18n::t("preferences:backup.export.partialHint"),
+            (ExportKind::Readable, _) => i18n::t("preferences:readableExport.notBackup"),
         };
         let body = match self.kind {
             ExportKind::Backup => div()
@@ -2706,6 +2873,11 @@ impl Render for ExportDialog {
                 .flex_col()
                 .gap(space(4.))
                 .pb(space(1.))
+                .child(form_field(
+                    i18n::t("preferences:backup.export.scope"),
+                    self.render_backup_range(cx),
+                    tokens,
+                ))
                 .child(form_field(
                     i18n::t("preferences:backup.export.mode"),
                     div()
@@ -2776,20 +2948,26 @@ async fn export_backup_file(
     dialog: gpui::Entity<ExportDialog>,
     cx: &mut gpui::AsyncWindowContext,
 ) {
-    let Ok((encrypted, password)) = cx.update(|_, cx| {
+    let Ok((encrypted, password, scope)) = cx.update(|_, cx| {
         let dialog = dialog.read(cx);
         (
             dialog.backup_encrypted(cx),
             dialog.password.value(cx).to_string(),
+            dialog.backup_scope(),
         )
     }) else {
         return;
+    };
+    let name = if scope.favorites_only {
+        "KwikPaste-favorites.kwikpastebak"
+    } else {
+        "KwikPaste-history.kwikpastebak"
     };
     let Ok(prompt) = cx.update(|_, cx| {
         let directory = core
             .preference_directory(PreferenceDirectory::Data)
             .unwrap_or_else(|_| std::env::temp_dir());
-        clipboard::view::pin::prompt_for_new_path(&directory, "KwikPaste-history.kwikpastebak", cx)
+        clipboard::view::pin::prompt_for_new_path(&directory, name, cx)
     }) else {
         log::warn!("could not open backup save dialog");
         return;
@@ -2805,11 +2983,31 @@ async fn export_backup_file(
             BackupExportMode::Plain
         },
         password: encrypted.then_some(password),
+        scope,
     };
-    match core.export_history_backup(path, options).await {
-        Ok(result) => log::info!("history backup exported: {}", result.path),
-        Err(error) => log::warn!("history backup export failed: {error:#}"),
-    }
+    let message = match core.export_history_backup(path, options).await {
+        Ok(result) => {
+            log::info!("history backup exported: {}", result.path);
+            Toast::success(i18n::t_args(
+                "commands:messages.backupExported",
+                &[
+                    ("count", &result.item_count.to_string()),
+                    ("size", &text::format_bytes(result.total_bytes)),
+                ],
+            ))
+        }
+        Err(error) => {
+            log::warn!("history backup export failed: {error:#}");
+            Toast::error(i18n::t_args(
+                "commands:error",
+                &[
+                    ("label", &i18n::t("commands:labels.exportBackup")),
+                    ("message", &error.to_string()),
+                ],
+            ))
+        }
+    };
+    let _ = cx.update(|window, cx| toast::show(message, window, cx));
 }
 
 /// 按弹框里预览过的选项导出 Excel / Markdown：按分组拆分时选目录，否则选文件。

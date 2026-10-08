@@ -168,6 +168,7 @@ fn payload_zip_contains_only_backup_whitelist() {
         image_count: 0,
         files_count: 0,
         resource_bytes: 5,
+        scope: None,
     };
     let source_paths = BackupSourcePaths {
         db_path: root.join("clipboard.db"),
@@ -327,6 +328,7 @@ fn input(path: &Path, password: Option<&str>) -> ImportHistoryBackupInput {
     ImportHistoryBackupInput {
         path: path.to_path_buf(),
         password: password.map(str::to_owned),
+        import_settings: true,
     }
 }
 
@@ -334,6 +336,7 @@ fn input(path: &Path, password: Option<&str>) -> ImportHistoryBackupInput {
 struct Source {
     fixture: Fixture,
     core: Core,
+    image_id: String,
     image_file: String,
 }
 
@@ -360,6 +363,7 @@ fn source() -> Source {
     Source {
         fixture,
         core,
+        image_id,
         image_file,
     }
 }
@@ -371,6 +375,7 @@ fn export(source: &Source, mode: BackupExportMode, password: Option<&str>) -> Pa
         ExportHistoryBackupOptions {
             mode,
             password: password.map(str::to_owned),
+            scope: BackupScope::default(),
         },
     ))
     .unwrap();
@@ -513,6 +518,229 @@ fn encrypted_export_overwrites_another_instance() {
 }
 
 #[test]
+fn merge_can_leave_settings_alone() {
+    let source = source();
+    let backup = export(&source, BackupExportMode::Plain, None);
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    fixture.take_events();
+    let result = block_on(core.import_history_backup(
+        ImportHistoryBackupInput {
+            import_settings: false,
+            ..input(&backup, None)
+        },
+        BackupImportStrategy::Merge,
+    ))
+    .unwrap();
+
+    assert_eq!(result.imported_items, 3);
+    assert!(!result.imported_settings);
+    assert_eq!(core.settings().appearance.theme, Theme::default());
+    assert!(!fixture
+        .take_events()
+        .iter()
+        .any(|event| matches!(event, CoreEvent::SettingsUpdated { .. })));
+    block_on(core.shutdown()).unwrap();
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[test]
+fn overwrite_can_leave_settings_alone() {
+    let source = source();
+    let backup = export(&source, BackupExportMode::Plain, None);
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    store(&core, text("replaced"));
+    let result = block_on(core.import_history_backup(
+        ImportHistoryBackupInput {
+            import_settings: false,
+            ..input(&backup, None)
+        },
+        BackupImportStrategy::Overwrite,
+    ))
+    .unwrap();
+
+    assert!(!result.imported_settings);
+    assert_eq!(contents(&core), ["only in the backup", "shared text"]);
+    assert_eq!(core.settings().appearance.theme, Theme::default());
+    block_on(core.shutdown()).unwrap();
+    block_on(source.core.shutdown()).unwrap();
+}
+
+fn export_scoped(
+    source: &Source,
+    name: &str,
+    scope: BackupScope,
+) -> Result<ExportHistoryBackupResult> {
+    block_on(source.core.export_history_backup(
+        source.fixture.root().join("exports").join(name),
+        ExportHistoryBackupOptions {
+            mode: BackupExportMode::Plain,
+            password: None,
+            scope,
+        },
+    ))
+}
+
+fn favorites() -> BackupScope {
+    BackupScope {
+        favorites_only: true,
+        ..BackupScope::default()
+    }
+}
+
+/// 只导出收藏：别的记录、它们的分组和设置都不进备份，删掉的内容也不留在库文件或全文索引里。
+#[test]
+fn favorites_backup_carries_only_favorites() {
+    let source = source();
+    block_on(source.core.toggle_favorite(&source.image_id)).unwrap();
+    store(&source.core, text("ungrouped secret note"));
+
+    let result = export_scoped(&source, "favorites", favorites()).unwrap();
+    assert_eq!(result.item_count, 2);
+    assert_eq!((result.text_count, result.image_count), (1, 1));
+
+    let backup = PathBuf::from(&result.path);
+    let extracted = extract_payload_zip(&fs::read(&backup).unwrap()).unwrap();
+    let manifest = read_json_file(&extracted.path().join(MANIFEST_FILENAME)).unwrap();
+    assert_eq!(manifest["scope"]["favoritesOnly"], json!(true));
+    assert_eq!(
+        read_json_file(&extracted.path().join("config").join("settings.json")).unwrap(),
+        json!({})
+    );
+    let db_bytes = fs::read(extracted.path().join("db").join(DB_FILENAME)).unwrap();
+    for removed in ["only in the backup", "ungrouped secret note"] {
+        assert!(
+            !db_bytes
+                .windows(removed.len())
+                .any(|window| window == removed.as_bytes()),
+            "{removed:?} left in the partial backup database"
+        );
+    }
+    let rt = crate::runtime::CoreRuntime::new().unwrap();
+    let fts_hits: i64 = rt.handle().block_on(async {
+        let pool = open_backup_db(&extracted.path().join("db").join(DB_FILENAME))
+            .await
+            .unwrap();
+        let hits = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM clipboard_items_fts WHERE clipboard_items_fts MATCH 'secret'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+        hits
+    });
+    assert_eq!(fts_hits, 0);
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    store(&core, text("local only"));
+    let imported =
+        block_on(core.import_history_backup(input(&backup, None), BackupImportStrategy::Merge))
+            .unwrap();
+
+    assert_eq!(imported.imported_items, 2);
+    assert!(!imported.imported_settings);
+    assert_eq!(contents(&core), ["local only", "shared text"]);
+    assert!(core
+        .image_origin_path(&source.image_file)
+        .unwrap()
+        .is_file());
+    assert_eq!(block_on(core.list_groups()).unwrap().len(), 1);
+    assert_eq!(core.settings().appearance.theme, Theme::default());
+    block_on(core.shutdown()).unwrap();
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[test]
+fn group_backup_keeps_only_the_chosen_groups() {
+    let source = source();
+    let group_id = block_on(source.core.list_groups()).unwrap()[0].id.clone();
+
+    let only_group = export_scoped(
+        &source,
+        "work",
+        BackupScope {
+            group_ids: Some(vec![group_id]),
+            ..BackupScope::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(only_group.item_count, 1);
+    let ungrouped = export_scoped(
+        &source,
+        "ungrouped",
+        BackupScope {
+            group_ids: Some(Vec::new()),
+            include_ungrouped: true,
+            ..BackupScope::default()
+        },
+    )
+    .unwrap();
+    assert_eq!((ungrouped.text_count, ungrouped.image_count), (1, 1));
+
+    let nothing = export_scoped(
+        &source,
+        "nothing",
+        BackupScope {
+            group_ids: Some(Vec::new()),
+            ..BackupScope::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(nothing.to_string(), "请选择至少一个分组或未分组");
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[test]
+fn favorites_backup_without_favorites_is_refused() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    store(&core, text("not a favorite"));
+    let target = fixture.root().join("empty.kwikpastebak");
+
+    let err = block_on(core.export_history_backup(
+        target.clone(),
+        ExportHistoryBackupOptions {
+            mode: BackupExportMode::Plain,
+            password: None,
+            scope: favorites(),
+        },
+    ))
+    .unwrap_err();
+
+    assert_eq!(err.to_string(), "所选范围没有可导出的记录");
+    assert!(!target.exists());
+    block_on(core.shutdown()).unwrap();
+}
+
+/// 部分备份不能覆盖导入：那会把范围外的记录全丢掉。
+#[test]
+fn partial_backup_refuses_overwrite() {
+    let source = source();
+    let backup = PathBuf::from(
+        export_scoped(&source, "favorites", favorites())
+            .unwrap()
+            .path,
+    );
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    store(&core, text("must survive"));
+    let err =
+        block_on(core.import_history_backup(input(&backup, None), BackupImportStrategy::Overwrite))
+            .unwrap_err();
+
+    assert_eq!(err.to_string(), "这个备份只包含部分记录，请用合并导入");
+    assert_eq!(contents(&core), ["must survive"]);
+    block_on(core.shutdown()).unwrap();
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[test]
 fn export_validates_password_and_target() {
     let fixture = Fixture::new();
     let core = fixture.start();
@@ -523,6 +751,7 @@ fn export_validates_password_and_target() {
             ExportHistoryBackupOptions {
                 mode,
                 password: password.map(str::to_owned),
+                scope: BackupScope::default(),
             },
         ))
         .map(|_| ())
@@ -575,6 +804,7 @@ fn passwords_never_show_up_in_debug_output() {
     let options = ExportHistoryBackupOptions {
         mode: BackupExportMode::Encrypted,
         password: Some(PASSWORD.to_owned()),
+        scope: BackupScope::default(),
     };
     let input = input(Path::new("a.kwikpastebak"), Some(PASSWORD));
 
@@ -634,6 +864,7 @@ where
         image_count: 0,
         files_count: 0,
         resource_bytes: 0,
+        scope: None,
     };
     let target = dir.join("crafted.kwikpastebak");
     let payload = dir.join("payload.zip");
@@ -766,6 +997,7 @@ fn overwrite_with_unreadable_settings_changes_nothing() {
             image_count: 0,
             files_count: 0,
             resource_bytes: 0,
+            scope: None,
         },
         &broken,
     )
@@ -911,6 +1143,7 @@ fn export_samples_for_v1() {
             ExportHistoryBackupOptions {
                 mode,
                 password: password.map(str::to_owned),
+                scope: BackupScope::default(),
             },
         ))
         .unwrap();
