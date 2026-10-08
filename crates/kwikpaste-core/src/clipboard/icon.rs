@@ -1,7 +1,13 @@
 //! 跨平台从「任意文件路径」抽取图标，落地为 PNG 字节。
-//! macOS 走 NSWorkspace.iconForFile，Windows 走 SHGetFileInfo，由 `file_icon_provider` 封装。
+//! macOS 走 NSWorkspace.iconForFile；Windows 的 Shell 路径由 `file_icon_provider` 封装，
+//! 配置宿主 helper 后在独立子进程中执行。
 
 use std::path::Path;
+
+#[cfg(target_os = "windows")]
+mod helper;
+#[cfg(target_os = "windows")]
+pub use helper::{run_helper, set_helper_exe};
 
 use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
 
@@ -51,7 +57,8 @@ pub fn get_icon_cache_key(path: &Path) -> String {
 /// 失败一律返回 `None`，由调用方决定回退。
 ///
 /// Windows 的 exe 先直接读图标资源：经 Shell 取图标会把 Shell 命名空间和它的图标缓存
-/// 留在进程里（实测常驻约 4.5 MB），直接读只多约 0.4 MB。读不到（没有图标资源等）再走 Shell。
+/// 留在进程里（实测常驻约 4.5 MB），直接读只多约 0.4 MB。读不到（没有图标资源等）再走
+/// helper；未配置 helper 的 core 使用者仍在当前进程内走 Shell。
 pub fn icon_png(path: &Path, size: Option<u32>) -> Option<Vec<u8>> {
     let size = size.unwrap_or(DEFAULT_ICON_PIXEL_SIZE);
     #[cfg(target_os = "windows")]
@@ -60,17 +67,31 @@ pub fn icon_png(path: &Path, size: Option<u32>) -> Option<Vec<u8>> {
     let direct = None;
     let icon = match direct {
         Some(icon) => icon,
-        None => match file_icon_provider::get_file_icon(path, size as u16) {
-            Ok(i) => i,
-            Err(err) => {
-                log::warn!(
-                    "icon_png: get_file_icon failed for {}: {err:?}",
-                    path.display()
-                );
-                return None;
+        None => {
+            #[cfg(target_os = "windows")]
+            if helper::HELPER_EXE.get().is_some() {
+                return helper::helper_icon_png(path, size);
             }
-        },
+            shell_icon(path, size)?
+        }
     };
+    encode_icon(icon, path, size)
+}
+
+fn shell_icon(path: &Path, size: u32) -> Option<file_icon_provider::Icon> {
+    match file_icon_provider::get_file_icon(path, size as u16) {
+        Ok(icon) => Some(icon),
+        Err(err) => {
+            log::warn!(
+                "icon_png: get_file_icon failed for {}: {err:?}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+fn encode_icon(icon: file_icon_provider::Icon, path: &Path, size: u32) -> Option<Vec<u8>> {
     // write_image 在缓冲长度与宽高对不上时会 panic；系统给的图标按理不会，这里先核对。
     let expected = u64::from(icon.width) * u64::from(icon.height) * 4;
     if icon.pixels.len() as u64 != expected {
@@ -83,7 +104,9 @@ pub fn icon_png(path: &Path, size: Option<u32>) -> Option<Vec<u8>> {
         );
         return None;
     }
-    let mut out = Vec::with_capacity((size * size * 4) as usize / 2);
+    let mut out = Vec::with_capacity(
+        (u64::from(size) * u64::from(size) * 4 / 2).min(16 * 1024 * 1024) as usize,
+    );
     let encoder = PngEncoder::new(&mut out);
     if let Err(err) = encoder.write_image(
         &icon.pixels,
@@ -284,6 +307,14 @@ mod windows_tests {
         assert!(alpha.contains(&0), "has transparent pixels");
         assert!(alpha.iter().any(|&value| value > 200), "has opaque pixels");
         assert!(exe_icon::extract(&Path::new(&system).join("win.ini"), 64).is_none());
+    }
+
+    #[test]
+    fn icon_png_uses_in_process_shell_without_helper_configuration() {
+        assert!(helper::HELPER_EXE.get().is_none());
+        let system = std::env::var_os("SystemRoot").expect("SystemRoot is set");
+        let path = Path::new(&system).join("win.ini");
+        assert!(icon_png(&path, Some(32)).is_some());
     }
 }
 
