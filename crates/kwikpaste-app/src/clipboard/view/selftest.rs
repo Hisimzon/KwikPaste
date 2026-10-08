@@ -1236,6 +1236,21 @@ impl Driver {
                 self.check("dragging a pinned card reorders in place", swapped, || {
                     "pinned order did not change".into()
                 });
+                // 夹具数据源带模拟延迟：先等它真正写入新顺序再重载，否则重载拿到旧顺序，
+                // 还会在下一个用例中途落地。
+                let store = self.store.clone();
+                let (first, second) = (expected_first.clone(), expected_second.clone());
+                self.settle(cx, move |_, _| {
+                    store.as_ref().is_some_and(|store| {
+                        store.lock().is_ok_and(|store| {
+                            store
+                                .index_of(&first)
+                                .zip(store.index_of(&second))
+                                .is_some_and(|(first, second)| first < second)
+                        })
+                    })
+                })
+                .await;
                 self.list.update(cx, |list, cx| list.reload(cx));
                 let expected_first = original_second.clone();
                 let expected_second = original_first.clone();
