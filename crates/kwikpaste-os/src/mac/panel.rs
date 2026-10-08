@@ -15,12 +15,16 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy,
     NSAutoresizingMaskOptions, NSEvent, NSEventMask, NSRunningApplication, NSScreen, NSView,
     NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
+    NSWindow, NSWindowButton, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
+    NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
 use crate::geometry::{Point, Rect, Size, follow_cursor};
 use kwikpaste_core::window_state::WindowGeometry;
+
+/// 材质（透明）面板的圆角，与 1.x 面板相同。
+const MATERIAL_CORNER_RADIUS: f64 = 16.;
 
 /// 切成不进 Dock、也不出现在 Cmd-Tab 中的辅助应用策略。
 pub fn set_dock_icon_visible(visible: bool) -> io::Result<()> {
@@ -75,6 +79,7 @@ impl Panel {
             .ok_or_else(|| io::Error::other("the panel view has no window"))?;
         let mask = window.styleMask() | NSWindowStyleMask::NonactivatingPanel;
         window.setStyleMask(mask | NSWindowStyleMask::Resizable);
+        hide_window_buttons(&window);
         window.setLevel(20);
         window.setCollectionBehavior(
             NSWindowCollectionBehavior::Stationary
@@ -95,6 +100,9 @@ impl Panel {
     }
 
     /// 在窗口下放置 AppKit 材质层；默认材质移除它并恢复不透明窗口。
+    ///
+    /// 不透明窗口由系统按窗口自己的圆角裁切，内容层不再另加圆角：系统圆角比 16 小，
+    /// 两道圆角之间会露出 GPUI 给不透明窗口铺的黑底。材质窗口是透明的，圆角由内容层给。
     pub fn set_material(&self, material: Material) -> io::Result<()> {
         let window = self
             .window()
@@ -102,15 +110,16 @@ impl Panel {
         let content = window
             .contentView()
             .ok_or_else(|| io::Error::other("the panel window has no content view"))?;
-        set_corner_radius(&content);
         match material {
             Material::Default => {
+                set_corner_radius(&content, 0.);
                 window.setOpaque(true);
                 if let Some(effect) = self.effect_view.borrow_mut().take() {
                     effect.removeFromSuperview();
                 }
             }
             Material::Mica | Material::Acrylic => {
+                set_corner_radius(&content, MATERIAL_CORNER_RADIUS);
                 window.setOpaque(false);
                 let effect = if let Some(effect) = self.effect_view.borrow().as_ref() {
                     effect.clone()
@@ -130,7 +139,7 @@ impl Panel {
                     *self.effect_view.borrow_mut() = Some(effect.clone());
                     effect
                 };
-                set_corner_radius(&effect);
+                set_corner_radius(&effect, MATERIAL_CORNER_RADIUS);
                 effect.setMaterial(match material {
                     Material::Mica => NSVisualEffectMaterial::UnderWindowBackground,
                     Material::Acrylic => NSVisualEffectMaterial::Popover,
@@ -150,6 +159,7 @@ impl Panel {
             .window()
             .ok_or_else(|| io::Error::other("the preview view has no window"))?;
         window.setStyleMask(window.styleMask() | NSWindowStyleMask::NonactivatingPanel);
+        hide_window_buttons(&window);
         window.setLevel(25);
         window.setCollectionBehavior(
             NSWindowCollectionBehavior::Stationary
@@ -392,10 +402,24 @@ fn main_thread() -> io::Result<MainThreadMarker> {
         .ok_or_else(|| io::Error::other("AppKit calls must run on the main thread"))
 }
 
-fn set_corner_radius(view: &NSView) {
+fn set_corner_radius(view: &NSView, radius: f64) {
     view.setWantsLayer(true);
     if let Some(layer) = view.layer() {
-        layer.setCornerRadius(16.);
+        layer.setCornerRadius(radius);
+    }
+}
+
+/// GPUI 的无标题栏窗口仍是 Titled 窗口（能成为 key、有系统阴影和圆角），AppKit 照样放红绿灯，
+/// 面板加了 Resizable 后缩放按钮还是可点的：三个按钮都藏起来。
+fn hide_window_buttons(window: &NSWindow) {
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(button) = window.standardWindowButton(kind) {
+            button.setHidden(true);
+        }
     }
 }
 
