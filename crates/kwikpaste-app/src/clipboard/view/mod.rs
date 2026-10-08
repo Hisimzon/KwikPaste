@@ -13,7 +13,7 @@ mod group_bar;
 pub mod group_dialogs;
 mod header;
 pub mod host;
-mod image_cache;
+pub(crate) mod image_cache;
 mod list;
 mod panel;
 pub mod pin;

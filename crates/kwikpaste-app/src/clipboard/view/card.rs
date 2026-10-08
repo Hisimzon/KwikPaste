@@ -57,6 +57,10 @@ pub struct CardState {
     /// 指针在卡片上：铺一层悬停底色。
     pub hovered: bool,
     pub image: Option<Visual>,
+    /// 来源应用图标；有路径时由列表里的独立图标缓存提供。
+    pub app_icon: Option<Visual>,
+    /// 文件行图标，顺序与 `ListItem::file_rows()` 相同。
+    pub file_icons: Vec<Option<Visual>>,
     /// 指针在卡片上：有备注且开了“悬停显示原文”时显示原文。
     pub show_original: bool,
     /// 按住修饰键时来源图标上的数字角标（1–9、0）。
@@ -111,6 +115,7 @@ pub fn card(
         item,
         index,
         state.image,
+        &state.file_icons,
         state.show_original,
         state.on_link,
     );
@@ -178,6 +183,7 @@ pub fn card(
                 env,
                 item,
                 hint,
+                state.app_icon.clone(),
                 actions,
                 checkbox,
                 status_marks(tokens, pinned, sensitive, true),
@@ -194,7 +200,7 @@ pub fn card(
                     .flex_none()
                     .h(space((20.) / 4.))
                     .items_center()
-                    .child(hinted_icon(env, item, hint)),
+                    .child(hinted_icon(env, item, hint, state.app_icon)),
             )
             .child(
                 div()
@@ -375,6 +381,7 @@ fn meta(
     env: &CardEnv<'_>,
     item: &ListItem,
     hint: Option<char>,
+    app_icon_state: Option<Visual>,
     actions: Option<AnyElement>,
     checkbox: Option<AnyElement>,
     marks: Div,
@@ -400,7 +407,7 @@ fn meta(
                 .items_center()
                 .gap(space((6.) / 4.))
                 .overflow_hidden()
-                .child(hinted_icon(env, item, hint))
+                .child(hinted_icon(env, item, hint, app_icon_state))
                 .child(
                     div()
                         .truncate()
@@ -431,8 +438,13 @@ fn meta(
 }
 
 /// 来源图标；按住修饰键时叠一个数字角标，图标本身隐去（1.x `KeyHint` 包着来源图标）。
-fn hinted_icon(env: &CardEnv<'_>, item: &ListItem, hint: Option<char>) -> AnyElement {
-    let icon = app_icon(env, item);
+fn hinted_icon(
+    env: &CardEnv<'_>,
+    item: &ListItem,
+    hint: Option<char>,
+    app_icon_state: Option<Visual>,
+) -> AnyElement {
+    let icon = app_icon(env, item, app_icon_state);
     let Some(key) = hint else {
         return icon;
     };
@@ -493,19 +505,24 @@ pub fn accessibility_name(item: &ListItem, now: &DateTime<Local>) -> SharedStrin
 
 /// 来源应用图标；同步来的记录用设备平台图标；都没有时是快贴的图标（1.x 的顺序）。
 /// 头部行里配 12 px 的小字用 14 px，紧凑密度里和正文并排用 16 px，三种来源同一尺寸。
-fn app_icon(env: &CardEnv<'_>, item: &ListItem) -> AnyElement {
+fn app_icon(env: &CardEnv<'_>, item: &ListItem, state: Option<Visual>) -> AnyElement {
     let size = if env.layout.header_row {
         space((14.) / 4.)
     } else {
         space((16.) / 4.)
     };
-    if item.source_app_id.is_some()
-        && let Some(path) = &item.source_app_icon_path
-    {
-        return img(std::path::PathBuf::from(&**path))
-            .size(size)
-            .flex_none()
-            .into_any_element();
+    if item.source_app_id.is_some() && item.source_app_icon_path.is_some() {
+        return match state {
+            Some(Visual::Ready(image)) => img(ImageSource::Render(image))
+                .size(size)
+                .flex_none()
+                .into_any_element(),
+            Some(Visual::Loading) => div().size(size).flex_none().into_any_element(),
+            Some(Visual::Failed) | None => img(ImageSource::Image(logo()))
+                .size(size)
+                .flex_none()
+                .into_any_element(),
+        };
     }
 
     if item.origin_device_id.is_some() {
@@ -546,6 +563,7 @@ fn content(
     item: &ListItem,
     index: usize,
     image: Option<Visual>,
+    file_icons: &[Option<Visual>],
     show_original: bool,
     on_link: Option<LinkHandler>,
 ) -> AnyElement {
@@ -562,7 +580,7 @@ fn content(
         ItemKind::Files if item.files_preview_kind == Some(FilesPreview::ImagePreview) => {
             image_body(env, item, index, image)
         }
-        ItemKind::Files => files_body(env, item.file_rows()),
+        ItemKind::Files => files_body(env, item.file_rows(), file_icons),
     }
 }
 
@@ -735,7 +753,7 @@ fn image_body(
     }
 }
 
-fn files_body(env: &CardEnv<'_>, rows: &[FileRow]) -> AnyElement {
+fn files_body(env: &CardEnv<'_>, rows: &[FileRow], file_icons: &[Option<Visual>]) -> AnyElement {
     let tokens = env.tokens;
 
     div()
@@ -743,16 +761,23 @@ fn files_body(env: &CardEnv<'_>, rows: &[FileRow]) -> AnyElement {
         .flex_col()
         .gap(space(1.))
         .kp_text(TextSize::Sm)
-        .children(rows.iter().map(|row| {
+        .children(rows.iter().enumerate().map(|(index, row)| {
+            let icon_state = file_icons.get(index).and_then(Option::clone);
             div()
                 .flex()
                 .items_center()
                 .gap(space(1.))
                 .min_w_0()
-                .children(row.icon_path.as_ref().map(|path| {
-                    img(std::path::PathBuf::from(&**path))
-                        .size(space((20.) / 4.))
-                        .flex_none()
+                .children(row.icon_path.as_ref().map(|_| {
+                    match icon_state {
+                        Some(Visual::Ready(image)) => img(ImageSource::Render(image))
+                            .size(space((20.) / 4.))
+                            .flex_none()
+                            .into_any_element(),
+                        Some(Visual::Loading) | Some(Visual::Failed) | None => {
+                            div().size(space((20.) / 4.)).flex_none().into_any_element()
+                        }
+                    }
                 }))
                 .child(
                     div()

@@ -18,10 +18,10 @@ use gpui::{
 use kwikpaste_core::db::models::{ClipboardKind, ClipboardSubKind};
 use kwikpaste_ui::{
     Button, Icon, IconName, KpStyled as _,
-    theme::{self, TextSize, radius, space},
+    theme::{self, TextSize, px_rems, radius, space},
 };
 
-use super::image_cache::{ImageKey, ImageState, KpImageCache, path_of};
+use super::image_cache::{ImageKey, ImageState, KpImageCache, ResizeMode, path_of};
 use crate::{
     clipboard::{
         model::preview::{
@@ -56,6 +56,8 @@ pub struct PreviewPanel {
     /// 图片在面板里的显示尺寸（逻辑像素），由列表按面板尺寸算好。
     image_box: Option<(f32, f32)>,
     images: Entity<KpImageCache>,
+    /// 预览文件图标的独立有界缓存；关闭预览时不清空，避免再次打开时闪烁。
+    icons: Entity<KpImageCache>,
     text_scroll: UniformListScrollHandle,
     scroll: ScrollHandle,
 }
@@ -65,7 +67,9 @@ impl EventEmitter<PreviewEvent> for PreviewPanel {}
 impl PreviewPanel {
     fn new(cx: &mut Context<Self>) -> Self {
         let images = cx.new(|_| KpImageCache::new());
+        let icons = cx.new(|_| KpImageCache::with_capacity(128));
         cx.observe(&images, |_, _, cx| cx.notify()).detach();
+        cx.observe(&icons, |_, _, cx| cx.notify()).detach();
 
         Self {
             preview: None,
@@ -75,6 +79,7 @@ impl PreviewPanel {
             selection: WordSelection::default(),
             image_box: None,
             images,
+            icons,
             text_scroll: UniformListScrollHandle::new(),
             scroll: ScrollHandle::new(),
         }
@@ -337,7 +342,7 @@ impl PreviewPanel {
 
         match payload.kind {
             ClipboardKind::Image => self.image(&preview, window, cx),
-            ClipboardKind::Files => self.files(&preview, cx),
+            ClipboardKind::Files => self.files(&preview, window, cx),
             ClipboardKind::Text => {
                 let text = payload.text.as_deref().unwrap_or_default();
                 if text.is_empty() {
@@ -370,6 +375,7 @@ impl PreviewPanel {
             path: path_of(path),
             width: (width * scale).round().max(1.) as u32,
             height: (height * scale).round().max(1.) as u32,
+            resize: ResizeMode::Exact,
         };
         let state = self
             .images
@@ -588,79 +594,126 @@ impl PreviewPanel {
             .into_any_element()
     }
 
-    fn files(&self, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {
+    fn icon(
+        &mut self,
+        path: &str,
+        logical_size: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> ImageState {
+        let physical = (px_rems(logical_size).to_pixels(window.rem_size()).as_f32()
+            * window.scale_factor())
+        .ceil()
+        .max(1.) as u32;
+        let key = ImageKey {
+            path: path_of(path),
+            width: physical,
+            height: physical,
+            resize: ResizeMode::Contain,
+        };
+        self.icons
+            .update(cx, |icons, cx| icons.request(key, window, cx))
+    }
+
+    fn files(
+        &mut self,
+        preview: &Preview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let tokens = theme::semantic(cx);
         let payload = &preview.payload;
         if payload.files.is_empty() {
             return Self::empty("preview:empty.files", cx);
         }
 
-        let rows = payload.files.iter().map(|file| {
-            let kind = if file.is_dir {
-                t("preview:file.folder")
-            } else {
-                t("preview:file.item")
-            };
-            let size_label = file
-                .size
-                .map(|size| SharedString::from(format_bytes(size)))
-                .unwrap_or(kind);
-            let path = if file.exists {
-                SharedString::from(file.path.clone())
-            } else {
-                t("preview:file.missingPath")
-            };
+        let icon_states: Vec<Option<ImageState>> = payload
+            .files
+            .iter()
+            .map(|file| {
+                file.icon_path
+                    .as_deref()
+                    .map(|path| self.icon(path, 24., window, cx))
+            })
+            .collect();
+        let rows = payload
+            .files
+            .iter()
+            .zip(icon_states)
+            .map(|(file, icon_state)| {
+                let kind = if file.is_dir {
+                    t("preview:file.folder")
+                } else {
+                    t("preview:file.item")
+                };
+                let size_label = file
+                    .size
+                    .map(|size| SharedString::from(format_bytes(size)))
+                    .unwrap_or(kind);
+                let path = if file.exists {
+                    SharedString::from(file.path.clone())
+                } else {
+                    t("preview:file.missingPath")
+                };
 
-            div().px(space((8.) / 4.)).child(
-                div()
-                    .flex()
-                    .min_h(space((FILE_ROW_HEIGHT as f32) / 4.))
-                    .items_center()
-                    .gap(space((8.) / 4.))
-                    .rounded(radius::MD)
-                    .px(space((8.) / 4.))
-                    .py(space((6.) / 4.))
-                    .when(!file.exists, |row| {
-                        row.opacity(theme::components(cx).preview_file.missing_opacity)
-                    })
-                    .child(match &file.icon_path {
-                        Some(icon) => img(path_of(icon))
-                            .flex_none()
-                            .size(space((24.) / 4.))
-                            .into_any_element(),
-                        None => Icon::new(IconName::Folder)
-                            .size(space((20.) / 4.))
-                            .color(tokens.text.secondary)
-                            .into_any_element(),
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .kp_text(TextSize::Xs)
-                                    .when(!file.exists, |name| name.line_through())
-                                    .child(file.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .kp_text(TextSize::Xs)
-                                    .text_color(tokens.text.secondary)
-                                    .child(path),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .kp_text(TextSize::Xs)
-                            .text_color(tokens.text.muted)
-                            .child(size_label),
-                    ),
-            )
-        });
+                div().px(space((8.) / 4.)).child(
+                    div()
+                        .flex()
+                        .min_h(space((FILE_ROW_HEIGHT as f32) / 4.))
+                        .items_center()
+                        .gap(space((8.) / 4.))
+                        .rounded(radius::MD)
+                        .px(space((8.) / 4.))
+                        .py(space((6.) / 4.))
+                        .when(!file.exists, |row| {
+                            row.opacity(theme::components(cx).preview_file.missing_opacity)
+                        })
+                        .child(match (file.icon_path.is_some(), icon_state) {
+                            (true, Some(ImageState::Ready(image))) => {
+                                img(ImageSource::Render(image))
+                                    .flex_none()
+                                    .size(space((24.) / 4.))
+                                    .into_any_element()
+                            }
+                            (true, Some(ImageState::Loading)) => {
+                                div().size(space((24.) / 4.)).flex_none().into_any_element()
+                            }
+                            (true, Some(ImageState::Failed)) | (true, None) => {
+                                div().size(space((24.) / 4.)).flex_none().into_any_element()
+                            }
+                            (false, _) => Icon::new(IconName::Folder)
+                                .size(space((20.) / 4.))
+                                .color(tokens.text.secondary)
+                                .into_any_element(),
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .kp_text(TextSize::Xs)
+                                        .when(!file.exists, |name| name.line_through())
+                                        .child(file.name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .kp_text(TextSize::Xs)
+                                        .text_color(tokens.text.secondary)
+                                        .child(path),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.text.muted)
+                                .child(size_label),
+                        ),
+                )
+            });
 
         div()
             .id("preview-files")

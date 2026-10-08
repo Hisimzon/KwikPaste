@@ -19,7 +19,7 @@ use kwikpaste_ui::{
     Button, Checkbox, ConfirmSpec, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
     NumberInputState, ScrollArea, Select, SelectOption, SelectState, Switch, TextInput,
     form_dialog,
-    theme::{self, SemanticTokens, TextSize, space},
+    theme::{self, SemanticTokens, TextSize, px_rems, space},
     toast::{self, Toast},
 };
 use serde_json::json;
@@ -31,7 +31,14 @@ use super::{
     sortable, text, values,
 };
 use crate::{
-    clipboard::{self, source::ClipboardSource, view::group_dialogs},
+    clipboard::{
+        self,
+        source::ClipboardSource,
+        view::{
+            group_dialogs,
+            image_cache::{ImageKey, ImageState, KpImageCache, ResizeMode, path_of},
+        },
+    },
     core_host, i18n,
     platform::{core_events, hotkey},
 };
@@ -190,11 +197,72 @@ struct Preferences {
     lan_code_hidden: bool,
     lan_name: TextInput,
     lan_max_image: NumberInputState,
+    icons: gpui::Entity<KpImageCache>,
 }
 
 impl Preferences {
+    /// 偏好窗口里的来源应用图标缓存；图标只保留物理显示尺寸的位图。
+    pub(super) fn cached_app_icon(
+        &self,
+        path: Option<&str>,
+        tokens: &kwikpaste_ui::theme::SemanticTokens,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let size = rems(1.25);
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
+            return div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(IconName::Monitor)
+                        .size(rems(1.1))
+                        .color(tokens.text.muted),
+                )
+                .into_any_element();
+        };
+        let physical = (px_rems(20.).to_pixels(window.rem_size()).as_f32() * window.scale_factor())
+            .ceil()
+            .max(1.) as u32;
+        let state = self.icons.update(cx, |icons, cx| {
+            icons.request(
+                ImageKey {
+                    path: path_of(path),
+                    width: physical,
+                    height: physical,
+                    resize: ResizeMode::Contain,
+                },
+                window,
+                cx,
+            )
+        });
+        match state {
+            ImageState::Ready(image) => img(ImageSource::Render(image))
+                .size(size)
+                .flex_none()
+                .into_any_element(),
+            ImageState::Loading => div().size(size).flex_none().into_any_element(),
+            ImageState::Failed => div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(IconName::Monitor)
+                        .size(rems(1.1))
+                        .color(tokens.text.muted),
+                )
+                .into_any_element(),
+        }
+    }
+
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = core_host::core(cx).map_or_else(Settings::default, |core| core.settings());
+        let icons = cx.new(|_| KpImageCache::with_capacity(128));
         let search = TextInput::new(i18n::t("preferences:search.placeholder"), window, cx);
         let search_subscription = search.on_change(cx, |_, _, cx| cx.notify());
         let theme = settings.appearance.theme;
@@ -435,7 +503,7 @@ impl Preferences {
             .detach();
         }
         let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
-        let subscriptions = core_events(cx)
+        let subscriptions: Vec<Subscription> = core_events(cx)
             .map(|events| {
                 cx.subscribe(&events, |this, _, event: &CoreEvent, cx| {
                     if matches!(
@@ -474,6 +542,8 @@ impl Preferences {
             ])
             .chain(setting_subscriptions)
             .collect();
+        let mut subscriptions = subscriptions;
+        subscriptions.push(cx.observe(&icons, |_, _, cx| cx.notify()));
         Self {
             tab: initial_tab(),
             settings,
@@ -491,6 +561,7 @@ impl Preferences {
             lan_code_hidden: false,
             lan_name,
             lan_max_image,
+            icons,
         }
     }
 
@@ -2402,6 +2473,7 @@ impl Preferences {
         &self,
         setting: &Setting,
         first: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let title = text::setting_title(setting);
@@ -2508,7 +2580,7 @@ impl Preferences {
                 }
             })
             .into_any_element(),
-            Control::StorageOverview => self.render_storage_overview(cx),
+            Control::StorageOverview => self.render_storage_overview(window, cx),
             Control::CaptureKinds => self.render_capture_kinds(value, cx),
             Control::CaptureOrder => self.render_capture_order(cx),
             Control::Retention => self.render_retention(cx),
@@ -2537,7 +2609,7 @@ impl Preferences {
             .into_any_element()
     }
 
-    fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_page(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
         let tab = tabs.into_iter().find(|tab| tab.id == self.tab);
@@ -2549,7 +2621,7 @@ impl Preferences {
         let mut blocks: Vec<gpui::AnyElement> = Vec::new();
         for section in sections {
             if self.tab == TabId::Overview {
-                blocks.push(self.render_storage_overview(cx));
+                blocks.push(self.render_storage_overview(window, cx));
                 continue;
             }
             let visible: Vec<&Setting> = section
@@ -2568,7 +2640,7 @@ impl Preferences {
             }
             let mut rows = Vec::with_capacity(visible.len());
             for (index, setting) in visible.into_iter().enumerate() {
-                rows.push(self.render_setting(setting, index == 0, cx));
+                rows.push(self.render_setting(setting, index == 0, window, cx));
             }
             blocks.push(section_block(
                 show_titles.then(|| text::section_title(&section)),
@@ -3494,6 +3566,7 @@ fn segment(
 struct SourceAppsDialog {
     apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
     selected: Vec<String>,
+    icons: gpui::Entity<KpImageCache>,
 }
 
 impl SourceAppsDialog {
@@ -3504,28 +3577,83 @@ impl SourceAppsDialog {
 }
 
 /// 显示来源应用缓存图标；抽取失败时用固定尺寸的中性窗口图标占位。
+impl SourceAppsDialog {
+    fn cached_app_icon(
+        &mut self,
+        path: Option<&str>,
+        tokens: &kwikpaste_ui::theme::SemanticTokens,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let size = rems(1.25);
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
+            return div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(IconName::Monitor)
+                        .size(rems(1.1))
+                        .color(tokens.text.muted),
+                )
+                .into_any_element();
+        };
+        let physical = (px_rems(20.).to_pixels(window.rem_size()).as_f32() * window.scale_factor())
+            .ceil()
+            .max(1.) as u32;
+        let state = self.icons.update(cx, |icons, cx| {
+            icons.request(
+                ImageKey {
+                    path: path_of(path),
+                    width: physical,
+                    height: physical,
+                    resize: ResizeMode::Contain,
+                },
+                window,
+                cx,
+            )
+        });
+        match state {
+            ImageState::Ready(image) => img(ImageSource::Render(image))
+                .size(size)
+                .flex_none()
+                .into_any_element(),
+            ImageState::Loading => div().size(size).flex_none().into_any_element(),
+            ImageState::Failed => div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(IconName::Monitor)
+                        .size(rems(1.1))
+                        .color(tokens.text.muted),
+                )
+                .into_any_element(),
+        }
+    }
+}
+
+/// 在不带缓存上下文的引导/概览行里显示来源应用图标。
 pub(super) fn app_icon(
-    path: Option<&str>,
+    _path: Option<&str>,
     tokens: &kwikpaste_ui::theme::SemanticTokens,
 ) -> gpui::AnyElement {
-    match path.filter(|path| !path.is_empty()) {
-        Some(path) => img(PathBuf::from(path))
-            .size(rems(1.25))
-            .flex_none()
-            .into_any_element(),
-        None => div()
-            .size(rems(1.25))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                Icon::new(IconName::Monitor)
-                    .size(rems(1.1))
-                    .color(tokens.text.muted),
-            )
-            .into_any_element(),
-    }
+    div()
+        .size(rems(1.25))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            Icon::new(IconName::Monitor)
+                .size(rems(1.1))
+                .color(tokens.text.muted),
+        )
+        .into_any_element()
 }
 
 /// 设置里的顺序在前（去重），缺的动作按默认顺序补在末尾，弹框始终列出全部动作。
@@ -3673,11 +3801,13 @@ impl Render for ActionVisibilityDialog {
 
 impl Render for SourceAppsDialog {
     /// 浅灰列表块里每行一个应用：勾选框、应用图标和应用名，下面一行灰色小字是路径（同引导的忽略应用）。
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
-        let rows = self.apps.iter().enumerate().map(|(index, app)| {
+        let apps = self.apps.clone();
+        let selected = self.selected.clone();
+        let rows = apps.iter().enumerate().map(|(index, app)| {
             let id = app.id.clone();
-            let checked = app_ids::contains_app(&self.selected, &id);
+            let checked = app_ids::contains_app(&selected, &id);
             let name = if app.name.is_empty() {
                 id.clone()
             } else {
@@ -3731,7 +3861,12 @@ impl Render for SourceAppsDialog {
                                         });
                                     }
                                 })
-                                .child(app_icon(app.icon_path.as_deref(), tokens))
+                                .child(self.cached_app_icon(
+                                    app.icon_path.as_deref(),
+                                    tokens,
+                                    window,
+                                    cx,
+                                ))
                                 .child(div().min_w_0().truncate().child(name)),
                         ),
                 )
@@ -3763,9 +3898,14 @@ fn open_source_apps_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let dialog = cx.new(|_| SourceAppsDialog {
-        apps,
-        selected: excluded,
+    let icons = cx.new(|_| KpImageCache::with_capacity(128));
+    let dialog = cx.new(|cx| {
+        cx.observe(&icons, |_, _, cx| cx.notify()).detach();
+        SourceAppsDialog {
+            apps,
+            selected: excluded,
+            icons,
+        }
     });
     let content = dialog.clone();
     let adder = dialog.downgrade();
@@ -4342,7 +4482,7 @@ fn platform_label(platform: kwikpaste_core::db::models::Platform) -> &'static st
 }
 
 impl Render for Preferences {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .track_focus(&self.focus)
@@ -4357,7 +4497,7 @@ impl Render for Preferences {
             )
             .text_color(theme::semantic(cx).text.primary)
             .child(self.render_sidebar(cx))
-            .child(self.render_page(cx))
+            .child(self.render_page(window, cx))
     }
 }
 

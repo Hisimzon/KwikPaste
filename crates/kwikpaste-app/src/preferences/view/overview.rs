@@ -19,7 +19,7 @@ use kwikpaste_ui::{
     theme::{self, SemanticTokens, TextSize, space},
 };
 
-use super::{Preferences, app_icon, category_label};
+use super::{Preferences, category_label};
 use crate::{
     i18n,
     preferences::{icons::PrefIcon, schema::TabId, text::format_bytes},
@@ -37,7 +37,11 @@ const TREND_GUTTER: gpui::Rems = gpui::Rems(2.25);
 const SPACE_WARNING_RATIO: f64 = 0.8;
 
 impl Preferences {
-    pub(super) fn render_storage_overview(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_storage_overview(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let tokens = theme::semantic(cx);
         let Some(overview) = self.storage_overview.as_ref() else {
             return div()
@@ -55,7 +59,7 @@ impl Preferences {
 
         let history = &overview.history;
         let category_rows = self.category_rows(&history.categories, cx);
-        let source_rows = self.source_rows(&history.source_apps, cx);
+        let source_rows = self.source_rows(&history.source_apps, window, cx);
         div()
             .flex()
             .flex_col()
@@ -368,7 +372,12 @@ impl Preferences {
     }
 
     /// 来源应用排行：应用图标、名称和条数，同一应用的不同版本已在 core 里合并。
-    fn source_rows(&self, apps: &[SourceAppStat], cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn source_rows(
+        &self,
+        apps: &[SourceAppStat],
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let tokens = theme::semantic(cx);
         let max = apps.iter().map(|stat| stat.count).max().unwrap_or(0);
 
@@ -381,7 +390,7 @@ impl Preferences {
                 .map(SharedString::from)
                 .unwrap_or_else(|| i18n::t("preferences:overview.sources.unknown"));
             let icon = match stat.app_id {
-                Some(_) => app_icon(stat.icon_path.as_deref(), tokens),
+                Some(_) => self.cached_app_icon(stat.icon_path.as_deref(), tokens, window, cx),
                 None => div()
                     .flex()
                     .flex_none()
