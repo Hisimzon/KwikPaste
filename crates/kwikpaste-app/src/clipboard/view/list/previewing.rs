@@ -384,7 +384,18 @@ impl ClipboardList {
                     panel.update(cx, |panel, cx| panel.release(window, cx));
                 })
                 .ok();
-            cx.spawn(async move |_, _| native.hide()).detach();
+            let request = self.previewing.request;
+            cx.spawn(async move |list, cx| {
+                native.hide();
+                // 隐藏后再丢正文，免得隐藏前多画一帧空白；期间又打开了新预览就不动。
+                let reopened = list
+                    .read_with(cx, |list, _| list.previewing.request != request)
+                    .unwrap_or(true);
+                if !reopened {
+                    panel.update(cx, |panel, _| panel.forget());
+                }
+            })
+            .detach();
         }
         true
     }

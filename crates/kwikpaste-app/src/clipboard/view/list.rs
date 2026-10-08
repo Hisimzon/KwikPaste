@@ -497,7 +497,8 @@ impl ClipboardList {
                     self.finish_note(false, window, cx);
                 }
                 // 隐藏即释放（附录 B §5.3）：缩略图位图全部还给图集，行缓存只留第一页。
-                self.images.update(cx, |images, cx| images.clear(None, cx));
+                self.images
+                    .update(cx, |images, cx| images.clear(Some(window), cx));
                 self.model.release_rows();
                 // 缩略图路径只是字符串，留着；与 1.x 的 `useImageThumbnail` 一样封顶 512 条。
                 if self.thumbnails.len() > THUMBNAIL_PATHS_MAX {

@@ -128,6 +128,13 @@ impl PreviewPanel {
             .update(cx, |images, cx| images.clear(Some(window), cx));
     }
 
+    /// 窗口隐藏后丢掉正文：预览窗口只隐藏不关，留着的正文最多可到文本上限（默认 4 MB）。
+    /// 不 `notify`，隐藏的窗口不用重画，下次 [`Self::set`] 会换上新内容。
+    pub fn forget(&mut self) {
+        self.preview = None;
+        self.rows = Rc::default();
+    }
+
     fn can_pick_words(&self) -> bool {
         self.preview.as_ref().is_some_and(|preview| {
             preview.payload.kind == ClipboardKind::Text && !preview.payload.words.is_empty()
