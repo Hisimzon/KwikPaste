@@ -233,6 +233,9 @@ fn window_options() -> WindowOptions {
         show: false,
         kind: WindowKind::PopUp,
         is_movable: true,
+        // macOS 面板顶部的隐藏标题栏不归系统管：双击不再按系统设置缩放到铺满屏幕，
+        // 拖动只走头部的 `window_drag_area`。
+        app_owns_titlebar_drag: true,
         is_resizable: true,
         is_minimizable: false,
         // 面板从不激活；默认值会把非活动窗口的动画压到 30 fps。面板因此不能放常驻动画。
