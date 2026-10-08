@@ -623,9 +623,10 @@ impl Onboarding {
                         "preferences:schema.settings.permissions.accessibility.title",
                     ))
                     .on_click(|_, _, _| {
-                        if let Err(error) = kwikpaste_os::keystroke::ensure_accessibility_trusted()
+                        if let Err(error) =
+                            kwikpaste_os::mac::permissions::open_accessibility_settings()
                         {
-                            log::debug!("accessibility permission is not available: {error}");
+                            log::warn!("accessibility settings could not be opened: {error}");
                         }
                     });
             rows.push(self.permission_tile(

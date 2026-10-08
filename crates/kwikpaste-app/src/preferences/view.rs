@@ -2489,6 +2489,25 @@ impl Preferences {
                     })
                     .into_any_element()
             }
+            #[cfg(target_os = "macos")]
+            Control::Permission(
+                kind @ (PermissionKind::Accessibility | PermissionKind::FullDiskAccess),
+            ) => Button::new(
+                format!("permission-{}", setting.id),
+                i18n::t("common:actions.open"),
+            )
+            .accessibility_label(title.clone())
+            .on_click(move |_, _, _| {
+                let opened = if kind == PermissionKind::FullDiskAccess {
+                    kwikpaste_os::mac::permissions::open_full_disk_access_settings()
+                } else {
+                    kwikpaste_os::mac::permissions::open_accessibility_settings()
+                };
+                if let Err(error) = opened {
+                    log::warn!("macOS privacy settings could not be opened: {error}");
+                }
+            })
+            .into_any_element(),
             Control::StorageOverview => self.render_storage_overview(cx),
             Control::CaptureKinds => self.render_capture_kinds(value, cx),
             Control::CaptureOrder => self.render_capture_order(cx),
