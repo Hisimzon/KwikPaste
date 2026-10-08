@@ -935,6 +935,10 @@ pub mod native {
         panel: mac_panel::Panel,
     }
 
+    /// 面板窗口里 `card`（逻辑像素，macOS 上就是 point）所在显示器上的几何。
+    ///
+    /// 全程用 point、以主屏左上角为原点（与 [`monitor::screens`] 相同）；只有交给
+    /// [`ScreenPlace::to_screen`] 的显示器原点按缩放乘成像素，`place_rect` 再按同一缩放除回来。
     pub fn screen_place(window: &Window, card: Bounds<Pixels>) -> Option<ScreenPlace> {
         let handle = HasWindowHandle::window_handle(window).ok()?;
         let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
@@ -944,12 +948,11 @@ pub mod native {
         let frame = panel.frame()?;
         let screens = monitor::screens();
         let primary_height = screens.first()?.height;
-        let scale = f64::from(window.scale_factor());
-        let left = frame.origin.x + f64::from(card.origin.x.as_f32()) * scale;
+        let left = frame.origin.x + f64::from(card.origin.x.as_f32());
         let top = primary_height - (frame.origin.y + frame.size.height)
-            + f64::from(card.origin.y.as_f32()) * scale;
-        let width = f64::from(card.size.width.as_f32()) * scale;
-        let height = f64::from(card.size.height.as_f32()) * scale;
+            + f64::from(card.origin.y.as_f32());
+        let width = f64::from(card.size.width.as_f32());
+        let height = f64::from(card.size.height.as_f32());
         let monitor = screens
             .iter()
             .find(|screen| {
@@ -962,10 +965,10 @@ pub mod native {
         let monitor_scale = monitor.scale;
         Some(ScreenPlace {
             card: RectF {
-                left: (left - monitor.x) / monitor_scale,
-                top: (top - monitor.y) / monitor_scale,
-                width: width / monitor_scale,
-                height: height / monitor_scale,
+                left: left - monitor.x,
+                top: top - monitor.y,
+                width,
+                height,
             },
             monitor: RectF {
                 left: 0.,
@@ -973,7 +976,10 @@ pub mod native {
                 width: monitor.width,
                 height: monitor.height,
             },
-            origin: (monitor.x.round() as i32, monitor.y.round() as i32),
+            origin: (
+                (monitor.x * monitor_scale).round() as i32,
+                (monitor.y * monitor_scale).round() as i32,
+            ),
             scale: monitor_scale,
             dpi: (monitor_scale * 96.).round() as u32,
         })

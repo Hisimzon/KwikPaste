@@ -281,10 +281,18 @@ impl Panel {
         Ok(())
     }
 
+    /// 把窗口放到 `rect`：主屏左上角为原点、向下为正（与 [`crate::mac::monitor::screens`] 相同），
+    /// 单位是按 `dpi` 放大过的像素，这里除回 point，再翻成 AppKit 以主屏左下角为原点、向上为正的坐标。
     pub fn place_rect(&self, rect: Rect, dpi: u32) -> io::Result<()> {
+        let main_thread = main_thread()?;
         let window = self
             .window()
             .ok_or_else(|| io::Error::other("the panel view has no window"))?;
+        let primary_height = NSScreen::screens(main_thread)
+            .iter()
+            .next()
+            .map(|screen| screen.frame().size.height)
+            .ok_or_else(|| io::Error::other("no screen to place the window on"))?;
         let scale = f64::from(dpi.max(1)) / 96.;
         window.setContentSize(NSSize::new(
             f64::from(rect.width().max(1)) / scale,
@@ -292,7 +300,7 @@ impl Panel {
         ));
         window.setFrameOrigin(NSPoint::new(
             f64::from(rect.left) / scale,
-            -f64::from(rect.bottom) / scale,
+            primary_height - f64::from(rect.bottom) / scale,
         ));
         Ok(())
     }
