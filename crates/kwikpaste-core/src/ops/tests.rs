@@ -639,3 +639,28 @@ fn single_image_file_records_preview_like_image_records() {
     );
     block_on(core.shutdown()).unwrap();
 }
+
+/// 图片扩展名的文件读不出图片头（没有读取权限、内容不是支持的格式）：按普通文件行显示，不画坏图。
+#[test]
+fn unreadable_image_file_records_preview_as_a_file_row() {
+    use crate::presenter::FilesPreviewKind;
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let photo = fixture.root().join("photos").join("broken.png");
+    std::fs::create_dir_all(photo.parent().unwrap()).unwrap();
+    std::fs::write(&photo, b"not an image").unwrap();
+    let id = copy_in(
+        &core,
+        MemoryState {
+            files: Some(vec![photo.to_string_lossy().into_owned()]),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+
+    let view = block_on(core.list_item(&id)).unwrap().unwrap();
+    assert_eq!(view.files_preview_kind, Some(FilesPreviewKind::List));
+    assert_eq!(view.image_display_size, None);
+    block_on(core.shutdown()).unwrap();
+}

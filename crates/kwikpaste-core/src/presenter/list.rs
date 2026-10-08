@@ -176,6 +176,7 @@ fn attach_image_display_size(view: &mut ClipboardItemView, max_height: u16) {
 
 /// 单图文件记录按图片卡片的规则展示：显示尺寸用文件头里的宽高算（不解码整图），
 /// 缩略图同样只给**已生成**的，没有时界面先画同尺寸占位，再经 `Core::ensure_file_thumbnail` 生成。
+/// 文件头读不出来（没有读取权限、SVG 等不支持的格式、超出解码上限）时按普通文件行显示，不画坏图。
 fn attach_file_image_preview(store: &ImageStore, view: &mut ClipboardItemView, max_height: u16) {
     if view.files_preview_kind != Some(FilesPreviewKind::ImagePreview) {
         return;
@@ -189,10 +190,13 @@ fn attach_file_image_preview(store: &ImageStore, view: &mut ClipboardItemView, m
         return;
     };
 
-    let dimensions = image_file_dimensions(&path);
+    let Some((width, height)) = image_file_dimensions(&path) else {
+        view.files_preview_kind = Some(FilesPreviewKind::List);
+        return;
+    };
     view.image_display_size = Some(image_display_size(
-        dimensions.map(|(width, _)| i64::from(width)),
-        dimensions.map(|(_, height)| i64::from(height)),
+        Some(i64::from(width)),
+        Some(i64::from(height)),
         max_height,
     ));
     view.image_thumbnail_path = store

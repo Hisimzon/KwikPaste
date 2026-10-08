@@ -6,9 +6,12 @@
 //! 图片读取走「PNG 直通优先」：源本身是 PNG 时直取原始字节、从头部解析尺寸（零解码/编码）；
 //! 仅当源是 TIFF/DIB 等非 PNG 时才回退到库的解码 + 重编码 PNG。
 
+use std::path::{Path, PathBuf};
+
 use super::backend::{ClipboardBackend, ClipboardFormat, SystemClipboard};
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
 use crate::error::Result;
+use crate::presenter::is_image_path;
 use crate::settings::{Capture, CaptureKind};
 
 /// 持有一个剪贴板后端的读取器。轻量，可按需创建；监听线程会持有一个长生命周期实例复用。
@@ -46,6 +49,9 @@ impl<B: ClipboardBackend> ClipboardReader<B> {
             match kind {
                 CaptureKind::Files => {
                     if let Some(files) = self.read_files()? {
+                        if let Some(image) = self.app_cache_image(capture, &files) {
+                            return Ok(Some(ClipboardPayload::Image(image)));
+                        }
                         return Ok(Some(ClipboardPayload::Files(files)));
                     }
                 }
@@ -102,6 +108,25 @@ impl<B: ClipboardBackend> ClipboardReader<B> {
         }
 
         Ok(Some(files))
+    }
+
+    /// 复制的「文件」其实是别的应用自己缓存的一张图、剪贴板上也带着这张图时，取图片载荷。
+    ///
+    /// QQ、微信等在 macOS 上复制聊天图片，会同时放图片数据和指向沙盒容器里缓存文件的 URL。
+    /// 这个文件是对方应用的内部存储：读它会被系统的「其他 App 的数据」权限拦下，对方清缓存后也会消失。
+    /// 用户复制的是图片，按图片收录。访达复制文件时放的图片是文件图标，所以只认应用私有目录里的文件。
+    fn app_cache_image(&self, capture: &Capture, files: &[String]) -> Option<ImagePayload> {
+        let [only] = files else {
+            return None;
+        };
+        if !capture.is_enabled(CaptureKind::Image)
+            || !is_app_cache_image(only, &app_cache_roots())
+            || !self.backend.has(ClipboardFormat::Image)
+        {
+            return None;
+        }
+
+        self.read_image().ok().flatten()
     }
 
     /// 读取剪贴板中的文本族表示，包含纯文本、HTML 和 RTF。
@@ -179,6 +204,32 @@ pub fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         return None;
     }
     Some((width, height))
+}
+
+/// `path` 是否是放在 `roots` 某个目录下的图片文件（按扩展名判断）。
+fn is_app_cache_image(path: &str, roots: &[PathBuf]) -> bool {
+    is_image_path(path) && roots.iter().any(|root| Path::new(path).starts_with(root))
+}
+
+/// 应用私有存储的根目录：沙盒容器、应用组容器、缓存和每用户临时目录。
+/// iCloud 云盘（`Mobile Documents`）、`CloudStorage` 下的网盘同样在 `~/Library` 里，但那是用户自己的文件，不算。
+#[cfg(target_os = "macos")]
+fn app_cache_roots() -> Vec<PathBuf> {
+    let mut roots = vec![
+        PathBuf::from("/private/var/folders"),
+        PathBuf::from("/var/folders"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        let library = home.join("Library");
+        roots.extend(["Containers", "Group Containers", "Caches"].map(|dir| library.join(dir)));
+    }
+    roots
+}
+
+/// Windows 上还没遇到这样复制图片的应用，文件照常按文件收录。
+#[cfg(not(target_os = "macos"))]
+fn app_cache_roots() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// 仅当 `available` 时读取，读取失败或空串都归并为 `None`，
@@ -305,6 +356,79 @@ mod tests {
             read(state, &text_first),
             Some(ClipboardPayload::Text(_))
         ));
+    }
+
+    #[test]
+    fn app_cache_image_matches_images_under_the_roots_only() {
+        let roots = [PathBuf::from("/Users/me/Library/Containers")];
+        let cached = "/Users/me/Library/Containers/com.tencent.qq/Data/Pic/ed8b.png";
+
+        assert!(is_app_cache_image(cached, &roots));
+        assert!(!is_app_cache_image(
+            "/Users/me/Library/Containers/com.tencent.qq/Data/a.docx",
+            &roots
+        ));
+        assert!(!is_app_cache_image("/Users/me/Desktop/ed8b.png", &roots));
+        assert!(!is_app_cache_image(
+            "/Users/me/Library/ContainersBackup/ed8b.png",
+            &roots
+        ));
+        assert!(!is_app_cache_image(cached, &[]));
+    }
+
+    // QQ 复制聊天图片：沙盒容器里的缓存文件 + 图片数据，按图片收录；关掉图片收录时退回文件。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_cache_file_with_image_data_is_read_as_image() {
+        let cached = dirs::home_dir()
+            .unwrap()
+            .join("Library/Containers/com.tencent.qq/Data/Pic/ed8b.png")
+            .to_string_lossy()
+            .into_owned();
+        let png = sample_png(6, 4);
+        let state = MemoryState {
+            files: Some(vec![cached.clone()]),
+            png: Some(png.clone()),
+            ..MemoryState::default()
+        };
+
+        assert_eq!(
+            read(state.clone(), &Capture::default()),
+            Some(ClipboardPayload::Image(ImagePayload {
+                bytes: png,
+                width: 6,
+                height: 4,
+            }))
+        );
+
+        let no_images = Capture {
+            image: false,
+            ..Capture::default()
+        };
+        assert_eq!(
+            read(state, &no_images),
+            Some(ClipboardPayload::Files(vec![cached]))
+        );
+    }
+
+    // 访达复制文件也会带一张图（文件图标），用户目录里的文件照常按文件收录。
+    #[test]
+    fn user_file_with_image_data_stays_files() {
+        let photo = dirs::home_dir()
+            .unwrap()
+            .join("Desktop/photo.png")
+            .to_string_lossy()
+            .into_owned();
+        let state = MemoryState {
+            files: Some(vec![photo.clone()]),
+            png: Some(sample_png(6, 4)),
+            ..MemoryState::default()
+        };
+
+        assert_eq!(
+            read(state, &Capture::default()),
+            Some(ClipboardPayload::Files(vec![photo]))
+        );
     }
 
     #[test]
