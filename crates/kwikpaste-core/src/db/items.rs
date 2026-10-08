@@ -44,6 +44,20 @@ pub struct UpsertResult {
     pub deduplicated: bool,
 }
 
+/// 可手动排序的本地分区。Favorite 只包含未置顶收藏，置顶收藏始终由 Pinned 分区决定位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReorderSection {
+    Pinned,
+    Favorite,
+}
+
+/// 相对于全局分区顺序的插入位置。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReorderAnchor {
+    Before(String),
+    After(String),
+}
+
 /// 计算去重指纹：`blake3("<kind>:<content>")`。
 /// 加 `kind` 前缀，避免 text 与 files 恰好同串内容被误判为重复。
 /// text 直接哈希内容串即可；image/files 的 `content` 是落盘引用/路径，
@@ -100,9 +114,12 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     sqlx::query(
         "INSERT INTO clipboard_items \
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-          summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
+          summary, file_types, size, width, height, use_count, is_favorite, is_pinned, favorite_order, pin_order, is_sensitive, platform, note, \
           created_at, updated_at, last_used_at, origin_device_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(favorite_order) FROM clipboard_items), 0) END,
+                 CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(pin_order) FROM clipboard_items), 0) END,
+                 ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(item.id.as_str())
     .bind(item.kind)
@@ -118,6 +135,8 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     .bind(item.width)
     .bind(item.height)
     .bind(item.use_count)
+    .bind(item.is_favorite)
+    .bind(item.is_pinned)
     .bind(item.is_favorite)
     .bind(item.is_pinned)
     .bind(item.is_sensitive)
@@ -209,7 +228,11 @@ pub async fn find_item_for_list_by_id(
 /// 翻转 `is_favorite`（收藏 / 取消收藏），返回翻转后的新状态。
 pub async fn toggle_item_favorite(pool: &SqlitePool, id: &str) -> Result<bool> {
     let new_value: bool = sqlx::query_scalar(
-        "UPDATE clipboard_items SET is_favorite = NOT is_favorite WHERE id = ? RETURNING is_favorite",
+        "UPDATE clipboard_items
+         SET is_favorite = NOT is_favorite,
+             favorite_order = CASE WHEN is_favorite THEN NULL
+                 ELSE 1 + COALESCE((SELECT MAX(favorite_order) FROM clipboard_items), 0) END
+         WHERE id = ? RETURNING is_favorite",
     )
     .bind(id)
     .fetch_one(pool)
@@ -220,24 +243,103 @@ pub async fn toggle_item_favorite(pool: &SqlitePool, id: &str) -> Result<bool> {
 
 /// 幂等地将 `is_favorite` 置为 true（已收藏的无变化）。auto-favorite 场景用。
 pub async fn mark_item_favorite(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("UPDATE clipboard_items SET is_favorite = 1 WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("failed to mark clipboard item favorite")?;
+    sqlx::query(
+        "UPDATE clipboard_items
+         SET is_favorite = 1,
+             favorite_order = CASE WHEN is_favorite AND favorite_order IS NOT NULL THEN favorite_order
+                 ELSE 1 + COALESCE((SELECT MAX(favorite_order) FROM clipboard_items), 0) END
+         WHERE id = ?",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .context("failed to mark clipboard item favorite")?;
     Ok(())
 }
 
 /// 翻转 `is_pinned`（置顶 / 取消置顶），返回翻转后的新状态。
 pub async fn toggle_item_pinned(pool: &SqlitePool, id: &str) -> Result<bool> {
     let new_value: bool = sqlx::query_scalar(
-        "UPDATE clipboard_items SET is_pinned = NOT is_pinned WHERE id = ? RETURNING is_pinned",
+        "UPDATE clipboard_items
+         SET is_pinned = NOT is_pinned,
+             pin_order = CASE WHEN is_pinned THEN NULL
+                 ELSE 1 + COALESCE((SELECT MAX(pin_order) FROM clipboard_items), 0) END
+         WHERE id = ? RETURNING is_pinned",
     )
     .bind(id)
     .fetch_one(pool)
     .await
     .context("failed to toggle clipboard item pinned")?;
     Ok(new_value)
+}
+
+/// 在一个手动排序分区内把 `id` 放到 `anchor` 指定记录之前或之后。
+/// 过滤视图只显示分区的子集，因此这里始终按全局分区顺序重排并整体重新编号。
+pub async fn reorder_item(
+    pool: &SqlitePool,
+    section: ReorderSection,
+    id: &str,
+    anchor: ReorderAnchor,
+) -> Result<()> {
+    let (anchor_id, position) = match &anchor {
+        ReorderAnchor::Before(anchor) => (anchor.as_str(), ReorderAnchor::Before(anchor.clone())),
+        ReorderAnchor::After(anchor) => (anchor.as_str(), ReorderAnchor::After(anchor.clone())),
+    };
+    let (select_sql, update_sql) = match section {
+        ReorderSection::Pinned => (
+            "SELECT id FROM clipboard_items WHERE is_pinned = 1 ORDER BY pin_order DESC, updated_at DESC, created_at DESC",
+            "UPDATE clipboard_items SET pin_order = ? WHERE id = ?",
+        ),
+        ReorderSection::Favorite => (
+            "SELECT id FROM clipboard_items WHERE is_favorite = 1 AND is_pinned = 0 ORDER BY favorite_order DESC, updated_at DESC, created_at DESC",
+            "UPDATE clipboard_items SET favorite_order = ? WHERE id = ?",
+        ),
+    };
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin item reorder transaction")?;
+    let mut ids: Vec<String> = sqlx::query_scalar(select_sql)
+        .fetch_all(&mut *tx)
+        .await
+        .context("failed to read item reorder section")?;
+    let Some(source_ix) = ids.iter().position(|candidate| candidate == id) else {
+        return Err(anyhow::anyhow!("item to reorder is not in the requested section").into());
+    };
+    if ids
+        .iter()
+        .position(|candidate| candidate == anchor_id)
+        .is_none()
+    {
+        return Err(anyhow::anyhow!("reorder anchor is not in the requested section").into());
+    }
+    if id == anchor_id {
+        return Ok(());
+    }
+
+    let source = ids.remove(source_ix);
+    let mut insert_ix = ids
+        .iter()
+        .position(|candidate| candidate == anchor_id)
+        .ok_or_else(|| anyhow::anyhow!("reorder anchor is not in the requested section"))?;
+    if matches!(position, ReorderAnchor::After(_)) {
+        insert_ix += 1;
+    }
+    ids.insert(insert_ix, source);
+
+    for (ix, item_id) in ids.iter().enumerate() {
+        let rank = i64::try_from(ids.len() - ix).unwrap_or(1);
+        sqlx::query(update_sql)
+            .bind(rank)
+            .bind(item_id)
+            .execute(&mut *tx)
+            .await
+            .context("failed to write item reorder")?;
+    }
+    tx.commit()
+        .await
+        .context("failed to commit item reorder transaction")?;
+    Ok(())
 }
 
 /// 更新备注，传 `None` 清空备注。
@@ -361,7 +463,12 @@ pub async fn list_item_refs(
          FROM clipboard_items WHERE 1 = 1",
     );
     push_filter_clauses(&mut qb, q, &keyword);
-    push_order_clause(&mut qb, q.sort);
+    push_order_clause(
+        &mut qb,
+        q.sort,
+        q.group == Some(ClipboardGroupFilter::Favorite)
+            || (q.group.is_none() && q.favorite == Some(true)),
+    );
 
     let refs = qb
         .build_query_as::<ClipboardItemRef>()
@@ -532,15 +639,23 @@ fn push_list_query(qb: &mut QueryBuilder<Sqlite>, q: &ClipboardItemQuery, keywor
     qb.push(LIST_SELECT_ITEM);
     qb.push(" WHERE 1 = 1");
     push_filter_clauses(qb, q, keyword);
-    push_order_clause(qb, q.sort);
+    push_order_clause(
+        qb,
+        q.sort,
+        q.group == Some(ClipboardGroupFilter::Favorite)
+            || (q.group.is_none() && q.favorite == Some(true)),
+    );
 
     qb.push(" LIMIT ").push_bind(q.limit);
     qb.push(" OFFSET ").push_bind(q.offset);
 }
 
 /// 列表排序：置顶恒前置，其余按 `sort`。列表分页与 [`list_item_refs`] 共用，保证两边顺序一致。
-fn push_order_clause(qb: &mut QueryBuilder<Sqlite>, sort: ClipboardItemSort) {
-    qb.push(" ORDER BY clipboard_items.is_pinned DESC, ");
+fn push_order_clause(qb: &mut QueryBuilder<Sqlite>, sort: ClipboardItemSort, favorite_tab: bool) {
+    qb.push(" ORDER BY clipboard_items.is_pinned DESC, clipboard_items.pin_order DESC, ");
+    if favorite_tab {
+        qb.push("clipboard_items.favorite_order DESC, ");
+    }
     match sort {
         ClipboardItemSort::CreatedAt => {
             qb.push("clipboard_items.created_at DESC");
@@ -1028,6 +1143,73 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(ids(&by_use), ["b", "a", "c"]);
+    }
+
+    #[tokio::test]
+    async fn manual_orders_assign_top_clear_and_reorder() {
+        let pool = memory_pool().await;
+        for id in ["a", "b", "c"] {
+            insert_item(&pool, &sample_item(id)).await.unwrap();
+        }
+        assert!(toggle_item_pinned(&pool, "a").await.unwrap());
+        assert!(toggle_item_pinned(&pool, "b").await.unwrap());
+        let pin_orders: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT id, pin_order FROM clipboard_items WHERE is_pinned = 1 ORDER BY pin_order DESC",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            pin_orders
+                .iter()
+                .map(|row| row.0.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "a"]
+        );
+
+        reorder_item(
+            &pool,
+            ReorderSection::Pinned,
+            "a",
+            ReorderAnchor::Before("b".to_owned()),
+        )
+        .await
+        .unwrap();
+        let q = ClipboardItemQuery {
+            group: Some(ClipboardGroupFilter::All),
+            ..Default::default()
+        };
+        assert_eq!(ids(&query_items(&pool, &q).await.unwrap()), ["a", "b", "c"]);
+        toggle_item_pinned(&pool, "a").await.unwrap();
+        assert!(sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT pin_order FROM clipboard_items WHERE id = 'a'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .is_none());
+        toggle_item_pinned(&pool, "b").await.unwrap();
+
+        assert!(toggle_item_favorite(&pool, "a").await.unwrap());
+        assert!(toggle_item_favorite(&pool, "b").await.unwrap());
+        reorder_item(
+            &pool,
+            ReorderSection::Favorite,
+            "a",
+            ReorderAnchor::After("b".to_owned()),
+        )
+        .await
+        .unwrap();
+        let favorite = query_items(
+            &pool,
+            &ClipboardItemQuery {
+                group: Some(ClipboardGroupFilter::Favorite),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ids(&favorite), ["b", "a"]);
     }
 
     #[tokio::test]
@@ -1769,7 +1951,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(toggle_item_favorite(&pool, "b").await.unwrap());
+        // 旧 schema 还没有 favorite_order；这里必须用旧库可执行的原始 SQL，
+        // 而不是调用依赖 0007 列的现行 toggle_item_favorite。
+        sqlx::query("UPDATE clipboard_items SET is_favorite = NOT is_favorite WHERE id = 'b'")
+            .execute(&pool)
+            .await
+            .unwrap();
         let mut expected = std::collections::BTreeMap::from([
             ("quartz", vec!["a"]),
             ("tundra", vec!["a"]),
@@ -1875,7 +2062,7 @@ mod tests {
                     group: Some(ClipboardGroupFilter::All),
                     ..ClipboardItemQuery::default()
                 },
-                "idx_clipboard_items_pinned_updated",
+                "idx_clipboard_items_pinned_updated_manual",
             ),
             (
                 "created sort",
@@ -1884,7 +2071,7 @@ mod tests {
                     sort: ClipboardItemSort::CreatedAt,
                     ..ClipboardItemQuery::default()
                 },
-                "idx_clipboard_items_pinned_created",
+                "idx_clipboard_items_pinned_created_manual",
             ),
             (
                 "image tab",
@@ -1892,7 +2079,7 @@ mod tests {
                     group: Some(ClipboardGroupFilter::Image),
                     ..ClipboardItemQuery::default()
                 },
-                "idx_clipboard_items_kind_pinned_updated",
+                "idx_clipboard_items_kind_pinned_updated_manual",
             ),
             (
                 "custom group",
@@ -1901,14 +2088,30 @@ mod tests {
                     group_id: Some("g1".to_owned()),
                     ..ClipboardItemQuery::default()
                 },
-                "idx_clipboard_items_group_pinned_updated",
+                "idx_clipboard_items_group_pinned_updated_manual",
+            ),
+            (
+                "favorite tab",
+                ClipboardItemQuery {
+                    group: Some(ClipboardGroupFilter::Favorite),
+                    ..ClipboardItemQuery::default()
+                },
+                "idx_clipboard_items_favorite_manual_updated",
             ),
         ];
 
         for (label, q, index) in cases {
             let plan = query_plan(&pool, &q).await;
+            let uses_expected_index = plan.iter().any(|step| {
+                let mut previous = "";
+                step.split_whitespace().any(|token| {
+                    let matched = previous == "INDEX" && token == index;
+                    previous = token;
+                    matched
+                })
+            });
             assert!(
-                plan.iter().any(|step| step.contains(index)),
+                uses_expected_index,
                 "{label}: expected {index}, got {plan:?}"
             );
             assert!(

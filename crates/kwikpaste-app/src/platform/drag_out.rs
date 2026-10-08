@@ -69,6 +69,19 @@ impl DragTracker {
     pub fn release(&mut self) {
         self.pressed = None;
     }
+
+    /// 判断是否越过系统拖拽阈值但不消费按下状态，供面板内排序手势先行判定。
+    pub fn crossed_threshold(&self, event: &MouseMoveEvent, window: &Window) -> bool {
+        if event.pressed_button != Some(MouseButton::Left) {
+            return false;
+        }
+        let Some((_, origin)) = self.pressed.as_ref() else {
+            return false;
+        };
+        let (threshold_x, threshold_y) = threshold(window);
+        let delta = event.position - *origin;
+        delta.x.abs() >= threshold_x || delta.y.abs() >= threshold_y
+    }
 }
 
 /// 系统的拖拽阈值（逻辑像素）：Windows `SM_CXDRAG` / `SM_CYDRAG` 按窗口缩放换算，macOS 3 pt。

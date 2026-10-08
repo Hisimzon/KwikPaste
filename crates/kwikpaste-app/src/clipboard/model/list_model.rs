@@ -291,6 +291,78 @@ impl ListModel {
         Some(index)
     }
 
+    /// 在已缓存行中乐观地移动一个置顶 / 收藏条目；空洞的分页位置保持不变。
+    pub fn reorder_local(
+        &mut self,
+        id: &str,
+        anchor: &str,
+        favorite_section: bool,
+        after: bool,
+    ) -> bool {
+        if id == anchor {
+            return false;
+        }
+        let section = |item: &ListItem| {
+            if favorite_section {
+                item.is_favorite && !item.is_pinned
+            } else {
+                item.is_pinned
+            }
+        };
+        let mut keys: Vec<usize> = self
+            .items
+            .iter()
+            .filter_map(|(index, item)| section(item).then_some(*index))
+            .collect();
+        keys.sort_unstable();
+        let Some(source_key) = keys
+            .iter()
+            .copied()
+            .find(|index| self.items.get(index).is_some_and(|item| &*item.id == id))
+        else {
+            return false;
+        };
+        let Some(anchor_key) = keys.iter().copied().find(|index| {
+            self.items
+                .get(index)
+                .is_some_and(|item| &*item.id == anchor)
+        }) else {
+            return false;
+        };
+        let Some(source_pos) = keys.iter().position(|key| *key == source_key) else {
+            return false;
+        };
+        let Some(anchor_pos) = keys.iter().position(|key| *key == anchor_key) else {
+            return false;
+        };
+        if (!after && source_pos + 1 == anchor_pos) || (after && anchor_pos + 1 == source_pos) {
+            return false;
+        }
+        let source = self.items.remove(&source_key);
+        let mut remaining: Vec<Arc<ListItem>> = keys
+            .iter()
+            .filter(|key| **key != source_key)
+            .filter_map(|key| self.items.get(key).cloned())
+            .collect();
+        let anchor_pos = remaining
+            .iter()
+            .position(|item| &*item.id == anchor)
+            .unwrap_or_else(|| {
+                keys.iter()
+                    .position(|key| *key == anchor_key)
+                    .unwrap_or_default()
+                    .min(remaining.len())
+            });
+        let insert_pos = (anchor_pos + usize::from(after)).min(remaining.len());
+        if let Some(source) = source {
+            remaining.insert(insert_pos, source);
+        }
+        for (key, item) in keys.into_iter().zip(remaining) {
+            self.items.insert(key, item);
+        }
+        true
+    }
+
     /// 面板隐藏时只留第一页：再显示时会回到顶部，其余行按需重拉（附录 B §5.3 第 8 条“隐藏即释放”）。
     pub fn release_rows(&mut self) {
         self.items.retain(|index, _| *index < PAGE_SIZE);
@@ -672,6 +744,29 @@ mod tests {
         let item = model.get(7).expect("cached");
         assert!(item.is_favorite);
         assert_eq!(item.note.as_deref(), Some("备注"));
+    }
+
+    #[test]
+    fn reorder_local_keeps_all_rows_and_moves_only_the_requested_section() {
+        let ids = backend(8);
+        let mut model = ListModel::new();
+        let first = model.reset_and_reload();
+        load(&mut model, &ids, 2, &first);
+        for id in ["r2", "r3", "r4"] {
+            model.patch_by_id(id, |item| item.is_favorite = true);
+        }
+
+        assert!(model.reorder_local("r0", "r1", false, true));
+        assert_eq!(model.get(0).map(|item| &*item.id), Some("r1"));
+        assert_eq!(model.get(1).map(|item| &*item.id), Some("r0"));
+        assert_eq!(model.get(2).map(|item| &*item.id), Some("r2"));
+        assert_eq!(model.get(7).map(|item| &*item.id), Some("r7"));
+
+        assert!(model.reorder_local("r2", "r4", true, false));
+        assert_eq!(model.get(2).map(|item| &*item.id), Some("r3"));
+        assert_eq!(model.get(3).map(|item| &*item.id), Some("r2"));
+        assert_eq!(model.get(4).map(|item| &*item.id), Some("r4"));
+        assert_eq!(model.get(5).map(|item| &*item.id), Some("r5"));
     }
 
     #[test]

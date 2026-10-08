@@ -71,6 +71,17 @@ pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
         }),
         group_id: group_id.as_deref().map(str::to_owned),
         favorite: query.filter.favorites().then_some(true),
+        group: Some(if query.filter.favorites() {
+            kwikpaste_core::db::models::ClipboardGroupFilter::Favorite
+        } else if let Some(category) = query.filter.category {
+            match category {
+                ItemKind::Text => kwikpaste_core::db::models::ClipboardGroupFilter::Text,
+                ItemKind::Image => kwikpaste_core::db::models::ClipboardGroupFilter::Image,
+                ItemKind::Files => kwikpaste_core::db::models::ClipboardGroupFilter::Files,
+            }
+        } else {
+            kwikpaste_core::db::models::ClipboardGroupFilter::All
+        }),
         keyword: (!keyword.is_empty()).then(|| keyword.to_string()),
         sort: query.sort,
         limit: i64::try_from(query.limit).unwrap_or(i64::MAX),
@@ -164,6 +175,17 @@ impl ClipboardSource for CoreSource {
         let core = self.core.clone();
 
         async move { Ok(core.toggle_pinned(&id).await?) }.boxed()
+    }
+
+    fn reorder(
+        &self,
+        section: kwikpaste_core::ops::ReorderSection,
+        id: Arc<str>,
+        anchor: kwikpaste_core::ops::ReorderAnchor,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.reorder_item(section, &id, anchor).await?) }.boxed()
     }
 
     fn update_note(

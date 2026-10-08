@@ -24,20 +24,21 @@ use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use chrono::{DateTime, Local};
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, ClickEvent, Context, DispatchPhase, Entity,
-    EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
-    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context, DispatchPhase,
+    Entity, EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
+    KeyUpEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement as _, Pixels, Point, Render, Role, ScrollDelta, ScrollWheelEvent,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, canvas, div, list,
-    prelude::FluentBuilder as _, px,
+    point, prelude::FluentBuilder as _, px,
 };
 use kwikpaste_core::{
     CoreEvent,
+    ops::{ReorderAnchor, ReorderSection},
     settings::{AutoPaste, MiddleClickAction, Settings},
 };
 use kwikpaste_ui::{
@@ -192,6 +193,38 @@ struct Rows {
     count: usize,
 }
 
+/// 面板内排序的临时状态；拖动期间只记录源、分区、指针和候选锚点，落地仍由 core 校验。
+#[derive(Clone, Debug)]
+struct ReorderDrag {
+    id: Arc<str>,
+    section: ReorderSection,
+    pointer: Point<Pixels>,
+    anchor: Option<Arc<str>>,
+    after: bool,
+    active: bool,
+    source_bounds: Bounds<Pixels>,
+    grab_offset: Pixels,
+}
+
+/// Bounds painted during an in-panel reorder. This is deliberately separate from
+/// preview anchors: preview visibility and hover timing must not affect drop geometry.
+#[derive(Clone, Default)]
+struct ReorderGeometry {
+    root: Option<Bounds<Pixels>>,
+    area: Option<Bounds<Pixels>>,
+    cards: Vec<(Arc<str>, ReorderSection, Bounds<Pixels>)>,
+    ghost: Option<Bounds<Pixels>>,
+    indicator: Option<Bounds<Pixels>>,
+    repaint_requested: bool,
+}
+
+type ReorderMeasurements = (
+    bool,
+    Option<Bounds<Pixels>>,
+    Option<Bounds<Pixels>>,
+    Option<Bounds<Pixels>>,
+);
+
 pub struct ClipboardList {
     pub(super) source: Arc<dyn ClipboardSource>,
     pub(super) model: ListModel,
@@ -248,6 +281,11 @@ pub struct ClipboardList {
     previewing: previewing::Previewing,
     /// 卡片上按下左键后拖动多远算拖出（平台层的拖出接口）。
     drag: DragTracker,
+    reorder: Option<ReorderDrag>,
+    reorder_geometry: Rc<RefCell<ReorderGeometry>>,
+    reorder_scroll_task: Option<Task<()>>,
+    pending_reorder_release: Option<Point<Pixels>>,
+    pending_drag_out: Option<Arc<str>>,
     /// 左键按下的卡片；拖出开始时清掉，点击时据此执行单击动作。
     armed_click: Option<Arc<str>>,
     _subscriptions: Vec<Subscription>,
@@ -323,6 +361,11 @@ impl ClipboardList {
             pointer: Pointer::Moved,
             previewing: previewing::Previewing::default(),
             drag: DragTracker::default(),
+            reorder: None,
+            reorder_geometry: Rc::default(),
+            reorder_scroll_task: None,
+            pending_reorder_release: None,
+            pending_drag_out: None,
             armed_click: None,
             _subscriptions: subscriptions,
         };
@@ -438,6 +481,7 @@ impl ClipboardList {
             }
             PanelEvent::Hidden => {
                 self.visible = false;
+                self.cancel_reorder(cx);
                 self.motion.reveal = None;
                 self.motion.wheel = 0.;
                 self.hovered = None;
@@ -587,7 +631,7 @@ impl ClipboardList {
     }
 
     /// 在顶部重拉第一页（有新内容时，1.x `reload`）。
-    fn reload(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reload(&mut self, cx: &mut Context<Self>) {
         let request = self.model.reload();
         self.fetch(request, cx);
     }
@@ -859,6 +903,9 @@ impl ClipboardList {
 
     /// 指针进出卡片：进入时它成为当前项（1.x hover 与键盘共用选中），并显示快捷动作。
     fn hover_card(&mut self, id: &Arc<str>, hovered: bool, cx: &mut Context<Self>) {
+        if self.reorder.as_ref().is_some_and(|drag| drag.active) {
+            return;
+        }
         if hovered {
             if self.pointer == Pointer::Moved {
                 self.controller.hover(id);
@@ -877,6 +924,76 @@ impl ClipboardList {
         // `Moved`；否则预览用例会偶发地在 `preview_hover` 的门槛处直接返回。
         self.pointer = Pointer::Moved;
         self.hover_card(id, true, cx);
+    }
+
+    /// 交互自测读取已经绘制卡片的中心点，随后仍通过 GPUI 鼠标事件驱动真实拖动路径。
+    pub(crate) fn selftest_card_center(&self, id: &str) -> Option<Point<Pixels>> {
+        self.previewing
+            .anchors
+            .borrow()
+            .iter()
+            .find(|(anchor, _)| &**anchor == id)
+            .map(|(_, bounds)| {
+                point(
+                    bounds.origin.x + bounds.size.width / 2.,
+                    bounds.origin.y + bounds.size.height / 2.,
+                )
+            })
+    }
+
+    /// Read the actual painted reorder overlay for GPUI selftests.
+    pub(crate) fn selftest_reorder_measurements(&self) -> Option<ReorderMeasurements> {
+        let drag = self.reorder.as_ref()?;
+        let geometry = self.reorder_geometry.borrow();
+        let source = geometry
+            .cards
+            .iter()
+            .find(|(id, _, _)| id.as_ref() == drag.id.as_ref())
+            .map(|(_, _, bounds)| *bounds)
+            .or(Some(drag.source_bounds));
+        Some((drag.active, source, geometry.ghost, geometry.indicator))
+    }
+
+    pub(crate) fn selftest_reorder_active(&self) -> bool {
+        self.reorder.as_ref().is_some_and(|drag| drag.active)
+    }
+
+    pub(crate) fn selftest_reorder_card_bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
+        self.reorder_geometry
+            .borrow()
+            .cards
+            .iter()
+            .find(|(candidate, _, _)| candidate.as_ref() == id)
+            .map(|(_, _, bounds)| *bounds)
+    }
+
+    pub(crate) fn selftest_reorder_indicator_matches_gap(&self) -> Option<bool> {
+        let drag = self.reorder.as_ref()?.clone();
+        let anchor = drag.anchor?;
+        let mut cards: Vec<_> = self
+            .reorder_geometry
+            .borrow()
+            .cards
+            .iter()
+            .filter(|(_, section, _)| *section == drag.section)
+            .cloned()
+            .collect();
+        cards.sort_by_key(|entry| entry.2.origin.y);
+        let index = cards.iter().position(|(id, _, _)| id == &anchor)?;
+        let anchor_bounds = cards.get(index)?.2;
+        let expected = if drag.after {
+            cards
+                .get(index + 1)
+                .map(|(_, _, next)| (anchor_bounds.bottom() + next.origin.y) / 2.)
+                .unwrap_or(anchor_bounds.bottom())
+        } else {
+            cards
+                .get(index.checked_sub(1).unwrap_or(usize::MAX))
+                .map(|(_, _, previous)| (previous.bottom() + anchor_bounds.origin.y) / 2.)
+                .unwrap_or(anchor_bounds.origin.y)
+        };
+        let indicator = self.reorder_geometry.borrow().indicator?;
+        Some((indicator.origin.y - expected).abs() <= px(2.))
     }
 
     /// 指针移动：显示后第一次移动只记下位置（可能是系统补发的），离开它超过 [`POINTER_SLOP`]
@@ -900,6 +1017,193 @@ impl ClipboardList {
                 }
             }
         }
+    }
+
+    fn update_reorder_target(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((id, section)) = self
+            .reorder
+            .as_ref()
+            .map(|drag| (drag.id.clone(), drag.section))
+        else {
+            return;
+        };
+        if let Some(drag) = self.reorder.as_mut() {
+            drag.pointer = position;
+        }
+        if position.x < px(0.)
+            || position.y < px(0.)
+            || position.x > window.bounds().size.width
+            || position.y > window.bounds().size.height
+        {
+            self.reorder = None;
+            self.armed_click = None;
+            self.drag.release();
+            self.drag_out(id, window, cx);
+            return;
+        }
+        let geometry = self.reorder_geometry.borrow();
+        let mut cards: Vec<_> = geometry
+            .cards
+            .iter()
+            .filter(|(_, card_section, _)| *card_section == section)
+            .filter(|(card_id, _, _)| card_id.as_ref() != id.as_ref())
+            .cloned()
+            .collect();
+        cards.sort_by_key(|left| left.2.origin.y);
+        if let Some(drag) = self.reorder.as_mut() {
+            if let Some((anchor, _, _bounds)) = cards
+                .iter()
+                .find(|(_, _, bounds)| position.y < bounds.origin.y + bounds.size.height / 2.)
+            {
+                drag.anchor = Some(anchor.clone());
+                drag.after = false;
+            } else if let Some((anchor, _, _)) = cards.last() {
+                drag.anchor = Some(anchor.clone());
+                drag.after = true;
+            } else {
+                drag.anchor = None;
+                drag.after = false;
+            }
+        }
+        cx.notify();
+    }
+
+    fn start_reorder_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reorder_scroll_task.is_some() {
+            return;
+        }
+        let entity = cx.entity().downgrade();
+        self.reorder_scroll_task = Some(cx.spawn_in(window, async move |_, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                let keep_running = entity
+                    .update_in(cx, |list, window, cx| {
+                        let Some(drag) = list.reorder.as_ref() else {
+                            return false;
+                        };
+                        if !drag.active || drag.section == ReorderSection::Pinned {
+                            return drag.active;
+                        }
+                        let Some(area) = list.reorder_geometry.borrow().area else {
+                            return true;
+                        };
+                        let edge = px(40.);
+                        let depth = if drag.pointer.y < area.origin.y + edge {
+                            (area.origin.y + edge - drag.pointer.y)
+                                .as_f32()
+                                .min(edge.as_f32())
+                        } else if drag.pointer.y > area.origin.y + area.size.height - edge {
+                            (drag.pointer.y - (area.origin.y + area.size.height - edge))
+                                .as_f32()
+                                .min(edge.as_f32())
+                        } else {
+                            0.
+                        };
+                        if depth > 0. {
+                            let direction = if drag.pointer.y < area.origin.y + edge {
+                                -1.
+                            } else {
+                                1.
+                            };
+                            let step = direction * 12. * (depth / edge.as_f32()).max(0.2);
+                            list.reorder_geometry.borrow_mut().repaint_requested = false;
+                            list.state.scroll_by(px(step));
+                            // 这里不在绘制阶段，不能 request_animation_frame（会 panic）；
+                            // update_reorder_target 里的 notify 会重绘。
+                            list.update_reorder_target(drag.pointer, window, cx);
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_running {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn reorder_area_contains(&self, position: Point<Pixels>) -> bool {
+        self.reorder_geometry
+            .borrow()
+            .area
+            .is_some_and(|area| area.contains(&position))
+    }
+
+    fn cancel_reorder(&mut self, cx: &mut Context<Self>) {
+        if self.reorder.take().is_some() {
+            self.reorder_scroll_task = None;
+            self.drag.release();
+            self.armed_click = None;
+            self.reorder_geometry.borrow_mut().ghost = None;
+            self.reorder_geometry.borrow_mut().indicator = None;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn dismiss_reorder(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.reorder.is_some() {
+            self.cancel_reorder(cx);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn commit_reorder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = self.reorder.take() else {
+            return;
+        };
+        self.reorder_scroll_task = None;
+        self.drag.release();
+        self.armed_click = None;
+        let Some(anchor) = drag.anchor else {
+            cx.notify();
+            return;
+        };
+        let original = self.model.index_of(&drag.id);
+        let changed = self.model.reorder_local(
+            &drag.id,
+            &anchor,
+            drag.section == ReorderSection::Favorite,
+            drag.after,
+        );
+        if !changed {
+            cx.notify();
+            return;
+        }
+        let anchor = if drag.after {
+            ReorderAnchor::After(anchor.to_string())
+        } else {
+            ReorderAnchor::Before(anchor.to_string())
+        };
+        let selected_id = drag.id.clone();
+        let future = self.source.reorder(drag.section, drag.id.clone(), anchor);
+        cx.spawn_in(window, async move |list, cx| {
+            let result = future.await;
+            list.update_in(cx, |list, window, cx| {
+                if let Err(err) = result {
+                    Self::toast_error("commands:labels.reorder", &err, window, cx);
+                    if let Some(request) = list.model.reload_current_range() {
+                        list.fetch(request, cx);
+                    }
+                } else {
+                    list.controller.select(&selected_id);
+                }
+                if original.is_some() {
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选；否则左键选中、记下拖出的
@@ -930,6 +1234,44 @@ impl ClipboardList {
             MouseButton::Left => {
                 self.controller.select(&id);
                 self.drag.press(id.to_string(), event.position);
+                let section = if item.is_pinned {
+                    Some(ReorderSection::Pinned)
+                } else if item.is_favorite
+                    && self.controller.filter().range
+                        == crate::clipboard::model::filter::Range::Favorite
+                {
+                    Some(ReorderSection::Favorite)
+                } else {
+                    None
+                };
+                let bounds = self
+                    .reorder_geometry
+                    .borrow()
+                    .cards
+                    .iter()
+                    .find(|(candidate, _, _)| candidate.as_ref() == id.as_ref())
+                    .map(|(_, _, bounds)| *bounds);
+                self.reorder = (!self.controller.filter().searching())
+                    .then_some(section)
+                    .flatten()
+                    .map(|section| ReorderDrag {
+                        id: id.clone(),
+                        section,
+                        pointer: event.position,
+                        anchor: None,
+                        after: false,
+                        active: false,
+                        source_bounds: bounds.unwrap_or_else(|| Bounds {
+                            origin: event.position,
+                            size: gpui::size(px(0.), px(0.)),
+                        }),
+                        grab_offset: bounds
+                            .map(|bounds| event.position.y - bounds.origin.y)
+                            .unwrap_or(px(0.)),
+                    });
+                if self.reorder.is_some() {
+                    self.reorder_geometry.borrow_mut().repaint_requested = false;
+                }
                 self.armed_click = Some(id);
             }
             MouseButton::Middle => {
@@ -962,6 +1304,9 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.reorder.as_ref().is_some_and(|drag| drag.active) {
+            return;
+        }
         let armed = self.armed_click.take().is_some_and(|id| id == item.id);
         if self.selection.active() {
             return;
@@ -1138,6 +1483,11 @@ impl ClipboardList {
             on_link,
             position: index + 1,
             set_size: self.model.total(),
+            dragged: self
+                .reorder
+                .as_ref()
+                .is_some_and(|drag| drag.active && drag.id == item.id),
+            lifted: false,
         };
         let id = item.id.clone();
         let pressed = item.clone();
@@ -1148,8 +1498,45 @@ impl ClipboardList {
             .wants_anchor(&item.id, active)
             .then(|| previewing::anchor_canvas(item.id.clone(), self.previewing.anchors.clone()));
 
+        let reorder_geometry = self.reorder_geometry.clone();
+        let reorder_id = item.id.clone();
+        let reorder_section = item
+            .is_pinned
+            .then_some(ReorderSection::Pinned)
+            .or_else(|| {
+                (item.is_favorite
+                    && !item.is_pinned
+                    && self.controller.filter().range
+                        == crate::clipboard::model::filter::Range::Favorite)
+                    .then_some(ReorderSection::Favorite)
+            });
+        let record_reorder = reorder_section.is_some();
+        let reorder_canvas = canvas(
+            move |bounds, window, _| {
+                let mut geometry = reorder_geometry.borrow_mut();
+                if record_reorder {
+                    geometry
+                        .cards
+                        .retain(|(id, _, _)| id.as_ref() != reorder_id.as_ref());
+                    if let Some(section) = reorder_section {
+                        geometry.cards.push((reorder_id.clone(), section, bounds));
+                    }
+                    if !geometry.repaint_requested {
+                        geometry.repaint_requested = true;
+                        window.request_animation_frame();
+                    }
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
         card::card(env, &item, index, state)
             .children(anchor)
+            .child(reorder_canvas)
             .on_hover(cx.listener(move |list, hovered: &bool, _, cx| {
                 list.hover_card(&id, *hovered, cx);
             }))
@@ -1186,6 +1573,7 @@ impl ClipboardList {
         let layout = self.layout;
         let env = CardEnv {
             tokens,
+            reorder_source_opacity: theme::components(cx).reorder.source_opacity,
             layout: &layout,
             now: self.now,
             reduce_motion: self.reduce_motion(cx),
@@ -1233,9 +1621,28 @@ impl Render for ClipboardList {
         }
 
         self.consume_snapshot(cx);
+        if let Some(id) = self.pending_drag_out.take() {
+            self.drag_out(id, window, cx);
+        }
+        if let Some(position) = self.pending_reorder_release.take()
+            && self.reorder.as_ref().is_some_and(|drag| drag.active)
+        {
+            if self.reorder_area_contains(position) {
+                self.commit_reorder(window, cx);
+            } else {
+                self.cancel_reorder(cx);
+            }
+        }
         self.placeholders.borrow_mut().clear();
         // 卡片位置每帧重记，滚出视口的卡片不留旧位置。
         self.previewing.anchors.borrow_mut().clear();
+        let painted_reorder_geometry = self.reorder_geometry.borrow().clone();
+        {
+            let mut geometry = self.reorder_geometry.borrow_mut();
+            geometry.cards.clear();
+            geometry.ghost = None;
+            geometry.indicator = None;
+        }
         self.apply_hints();
         self.run_motion(window, cx);
         self.consume_reload_at_top(cx);
@@ -1244,6 +1651,7 @@ impl Render for ClipboardList {
         let layout = self.layout;
         let env = CardEnv {
             tokens,
+            reorder_source_opacity: theme::components(cx).reorder.source_opacity,
             layout: &layout,
             now: self.now,
             reduce_motion: self.reduce_motion(cx),
@@ -1317,12 +1725,261 @@ impl Render for ClipboardList {
                 .into_any_element()
         };
 
+        let reorder_overlay: Vec<AnyElement> = self
+            .reorder
+            .clone()
+            .filter(|drag| drag.active)
+            .and_then(|drag| {
+                let item = self.model.find(&drag.id)?.clone();
+                let (root, area, (source, mut section_cards, mut all_section_cards)) = {
+                    let geometry = &painted_reorder_geometry;
+                    let root = geometry.root?;
+                    let area = geometry.area?;
+                    let source = geometry
+                        .cards
+                        .iter()
+                        .find(|(id, _, _)| id.as_ref() == drag.id.as_ref())
+                        .map(|(_, _, bounds)| *bounds)
+                        .unwrap_or(drag.source_bounds);
+                    let cards: Vec<_> = geometry
+                        .cards
+                        .iter()
+                        .filter(|(_, section, _)| *section == drag.section)
+                        .filter(|(id, _, _)| id.as_ref() != drag.id.as_ref())
+                        .cloned()
+                        .collect();
+                    let all_cards: Vec<_> = geometry
+                        .cards
+                        .iter()
+                        .filter(|(_, section, _)| *section == drag.section)
+                        .cloned()
+                        .collect();
+                    (root, area, (source, cards, all_cards))
+                };
+                section_cards.sort_by_key(|left| left.2.origin.y);
+                all_section_cards.sort_by_key(|left| left.2.origin.y);
+                let ghost_top = (drag.pointer.y - drag.grab_offset)
+                    .max(area.origin.y)
+                    .min((area.bottom() - source.size.height).max(area.origin.y));
+                let local_x = source.origin.x - root.origin.x;
+                let local_y = ghost_top - root.origin.y;
+                let image = self.visual(&item, window, cx);
+                let ghost = card::card(
+                    &env,
+                    &item,
+                    self.model.index_of(&item.id).unwrap_or_default(),
+                    CardState {
+                        active: false,
+                        hovered: false,
+                        image,
+                        show_original: false,
+                        hint: None,
+                        checked: false,
+                        after_highlight: false,
+                        actions: None,
+                        checkbox: None,
+                        on_snippet: None,
+                        on_link: None,
+                        position: 1,
+                        set_size: 1,
+                        dragged: false,
+                        lifted: true,
+                    },
+                )
+                .absolute()
+                .left(local_x)
+                .top(local_y)
+                .w(source.size.width)
+                .h(source.size.height)
+                .opacity(theme::components(cx).reorder.ghost_opacity)
+                .into_any_element();
+                /*
+                 * The source is excluded above. Walking the painted bounds gives
+                 * the same slot in card and seamless styles, including variable
+                 * image/text heights.
+                 */
+                let anchor_index = drag
+                    .anchor
+                    .as_ref()
+                    .and_then(|anchor| section_cards.iter().position(|(id, _, _)| id == anchor));
+                let indicator_y = anchor_index
+                    .and_then(|index| {
+                        let anchor_id = section_cards.get(index)?.0.clone();
+                        let all_index = all_section_cards
+                            .iter()
+                            .position(|(id, _, _)| id == &anchor_id)?;
+                        let anchor_bounds = all_section_cards.get(all_index)?.2;
+                        if drag.after {
+                            Some(
+                                all_section_cards
+                                    .get(all_index + 1)
+                                    .map(|(_, _, next)| {
+                                        (anchor_bounds.bottom() + next.origin.y) / 2.
+                                    })
+                                    .unwrap_or(anchor_bounds.bottom()),
+                            )
+                        } else {
+                            Some(
+                                all_section_cards
+                                    .get(all_index.checked_sub(1).unwrap_or(usize::MAX))
+                                    .map(|(_, _, previous)| {
+                                        (previous.bottom() + anchor_bounds.origin.y) / 2.
+                                    })
+                                    .unwrap_or(anchor_bounds.origin.y),
+                            )
+                        }
+                    })
+                    .unwrap_or(ghost_top);
+                let indicator_card = anchor_index
+                    .and_then(|index| {
+                        section_cards.get(index).and_then(|(id, _, _)| {
+                            all_section_cards
+                                .iter()
+                                .find(|(candidate, _, _)| candidate == id)
+                                .map(|(_, _, bounds)| *bounds)
+                        })
+                    })
+                    .or_else(|| section_cards.last().map(|(_, _, bounds)| *bounds))
+                    .unwrap_or(source);
+                let left_inset = px_rems(
+                    self.layout.item_padding_x
+                        + self.layout.card_padding_x
+                        + if self.layout.header_row {
+                            0.
+                        } else {
+                            16. + self.layout.body_gap
+                        },
+                )
+                .to_pixels(self.rem);
+                let right_inset = px_rems(self.layout.item_padding_x + self.layout.card_padding_x)
+                    .to_pixels(self.rem);
+                let indicator_left = indicator_card.origin.x + left_inset;
+                let indicator_width =
+                    (indicator_card.size.width - left_inset - right_inset).max(px(0.));
+                let indicator_local_y = indicator_y - root.origin.y;
+                let indicator = div()
+                    .absolute()
+                    .left(indicator_left - root.origin.x)
+                    .top(indicator_local_y)
+                    .w(indicator_width)
+                    .h(px(2.))
+                    .bg(tokens.accent.solid)
+                    .into_any_element();
+                let mut geometry = self.reorder_geometry.borrow_mut();
+                geometry.ghost = Some(Bounds {
+                    origin: point(source.origin.x, ghost_top),
+                    size: source.size,
+                });
+                geometry.indicator = Some(Bounds {
+                    origin: point(indicator_left, indicator_y),
+                    size: gpui::size(indicator_width, px(2.)),
+                });
+                Some(vec![ghost, indicator])
+            })
+            .unwrap_or_default();
+
+        let geometry = self.reorder_geometry.clone();
+        let event_entity = cx.entity().downgrade();
+        let root_bounds = canvas(
+            move |bounds, _, _| {
+                geometry.borrow_mut().root = Some(bounds);
+            },
+            move |_, _, window, _| {
+                let move_entity = event_entity.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture {
+                        return;
+                    }
+                    if let Some(entity) = move_entity.upgrade() {
+                        entity.update(cx, |list, cx| {
+                            let Some(drag) = list.reorder.as_ref() else {
+                                return;
+                            };
+                            let outside = event.position.x < px(0.)
+                                || event.position.y < px(0.)
+                                || event.position.x > window.bounds().size.width
+                                || event.position.y > window.bounds().size.height;
+                            let crossed = list.drag.crossed_threshold(event, window);
+                            if event.pressed_button != Some(MouseButton::Left) {
+                                list.reorder = None;
+                                list.armed_click = None;
+                                list.drag.release();
+                                list.reorder_scroll_task = None;
+                                cx.notify();
+                            } else if (drag.active || crossed) && outside {
+                                let id = drag.id.clone();
+                                list.reorder = None;
+                                list.armed_click = None;
+                                list.drag.release();
+                                list.reorder_scroll_task = None;
+                                list.pending_drag_out = Some(id);
+                                cx.notify();
+                            }
+                        });
+                    }
+                });
+                let up_entity = event_entity.clone();
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+                    if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
+                        return;
+                    }
+                    if let Some(entity) = up_entity.upgrade() {
+                        entity.update(cx, |list, cx| {
+                            if list.reorder.as_ref().is_some_and(|drag| drag.active) {
+                                list.pending_reorder_release = Some(event.position);
+                                cx.notify();
+                            }
+                        });
+                    }
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        let area_geometry = self.reorder_geometry.clone();
+        let area_bounds = canvas(
+            move |bounds, _, _| {
+                area_geometry.borrow_mut().area = Some(bounds);
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        let list_area = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .when(!pinned.is_empty(), |area| {
+                area.child(div().flex().flex_col().flex_none().children(pinned))
+            })
+            .child(content)
+            .child(area_bounds);
+
         let root = div()
             .id("clipboard-list")
             .role(Role::ListBox)
             .aria_label(crate::i18n::t("clipboard:accessibility.list"))
             .track_focus(&self.focus)
             .on_mouse_move(cx.listener(|list, event: &MouseMoveEvent, window, cx| {
+                if let Some(reorder) = list.reorder.as_ref()
+                    && (reorder.active || list.drag.crossed_threshold(event, window))
+                {
+                    if let Some(reorder) = list.reorder.as_mut() {
+                        reorder.active = true;
+                    }
+                    list.armed_click = None;
+                    list.close_preview(cx);
+                    list.start_reorder_autoscroll(window, cx);
+                    list.update_reorder_target(event.position, window, cx);
+                    return;
+                }
                 list.pointer_moved(event.position, cx);
                 // 在卡片上按住左键拖过系统阈值：拖出这条记录。
                 if let Some(id) = list.drag.moved(event, window) {
@@ -1332,10 +1989,26 @@ impl Render for ClipboardList {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|list, _: &MouseUpEvent, _, _| list.drag.release()),
+                cx.listener(|list, event: &MouseUpEvent, window, cx| {
+                    if list.reorder.as_ref().is_some_and(|drag| drag.active) {
+                        if list.reorder_area_contains(event.position) {
+                            list.commit_reorder(window, cx);
+                        } else {
+                            list.cancel_reorder(cx);
+                        }
+                    } else {
+                        list.reorder = None;
+                        list.drag.release();
+                    }
+                }),
             )
             // 按住空格预览当前项（钩子转来的空格按下、松开）。
             .on_key_down(cx.listener(|list, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && list.reorder.is_some() {
+                    list.cancel_reorder(cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if event.keystroke.key == "space" && !event.keystroke.modifiers.modified() {
                     list.preview_space(true, cx);
                     cx.stop_propagation();
@@ -1347,15 +2020,14 @@ impl Render for ClipboardList {
                     cx.stop_propagation();
                 }
             }))
+            .relative()
             .flex()
             .flex_col()
             .size_full()
             .text_color(tokens.text.primary)
-            .when(!pinned.is_empty(), |root| {
-                // 置顶块固定在滚动区上方，不吸顶（材质上任何遮挡底色都会成为色块）。
-                root.child(div().flex().flex_col().flex_none().children(pinned))
-            })
-            .child(content)
+            .child(root_bounds)
+            .child(list_area)
+            .children(reorder_overlay)
             .child(self.render_footer(cx));
         let entity = cx.entity().downgrade();
         let root = context_menu(root, move |_, cx| {

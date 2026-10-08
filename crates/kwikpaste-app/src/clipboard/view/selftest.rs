@@ -312,6 +312,16 @@ impl Driver {
             return;
         }
         let all = self.read(cx, |list, _| list.total());
+        let reorder_fixtures = self.read(cx, |list, _| {
+            [
+                "sample-text-multiline",
+                "sample-image-wide",
+                "sample-image-strip",
+            ]
+            .into_iter()
+            .filter_map(|id| list.model.find(id).map(|item| (**item).clone()))
+            .collect::<Vec<_>>()
+        });
 
         // AccessKit only retains a tree when a platform accessibility client is
         // connected (for example Narrator/UIA on Windows). Keep this probe
@@ -411,6 +421,7 @@ impl Driver {
         self.split_words(cx).await;
         self.shortcuts(cx).await;
         self.drag_out(cx).await;
+        self.reorder_drag(cx, reorder_fixtures).await;
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
         self.header_actions(cx).await;
@@ -1000,12 +1011,27 @@ impl Driver {
 
     /// 在卡片上按下左键再移动（`pressed_button` 为左键）。
     fn press_and_move(&self, cx: &mut AsyncApp, from: (f32, f32), to: (f32, f32)) {
+        self.press_move_points(
+            cx,
+            point(px(from.0), px(from.1)),
+            point(px(to.0), px(to.1)),
+            true,
+        );
+    }
+
+    fn press_move_points(
+        &self,
+        cx: &mut AsyncApp,
+        from: gpui::Point<gpui::Pixels>,
+        to: gpui::Point<gpui::Pixels>,
+        release: bool,
+    ) {
         self.window
             .update(cx, |_, window, cx| {
                 window.dispatch_event(
                     PlatformInput::MouseDown(MouseDownEvent {
                         button: MouseButton::Left,
-                        position: point(px(from.0), px(from.1)),
+                        position: from,
                         modifiers: Modifiers::default(),
                         click_count: 1,
                         first_mouse: false,
@@ -1014,16 +1040,81 @@ impl Driver {
                 );
                 window.dispatch_event(
                     PlatformInput::MouseMove(MouseMoveEvent {
-                        position: point(px(to.0), px(to.1)),
+                        position: to,
                         pressed_button: Some(MouseButton::Left),
                         modifiers: Modifiers::default(),
                     }),
                     cx,
                 );
+                if release {
+                    window.dispatch_event(
+                        PlatformInput::MouseUp(MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: to,
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                        }),
+                        cx,
+                    );
+                }
+            })
+            .ok();
+    }
+
+    fn mouse_press(&self, cx: &mut AsyncApp, position: gpui::Point<gpui::Pixels>) {
+        self.window
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position,
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    }),
+                    cx,
+                );
+            })
+            .ok();
+    }
+
+    fn mouse_move(&self, cx: &mut AsyncApp, position: gpui::Point<gpui::Pixels>) {
+        self.window
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position,
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::default(),
+                    }),
+                    cx,
+                );
+            })
+            .ok();
+    }
+
+    fn mouse_move_without_button(&self, cx: &mut AsyncApp, position: gpui::Point<gpui::Pixels>) {
+        self.window
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position,
+                        pressed_button: None,
+                        modifiers: Modifiers::default(),
+                    }),
+                    cx,
+                );
+            })
+            .ok();
+    }
+
+    fn mouse_release(&self, cx: &mut AsyncApp, position: gpui::Point<gpui::Pixels>) {
+        self.window
+            .update(cx, |_, window, cx| {
                 window.dispatch_event(
                     PlatformInput::MouseUp(MouseUpEvent {
                         button: MouseButton::Left,
-                        position: point(px(to.0), px(to.1)),
+                        position,
                         modifiers: Modifiers::default(),
                         click_count: 1,
                     }),
@@ -1031,6 +1122,286 @@ impl Driver {
                 );
             })
             .ok();
+    }
+
+    async fn card_center(&self, cx: &mut AsyncApp, id: &str) -> Option<gpui::Point<gpui::Pixels>> {
+        for _ in 0..100 {
+            let id = Arc::<str>::from(id);
+            self.list
+                .update(cx, |list, cx| list.selftest_hover(&id, cx));
+            if let Some(center) = self.read(cx, |list, _| list.selftest_card_center(&id)) {
+                return Some(center);
+            }
+            self.pause(cx, 16).await;
+        }
+        None
+    }
+
+    /// 面板内排序的 GPUI 事件回归：置顶、收藏、普通点击、Esc 取消以及重载持久化。
+    async fn reorder_drag(&mut self, cx: &mut AsyncApp, fixtures: Vec<ListItem>) {
+        self.focus_list(cx);
+        if let Some(store) = &self.store {
+            if let Ok(mut store) = store.lock() {
+                store.set_pinned("sample-text-pinned", false);
+                store.patch("sample-text-pinned", |item| item.is_favorite = false);
+                store.set_pinned("sample-url-pinned", true);
+                for mut item in fixtures {
+                    store.remove(&item.id);
+                    if item.id.as_ref() == "sample-text-multiline" {
+                        let mut favorite = item.clone();
+                        favorite.id = "reorder-favorite-text".into();
+                        favorite.is_pinned = false;
+                        favorite.is_favorite = true;
+                        store.insert_newest(favorite);
+                    }
+                    item.is_pinned = false;
+                    item.is_favorite = item.id.as_ref() == "sample-image-strip";
+                    store.insert_newest(item);
+                }
+                store.set_pinned("sample-text-multiline", true);
+                store.set_pinned("sample-image-wide", true);
+            }
+            self.list.update(cx, |list, cx| list.reload(cx));
+            self.settle(cx, |list, _| {
+                list.model
+                    .get(0)
+                    .is_some_and(|item| item.id.as_ref() == "sample-image-wide")
+                    && list
+                        .model
+                        .get(1)
+                        .is_some_and(|item| item.id.as_ref() == "sample-text-multiline")
+            })
+            .await;
+            self.pause(cx, 48).await;
+        }
+        self.filtered(cx, "reorder starts in all", ListFilter::default())
+            .await;
+        let pinned: Vec<Arc<str>> = self.read(cx, |list, _| {
+            (0..list.total())
+                .filter_map(|index| list.model.get(index))
+                .filter(|item| item.is_pinned)
+                .take(2)
+                .map(|item| item.id.clone())
+                .collect()
+        });
+        if let (Some(first), Some(second)) = (pinned.first().cloned(), pinned.get(1).cloned()) {
+            let original_first = first.clone();
+            let original_second = second.clone();
+            let moved = self.card_center(cx, &first).await;
+            let target = self.card_center(cx, &second).await;
+            if let (Some(from), Some(to)) = (moved, target) {
+                self.mouse_press(cx, from);
+                let drop_point = point(to.x, to.y + px(12.));
+                self.mouse_move(cx, drop_point);
+                self.pause(cx, 32).await;
+                let metrics = self.read(cx, |list, _| list.selftest_reorder_measurements());
+                let source_bounds = self.read(cx, |list, _| {
+                    list.selftest_reorder_card_bounds(&original_first)
+                });
+                let target_bounds = self.read(cx, |list, _| {
+                    list.selftest_reorder_card_bounds(&original_second)
+                });
+                let geometry_ok =
+                    metrics
+                        .as_ref()
+                        .is_some_and(|(active, source, ghost, indicator)| {
+                            *active
+                                && source.zip(*ghost).is_some_and(|(source, ghost)| {
+                                    (ghost.origin.y - (drop_point.y - (from.y - source.origin.y)))
+                                        .abs()
+                                        <= px(2.)
+                                })
+                                && indicator.is_some()
+                        });
+                let gap_ok = self
+                    .read(cx, |list, _| list.selftest_reorder_indicator_matches_gap())
+                    .unwrap_or(false);
+                self.check("reorder paints a real ghost and insertion indicator", geometry_ok && gap_ok, || {
+                    format!("measurements {metrics:?}, source {source_bounds:?}, target {target_bounds:?}")
+                });
+                self.mouse_release(cx, drop_point);
+                let expected_first = original_second.clone();
+                let expected_second = original_first.clone();
+                let swapped = self
+                    .settle(cx, |list, _| {
+                        list.model
+                            .get(0)
+                            .is_some_and(|item| item.id == expected_first)
+                            && list
+                                .model
+                                .get(1)
+                                .is_some_and(|item| item.id == expected_second)
+                    })
+                    .await;
+                self.check("dragging a pinned card reorders in place", swapped, || {
+                    "pinned order did not change".into()
+                });
+                self.list.update(cx, |list, cx| list.reload(cx));
+                let expected_first = original_second.clone();
+                let expected_second = original_first.clone();
+                let persisted = self
+                    .settle(cx, |list, _| {
+                        list.model
+                            .get(0)
+                            .is_some_and(|item| item.id == expected_first)
+                            && list
+                                .model
+                                .get(1)
+                                .is_some_and(|item| item.id == expected_second)
+                    })
+                    .await;
+                self.check("pinned reorder survives a reload", persisted, || {
+                    "reload restored the old pinned order".into()
+                });
+
+                let from = self.card_center(cx, &original_second).await;
+                let to = self.card_center(cx, &original_first).await;
+                let from = from.unwrap_or(point(px(180.), px(220.)));
+                let to = to
+                    .map(|target_point| point(target_point.x, target_point.y + px(12.)))
+                    .unwrap_or(point(px(180.), px(300.)));
+                let before_cancel = self.read(cx, |list, _| {
+                    (0..2)
+                        .filter_map(|index| list.model.get(index))
+                        .map(|item| item.id.clone())
+                        .collect::<Vec<_>>()
+                });
+                self.focus_list(cx);
+                self.mouse_press(cx, from);
+                self.mouse_move(cx, to);
+                self.pause(cx, 16).await;
+                self.key(cx, "escape");
+                self.pause(cx, 16).await;
+                let esc_cancelled = self.read(cx, |list, _| {
+                    !list.selftest_reorder_active()
+                        && (0..2)
+                            .filter_map(|index| list.model.get(index))
+                            .map(|item| item.id.clone())
+                            .collect::<Vec<_>>()
+                            == before_cancel
+                });
+                self.mouse_release(cx, to);
+                self.pause(cx, 16).await;
+                let after_cancel = self.read(cx, |list, _| {
+                    (0..2)
+                        .filter_map(|index| list.model.get(index))
+                        .map(|item| item.id.clone())
+                        .collect::<Vec<_>>()
+                });
+                let cancelled = esc_cancelled && after_cancel == before_cancel;
+                let cancelled_detail = self.read(cx, |list, _| {
+                    (0..2)
+                        .filter_map(|index| list.model.get(index))
+                        .map(|item| item.id.to_string())
+                        .collect::<Vec<_>>()
+                });
+                self.check(
+                    "Esc cancels a reorder without changing order",
+                    cancelled,
+                    || format!("Esc changed the pinned order: before={before_cancel:?}, after={cancelled_detail:?}"),
+                );
+                let esc_cleared = self.read(cx, |list, _| !list.selftest_reorder_active());
+                self.check("Esc leaves no active reorder state", esc_cleared, || {
+                    "reorder remained active after Esc".into()
+                });
+
+                self.mouse_press(cx, from);
+                self.mouse_move(cx, to);
+                self.pause(cx, 16).await;
+                self.mouse_release(cx, point(to.x, px(20.)));
+                self.pause(cx, 32).await;
+                let header_cancelled = self.read(cx, |list, _| !list.selftest_reorder_active());
+                self.check(
+                    "releasing over the panel header cancels reorder",
+                    header_cancelled,
+                    || "header release left reorder active".into(),
+                );
+
+                self.mouse_press(cx, from);
+                self.mouse_move(cx, to);
+                self.pause(cx, 16).await;
+                self.mouse_move_without_button(cx, to);
+                self.pause(cx, 16).await;
+                let buttonless_cancelled = self.read(cx, |list, _| !list.selftest_reorder_active());
+                self.check(
+                    "a button-less move cancels an interrupted reorder",
+                    buttonless_cancelled,
+                    || "button-less move continued dragging".into(),
+                );
+            }
+        } else {
+            self.check("dragging a pinned card reorders in place", false, || {
+                "fixture has fewer than two pinned cards".into()
+            });
+        }
+
+        self.key(cx, "secondary-q");
+        self.filtered(
+            cx,
+            "reorder favorite tab",
+            ListFilter {
+                range: Range::Favorite,
+                ..ListFilter::default()
+            },
+        )
+        .await;
+        let favorites: Vec<Arc<str>> = self.read(cx, |list, _| {
+            (0..list.total())
+                .filter_map(|index| list.model.get(index))
+                .filter(|item| item.is_favorite && !item.is_pinned)
+                .take(2)
+                .map(|item| item.id.clone())
+                .collect()
+        });
+        if let (Some(first), Some(second)) = (favorites.first().cloned(), favorites.get(1).cloned())
+        {
+            let from = self.card_center(cx, &first).await;
+            let to = self.card_center(cx, &second).await;
+            if let (Some(from), Some(to)) = (from, to) {
+                self.press_move_points(cx, from, point(to.x, to.y + px(40.)), true);
+                let moved_id = first.clone();
+                let changed = self
+                    .settle(cx, |list, _| {
+                        list.model
+                            .find(&moved_id)
+                            .and_then(|item| list.model.index_of(&item.id))
+                            .is_some_and(|first_index| {
+                                list.model
+                                    .index_of(&second)
+                                    .is_some_and(|second_index| first_index > second_index)
+                            })
+                    })
+                    .await;
+                self.check("dragging a favorite reorders in Favorite", changed, || {
+                    "favorite order did not change".into()
+                });
+            }
+        } else {
+            self.check("dragging a favorite reorders in Favorite", false, || {
+                "fixture has fewer than two non-pinned favorites".into()
+            });
+        }
+
+        self.intents.borrow_mut().clear();
+        if let Some(id) = self.select_where(cx, |item| !item.is_pinned)
+            && let Some(center) = self.card_center(cx, &id).await
+        {
+            self.press_move_points(cx, center, center, true);
+        }
+        let drag_out = self
+            .intents
+            .borrow()
+            .iter()
+            .any(|intent| matches!(intent, ListIntent::DragOut { .. }));
+        let intents = self.intents.borrow().clone();
+        self.check(
+            "a click without crossing the threshold is not drag-out",
+            !drag_out,
+            || format!("unexpected intents {intents:?}"),
+        );
+        self.key(cx, "secondary-q");
+        self.filtered(cx, "reorder returns to all", ListFilter::default())
+            .await;
     }
 
     /// 拖出：按住卡片拖过系统阈值交给宿主拖出那张卡片；只挪 1 px 不算拖；多选时不拖。

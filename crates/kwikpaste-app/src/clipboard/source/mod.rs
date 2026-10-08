@@ -14,7 +14,11 @@ pub mod synthetic;
 use std::{path::PathBuf, sync::Arc};
 
 use futures::future::BoxFuture;
-use kwikpaste_core::{db::models::ClipboardItemSort, settings::Settings};
+use kwikpaste_core::{
+    db::models::ClipboardItemSort,
+    ops::{ReorderAnchor, ReorderSection},
+    settings::Settings,
+};
 
 pub use self::core_source::start_selftest_core;
 pub use self::fixture::{FixtureSource, FixtureStore};
@@ -101,6 +105,14 @@ pub trait ClipboardSource: Send + Sync + 'static {
 
     /// 翻转置顶，返回新状态。
     fn toggle_pinned(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>>;
+
+    /// 在置顶或收藏分区内按锚点重排。
+    fn reorder(
+        &self,
+        section: ReorderSection,
+        id: Arc<str>,
+        anchor: ReorderAnchor,
+    ) -> BoxFuture<'static, anyhow::Result<()>>;
 
     fn update_note(
         &self,

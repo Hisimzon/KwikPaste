@@ -173,7 +173,7 @@ pub enum MouseTrigger {
 }
 
 /// 全局快速粘贴：修饰键 + 1–9 粘贴第 1–9 条，修饰键 + 0 粘贴第 10 条。
-/// 条目顺序与剪贴板窗口「全部」视图一致：置顶在前，其余按 `content.sort`。
+/// 条目顺序与剪贴板窗口「全部」视图一致：置顶按手动置顶顺序在前，其余按 `content.sort`。
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct QuickPaste {

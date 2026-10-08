@@ -35,6 +35,7 @@ const PULSE_PERIOD: Duration = Duration::from_secs(2);
 /// 渲染卡片需要的环境。
 pub struct CardEnv<'a> {
     pub tokens: &'static SemanticTokens,
+    pub reorder_source_opacity: f32,
     pub layout: &'a LayoutSpec,
     pub now: DateTime<Local>,
     pub reduce_motion: bool,
@@ -76,6 +77,10 @@ pub struct CardState {
     pub position: usize,
     /// 无障碍列表的总条数。
     pub set_size: usize,
+    /// 面板内排序时源卡片留在原位但变暗。
+    pub dragged: bool,
+    /// 面板内排序时跟随指针的幽灵卡片：不透明的浮起底色加投影，盖住下面的行。
+    pub lifted: bool,
 }
 
 /// 快捷信息被点了：参数是那段文字。
@@ -128,7 +133,10 @@ pub fn card(
 
     // 条目是扁平的行：平时没有底色和描边，悬停、当前项（中性灰）、勾选（淡主色）时才铺一层
     // 底色。卡片风格是圆角块、行间画细分隔线；无间风格贴边，用底边线分隔。
-    let highlight = if state.checked {
+    let lifted = state.lifted;
+    let highlight = if lifted {
+        Some(tokens.surface.raised)
+    } else if state.checked {
         Some(tokens.accent.subtle)
     } else if state.active {
         Some(tokens.fill.default)
@@ -154,7 +162,12 @@ pub fn card(
                 .border_color(kwikpaste_ui::theme::transparent())
                 .rounded(radius::LG)
         })
-        .when_some(highlight, |frame, highlight| frame.bg(highlight));
+        .when_some(highlight, |frame, highlight| frame.bg(highlight))
+        .when(lifted, |frame| {
+            frame
+                .rounded(radius::LG)
+                .shadow(tokens.shadow.overlay.to_vec())
+        });
 
     frame = if layout.header_row {
         // 来源、类型、时间这行小号灰字在正文上方。
@@ -233,6 +246,7 @@ pub fn card(
         .aria_position_in_set(state.position)
         .aria_size_of_set(state.set_size)
         .relative()
+        .when(state.dragged, |row| row.opacity(env.reorder_source_opacity))
         .px(space((layout.item_padding_x) / 4.))
         .pt(space((layout.item_gap) / 4.))
         // 卡片风格的行间分隔线画在行上方的间距里，左右与正文对齐；第一行和挨着色块的不画。

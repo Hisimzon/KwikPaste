@@ -1311,9 +1311,12 @@ async fn merge_items(
         sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
+              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, favorite_order, pin_order, is_sensitive, platform, note, \
               created_at, updated_at, last_used_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                     CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(favorite_order) FROM clipboard_items), 0) END,
+                     CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(pin_order) FROM clipboard_items), 0) END,
+                     ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id)
         .bind(row.kind)
@@ -1329,6 +1332,8 @@ async fn merge_items(
         .bind(row.width)
         .bind(row.height)
         .bind(row.use_count)
+        .bind(row.is_favorite)
+        .bind(row.is_pinned)
         .bind(row.is_favorite)
         .bind(row.is_pinned)
         .bind(row.is_sensitive)

@@ -27,6 +27,13 @@ pub struct PreviewFileTokens {
     pub missing_opacity: f32,
 }
 
+/// 面板内排序时源卡片与跟随指针的幽灵卡片透明度。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReorderTokens {
+    pub source_opacity: f32,
+    pub ghost_opacity: f32,
+}
+
 /// 引导完成状态的图标背景。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OnboardingTokens {
@@ -173,6 +180,7 @@ pub struct ComponentTokens {
     pub icon_button: IconButtonTokens,
     pub quick_action: QuickActionTokens,
     pub preview_file: PreviewFileTokens,
+    pub reorder: ReorderTokens,
     pub onboarding: OnboardingTokens,
     pub preferences: PreferencesTokens,
     pub input: InputTokens,
@@ -197,6 +205,10 @@ impl ComponentTokens {
             },
             preview_file: PreviewFileTokens {
                 missing_opacity: 0.5,
+            },
+            reorder: ReorderTokens {
+                source_opacity: 0.42,
+                ghost_opacity: 0.96,
             },
             onboarding: OnboardingTokens {
                 done_background: s.status.success.solid.opacity(0.12),

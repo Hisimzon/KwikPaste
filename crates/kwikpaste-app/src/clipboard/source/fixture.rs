@@ -14,7 +14,10 @@ use anyhow::Context as _;
 use futures::{FutureExt as _, future::BoxFuture};
 use serde::Deserialize;
 
-use kwikpaste_core::settings::Settings;
+use kwikpaste_core::{
+    ops::{ReorderAnchor, ReorderSection},
+    settings::Settings,
+};
 
 use super::{
     ClipboardSource, Group, GroupInput, ImageSave, ListQuery, NoteSaved, Preview,
@@ -147,8 +150,49 @@ impl FixtureStore {
         };
         let mut item = (*item).clone();
         item.is_pinned = pinned;
-        let at = self.items.iter().take_while(|item| item.is_pinned).count();
+        let at = if pinned {
+            0
+        } else {
+            self.items.iter().take_while(|item| item.is_pinned).count()
+        };
         self.items.insert(at, Arc::new(item));
+        true
+    }
+
+    pub fn reorder(&mut self, section: ReorderSection, id: &str, anchor: ReorderAnchor) -> bool {
+        let (anchor, after) = match anchor {
+            ReorderAnchor::Before(anchor) => (anchor, false),
+            ReorderAnchor::After(anchor) => (anchor, true),
+        };
+        if id == anchor {
+            return true;
+        }
+        let matches = |item: &ListItem| match section {
+            ReorderSection::Pinned => item.is_pinned,
+            ReorderSection::Favorite => item.is_favorite && !item.is_pinned,
+        };
+        let Some(source_ix) = self
+            .items
+            .iter()
+            .position(|item| &*item.id == id && matches(item))
+        else {
+            return false;
+        };
+        let Some(anchor_ix) = self
+            .items
+            .iter()
+            .position(|item| *item.id == anchor && matches(item))
+        else {
+            return false;
+        };
+        let item = self.items.remove(source_ix);
+        let anchor_ix = self
+            .items
+            .iter()
+            .position(|candidate| *candidate.id == anchor)
+            .unwrap_or(anchor_ix);
+        let insert_ix = if after { anchor_ix + 1 } else { anchor_ix };
+        self.items.insert(insert_ix.min(self.items.len()), item);
         true
     }
 
@@ -458,12 +502,32 @@ impl ClipboardSource for FixtureSource {
 
     fn toggle_favorite(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
         self.with_store(move |store| {
-            let mut favorite = false;
-            if !store.patch(&id, |item| {
-                item.is_favorite = !item.is_favorite;
-                favorite = item.is_favorite;
-            }) {
+            let Some(original_ix) = store.index_of(&id) else {
                 return Err(missing(&id));
+            };
+            let Some(item) = store.remove(&id) else {
+                return Err(missing(&id));
+            };
+            let mut item = (*item).clone();
+            item.is_favorite = !item.is_favorite;
+            let favorite = item.is_favorite;
+            if favorite && !item.is_pinned {
+                let at = store
+                    .items
+                    .iter()
+                    .position(|candidate| candidate.is_favorite && !candidate.is_pinned)
+                    .unwrap_or_else(|| {
+                        store
+                            .items
+                            .iter()
+                            .take_while(|candidate| candidate.is_pinned)
+                            .count()
+                    });
+                store.items.insert(at, Arc::new(item));
+            } else {
+                store
+                    .items
+                    .insert(original_ix.min(store.items.len()), Arc::new(item));
             }
             Ok(favorite)
         })
@@ -474,6 +538,21 @@ impl ClipboardSource for FixtureSource {
             let pinned = !store.find(&id).ok_or_else(|| missing(&id))?.is_pinned;
             store.set_pinned(&id, pinned);
             Ok(pinned)
+        })
+    }
+
+    fn reorder(
+        &self,
+        section: ReorderSection,
+        id: Arc<str>,
+        anchor: ReorderAnchor,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        self.with_store(move |store| {
+            if store.reorder(section, &id, anchor) {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("记录不在可排序分区中"))
+            }
         })
     }
 
@@ -708,10 +787,10 @@ mod tests {
 
         assert!(store.set_pinned(&first_regular, true));
         assert_eq!(
-            store.get(pinned).map(|item| item.id.clone()),
+            store.get(0).map(|item| item.id.clone()),
             Some(first_regular.clone())
         );
-        assert!(store.get(pinned).is_some_and(|item| item.is_pinned));
+        assert!(store.get(0).is_some_and(|item| item.is_pinned));
 
         assert!(store.set_pinned(&first_regular, false));
         assert_eq!(

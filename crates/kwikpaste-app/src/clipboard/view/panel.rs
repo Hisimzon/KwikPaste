@@ -536,6 +536,9 @@ impl ClipboardPanel {
 
     /// Esc 按预览、多选、分组、分类、窗口的顺序逐层退出（1.x `closeTopEscapeLayer`）。
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if self.list.update(cx, |list, cx| list.dismiss_reorder(cx)) {
+            return;
+        }
         if self.list.update(cx, |list, cx| list.close_preview(cx)) {
             return;
         }

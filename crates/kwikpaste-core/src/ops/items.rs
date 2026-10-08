@@ -15,8 +15,9 @@ use crate::clipboard::{
 };
 use crate::db::items::{
     clear_items, delete_item, delete_items, find_item_by_id, find_item_id_at,
-    increment_item_use_count, list_item_refs, mark_item_favorite, toggle_item_favorite,
-    toggle_item_pinned, touch_item_last_used, update_item_group, update_item_note,
+    increment_item_use_count, list_item_refs, mark_item_favorite, reorder_item,
+    toggle_item_favorite, toggle_item_pinned, touch_item_last_used, update_item_group,
+    update_item_note, ReorderAnchor, ReorderSection,
 };
 use crate::db::models::{ClipboardItem, ClipboardItemQuery, ClipboardItemRef, ClipboardKind};
 use crate::db::overview::{clear_scope, ClearScope};
@@ -493,6 +494,23 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move { toggle_item_pinned(&core.0.db.pool().await, &id).await })
             .await
+    }
+
+    /// 把记录放到置顶或收藏分区中锚点记录的前面 / 后面，并通知所有列表刷新。
+    pub async fn reorder_item(
+        &self,
+        section: ReorderSection,
+        id: &str,
+        anchor: ReorderAnchor,
+    ) -> Result<()> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            reorder_item(&core.0.db.pool().await, section, &id, anchor).await?;
+            core.0.events.emit(CoreEvent::ClipboardReloaded);
+            Ok(())
+        })
+        .await
     }
 
     /// 写入备注：去前后空白，空串清空。写入非空备注且开了「备注自动收藏」时顺带收藏。
