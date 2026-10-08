@@ -33,6 +33,7 @@
   "words": {
     "clear": "Clear",
     "copy": "Copy",
+    "hint": "Click or drag to select words",
     "paste": "Paste",
     "selected": "{{count}} selected",
     "truncated": "This text is long, so only the beginning is split."

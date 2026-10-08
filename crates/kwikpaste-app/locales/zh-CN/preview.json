@@ -33,6 +33,7 @@
   "words": {
     "clear": "清除",
     "copy": "复制",
+    "hint": "点击或拖动选择词语",
     "paste": "粘贴",
     "selected": "已选 {{count}} 个词",
     "truncated": "内容较长，只拆分了开头部分。"

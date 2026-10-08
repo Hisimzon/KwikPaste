@@ -36,6 +36,8 @@ const WORD_LINE_HEIGHT: f64 = 20.;
 pub const WORD_GAP: f64 = 4.;
 /// 词块区的内边距。
 pub const WORDS_PADDING: f64 = 16.;
+/// 选词视图底部操作栏的高度（1px 分隔线 + 上下各 8px + 小号按钮 24px），一直占位，选词前后布局不跳。
+pub const WORDS_BAR_HEIGHT: f64 = 41.;
 /// 选词区左右再扣掉的宽度：预览窗两侧各 1px 边框，加 1px 余量（GPUI 按设备像素取整，
 /// 词块实际会比测得的略宽；宁可多留一行空白也不能裁掉最后一行）。
 const WORDS_EDGE: f64 = 3.;
@@ -204,7 +206,10 @@ fn panel_size(
                 .map(|chip| (chip.width, chip.line_break))
                 .collect();
             let content = max_width / scale - WORDS_PADDING * 2. - WORDS_EDGE;
-            (max_width, header + words_height(&widths, content) * scale)
+            (
+                max_width,
+                header + (words_height(&widths, content) + WORDS_BAR_HEIGHT) * scale,
+            )
         }
         Some(PreviewContentMetrics::Files { shown, total }) => {
             (max_width, header + files_height(*shown, *total) * scale)
@@ -551,7 +556,7 @@ mod tests {
             1.,
         )
         .1;
-        assert_eq!(height, 48. + 3. * 24. + 2. * 4. + 32.);
+        assert_eq!(height, 48. + 3. * 24. + 2. * 4. + 32. + 41.);
     }
 
     #[test]

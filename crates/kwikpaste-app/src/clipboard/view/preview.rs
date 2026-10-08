@@ -25,8 +25,8 @@ use super::image_cache::{ImageKey, ImageState, KpImageCache, path_of};
 use crate::{
     clipboard::{
         model::preview::{
-            FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, TEXT_PADDING_X, TEXT_ROW_HEIGHT, WordSelection,
-            format_bytes, utf16_range,
+            FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, TEXT_PADDING_X, TEXT_ROW_HEIGHT,
+            WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
         },
         source::{Preview, PreviewTextView},
     },
@@ -523,32 +523,36 @@ impl PreviewPanel {
                         )
                     }),
             )
-            .when(count > 0, |area| {
-                area.child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(space((8.) / 4.))
-                        .border_t_1()
-                        .border_color(tokens.border.divider)
-                        .py(space((8.) / 4.))
-                        .pr(space((12.) / 4.))
-                        .pl(space((16.) / 4.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .kp_text(TextSize::Xs)
-                                .text_color(tokens.text.secondary)
-                                .child(t_count(
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(space((8.) / 4.))
+                    .h(space((WORDS_BAR_HEIGHT as f32) / 4.))
+                    .border_t_1()
+                    .border_color(tokens.border.divider)
+                    .pr(space((12.) / 4.))
+                    .pl(space((16.) / 4.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .kp_text(TextSize::Xs)
+                            .text_color(tokens.text.secondary)
+                            .child(if count > 0 {
+                                t_count(
                                     "preview:words.selected",
                                     i64::try_from(count).unwrap_or(i64::MAX),
                                     &[],
-                                )),
-                        )
-                        .child(
+                                )
+                            } else {
+                                t("preview:words.hint")
+                            }),
+                    )
+                    .when(count > 0, |bar| {
+                        bar.child(
                             Button::new("preview-words-clear", t("preview:words.clear"))
                                 .small()
                                 .ghost()
@@ -571,9 +575,9 @@ impl PreviewPanel {
                                 .on_click(cx.listener(|_, _, _, cx| {
                                     cx.emit(PreviewEvent::Words { paste: true });
                                 })),
-                        ),
-                )
-            })
+                        )
+                    }),
+            )
             .into_any_element()
     }
 
