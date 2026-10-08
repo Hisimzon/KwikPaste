@@ -49,17 +49,27 @@ pub fn get_icon_cache_key(path: &Path) -> String {
 
 /// 抽取指定路径的图标 PNG 字节。`size` 为 `None` 时用内置默认值。
 /// 失败一律返回 `None`，由调用方决定回退。
+///
+/// Windows 的 exe 先直接读图标资源：经 Shell 取图标会把 Shell 命名空间和它的图标缓存
+/// 留在进程里（实测常驻约 4.5 MB），直接读只多约 0.4 MB。读不到（没有图标资源等）再走 Shell。
 pub fn icon_png(path: &Path, size: Option<u32>) -> Option<Vec<u8>> {
     let size = size.unwrap_or(DEFAULT_ICON_PIXEL_SIZE);
-    let icon = match file_icon_provider::get_file_icon(path, size as u16) {
-        Ok(i) => i,
-        Err(err) => {
-            log::warn!(
-                "icon_png: get_file_icon failed for {}: {err:?}",
-                path.display()
-            );
-            return None;
-        }
+    #[cfg(target_os = "windows")]
+    let direct = exe_icon::extract(path, size);
+    #[cfg(not(target_os = "windows"))]
+    let direct = None;
+    let icon = match direct {
+        Some(icon) => icon,
+        None => match file_icon_provider::get_file_icon(path, size as u16) {
+            Ok(i) => i,
+            Err(err) => {
+                log::warn!(
+                    "icon_png: get_file_icon failed for {}: {err:?}",
+                    path.display()
+                );
+                return None;
+            }
+        },
     };
     // write_image 在缓冲长度与宽高对不上时会 panic；系统给的图标按理不会，这里先核对。
     let expected = u64::from(icon.width) * u64::from(icon.height) * 4;
@@ -85,6 +95,130 @@ pub fn icon_png(path: &Path, size: Option<u32>) -> Option<Vec<u8>> {
         return None;
     }
     Some(out)
+}
+
+/// 直接从 exe 的图标资源取 RGBA（第 0 个图标组，系统按请求尺寸挑帧或缩放），不经 Shell。
+#[cfg(target_os = "windows")]
+mod exe_icon {
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::path::Path;
+
+    use file_icon_provider::Icon;
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO,
+        BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO,
+    };
+
+    pub(super) fn extract(path: &Path, size: u32) -> Option<Icon> {
+        let is_exe = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
+        if !is_exe {
+            return None;
+        }
+        let side = i32::try_from(size).ok()?;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let mut icon: HICON = std::ptr::null_mut();
+        let mut id = 0u32;
+        let count =
+            unsafe { PrivateExtractIconsW(wide.as_ptr(), 0, side, side, &mut icon, &mut id, 1, 0) };
+        // 出错时返回 0xFFFFFFFF；文件里没有图标时返回 0。
+        if count != 1 || icon.is_null() {
+            return None;
+        }
+        let _icon = Guard(icon, |icon| unsafe {
+            DestroyIcon(icon);
+        });
+
+        let mut info: ICONINFO = unsafe { std::mem::zeroed() };
+        if unsafe { GetIconInfo(icon, &mut info) } == 0 {
+            return None;
+        }
+        let _mask = Guard(info.hbmMask, delete_bitmap);
+        let _color = Guard(info.hbmColor, delete_bitmap);
+        // 单色图标没有彩色位图，交给 Shell。
+        if info.hbmColor.is_null() {
+            return None;
+        }
+
+        let (width, height, mut pixels) = bgra(info.hbmColor)?;
+        // 老式图标没有 alpha 通道，透明区域在掩码里（掩码白色 = 透明）。
+        if pixels.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+            let (mask_width, mask_height, mask) = bgra(info.hbmMask)?;
+            if (mask_width, mask_height) != (width, height) {
+                return None;
+            }
+            for (pixel, mask) in pixels.chunks_exact_mut(4).zip(mask.chunks_exact(4)) {
+                pixel[3] = if mask[0] == 0 { 255 } else { 0 };
+            }
+        }
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+
+        Some(Icon {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    /// 位图按 32 位自上而下读出 BGRA。
+    fn bgra(bitmap: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
+        let mut header: BITMAP = unsafe { std::mem::zeroed() };
+        let read =
+            unsafe { GetObjectW(bitmap, size_of::<BITMAP>() as i32, (&raw mut header).cast()) };
+        if read == 0 || header.bmWidth <= 0 || header.bmHeight <= 0 {
+            return None;
+        }
+        let (width, height) = (header.bmWidth as u32, header.bmHeight as u32);
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+
+        let mut info: BITMAPINFO = unsafe { std::mem::zeroed() };
+        info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = header.bmWidth;
+        info.bmiHeader.biHeight = -header.bmHeight;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+
+        let dc = unsafe { CreateCompatibleDC(std::ptr::null_mut()) };
+        if dc.is_null() {
+            return None;
+        }
+        let lines = unsafe {
+            GetDIBits(
+                dc,
+                bitmap,
+                0,
+                height,
+                pixels.as_mut_ptr().cast(),
+                &mut info,
+                DIB_RGB_COLORS,
+            )
+        };
+        unsafe { DeleteDC(dc) };
+
+        (lines == height as i32).then_some((width, height, pixels))
+    }
+
+    fn delete_bitmap(bitmap: HBITMAP) {
+        if !bitmap.is_null() {
+            unsafe { DeleteObject(bitmap) };
+        }
+    }
+
+    /// 离开作用域时释放 GDI / 图标句柄。
+    struct Guard<T: Copy>(T, fn(T));
+
+    impl<T: Copy> Drop for Guard<T> {
+        fn drop(&mut self) {
+            (self.1)(self.0);
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -136,6 +270,20 @@ mod windows_tests {
         }
         // exe 有自己的图标，与 .txt 的关联图标不同。
         assert_ne!(icons[0], icons[2]);
+    }
+
+    #[test]
+    fn exe_icons_are_read_from_resources_with_transparency() {
+        let system = std::env::var_os("SystemRoot").expect("SystemRoot is set");
+        let notepad = Path::new(&system).join("System32").join("notepad.exe");
+
+        let icon = exe_icon::extract(&notepad, 64).expect("notepad has an icon resource");
+
+        assert_eq!((icon.width, icon.height), (64, 64));
+        let alpha: Vec<u8> = icon.pixels.chunks_exact(4).map(|pixel| pixel[3]).collect();
+        assert!(alpha.contains(&0), "has transparent pixels");
+        assert!(alpha.iter().any(|&value| value > 200), "has opaque pixels");
+        assert!(exe_icon::extract(&Path::new(&system).join("win.ini"), 64).is_none());
     }
 }
 
