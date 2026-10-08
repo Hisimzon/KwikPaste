@@ -11,9 +11,9 @@
 
   <br />
 
-  <img alt="Tauri v2" src="https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square" />
-  <img alt="Rust first" src="https://img.shields.io/badge/Rust-first-b7410e?style=flat-square" />
-  <img alt="React 19" src="https://img.shields.io/badge/React-19-61dafb?style=flat-square" />
+  <img alt="100% Rust" src="https://img.shields.io/badge/Rust-100%25-b7410e?style=flat-square&logo=rust&logoColor=white" />
+  <img alt="GPUI" src="https://img.shields.io/badge/UI-GPUI-6e56cf?style=flat-square" />
+  <img alt="No WebView" src="https://img.shields.io/badge/WebView-none-2ea44f?style=flat-square" />
   <img alt="macOS" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-supported-0078d4?style=flat-square&logo=windows&logoColor=white" />
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" />
@@ -23,7 +23,11 @@
 
 快贴把你复制过的一切——纯文本、富文本、图片和文件——放在一个快捷键之外，并且不会把任何内容发送到别处。历史记录、搜索索引、资源缓存和设置全部保存在本机。
 
-快贴采用 Rust-First 的 Tauri 架构：剪贴板采集、存储、搜索和系统集成由 Rust 承担，React 前端专注于界面展示与交互。因此它体积小、响应快，在 macOS 和 Windows 上都用得顺手。
+快贴 2.0 用 Rust 从头重写，是一个纯 Rust 的原生应用：界面基于 [GPUI](https://www.gpui.rs) 由 GPU 直接绘制，不再内嵌 WebView。剪贴板采集、存储、搜索、系统集成和界面渲染都在同一个原生进程里完成。
+
+- **内存占用极低**：在 Windows 上常驻后台约 20–40 MB，1.x 约 370 MB，只有原来的十分之一左右。
+- **随按随开**：按下快捷键，窗口立即出现，不用等网页引擎启动。
+- **两端原生**：Windows 上是 Direct3D 11 渲染与 Mica / Acrylic 材质，macOS 上是 Metal 渲染与原生面板，都不抢当前应用的焦点。
 
 ## 下载
 
@@ -46,6 +50,8 @@ brew install --cask mansandadada/tap/kwikpaste
 
 之后快贴会自动保持最新。每个更新包在安装前都会校验签名，下载走国内 CDN，GitHub 作为备用。
 
+**从 1.x 升级**：1.x 不会自动更新到 2.0，请下载 2.0 直接覆盖安装，记录、分组、设置和图片都会保留。升级后 1.x 无法再打开这份数据，如果之后可能退回 1.x，请先在 1.x 中「导出备份」。
+
 ## 使用
 
 | 快捷键 | 作用 |
@@ -65,7 +71,9 @@ brew install --cask mansandadada/tap/kwikpaste
 - 支持粘贴、复制、复制为纯文本、定位文件、打开链接、添加备注、置顶、收藏、删除，以及将记录拖出到其它应用。
 - 通过收藏、置顶、备注、自定义分组和可配置快捷动作组织历史记录。
 - 可调整采集顺序、大小限制、保留策略、展示密度、列表排序和窗口行为。
-- 支持导出和导入 `.kwikpastebak` 备份，包括加密备份包。
+- 局域网同步：用配对码配对同一网络中的设备，复制的文本和图片实时互通，数据不经过任何服务器。
+- 全局快捷键支持「粘贴为纯文本」；全屏应用（如游戏）或指定应用在前台时可以自动停用快捷键。
+- 支持导出和导入 `.kwikpastebak` 备份，包括加密备份包，也可以只备份收藏或指定分组；还能导出为 Excel 或 Markdown。
 - 应用内自动更新，更新包经过签名校验。
 - 剪贴板数据、资源缓存和设置均保存在本机。
 
@@ -77,4 +85,4 @@ brew install --cask mansandadada/tap/kwikpaste
 
 快贴基于 [Apache License 2.0](./LICENSE) 开源。
 
-> 快贴基于 Apache-2.0 许可的 [EcoPaste](https://github.com/EcoPasteHub/EcoPaste) 二次开发。
+> 快贴 1.x 基于 Apache-2.0 许可的 [EcoPaste](https://github.com/EcoPasteHub/EcoPaste) 二次开发，2.0 起用 Rust 原生重写。

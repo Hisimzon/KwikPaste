@@ -11,9 +11,9 @@
 
   <br />
 
-  <img alt="Tauri v2" src="https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square" />
-  <img alt="Rust first" src="https://img.shields.io/badge/Rust-first-b7410e?style=flat-square" />
-  <img alt="React 19" src="https://img.shields.io/badge/React-19-61dafb?style=flat-square" />
+  <img alt="100% Rust" src="https://img.shields.io/badge/Rust-100%25-b7410e?style=flat-square&logo=rust&logoColor=white" />
+  <img alt="GPUI" src="https://img.shields.io/badge/UI-GPUI-6e56cf?style=flat-square" />
+  <img alt="No WebView" src="https://img.shields.io/badge/WebView-none-2ea44f?style=flat-square" />
   <img alt="macOS" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-supported-0078d4?style=flat-square&logo=windows&logoColor=white" />
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" />
@@ -23,7 +23,11 @@
 
 KwikPaste keeps everything you copy — plain text, rich text, images and files — one shortcut away, and never sends any of it anywhere. History, the search index, cached resources and settings all stay on your machine.
 
-It is built on a Rust-first Tauri architecture: clipboard capture, storage, search and system integration run in Rust, while the React frontend focuses on rendering and interaction. The result is a small, fast app that feels at home on both macOS and Windows.
+KwikPaste 2.0 is rewritten from scratch as a pure Rust native app: the interface is drawn on the GPU with [GPUI](https://www.gpui.rs), with no embedded WebView. Clipboard capture, storage, search, system integration and rendering all run in one native process.
+
+- **Tiny memory footprint**: about 20–40 MB in the background on Windows, versus about 370 MB for 1.x — roughly a tenth.
+- **Opens instantly**: the window appears the moment you press the shortcut, with no web engine to start.
+- **Native on both platforms**: Direct3D 11 rendering with Mica / Acrylic on Windows, Metal rendering with a native panel on macOS, and it never steals focus from the app you are in.
 
 ## Download
 
@@ -46,6 +50,8 @@ See [homebrew-tap](https://github.com/ManSanDADADA/homebrew-tap) for upgrading a
 
 After that, KwikPaste keeps itself up to date. Every update package is signature-checked before it is installed, and downloads are served from a mainland China CDN with GitHub as the fallback.
 
+**Upgrading from 1.x**: 1.x does not update to 2.0 on its own. Download 2.0 and install it over 1.x; your records, groups, settings and images carry over. After the upgrade 1.x can no longer open the same data, so if you may want to go back, choose Export Backup in 1.x first.
+
 ## Usage
 
 | Shortcut | Action |
@@ -65,7 +71,9 @@ Both shortcuts can be changed in preferences. On Windows, KwikPaste can also tak
 - Paste, copy, copy as plain text, reveal files, open links, add notes, pin, favorite, delete, and drag items out to other apps.
 - Organize history with favorites, pinned items, notes, custom groups, and configurable item actions.
 - Tune capture order, size limits, retention, display density, list sorting, and window behavior.
-- Export and import `.kwikpastebak` backups, including encrypted backup containers.
+- Sync with LAN Sync: pair devices on the same network with a pairing code, and copied text and images reach each other in real time without passing through any server.
+- Paste as plain text with a global shortcut, and pause shortcuts automatically while a full-screen app (such as a game) or a chosen app is in front.
+- Export and import `.kwikpastebak` backups, including encrypted backup containers, or back up only favorites or chosen groups; records can also be exported to Excel or Markdown.
 - Stay up to date with signed in-app updates.
 - Keep clipboard data, resources, and settings local to your machine.
 
