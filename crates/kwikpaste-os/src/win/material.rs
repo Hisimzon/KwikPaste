@@ -26,7 +26,8 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, SendMessageW, WM_NCACTIVATE, WM_NCDESTROY, WS_EX_TOOLWINDOW,
+    GWL_EXSTYLE, GetWindowLongPtrW, PostMessageW, SendMessageW, WM_APP, WM_NCACTIVATE,
+    WM_NCDESTROY, WM_SHOWWINDOW, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, s, w};
 use windows_registry::{CURRENT_USER, LOCAL_MACHINE};
@@ -41,6 +42,8 @@ const BUILD_ACRYLIC: u32 = 17763;
 const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 /// [`keep_popup_frame_active`] 的子类 id（"KPMA"）。
 const ACTIVE_FRAME_SUBCLASS: usize = 0x4b50_4d41;
+/// 失活走完之后把框架重新置为活动的私有消息，只投递给窗口自己。
+const WM_REASSERT_ACTIVE_FRAME: u32 = WM_APP + 0x4d;
 
 /// 当前系统对两种材质的支持（与 1.x 的 `MaterialSupport` 相同的门槛）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +138,9 @@ pub fn set_backdrop(hwnd: isize, backdrop: Backdrop, build: u32) {
 /// 让从不激活的浮层窗口（`WS_EX_TOOLWINDOW`：面板、预览）一直按活动窗口画背板：子类把
 /// `WM_NCACTIVATE(FALSE)` 改成 TRUE，并立即发一次 TRUE。普通窗口（偏好设置等）不处理，失焦时照系统
 /// 惯例回退成纯色。可重复调用：同一个子类只装一次。
+///
+/// 真被激活过的浮层（面板编辑态）失活时，系统在 `WM_NCACTIVATE(FALSE)` 处理完之后仍会把框架清成
+/// 非活动，改写挡不住；子类因此在失活后投递一条消息，等这次失活走完再置回活动，每次显示前也再置一次。
 pub fn keep_popup_frame_active(hwnd: isize) {
     let window = HWND(hwnd as *mut c_void);
     let ex_style = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
@@ -160,9 +166,22 @@ unsafe extern "system" fn active_frame_proc(
     _data: usize,
 ) -> LRESULT {
     match msg {
-        WM_NCACTIVATE if wparam.0 == 0 => unsafe {
-            DefSubclassProc(hwnd, msg, WPARAM(1), LPARAM(-1))
-        },
+        WM_NCACTIVATE if wparam.0 == 0 => {
+            if let Err(err) =
+                unsafe { PostMessageW(Some(hwnd), WM_REASSERT_ACTIVE_FRAME, WPARAM(0), LPARAM(0)) }
+            {
+                log::debug!("active frame could not be reasserted after deactivation: {err}");
+            }
+            unsafe { DefSubclassProc(hwnd, msg, WPARAM(1), LPARAM(-1)) }
+        }
+        WM_REASSERT_ACTIVE_FRAME => {
+            unsafe { SendMessageW(hwnd, WM_NCACTIVATE, Some(WPARAM(1)), Some(LPARAM(-1))) };
+            LRESULT(0)
+        }
+        WM_SHOWWINDOW if wparam.0 != 0 => {
+            unsafe { SendMessageW(hwnd, WM_NCACTIVATE, Some(WPARAM(1)), Some(LPARAM(-1))) };
+            unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+        }
         WM_NCDESTROY => {
             let _ = unsafe {
                 RemoveWindowSubclass(hwnd, Some(active_frame_proc), ACTIVE_FRAME_SUBCLASS)
