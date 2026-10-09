@@ -419,10 +419,7 @@ pub fn snapshot(app: &AppHandle) -> Vec<LifecycleSnapshot> {
             .iter()
             .map(|descriptor| {
                 let window = app.get_webview_window(descriptor.label);
-                let visible = window
-                    .as_ref()
-                    .and_then(|window| window.is_visible().ok())
-                    .unwrap_or(false);
+                let visible = window_is_visible(app, descriptor.label, window.as_ref());
                 let Some(state) = states.get_mut(descriptor.label) else {
                     return LifecycleSnapshot {
                         dirty_owner_count: 0,
@@ -460,6 +457,21 @@ pub fn snapshot(app: &AppHandle) -> Vec<LifecycleSnapshot> {
             })
             .collect()
     })
+}
+
+/// Windows 剪贴板窗口绕过 Tauri 显隐 API，必须读取平台维护的状态；其它窗口沿用运行时查询。
+fn window_is_visible(
+    app: &AppHandle,
+    label: &str,
+    window: Option<&tauri::WebviewWindow>,
+) -> bool {
+    if label == super::CLIPBOARD_WINDOW_LABEL {
+        return super::is_clipboard_window_visible(app);
+    }
+
+    window
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
 }
 
 /// 解析诊断快照展示阶段；`Created` 仅在真实 WebView 存在时表示已创建。

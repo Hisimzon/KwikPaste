@@ -369,7 +369,7 @@ fn cursor_outside_clipboard_window(app: &AppHandle, cursor: POINT) -> bool {
     let Some(window) = app.get_webview_window(CLIPBOARD_WINDOW_LABEL) else {
         return false;
     };
-    if !window.is_visible().unwrap_or(false) {
+    if !window::is_clipboard_window_visible(app) {
         return false;
     }
 

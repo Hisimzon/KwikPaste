@@ -96,15 +96,16 @@ fn writes_plain(content: &Content, kind: ClipboardKind) -> bool {
 /// 剪贴板窗口隐藏时直接注入粘贴；可见时先隐藏它（固定时改为让出键盘焦点），
 /// 否则 macOS 上 ⌘V 会被仍是 key window 的面板吞掉。
 async fn paste_into_foreground_app(app: &AppHandle) -> Result<()> {
-    let visible = app
-        .get_webview_window(CLIPBOARD_WINDOW_LABEL)
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
+    let visible = window::is_clipboard_window_visible(app);
     if !visible {
         return crate::keystroke::simulate_paste();
     }
 
     let pinned = window::is_clipboard_window_pinned();
+    #[cfg(target_os = "windows")]
+    if let Err(err) = window::windows::restore_clipboard_paste_target(app) {
+        log::warn!("restore clipboard paste target before quick paste failed: {err:?}");
+    }
     if pinned {
         #[cfg(target_os = "macos")]
         if let Err(err) = window::macos::resign_clipboard_panel_key(app) {
@@ -114,7 +115,12 @@ async fn paste_into_foreground_app(app: &AppHandle) -> Result<()> {
         log::warn!("hide clipboard window before quick paste failed: {err:?}");
     }
 
-    tokio::time::sleep(WINDOW_SETTLE_DELAY).await;
+    tokio::time::sleep(if cfg!(target_os = "windows") {
+        Duration::from_millis(120)
+    } else {
+        WINDOW_SETTLE_DELAY
+    })
+    .await;
     crate::keystroke::simulate_paste()?;
 
     #[cfg(target_os = "macos")]

@@ -169,6 +169,20 @@ pub fn set_clipboard_window_auto_hide_suspended(suspended: bool) {
     CLIPBOARD_WINDOW_AUTO_HIDE_SUSPENDED.store(suspended, Ordering::Relaxed);
 }
 
+/// 返回剪贴板窗口的真实可见状态；Windows 走原生 HWND，macOS 沿用 panel 运行时状态。
+pub fn is_clipboard_window_visible(app_handle: &AppHandle) -> bool {
+    #[cfg(target_os = "windows")]
+    return windows::is_clipboard_window_visible(app_handle);
+
+    #[cfg(target_os = "macos")]
+    {
+        app_handle
+            .get_webview_window(CLIPBOARD_WINDOW_LABEL)
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false)
+    }
+}
+
 pub fn set_clipboard_window_editing(app_handle: &AppHandle, editing: bool) -> Result<()> {
     #[cfg(target_os = "windows")]
     return windows::set_clipboard_window_editing(app_handle, editing);
@@ -269,10 +283,7 @@ fn hide_clipboard_window_for_preference(app_handle: &AppHandle) {
         return;
     }
 
-    let visible = app_handle
-        .get_webview_window(CLIPBOARD_WINDOW_LABEL)
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
+    let visible = is_clipboard_window_visible(app_handle);
     if !visible {
         return;
     }
@@ -310,10 +321,15 @@ pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
 
 pub fn toggle_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     // 已销毁的按需窗口（如空闲超时后的 preference）取不到实例，视为不可见 → 走 show 重建。
-    let visible = app_handle
-        .get_webview_window(label)
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
+    // Windows 剪贴板窗口显隐绕过 Tauri，tao 的 is_visible 不会跟着变，必须读平台状态。
+    let visible = if label == CLIPBOARD_WINDOW_LABEL {
+        is_clipboard_window_visible(app_handle)
+    } else {
+        app_handle
+            .get_webview_window(label)
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false)
+    };
     if visible {
         hide_window(app_handle, label)
     } else {

@@ -365,17 +365,30 @@ pub fn start<V: Render>(
 
     // Host 请求（托盘、快捷键、第二次启动和备份文件）统一交给偏好窗口。
     // 注册必须先于 `queue_launch_arguments`，这样冷启动携带的备份文件不会退回面板。
-    host::set_handler(cx, |request, cx| {
-        let result = if matches!(request, host::HostRequest::OpenPreferences { .. })
+    host::set_handler(cx, |host_request, cx| {
+        // 从主窗口里的按钮进来时，偏好窗会盖住主窗口：先把主窗口收起来。
+        // 快捷键、托盘、二次启动这些入口本来就没有可见的主窗口，不动。
+        if matches!(
+            host_request,
+            host::HostRequest::OpenPreferences {
+                source: host::RequestSource::Panel
+            }
+        ) {
+            request(
+                cx,
+                panel::PanelCommand::Hide(panel::Trigger::now(panel::TriggerSource::Ui)),
+            );
+        }
+        let result = if matches!(host_request, host::HostRequest::OpenPreferences { .. })
             && core_host::core(cx).is_some_and(|core| !core.settings().onboarding.completed)
         {
             // 与 1.x 相同：首次启动尚未完成引导时，偏好请求先打开引导窗。
             crate::preferences::open_onboarding(cx)
         } else {
-            crate::preferences::open_request(cx, request.clone())
+            crate::preferences::open_request(cx, host_request.clone())
         };
         if let Err(err) = result {
-            log::error!("could not handle host request {request:?}: {err:#}");
+            log::error!("could not handle host request {host_request:?}: {err:#}");
         }
     });
     host::queue_launch_arguments(cx);

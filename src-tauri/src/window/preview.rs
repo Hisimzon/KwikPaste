@@ -549,9 +549,7 @@ fn set_preview_state(state: Option<ClipboardPreviewState>) {
 
 /// 判断剪贴板窗口是否仍处于可见状态，防止过期 hover 请求在剪贴板窗口隐藏后唤起预览。
 fn is_clipboard_window_visible(app: &AppHandle) -> bool {
-    app.get_webview_window(CLIPBOARD_WINDOW_LABEL)
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false)
+    super::is_clipboard_window_visible(app)
 }
 
 /// 返回本次 show 所属的可见会话 id；隐藏后再次 show 会开启新会话。
