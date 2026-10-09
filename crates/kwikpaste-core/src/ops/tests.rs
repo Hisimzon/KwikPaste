@@ -75,6 +75,7 @@ fn capture_records_source_app_plays_sound_and_dedups() {
         1
     );
     assert_eq!(fixture.platform.sounds(), 2);
+    assert_eq!(*fixture.platform.sound_volumes.lock().unwrap(), [100, 100]);
 
     let upserts: Vec<bool> = fixture
         .take_events()
@@ -85,6 +86,31 @@ fn capture_records_source_app_plays_sound_and_dedups() {
         })
         .collect();
     assert_eq!(upserts, [false, true]);
+}
+
+#[test]
+fn capture_uses_current_volume_and_preview_passes_its_own_clamped_volume() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    copy_in(&core, text("sound disabled"));
+    assert_eq!(fixture.platform.sounds(), 0);
+    for volume in [80, 0, 255] {
+        block_on(core.update_settings(json!({"clipboard": {"feedback": {
+            "copySound": true, "copySoundVolume": volume
+        }}})))
+        .unwrap();
+        copy_in(&core, text(&format!("volume {volume}")));
+    }
+    core.play_copy_sound(25);
+    core.play_copy_sound(255);
+    block_on(core.update_settings(json!({"clipboard": {"feedback": {"copySound": false}}})))
+        .unwrap();
+    copy_in(&core, text("sound disabled again"));
+    assert_eq!(
+        *fixture.platform.sound_volumes.lock().unwrap(),
+        [80, 0, 100, 25, 100]
+    );
+    assert_eq!(fixture.platform.sounds(), 5);
 }
 
 /// 同步计数器的当前值与某条记录的序号。

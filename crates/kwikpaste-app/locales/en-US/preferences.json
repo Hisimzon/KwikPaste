@@ -444,6 +444,9 @@
       "sort": {
         "title": "Sorting"
       },
+      "sound": {
+        "title": "Sound"
+      },
       "startup": {
         "title": "Startup & Icons"
       },
@@ -660,8 +663,15 @@
           "title": "Copy as Plain Text by Default"
         },
         "sound": {
-          "preview": "Preview sound",
-          "title": "Copy Sound"
+          "preview": {
+            "controlLabel": "Preview",
+            "title": "Preview sound"
+          },
+          "title": "Copy Sound",
+          "volume": {
+            "description": "Drag to adjust, release to save; 0% is silent.",
+            "title": "Sound volume"
+          }
         },
         "updateOnReuse": {
           "description": "Refresh a record's last-used time and use count when you copy or paste it again.",

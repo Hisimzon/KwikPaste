@@ -32,7 +32,8 @@ pub struct ScannedApp {
 }
 
 /// 平台层提供给 core 的能力。方法可能在任意线程上调用，实现必须线程安全；
-/// 除 [`PlatformServices::frontmost_app`] 外都可能较慢，core 会放到阻塞线程池里调用。
+/// 除 [`PlatformServices::frontmost_app`] 与非阻塞的 [`PlatformServices::play_copy_sound`] 外
+/// 都可能较慢，core 会放到阻塞线程池里调用。
 pub trait PlatformServices: Send + Sync + 'static {
     /// 当前前台应用；失败、没有前台应用或拿不到稳定 id 时返回 `None`。
     /// 1.x 实现：macOS `NSWorkspace.frontmostApplication`（无 bundle id 的进程返回 `None`），
@@ -51,8 +52,8 @@ pub trait PlatformServices: Send + Sync + 'static {
     /// 用于把默认忽略的应用（钥匙串访问、密码）补成完整记录。
     fn app_from_id(&self, id: &str) -> Option<ScannedApp>;
 
-    /// 异步播放一次复制提示音，不阻塞调用方。
-    fn play_copy_sound(&self);
+    /// 异步播放一次复制提示音，不阻塞调用方；音量为 0 时静音，超过 100 时夹到 100。
+    fn play_copy_sound(&self, volume_percent: u8);
 }
 
 /// 没接平台层时的默认实现：识别不到前台应用、没有运行中应用、不播放提示音。
@@ -78,5 +79,5 @@ impl PlatformServices for NoPlatformServices {
         None
     }
 
-    fn play_copy_sound(&self) {}
+    fn play_copy_sound(&self, _volume_percent: u8) {}
 }

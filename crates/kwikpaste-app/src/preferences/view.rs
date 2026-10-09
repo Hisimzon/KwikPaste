@@ -17,8 +17,8 @@ use kwikpaste_core::{
 };
 use kwikpaste_ui::{
     Button, Checkbox, ConfirmSpec, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
-    NumberInputState, ScrollArea, Select, SelectOption, SelectState, Switch, TextInput,
-    form_dialog,
+    NumberInputState, ScrollArea, Select, SelectOption, SelectState, Slider, SliderState, Switch,
+    TextInput, form_dialog,
     theme::{self, SemanticTokens, TextSize, px_rems, space},
     toast::{self, Toast},
 };
@@ -212,6 +212,7 @@ struct Preferences {
     language: SelectState,
     selects: std::collections::HashMap<&'static str, SelectState>,
     number_inputs: std::collections::HashMap<&'static str, NumberInputState>,
+    sliders: std::collections::HashMap<&'static str, SliderState>,
     scroll: ScrollHandle,
     focus: FocusHandle,
     recording: Option<&'static str>,
@@ -363,6 +364,7 @@ impl Preferences {
         let storage_location = core_host::core(cx).and_then(|core| core.storage_location().ok());
         let mut selects = std::collections::HashMap::new();
         let mut number_inputs = std::collections::HashMap::new();
+        let mut sliders = std::collections::HashMap::new();
         let mut setting_subscriptions = Vec::new();
         let settings_json = values::to_json(&settings);
         for tab in schema::tabs(portable) {
@@ -442,6 +444,23 @@ impl Preferences {
                             });
                             setting_subscriptions.push(subscription);
                             selects.insert(setting.id, state);
+                        }
+                        Control::Slider { min, max } => {
+                            let value = values::get_u64(&settings_json, setting.path.unwrap_or(""))
+                                .clamp(u64::from(min), u64::from(max))
+                                as u8;
+                            let state = SliderState::new(value, min, max, cx);
+                            let path = setting.path;
+                            setting_subscriptions.push(state.on_change(cx, |_, cx| cx.notify()));
+                            setting_subscriptions.push(state.on_commit(
+                                cx,
+                                move |this, value, cx| {
+                                    if let Some(path) = path {
+                                        this.update(path, json!(value), cx);
+                                    }
+                                },
+                            ));
+                            sliders.insert(setting.id, state);
                         }
                         Control::Number { min, max, .. } => {
                             let value = values::get(&settings_json, setting.path.unwrap_or(""))
@@ -585,6 +604,7 @@ impl Preferences {
             language,
             selects,
             number_inputs,
+            sliders,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             recording: None,
@@ -1218,6 +1238,7 @@ impl Preferences {
                     return;
                 };
                 entity.update(cx, |this, cx| match id {
+                    "copy.sound.preview" => this.preview_copy_sound(cx),
                     "backup.export" => this.open_export(ExportKind::Backup, window, cx),
                     "backup.importHistory" => this.import_backup(window, cx),
                     "localData.cleanCache" => this.clean_resource_cache(cx),
@@ -1246,6 +1267,17 @@ impl Preferences {
                 });
             })
             .into_any_element()
+    }
+
+    /// 试听取滑块当前值，不等待异步落盘；平台层在工作线程播放，不阻塞偏好窗。
+    fn preview_copy_sound(&self, cx: &App) {
+        let volume_percent = self.sliders.get("copy.sound.volume").map_or(
+            self.settings.clipboard.feedback.copy_sound_volume.min(100),
+            |state| state.value(cx),
+        );
+        if let Some(core) = core_host::core(cx) {
+            core.play_copy_sound(volume_percent);
+        }
     }
 
     /// 拖放按当前位置移入目标行；未启用的格式仍保留在顺序中，避免开关采集类型时丢失位置。
@@ -2788,6 +2820,29 @@ impl Preferences {
                         .width(CONTROL_WIDTH)
                         .disabled(setting.is_disabled(&self.settings))
                         .accessibility_label(title.clone())
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                }
+            }
+            Control::Slider { .. } => {
+                if let Some(state) = self.sliders.get(setting.id) {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(space(3.))
+                        .child(
+                            Slider::new(state)
+                                .width(CONTROL_WIDTH)
+                                .disabled(setting.is_disabled(&self.settings))
+                                .accessibility_label(title.clone()),
+                        )
+                        .child(
+                            div()
+                                .w(rems(3.))
+                                .text_right()
+                                .child(format!("{}%", state.value(cx))),
+                        )
                         .into_any_element()
                 } else {
                     div().into_any_element()

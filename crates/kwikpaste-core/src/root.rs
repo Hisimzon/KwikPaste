@@ -226,8 +226,8 @@ impl Core {
     }
 
     /// 播放一次复制提示音（偏好页试听）。
-    pub fn play_copy_sound(&self) {
-        self.0.platform().play_copy_sound();
+    pub fn play_copy_sound(&self, volume_percent: u8) {
+        self.0.platform().play_copy_sound(volume_percent.min(100));
     }
 
     pub fn info(&self) -> &AppInfo {

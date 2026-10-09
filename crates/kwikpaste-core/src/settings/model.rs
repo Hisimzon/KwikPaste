@@ -890,10 +890,21 @@ impl LanSync {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Feedback {
     pub copy_sound: bool,
+    /// 复制提示音的音量百分比；手改文件超出 100 的值在播放时夹取。
+    pub copy_sound_volume: u8,
+}
+
+impl Default for Feedback {
+    fn default() -> Self {
+        Self {
+            copy_sound: false,
+            copy_sound_volume: 100,
+        }
+    }
 }
 
 /// 1.x 的渠道开关 `includeBeta` / `includeNightly` 在 2.x 删掉了（2.x 只有一个更新渠道）：读取时忽略，
