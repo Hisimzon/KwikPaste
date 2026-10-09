@@ -1,4 +1,4 @@
-//! 主窗口的剪贴板列表（附录 D §3.2 的 ListView）：`list(ListState)`、稀疏分页、置顶块、页脚，
+//! 主窗口的剪贴板列表（附录 D §3.2 的 ListView）：`list(ListState)`、稀疏分页、置顶优先排序、页脚，
 //! 以及卡片上的悬停快捷动作、数字角标、多选（见 [`ops`]、[`selecting`]、[`parts`]）。
 //!
 //! 落实 r2-02 的硬约束：
@@ -191,7 +191,6 @@ pub(super) struct Motion {
 /// 已经同步给 `ListState` 的行数。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Rows {
-    pinned: usize,
     count: usize,
 }
 
@@ -200,6 +199,8 @@ struct Rows {
 struct ReorderDrag {
     id: Arc<str>,
     section: ReorderSection,
+    /// 拖动源滚出缓存后仍能绘制 ghost；落地顺序由 core 校验。
+    item: Arc<ListItem>,
     pointer: Point<Pixels>,
     anchor: Option<Arc<str>>,
     after: bool,
@@ -452,10 +453,10 @@ impl ClipboardList {
         match event {
             PanelEvent::Shown => {
                 self.visible = true;
-                // `scrollToTopOnOpen` 默认开启：清掉选中、回到顶部，当前项就是第一个非置顶行；
+                // `scrollToTopOnOpen` 默认开启：清掉选中、回到顶部，当前项就是第一个可见行；
                 // 光标下的卡片要等指针动过才能抢走当前项。挂起的刷新当场发出。
                 self.controller.on_shown();
-                self.controller.set_first_visible(self.rows.pinned);
+                self.controller.set_first_visible(0);
                 self.pointer = Pointer::Waiting;
                 self.motion.reveal = None;
                 self.motion.wheel = 0.;
@@ -464,7 +465,12 @@ impl ClipboardList {
                     item_ix: 0,
                     offset_in_item: px(0.),
                 });
-                if self.controller.take_reload_at_top(true) {
+                let deferred = self.controller.take_reload_at_top(true);
+                if self.model.total() > 0 && self.model.get(0).is_none() {
+                    // 深滚动可淘汰包括置顶行在内的第一页，Enter 必须等它重新加载。
+                    self.freshness.changed();
+                    self.reload(cx);
+                } else if deferred {
                     self.reload(cx);
                 }
                 window.focus(&self.focus, cx);
@@ -544,8 +550,20 @@ impl ClipboardList {
     ) {
         match result {
             Ok(page) => {
+                // 排序刷新时保留视口锚点；置顶切换不能让正在浏览的卡片上下跳一行。
+                let top = self.state.logical_scroll_top();
+                let anchor = (request.replace && !self.at_top())
+                    .then(|| self.model.get(top.item_ix).map(|item| item.id.clone()))
+                    .flatten();
                 if let Some(applied) = self.model.apply(&request, page) {
                     self.sync_rows(Some(&applied));
+                    if let Some(index) = anchor.and_then(|id| self.model.index_of(&id)) {
+                        self.state.scroll_to(ListOffset {
+                            item_ix: index,
+                            offset_in_item: top.offset_in_item,
+                        });
+                        self.controller.set_first_visible(index);
+                    }
                     if request.replace
                         && request.range.start == 0
                         && std::mem::take(&mut self.refetch_view_after_first_page)
@@ -571,10 +589,8 @@ impl ClipboardList {
 
     /// 把模型的行数变化同步给 `ListState`。
     fn sync_rows(&mut self, applied: Option<&Applied>) {
-        let pinned = self.model.leading_pinned();
         let target = Rows {
-            pinned,
-            count: self.model.total().saturating_sub(pinned),
+            count: self.model.total(),
         };
         let rebuild = applied.is_none_or(|applied| {
             applied.replaced
@@ -593,25 +609,11 @@ impl ClipboardList {
             self.rows = target;
             self.hints.dirty = true;
             self.heights.sampled.clear();
-            // 回到了顶部：当前项立刻是新的第一个非置顶行，不等下一帧的布局快照。
-            self.controller.set_first_visible(target.pinned);
+            // 回到了顶部：当前项立刻是新的第一行，不等下一帧的布局快照。
+            self.controller.set_first_visible(0);
             return;
         }
 
-        if target.pinned != self.rows.pinned {
-            // 置顶块变化发生在列表开头：按差值在开头增删行，锚点随 splice 平移。
-            if target.pinned > self.rows.pinned {
-                let removed = (target.pinned - self.rows.pinned).min(self.rows.count);
-                self.state.splice(0..removed, 0);
-                self.rows.count -= removed;
-            } else {
-                let added = self.rows.pinned - target.pinned;
-                self.state.splice(0..0, added);
-                self.rows.count += added;
-            }
-            self.rows.pinned = target.pinned;
-            self.hints.dirty = true;
-        }
         if target.count != self.rows.count {
             if target.count > self.rows.count {
                 self.state.splice(
@@ -626,12 +628,8 @@ impl ClipboardList {
         }
 
         if let Some(applied) = applied {
-            let start = applied.range.start.saturating_sub(self.rows.pinned);
-            let end = applied
-                .range
-                .end
-                .saturating_sub(self.rows.pinned)
-                .min(self.rows.count);
+            let start = applied.range.start;
+            let end = applied.range.end.min(self.rows.count);
             if start < end {
                 self.state.remeasure_items(start..end);
             }
@@ -652,6 +650,8 @@ impl ClipboardList {
             offset_in_item: px(0.),
         });
         self.rows = Rows::default();
+        self.controller.set_first_visible(0);
+        *self.snapshot.borrow_mut() = Snapshot::default();
         self.motion.reveal = None;
         self.motion.wheel = 0.;
         self.hints.dirty = true;
@@ -672,15 +672,16 @@ impl ClipboardList {
             return false;
         };
 
-        if removed.index >= removed.pinned_before {
-            let ix = removed.index - removed.pinned_before;
-            if ix < self.rows.count {
-                self.state.splice(ix..ix + 1, 0);
-                self.rows.count -= 1;
-            }
-        } else {
-            self.rows.pinned = self.rows.pinned.saturating_sub(1);
+        if removed.index < self.rows.count {
+            self.state.splice(removed.index..removed.index + 1, 0);
+            self.rows.count -= 1;
         }
+        self.controller.set_first_visible(
+            self.state
+                .logical_scroll_top()
+                .item_ix
+                .min(self.rows.count.saturating_sub(1)),
+        );
         if let Some(request) = removed.refetch {
             self.fetch(request, cx);
         }
@@ -696,10 +697,7 @@ impl ClipboardList {
         cx: &mut Context<Self>,
     ) -> Option<usize> {
         let index = self.model.patch_by_id(id, patch)?;
-        if index >= self.rows.pinned {
-            let ix = index - self.rows.pinned;
-            self.state.remeasure_items(ix..ix + 1);
-        }
+        self.state.remeasure_items(index..index + 1);
         cx.notify();
         Some(index)
     }
@@ -740,13 +738,13 @@ impl ClipboardList {
 
         let top = self.state.logical_scroll_top().item_ix;
         let (first, last) = match (snapshot.rows.first(), snapshot.rows.last()) {
-            (Some(first), Some(last)) => (first.ix.min(top), last.ix.max(top)),
+            (Some(_), Some(last)) => (top, last.ix.max(top)),
             _ => (top, top + 10),
         };
-        self.controller.set_first_visible(first + self.rows.pinned);
+        self.controller.set_first_visible(first);
 
         if self.model.loaded_initial() && self.rows.count > 0 {
-            let visible = first + self.rows.pinned..last + 1 + self.rows.pinned;
+            let visible = first..last + 1;
             if let Some(request) = self.model.load_range(visible) {
                 self.fetch(request, cx);
             }
@@ -872,11 +870,8 @@ impl ClipboardList {
         if let Some(request) = request {
             self.fetch(request, cx);
         }
-        if let NavOutcome::Moved { index } = outcome
-            && index >= self.rows.pinned
-        {
-            // 置顶块不滚动，只有列表里的行需要露出。
-            self.motion.reveal = Some(index - self.rows.pinned);
+        if let NavOutcome::Moved { index } = outcome {
+            self.motion.reveal = Some(index);
         }
         if matches!(outcome, NavOutcome::Moved { .. }) {
             self.preview_follow_active(cx);
@@ -886,10 +881,8 @@ impl ClipboardList {
 
     /// 把一条记录滚进视口（截图摆场景用）。
     pub(super) fn reveal_item(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Some(index) = self.model.index_of(id)
-            && index >= self.rows.pinned
-        {
-            self.motion.reveal = Some(index - self.rows.pinned);
+        if let Some(index) = self.model.index_of(id) {
+            self.motion.reveal = Some(index);
             cx.notify();
         }
     }
@@ -1058,7 +1051,12 @@ impl ClipboardList {
         let mut cards: Vec<_> = geometry
             .cards
             .iter()
-            .filter(|(_, card_section, _)| *card_section == section)
+            .filter(|(_, card_section, bounds)| {
+                *card_section == section
+                    && geometry.area.is_some_and(|area| {
+                        bounds.bottom() > area.top() && bounds.top() < area.bottom()
+                    })
+            })
             .filter(|(card_id, _, _)| card_id.as_ref() != id.as_ref())
             .cloned()
             .collect();
@@ -1096,7 +1094,7 @@ impl ClipboardList {
                         let Some(drag) = list.reorder.as_ref() else {
                             return false;
                         };
-                        if !drag.active || drag.section == ReorderSection::Pinned {
+                        if !drag.active {
                             return drag.active;
                         }
                         let Some(area) = list.reorder_geometry.borrow().area else {
@@ -1182,9 +1180,13 @@ impl ClipboardList {
             drag.section == ReorderSection::Favorite,
             drag.after,
         );
-        if !changed {
+        if !changed && original.is_some() {
             cx.notify();
             return;
+        }
+        if let (Some(before), Some(after)) = (original, self.model.index_of(&drag.id)) {
+            self.state
+                .remeasure_items(before.min(after)..before.max(after) + 1);
         }
         let anchor = if drag.after {
             ReorderAnchor::After(anchor.to_string())
@@ -1203,6 +1205,9 @@ impl ClipboardList {
                     }
                 } else {
                     list.controller.select(&selected_id);
+                    if let Some(request) = list.model.reload_current_range() {
+                        list.fetch(request, cx);
+                    }
                 }
                 if original.is_some() {
                     cx.notify();
@@ -1265,6 +1270,7 @@ impl ClipboardList {
                     .map(|section| ReorderDrag {
                         id: id.clone(),
                         section,
+                        item: item.clone(),
                         pointer: event.position,
                         anchor: None,
                         after: false,
@@ -1491,7 +1497,7 @@ impl ClipboardList {
         let can_delete = self.can_delete(item.is_favorite, item.is_pinned);
         let hint = self
             .key_hints
-            .then(|| self.controller.hint_key(index, self.rows.pinned, selecting))
+            .then(|| self.controller.hint_key(index, selecting))
             .flatten();
         let actions = (hovered && !selecting)
             .then(|| {
@@ -1649,7 +1655,7 @@ impl ClipboardList {
             now: self.now,
             reduce_motion: self.reduce_motion(cx),
         };
-        let index = ix + self.rows.pinned;
+        let index = ix;
         let placeholder = self.model.get(index).is_none();
         if placeholder {
             self.placeholders.borrow_mut().insert(ix);
@@ -1716,6 +1722,8 @@ impl Render for ClipboardList {
         }
         self.apply_hints();
         self.run_motion(window, cx);
+        self.controller
+            .set_first_visible(self.state.logical_scroll_top().item_ix);
         self.consume_reload_at_top(cx);
 
         let tokens = theme::semantic(cx);
@@ -1729,10 +1737,6 @@ impl Render for ClipboardList {
         };
 
         let empty = self.model.loaded_initial() && self.model.total() == 0;
-        let pinned: Vec<AnyElement> = (0..self.rows.pinned)
-            .map(|index| self.render_row(index, &env, window, cx))
-            .collect();
-
         let content: AnyElement = if empty {
             div()
                 .flex()
@@ -1801,7 +1805,7 @@ impl Render for ClipboardList {
             .clone()
             .filter(|drag| drag.active)
             .and_then(|drag| {
-                let item = self.model.find(&drag.id)?.clone();
+                let item = drag.item.clone();
                 let (root, area, (source, mut section_cards, mut all_section_cards)) = {
                     let geometry = &painted_reorder_geometry;
                     let root = geometry.root?;
@@ -1930,6 +1934,7 @@ impl Render for ClipboardList {
                 let indicator_left = indicator_card.origin.x + left_inset;
                 let indicator_width =
                     (indicator_card.size.width - left_inset - right_inset).max(px(0.));
+                let indicator_y = indicator_y.max(area.top()).min(area.bottom() - px(2.));
                 let indicator_local_y = indicator_y - root.origin.y;
                 let indicator = div()
                     .absolute()
@@ -2030,9 +2035,6 @@ impl Render for ClipboardList {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .when(!pinned.is_empty(), |area| {
-                area.child(div().flex().flex_col().flex_none().children(pinned))
-            })
             .child(content)
             .child(area_bounds);
 

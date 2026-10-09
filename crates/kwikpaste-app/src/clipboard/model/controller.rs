@@ -1,6 +1,6 @@
 //! 列表控制器：当前项、键盘移动、数字提示和刷新策略，移植自 1.x `List.tsx` 的逻辑部分。
 //!
-//! - 当前项（“选中”）只有一个：没有显式选中时，第一个可见的非置顶项就是当前项；
+//! - 当前项（“选中”）只有一个：没有显式选中时，第一个可见的项就是当前项；
 //!   指针移进卡片就把它设为当前项，键盘和指针共用一个选中。
 //! - ↑/↓ 夹在首尾、不循环；目标行没加载时先发请求，这一次移动作废（与 1.x 相同）。
 //! - 剪贴板有新内容时：面板隐藏时立即重拉第一页（再显示总会回到顶部，显示时数据已经是新的）；
@@ -24,7 +24,7 @@ pub enum Nav {
 /// 一次方向键的结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavOutcome {
-    /// 当前项移到了模型下标 `index`，视图把它平滑滚进视口（置顶行不滚）。
+    /// 当前项移到了模型下标 `index`，视图把它平滑滚进视口。
     Moved { index: usize },
     /// 目标行还没加载：已登记为可见范围，等数据到了再按。
     NeedsLoad { index: usize },
@@ -59,13 +59,13 @@ pub enum UpdateAction {
     Defer { reset_selection: bool },
 }
 
-/// 数字提示 1–9、0（Mod+数字粘贴第 N 个可见非置顶项）。
+/// 数字提示 1–9、0（Mod+数字粘贴第 N 个可见项）。
 pub const HINT_KEYS: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 
 #[derive(Debug, Default)]
 pub struct ListController {
     selected: Option<Arc<str>>,
-    /// 第一个可见的非置顶项的模型下标（列表视口第一行 + 置顶行数）。
+    /// 第一个可见的项的模型下标（包含置顶行）。
     first_visible: usize,
     pending_reload: bool,
     filter: ListFilter,
@@ -116,7 +116,7 @@ impl ListController {
         }
     }
 
-    /// 当前项的模型下标：显式选中且仍在缓存里时取它，否则取第一个可见的非置顶项。
+    /// 当前项的模型下标：显式选中且仍在缓存里时取它，否则取第一个可见的项。
     pub fn active_index(&self, model: &ListModel) -> usize {
         self.selected
             .as_deref()
@@ -124,7 +124,7 @@ impl ListController {
             .unwrap_or(self.first_visible)
     }
 
-    /// Enter 作用的记录（1.x：显式选中项，否则第一个可见非置顶项，再否则第 0 行）。
+    /// Enter 作用的记录（1.x：显式选中项，否则第一个可见项，再否则第 0 行）。
     pub fn active_item<'a>(&self, model: &'a ListModel) -> Option<&'a Arc<ListItem>> {
         if let Some(item) = self.selected.as_deref().and_then(|id| model.find(id)) {
             return Some(item);
@@ -187,9 +187,9 @@ impl ListController {
             .map(|item| item.id.clone());
     }
 
-    /// 第 `index` 行的数字提示：只标在前 10 个可见非置顶项上，多选时不显示。
-    pub fn hint_key(&self, index: usize, pinned: usize, selecting: bool) -> Option<char> {
-        if selecting || index < pinned {
+    /// 第 `index` 行的数字提示：只标在前 10 个可见项上，多选时不显示。
+    pub fn hint_key(&self, index: usize, selecting: bool) -> Option<char> {
+        if selecting {
             return None;
         }
 
@@ -197,7 +197,7 @@ impl ListController {
         HINT_KEYS.get(relative).copied()
     }
 
-    /// Mod+数字：数字键对应的模型下标（`1` 是第一个可见非置顶项，`0` 是第十个）。
+    /// Mod+数字：数字键对应的模型下标（`1` 是第一个可见项，`0` 是第十个）。
     pub fn hint_index(&self, key: char) -> Option<usize> {
         HINT_KEYS
             .iter()
@@ -331,16 +331,22 @@ mod tests {
     }
 
     #[test]
-    fn default_active_item_is_the_first_visible_non_pinned_row() {
+    fn default_active_item_is_the_first_visible_row_including_pins() {
         let model = model(100, 30, 2);
         let mut controller = ListController::new();
-        controller.set_first_visible(2);
-
-        assert!(controller.is_active(2, "r2"));
+        assert!(controller.is_active(0, "r0"));
+        assert_eq!(
+            controller.active_item(&model).map(|item| &*item.id),
+            Some("r0")
+        );
+        controller.set_first_visible(1);
+        assert!(controller.is_active(1, "r1"));
+        assert_eq!(controller.active_index(&model), 1);
+        controller.set_first_visible(5);
         assert!(!controller.is_active(0, "r0"));
         assert_eq!(
             controller.active_item(&model).map(|item| &*item.id),
-            Some("r2")
+            Some("r5")
         );
     }
 
@@ -402,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn up_from_the_first_regular_row_reaches_pinned_rows() {
+    fn arrows_cross_the_pinned_boundary_and_reach_the_top() {
         let mut model = model(50, 30, 2);
         let mut controller = ListController::new();
         controller.set_first_visible(2);
@@ -410,6 +416,18 @@ mod tests {
         assert_eq!(
             controller.navigate(Nav::Up, &mut model).0,
             NavOutcome::Moved { index: 1 }
+        );
+        assert_eq!(
+            controller.navigate(Nav::Up, &mut model).0,
+            NavOutcome::Moved { index: 0 }
+        );
+        assert_eq!(
+            controller.navigate(Nav::Down, &mut model).0,
+            NavOutcome::Moved { index: 1 }
+        );
+        assert_eq!(
+            controller.navigate(Nav::Down, &mut model).0,
+            NavOutcome::Moved { index: 2 }
         );
     }
 
@@ -432,25 +450,19 @@ mod tests {
     }
 
     #[test]
-    fn number_hints_cover_ten_visible_regular_rows() {
+    fn number_hints_cover_ten_visible_rows_including_pins() {
         let mut controller = ListController::new();
+        assert_eq!(controller.hint_key(0, false), Some('1'));
+        assert_eq!(controller.hint_key(1, false), Some('2'));
+        assert_eq!(controller.hint_index('1'), Some(0));
         controller.set_first_visible(5);
 
-        assert_eq!(controller.hint_key(5, 2, false), Some('1'));
-        assert_eq!(controller.hint_key(13, 2, false), Some('9'));
-        assert_eq!(controller.hint_key(14, 2, false), Some('0'));
-        assert_eq!(controller.hint_key(15, 2, false), None);
-        assert_eq!(controller.hint_key(4, 2, false), None);
-        assert_eq!(
-            controller.hint_key(1, 2, false),
-            None,
-            "pinned rows get no hint"
-        );
-        assert_eq!(
-            controller.hint_key(6, 2, true),
-            None,
-            "hidden while selecting"
-        );
+        assert_eq!(controller.hint_key(5, false), Some('1'));
+        assert_eq!(controller.hint_key(13, false), Some('9'));
+        assert_eq!(controller.hint_key(14, false), Some('0'));
+        assert_eq!(controller.hint_key(15, false), None);
+        assert_eq!(controller.hint_key(4, false), None);
+        assert_eq!(controller.hint_key(6, true), None, "hidden while selecting");
     }
 
     #[test]

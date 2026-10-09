@@ -1,11 +1,11 @@
 //! 列表的稀疏分页缓存，移植自 1.x `src/hooks/useClipboardItems.ts`。
 //!
 //! 数据源（core）仍是排序、搜索、载荷裁剪的唯一真相；这里只按可见范围缓存少量已加载行：
-//! 请求按 30 行对齐、两侧各预取 30 行，超过 180 行时围绕视图中心保留 90 行（开头连续的置顶行
-//! 始终保留）。每次重载递增请求令牌，过期响应直接丢弃。
+//! 请求按 30 行对齐、两侧各预取 30 行，超过 180 行时围绕视图中心保留 ±90 行。
+//! 每次重载递增请求令牌，过期响应直接丢弃。
 //!
-//! 下标一律是「模型下标」：包含开头的置顶行。视图层把置顶行画在列表上方，列表行号 =
-//! 模型下标 − 置顶行数。所有操作都只改数据，不碰 GPUI；视图拿返回值去同步 `ListState`。
+//! 下标一律是「模型下标」：包含开头的置顶行，与虚拟列表行号一致。
+//! 所有操作都只改数据，不碰 GPUI；视图拿返回值去同步 `ListState`。
 
 use std::{
     collections::{HashMap, HashSet},
@@ -48,15 +48,12 @@ pub struct Applied {
     pub replaced: bool,
     pub total_before: usize,
     pub total_after: usize,
-    pub pinned_before: usize,
-    pub pinned_after: usize,
 }
 
 /// 删除一行后的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Removed {
     pub index: usize,
-    pub pinned_before: usize,
     /// 删除后强制重拉视图范围，补上后面挪上来的行。
     pub refetch: Option<FetchRequest>,
 }
@@ -123,13 +120,6 @@ impl ListModel {
         self.items.values().find(|item| &*item.id == id)
     }
 
-    /// 已加载的开头连续置顶行数，这些行固定画在列表上方（1.x `countLeadingPinnedItems`）。
-    pub fn leading_pinned(&self) -> usize {
-        (0..)
-            .take_while(|index| self.items.get(index).is_some_and(|item| item.is_pinned))
-            .count()
-    }
-
     /// 记下可见范围（模型下标，半开），缺数据时返回要发的请求（1.x `loadRange`）。
     pub fn load_range(&mut self, visible: Range<usize>) -> Option<FetchRequest> {
         let start = visible.start.min(visible.end);
@@ -167,10 +157,9 @@ impl ListModel {
         self.first_page()
     }
 
-    /// 清空缓存后重拉视图 ± 预取范围（置顶切换、显示设置变化后，1.x `reloadCurrentRange`）。
+    /// 重拉视图 ± 预取范围，响应到达前保留旧行，随后整体替换过时的排序缓存。
     pub fn reload_current_range(&mut self) -> Option<FetchRequest> {
         self.bump_token();
-        self.items.clear();
         let view = self.view.clone();
 
         self.fetch(
@@ -209,7 +198,6 @@ impl ListModel {
         self.finish(request);
 
         let total_before = self.total;
-        let pinned_before = self.leading_pinned();
         let total_after = page.total;
         if request.replace {
             self.items.clear();
@@ -236,8 +224,6 @@ impl ListModel {
             replaced: request.replace,
             total_before,
             total_after,
-            pinned_before,
-            pinned_after: self.leading_pinned(),
         })
     }
 
@@ -260,7 +246,6 @@ impl ListModel {
     /// 删掉一行并把后面的下标前移（单条删除、在收藏里取消收藏、移出当前分组，1.x `removeItemById`）。
     pub fn remove_by_id(&mut self, id: &str) -> Option<Removed> {
         let removed = self.index_of(id)?;
-        let pinned_before = self.leading_pinned();
 
         let old = std::mem::take(&mut self.items);
         for (index, item) in old {
@@ -277,7 +262,6 @@ impl ListModel {
 
         Some(Removed {
             index: removed,
-            pinned_before,
             refetch,
         })
     }
@@ -424,7 +408,7 @@ impl ListModel {
         })
     }
 
-    /// 超过上限时围绕视图中心保留 ±90 行，开头连续的置顶行始终保留（1.x `trimCache`）。
+    /// 超过上限时围绕视图中心保留 ±90 行，置顶行和普通行采用相同的淘汰策略。
     fn trim(&mut self) {
         if self.items.len() <= CACHE_MAX_ROWS {
             return;
@@ -434,10 +418,8 @@ impl ListModel {
         let center = (self.view.start + last) / 2;
         let keep_start = center.saturating_sub(CACHE_KEEP_RADIUS);
         let keep_end = (center + CACHE_KEEP_RADIUS).min(self.total.saturating_sub(1));
-        let pinned = self.leading_pinned();
-
         self.items
-            .retain(|index, _| *index < pinned || (keep_start..=keep_end).contains(index));
+            .retain(|index, _| (keep_start..=keep_end).contains(index));
     }
 }
 
@@ -592,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn trimming_keeps_radius_around_view_and_leading_pins() {
+    fn trimming_evicts_offscreen_pins_like_regular_rows() {
         let ids = backend(2000);
         let mut model = ListModel::new();
         let first = model.reset_and_reload();
@@ -608,13 +590,15 @@ mod tests {
         }
 
         assert!(model.cached_rows() <= CACHE_MAX_ROWS);
-        // 视图中心 1004，只保留 914..=1094（实际加载了 960..1050）；开头 3 个置顶行始终保留。
-        assert!(model.get(0).is_some() && model.get(2).is_some());
+        // 视图中心 1004，只保留 914..=1094（实际加载了 960..1050），置顶行也会淘汰。
+        assert!(model.get(0).is_none() && model.get(2).is_none());
         assert!(model.get(3).is_none());
         assert!(model.get(960).is_some() && model.get(1049).is_some());
         assert!(model.get(500).is_none());
         assert!(model.get(913).is_none());
-        assert_eq!(model.leading_pinned(), 3);
+        let request = model.load_range(0..10).expect("reload evicted pins");
+        load(&mut model, &ids, 3, &request);
+        assert!(model.get(0).is_some_and(|item| item.is_pinned));
     }
 
     #[test]
@@ -677,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn reload_current_range_clears_and_refetches_the_view() {
+    fn reload_current_range_keeps_rows_until_the_response() {
         let ids = backend(1000);
         let mut model = ListModel::new();
         let first = model.reset_and_reload();
@@ -685,10 +669,14 @@ mod tests {
         let request = model.load_range(200..210).expect("needs rows");
         load(&mut model, &ids, 0, &request);
 
+        let cached = model.cached_rows();
         let refetch = model.reload_current_range().expect("view range");
-        assert_eq!(model.cached_rows(), 0);
+        assert_eq!(model.cached_rows(), cached);
         assert_eq!(refetch.range, 150..240);
         assert!(refetch.replace);
+        load(&mut model, &ids, 0, &refetch);
+        assert_eq!(model.get(200).map(|item| &*item.id), Some("r200"));
+        assert!(model.get(0).is_none());
     }
 
     #[test]
@@ -758,6 +746,8 @@ mod tests {
             model.patch_by_id(id, |item| item.is_favorite = true);
         }
 
+        assert!(!model.reorder_local("r0", "r2", false, true));
+        assert!(!model.reorder_local("r2", "r0", true, true));
         assert!(model.reorder_local("r0", "r1", false, true));
         assert_eq!(model.get(0).map(|item| &*item.id), Some("r1"));
         assert_eq!(model.get(1).map(|item| &*item.id), Some("r0"));
@@ -800,15 +790,17 @@ mod tests {
     }
 
     #[test]
-    fn leading_pins_are_counted_from_loaded_rows() {
+    fn removing_a_pinned_row_shifts_the_same_model_indices() {
         let ids = backend(50);
         let mut model = ListModel::new();
         let first = model.reset_and_reload();
-        let applied = load(&mut model, &ids, 4, &first);
+        load(&mut model, &ids, 4, &first);
 
-        assert_eq!(applied.pinned_before, 0);
-        assert_eq!(applied.pinned_after, 4);
-        assert_eq!(model.leading_pinned(), 4);
+        let removed = model.remove_by_id("r1").expect("pinned row");
+        assert_eq!(removed.index, 1);
+        assert_eq!(model.total(), 49);
+        assert_eq!(model.get(1).map(|item| &*item.id), Some("r2"));
+        assert_eq!(model.get(3).map(|item| &*item.id), Some("r4"));
     }
 
     #[test]

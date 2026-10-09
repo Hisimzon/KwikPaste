@@ -89,7 +89,7 @@ actions!(
     ]
 );
 
-/// Mod+数字：粘贴第 N 个可见的非置顶项（`slot` 0–9 对应数字键 1–9、0）。
+/// Mod+数字：粘贴第 N 个可见项（包含置顶行）（`slot` 0–9 对应数字键 1–9、0）。
 #[derive(Clone, Debug, PartialEq, Eq, Action)]
 #[action(namespace = clipboard_panel, no_json)]
 pub struct QuickPaste {

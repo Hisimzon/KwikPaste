@@ -181,7 +181,7 @@ impl ClipboardList {
         self.activate(Activation::Paste { plain }, cx);
     }
 
-    /// Mod+数字：粘贴第 N 个可见非置顶项。多选时不响应（也不显示角标）；数据没追上时同 Enter 挂起。
+    /// Mod+数字：粘贴第 N 个可见项（包含置顶行）。多选时不响应（也不显示角标）；数据没追上时同 Enter 挂起。
     pub fn quick_paste(&mut self, key: char, cx: &mut Context<Self>) {
         if self.selection.active() {
             return;
@@ -408,7 +408,6 @@ impl ClipboardList {
                         "commands:messages.itemUnpinned"
                     };
                     Self::toast_success(key, window, cx);
-                    list.patch_item(&id, |item| item.is_pinned = pinned, cx);
                     if let Some(request) = list.model.reload_current_range() {
                         list.fetch(request, cx);
                     }

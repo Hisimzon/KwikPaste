@@ -132,7 +132,7 @@ impl FixtureStore {
         self.items.iter().position(|item| &*item.id == id)
     }
 
-    /// 新记录进库：排在置顶块之后的第一位（core 按 `is_pinned DESC, updated_at DESC` 排序）。
+    /// 新记录进库：排在置顶行之后的第一位（core 按 `is_pinned DESC, updated_at DESC` 排序）。
     pub fn insert_newest(&mut self, item: ListItem) {
         let at = self.items.iter().take_while(|item| item.is_pinned).count();
         self.items.insert(at, Arc::new(item));
@@ -143,7 +143,7 @@ impl FixtureStore {
         Some(self.items.remove(index))
     }
 
-    /// 切换置顶：置顶的移到置顶块末尾，取消置顶的放回置顶块之后。
+    /// 切换置顶：置顶的移到列表首行，取消置顶的放回置顶行之后。
     pub fn set_pinned(&mut self, id: &str, pinned: bool) -> bool {
         let Some(item) = self.remove(id) else {
             return false;
@@ -779,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn store_mutations_keep_the_pinned_block_first() {
+    fn store_mutations_keep_pinned_rows_first() {
         let store = FixtureStore::from_page_json(SAMPLE, Path::new("/tmp")).expect("parses");
         let mut store = store;
         let pinned = store.items.iter().take_while(|item| item.is_pinned).count();

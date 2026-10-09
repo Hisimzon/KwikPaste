@@ -196,13 +196,12 @@ impl Bench {
         }
         bench.seen_seq = snapshot.seq;
 
-        let pinned = list.model.leading_pinned();
         let positions: Vec<(Arc<str>, f32)> = snapshot
             .rows
             .iter()
             .filter_map(|row| {
                 list.model
-                    .get(row.ix + pinned)
+                    .get(row.ix)
                     .map(|item| (item.id.clone(), row.top))
             })
             .collect();
@@ -614,11 +613,10 @@ fn run_step(
             );
         }
         Step::RemoveAbove => {
-            let pinned = list.model.leading_pinned();
             let top = list.state.logical_scroll_top().item_ix;
             let Some(id) = list
                 .model
-                .get(top.saturating_sub(5) + pinned)
+                .get(top.saturating_sub(5))
                 .map(|item| item.id.clone())
             else {
                 bench.borrow_mut().note("A2 skipped: row not loaded");
@@ -631,15 +629,14 @@ fn run_step(
             list.remove_item(&id, cx);
         }
         Step::RemoveVisible => {
-            let pinned = list.model.leading_pinned();
             let top = list.state.logical_scroll_top().item_ix;
             let target = top + 3;
-            let Some(id) = list.model.get(target + pinned).map(|item| item.id.clone()) else {
+            let Some(id) = list.model.get(target).map(|item| item.id.clone()) else {
                 bench.borrow_mut().note("A3 skipped: row not loaded");
                 return;
             };
             let above: Vec<Arc<str>> = (top..target)
-                .filter_map(|ix| list.model.get(ix + pinned).map(|item| item.id.clone()))
+                .filter_map(|ix| list.model.get(ix).map(|item| item.id.clone()))
                 .collect();
             remove_from_store(bench, &id);
             bench.borrow_mut().check(
@@ -651,13 +648,8 @@ fn run_step(
             list.remove_item(&id, cx);
         }
         Step::RemoveScrollTop => {
-            let pinned = list.model.leading_pinned();
             let top = list.state.logical_scroll_top();
-            let Some(id) = list
-                .model
-                .get(top.item_ix + pinned)
-                .map(|item| item.id.clone())
-            else {
+            let Some(id) = list.model.get(top.item_ix).map(|item| item.id.clone()) else {
                 bench.borrow_mut().note("A4 skipped: row not loaded");
                 return;
             };
@@ -670,10 +662,9 @@ fn run_step(
             list.remove_item(&id, cx);
         }
         Step::GrowAbove => {
-            let pinned = list.model.leading_pinned();
             let top = list.state.logical_scroll_top().item_ix;
             let ids: Vec<Arc<str>> = (top.saturating_sub(12)..top.saturating_sub(2))
-                .filter_map(|ix| list.model.get(ix + pinned).map(|item| item.id.clone()))
+                .filter_map(|ix| list.model.get(ix).map(|item| item.id.clone()))
                 .collect();
             bench
                 .borrow_mut()
@@ -683,13 +674,8 @@ fn run_step(
             }
         }
         Step::GrowScrollTop => {
-            let pinned = list.model.leading_pinned();
             let top = list.state.logical_scroll_top();
-            let Some(id) = list
-                .model
-                .get(top.item_ix + pinned)
-                .map(|item| item.id.clone())
-            else {
+            let Some(id) = list.model.get(top.item_ix).map(|item| item.id.clone()) else {
                 bench.borrow_mut().note("A6 skipped: row not loaded");
                 return;
             };
@@ -789,11 +775,8 @@ fn run_step(
         }
         Step::Arrow => {
             list.navigate(Nav::Down, cx);
-            let pinned = list.model.leading_pinned();
             let index = list.controller.active_index(&list.model);
-            if index >= pinned {
-                bench.borrow_mut().reveal_started = Some((Instant::now(), index - pinned));
-            }
+            bench.borrow_mut().reveal_started = Some((Instant::now(), index));
             bench.borrow_mut().phase = "keys";
         }
         Step::WheelToTop => {
@@ -827,8 +810,10 @@ fn run_step(
         }
         Step::TopReport => {
             let top = list.state.logical_scroll_top();
-            let pinned = list.model.leading_pinned();
-            let first = list.model.get(pinned).map(|item| item.id.clone());
+            let first = (0..list.total())
+                .filter_map(|index| list.model.get(index))
+                .find(|item| !item.is_pinned)
+                .map(|item| item.id.clone());
             let newest = bench.borrow().deferred_ids.last().cloned();
             let ok = top.item_ix == 0
                 && top.offset_in_item <= px(0.5)

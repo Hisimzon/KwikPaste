@@ -333,7 +333,9 @@ impl Driver {
         #[cfg(target_os = "windows")]
         self.drag_regions(cx).await;
 
-        // 方向键：从第一个可见的非置顶项往下走一行。
+        self.pinned_scroll(cx).await;
+
+        // 方向键：从第一个可见项往下走一行。
         let before = self.active_index(cx);
         self.key(cx, "down");
         let after = self.active_index(cx);
@@ -425,6 +427,65 @@ impl Driver {
         self.show_then_enter(cx).await;
         self.escape_layers(cx).await;
         self.header_actions(cx).await;
+    }
+
+    /// 置顶行属于同一虚拟列表：滚出视口后，当前项和数字提示都跟随模型下标。
+    async fn pinned_scroll(&mut self, cx: &mut AsyncApp) {
+        self.emit(cx, PanelEvent::Shown);
+        self.pause(cx, 48).await;
+        let pins: Vec<Arc<str>> = self.read(cx, |list, _| {
+            (0..list.total())
+                .filter_map(|index| list.model.get(index))
+                .take_while(|item| item.is_pinned)
+                .map(|item| item.id.clone())
+                .collect()
+        });
+        let at_top = self.read(cx, |list, _| {
+            list.state.item_count() == list.total()
+                && list.controller.active_index(&list.model) == 0
+                && list.controller.hint_key(0, false) == Some('1')
+                && list.active_item().is_some_and(|item| item.is_pinned)
+        });
+        let target = pins.len() + 2;
+        self.list.update(cx, |list, cx| {
+            list.state.scroll_to(gpui::ListOffset {
+                item_ix: target,
+                offset_in_item: px(0.),
+            });
+            cx.notify();
+        });
+        let scrolled = self
+            .settle(cx, |list, _| {
+                let snapshot = list.snapshot.borrow();
+                let Some(first) = snapshot.rows.first() else {
+                    return false;
+                };
+                let index = first.ix;
+                index >= pins.len()
+                    && index == list.state.logical_scroll_top().item_ix
+                    && list.controller.active_index(&list.model) == index
+                    && list.controller.hint_index('1') == Some(index)
+                    && list.controller.hint_key(index, false) == Some('1')
+                    && list.controller.hint_key(index - 1, false).is_none()
+                    && list
+                        .active_item()
+                        .zip(list.model.get(index))
+                        .is_some_and(|(active, row)| active.id == row.id)
+                    && pins.iter().all(|id| {
+                        list.selftest_reorder_card_bounds(id).is_none_or(|bounds| {
+                            bounds.bottom() <= snapshot.viewport.top()
+                                || bounds.top() >= snapshot.viewport.bottom()
+                        })
+                    })
+            })
+            .await;
+        self.check(
+            "pinned rows scroll away and visible indices/hints follow the model",
+            !pins.is_empty() && at_top && scrolled,
+            || format!("pins {pins:?}, at_top {at_top}, scrolled {scrolled}"),
+        );
+        self.emit(cx, PanelEvent::Shown);
+        self.pause(cx, 48).await;
     }
 
     /// Export the last AccessKit tree and verify the first-release list nodes.
@@ -541,7 +602,7 @@ impl Driver {
         false
     }
 
-    /// 把指针停在第一个非置顶行上（重复移动，越过显示后的指针门槛），返回悬停的记录。
+    /// 把指针停在可见卡片上（重复移动，越过显示后的指针门槛），返回悬停的记录。
     async fn hover_row(&self, cx: &mut AsyncApp) -> Option<Arc<ListItem>> {
         // WM_SHOWWINDOW 与首帧绘制是异步的；在 vsync 休眠/唤醒的窗口里，前两次注入可能
         // 发生在卡片还没有命中测试区域之前。重复同一对移动，但在第二次移动后马上
@@ -1139,6 +1200,7 @@ impl Driver {
 
     /// 面板内排序的 GPUI 事件回归：置顶、收藏、普通点击、Esc 取消以及重载持久化。
     async fn reorder_drag(&mut self, cx: &mut AsyncApp, fixtures: Vec<ListItem>) {
+        self.emit(cx, PanelEvent::Shown);
         self.focus_list(cx);
         if let Some(store) = &self.store {
             if let Ok(mut store) = store.lock() {
@@ -1343,6 +1405,12 @@ impl Driver {
                     buttonless_cancelled,
                     || "button-less move continued dragging".into(),
                 );
+            } else {
+                self.check("dragging a pinned card reorders in place", false, || {
+                    format!(
+                        "pinned cards are outside the viewport: source {moved:?}, target {target:?}"
+                    )
+                });
             }
         } else {
             self.check("dragging a pinned card reorders in place", false, || {
@@ -1491,7 +1559,7 @@ impl Driver {
             .ok();
     }
 
-    /// 像 core 存入新记录那样：夹具里插到置顶块之后，列表收到 `ClipboardUpserted`。
+    /// 像 core 存入新记录那样：夹具里插到置顶行之后，列表收到 `ClipboardUpserted`。
     fn store_new_record(&self, cx: &mut AsyncApp, template: &ListItem, id: &str) {
         let Some(store) = &self.store else {
             return;
@@ -1522,7 +1590,7 @@ impl Driver {
     /// 显示面板后立刻按 Enter（平台线的复现：粘的是上一条）。新记录在面板隐藏时或刚显示时到达；
     /// 一半的轮次面板出现在静止的光标下（首帧之后补一次指针移动，光标下是旧的第一行）；夹具查询慢
     /// 60 ms，Enter 一定赶在刷新落地之前。
-    /// 粘贴的必须是新记录，刷新落地后当前项也必须是第一个非置顶行。
+    /// 置顶行存在时它仍是当前项；没有置顶行时才粘贴新记录。刷新必须先落地，不能粘贴旧的首行。
     async fn show_then_enter(&mut self, cx: &mut AsyncApp) {
         let template = self.read(cx, |list, _| {
             (0..list.total())
@@ -1538,8 +1606,8 @@ impl Driver {
         };
 
         let rounds = 8;
-        let mut pasted_newest = 0;
-        let mut active_newest = 0;
+        let mut pasted_first = 0;
+        let mut active_first = 0;
         let mut details = Vec::new();
         for round in 0..rounds {
             let id = format!("selftest-fresh-{round}");
@@ -1559,10 +1627,26 @@ impl Driver {
             }
             if over_card {
                 // 面板出现在静止的光标下时系统会补发一次指针移动：等首帧画出（数据还是旧的），
-                // 再在第一个非置顶行（两张置顶卡片之下）的位置补一次移动，然后立刻按 Enter。
+                // 再在可见卡片的位置补一次移动，然后立刻按 Enter。
                 self.pause(cx, 20).await;
                 self.pointer_at(cx, 180., 360.);
             }
+            let expected = self
+                .store
+                .as_ref()
+                .and_then(|store| store.lock().ok())
+                .and_then(|store| {
+                    store
+                        .page(&ListQuery {
+                            offset: 0,
+                            limit: 1,
+                            filter: ListFilter::default(),
+                            sort: Default::default(),
+                        })
+                        .items
+                        .first()
+                        .map(|item| item.id.clone())
+                });
             self.key(cx, "enter");
 
             let intents = self.intents.clone();
@@ -1571,13 +1655,13 @@ impl Driver {
                 self.pause(cx, 10).await;
             }
             let pasted = intents.borrow().first().cloned();
-            if pasted
-                == Some(ListIntent::Paste {
-                    id: id.clone().into(),
-                    plain: false,
-                })
+            if expected.is_some()
+                && pasted
+                    == expected
+                        .clone()
+                        .map(|id| ListIntent::Paste { id, plain: false })
             {
-                pasted_newest += 1;
+                pasted_first += 1;
             } else {
                 details.push(format!("round {round}: pasted {pasted:?}"));
             }
@@ -1585,12 +1669,14 @@ impl Driver {
             let wanted = id.clone();
             let caught_up = self
                 .settle(cx, move |list, _| {
-                    list.model.loaded_initial()
-                        && list.active_item().is_some_and(|item| *item.id == *wanted)
+                    list.model.find(&wanted).is_some()
+                        && list
+                            .active_item()
+                            .is_some_and(|item| Some(&item.id) == expected.as_ref())
                 })
                 .await;
             if caught_up {
-                active_newest += 1;
+                active_first += 1;
             } else {
                 let active =
                     self.read(cx, |list, _| list.active_item().map(|item| item.id.clone()));
@@ -1599,14 +1685,14 @@ impl Driver {
         }
 
         self.check(
-            "enter right after showing pastes the newest record",
-            pasted_newest == rounds,
-            || format!("{pasted_newest}/{rounds}: {}", details.join("; ")),
+            "enter right after showing pastes the refreshed first row",
+            pasted_first == rounds,
+            || format!("{pasted_first}/{rounds}: {}", details.join("; ")),
         );
         self.check(
-            "after showing the active row is the newest record",
-            active_newest == rounds,
-            || format!("{active_newest}/{rounds}: {}", details.join("; ")),
+            "after showing the active row is the refreshed first row",
+            active_first == rounds,
+            || format!("{active_first}/{rounds}: {}", details.join("; ")),
         );
         self.pointer_at(cx, 20., 20.);
     }
@@ -1754,7 +1840,7 @@ impl Driver {
             "hints off".into()
         });
 
-        // Mod+2 粘贴第二个可见的非置顶项（宿主接上之前是意图）。
+        // Mod+2 粘贴第二个可见项（宿主接上之前是意图）。
         let target = self.read(cx, |list, _| {
             list.controller
                 .hint_index('2')
@@ -1810,16 +1896,18 @@ impl Driver {
             });
         }
 
-        // 置顶：Mod+T 后它进入置顶块，再按一次回去。
-        let pinned_before = self.read(cx, |list, _| list.model.leading_pinned());
+        // 置顶：Mod+T 后它进入列表首行，再按一次回去。
         self.key(cx, "secondary-t");
         let pinned = self
             .settle(cx, |list, _| {
-                list.model.loaded_initial() && list.model.leading_pinned() == pinned_before + 1
+                list.model
+                    .get(0)
+                    .is_some_and(|item| Some(&item.id) == id.as_ref() && item.is_pinned)
+                    && list.state.item_count() == list.total()
             })
             .await;
         self.check("mod+t pins the active row", pinned, || {
-            format!("pinned block stayed {pinned_before}")
+            format!("{id:?} did not move to the first list row")
         });
         if let Some(id) = id.clone() {
             self.list.update(cx, |list, cx| {
@@ -1830,11 +1918,14 @@ impl Driver {
         self.key(cx, "secondary-t");
         let unpinned = self
             .settle(cx, |list, _| {
-                list.model.loaded_initial() && list.model.leading_pinned() == pinned_before
+                id.as_ref()
+                    .and_then(|id| list.model.find(id))
+                    .is_some_and(|item| !item.is_pinned)
+                    && list.state.item_count() == list.total()
             })
             .await;
         self.check("mod+t again unpins it", unpinned, || {
-            "pinned block changed".into()
+            "row is still pinned or row count changed".into()
         });
 
         // 删除保护：收藏、置顶的记录按默认设置删不掉，不弹确认框。
