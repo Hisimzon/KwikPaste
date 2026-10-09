@@ -165,6 +165,11 @@ impl ClipboardSource for CoreSource {
         async move { Ok(core.copy_item(&id, plain).await?.hide_window) }.boxed()
     }
 
+    fn copy_image_text(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        let core = self.core.clone();
+        async move { Ok(core.copy_image_text(&id).await?.hide_window) }.boxed()
+    }
+
     fn toggle_favorite(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
         let core = self.core.clone();
 
@@ -535,6 +540,7 @@ impl From<ClipboardAction> for ItemAction {
             ClipboardAction::PasteAsPath => Self::PasteAsPath,
             ClipboardAction::Copy => Self::Copy,
             ClipboardAction::SaveImage => Self::SaveImage,
+            ClipboardAction::CopyImageText => Self::CopyImageText,
             ClipboardAction::SplitWords => Self::SplitWords,
             ClipboardAction::OpenLink => Self::OpenLink,
             ClipboardAction::SendEmail => Self::SendEmail,

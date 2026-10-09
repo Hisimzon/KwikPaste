@@ -693,25 +693,28 @@ fn push_filter_clauses(
     q: &ClipboardItemQuery,
     keyword: &KeywordFilter,
 ) {
-    match keyword {
-        KeywordFilter::None => {}
-        KeywordFilter::Fts(expr) => {
-            qb.push(
-                " AND clipboard_items.rowid IN (SELECT rowid FROM clipboard_items_fts WHERE clipboard_items_fts MATCH ",
-            )
-            .push_bind(expr.clone())
-            .push(")");
+    if *keyword != KeywordFilter::None {
+        qb.push(" AND (");
+        match keyword {
+            KeywordFilter::Fts(expr) => {
+                qb.push("clipboard_items.rowid IN (SELECT rowid FROM clipboard_items_fts WHERE clipboard_items_fts MATCH ")
+                    .push_bind(expr.clone()).push(")");
+            }
+            KeywordFilter::Like(kw) => {
+                let pattern = format!("%{kw}%");
+                qb.push("clipboard_items.search_text LIKE ")
+                    .push_bind(pattern.clone())
+                    .push(" ESCAPE '\\' OR clipboard_items.note LIKE ")
+                    .push_bind(pattern)
+                    .push(" ESCAPE '\\'");
+            }
+            KeywordFilter::None => {}
         }
-        KeywordFilter::Like(kw) => {
-            // FTS 索引覆盖 search_text / note 两列，LIKE 兜底也跟齐，
-            // 让 1–2 字符短词的命中范围与长词一致。
-            let pattern = format!("%{kw}%");
-            qb.push(" AND (clipboard_items.search_text LIKE ")
-                .push_bind(pattern.clone())
-                .push(" ESCAPE '\\' OR clipboard_items.note LIKE ")
-                .push_bind(pattern)
-                .push(" ESCAPE '\\')");
+        if q.ocr_enabled {
+            qb.push(" OR ");
+            push_ocr_match(qb, keyword);
         }
+        qb.push(")");
     }
     // group（UI Tab）覆盖显式 kind / favorite；为 None 时回退到显式字段（单测使用）。
     let (effective_kind, effective_favorite) = match q.group {
@@ -737,6 +740,49 @@ fn push_filter_clauses(
         qb.push(" AND clipboard_items.is_pinned = ")
             .push_bind(pinned);
     }
+}
+
+/// OCR 匹配作为非相关子查询，FTS 一次求命中集合后用 item_id 主键关联。
+fn push_ocr_match(qb: &mut QueryBuilder<Sqlite>, keyword: &KeywordFilter) {
+    qb.push("clipboard_items.kind = 'image' AND clipboard_items.id IN (SELECT item_id FROM image_texts WHERE status = 'done' AND ");
+    match keyword {
+        KeywordFilter::Fts(expr) => {
+            qb.push("rowid IN (SELECT rowid FROM image_texts_fts WHERE image_texts_fts MATCH ")
+                .push_bind(expr.clone())
+                .push(")");
+        }
+        KeywordFilter::Like(kw) => {
+            qb.push("text LIKE ")
+                .push_bind(format!("%{kw}%"))
+                .push(" ESCAPE '\\'");
+        }
+        KeywordFilter::None => {
+            qb.push("0");
+        }
+    }
+    qb.push(")");
+}
+
+/// 展示层仅查询布尔值，不把识别正文装入列表；短词与分页/全选共享同一谓词。
+pub(crate) async fn image_text_flags(
+    pool: &SqlitePool,
+    id: &str,
+    keyword: Option<&str>,
+) -> Result<(bool, bool)> {
+    let keyword = KeywordFilter::from_keyword(keyword);
+    let mut qb = QueryBuilder::<Sqlite>::new("SELECT EXISTS(SELECT 1 FROM image_texts WHERE item_id = clipboard_items.id AND status = 'done' AND text <> ''), (");
+    if keyword == KeywordFilter::None {
+        qb.push("0");
+    } else {
+        push_ocr_match(&mut qb, &keyword);
+    }
+    qb.push(") FROM clipboard_items WHERE id = ")
+        .push_bind(id.to_owned());
+    Ok(qb
+        .build_query_as()
+        .fetch_one(pool)
+        .await
+        .context("failed to read image text flags")?)
 }
 
 #[cfg(test)]
@@ -2050,6 +2096,40 @@ mod tests {
         push_list_query(&mut qb, q, &KeywordFilter::None);
         let rows: Vec<(i64, i64, i64, String)> = qb.build_query_as().fetch_all(pool).await.unwrap();
         rows.into_iter().map(|row| row.3).collect()
+    }
+
+    #[tokio::test]
+    async fn ocr_query_plan_uses_fts_and_unified_predicate_on_large_history() {
+        let pool = memory_pool().await;
+        sqlx::query("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<20000) INSERT INTO clipboard_items(id,kind,content,content_hash,platform,created_at,updated_at) SELECT printf('plan-%d',x),CASE WHEN x%4=0 THEN 'image' ELSE 'text' END, 'fixture.png',printf('hash-%d',x),'windows','2026-10-09T00:00:00Z','2026-10-09T00:00:00Z' FROM n")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO image_texts(item_id,status,text,attempts,created_at,updated_at) SELECT id,'done','中文识别 English words',1,created_at,created_at FROM clipboard_items WHERE kind='image'")
+            .execute(&pool).await.unwrap();
+        let q = ClipboardItemQuery {
+            ocr_enabled: true,
+            keyword: Some("English".into()),
+            ..Default::default()
+        };
+        let mut qb = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
+        push_list_query(
+            &mut qb,
+            &q,
+            &KeywordFilter::from_keyword(q.keyword.as_deref()),
+        );
+        let rows: Vec<(i64, i64, i64, String)> =
+            qb.build_query_as().fetch_all(&pool).await.unwrap();
+        let plan = rows
+            .iter()
+            .map(|row| row.3.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        println!("OCR 20k/5k query plan:\n{plan}");
+        assert!(plan.contains("VIRTUAL TABLE INDEX"), "{plan}");
+        assert!(!plan.contains("CORRELATED"), "{plan}");
+        let (rows, total) = query_items_page(&pool, &q).await.unwrap();
+        assert_eq!(rows.len(), 20);
+        assert_eq!(total, 5000);
+        assert_eq!(list_item_refs(&pool, &q).await.unwrap().len(), 5000);
     }
 
     #[tokio::test]

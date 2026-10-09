@@ -17,6 +17,7 @@ pub mod events;
 pub mod i18n;
 pub mod imaging;
 pub mod legacy;
+pub mod ocr;
 pub mod ops;
 pub mod paths;
 pub mod platform;
@@ -37,3 +38,5 @@ pub use events::{CoreEvent, EventSink, NoopSink};
 pub use paths::{cloud_sync_provider, CorePaths, StorageLocation};
 pub use root::Core;
 pub use runtime::CoreRuntime;
+
+pub use ocr::{OcrStatus, OcrSupport};

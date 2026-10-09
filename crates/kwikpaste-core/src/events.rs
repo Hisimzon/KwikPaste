@@ -33,6 +33,8 @@ impl EventSink for NoopSink {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum CoreEvent {
+    /// 图片文字识别状态变化，运行中进度最多每秒两次。
+    OcrChanged,
     /// 一条记录入库或命中已有内容（1.x `clipboard://updated` 的 `{ id, kind, deduplicated }`）。
     ClipboardUpserted {
         id: String,

@@ -56,6 +56,11 @@ pub(crate) async fn store_and_emit(core: &CoreInner, item: &ClipboardItem) -> Re
     };
     if !result.deduplicated {
         super::cleanup::notify_inserted(core);
+        if item.kind == crate::db::models::ClipboardKind::Image
+            && core.settings.snapshot().clipboard.ocr.enabled
+        {
+            core.ocr.nudge();
+        }
     }
 
     core.events.emit(CoreEvent::ClipboardUpserted {

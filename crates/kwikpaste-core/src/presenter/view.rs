@@ -11,6 +11,10 @@ use crate::db::models::ClipboardItem;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardItemView {
+    #[serde(skip)]
+    pub has_image_text: bool,
+    #[serde(skip)]
+    pub image_text_matched: bool,
     /// 数据库行。列表查询里文本记录的 `content` / `search_text` 已置空，卡片用 `summary` 渲染；
     /// 敏感内容按设置脱敏后 `summary` 是遮罩过的。
     #[serde(flatten)]
@@ -62,6 +66,8 @@ impl ClipboardItemView {
             display_created_at: String::new(),
             quick_snippets: Vec::new(),
             image_display_size: None,
+            has_image_text: false,
+            image_text_matched: false,
         }
     }
 }
@@ -89,6 +95,8 @@ pub enum ClipboardAction {
     Copy,
     /// 将图片条目另存到本地文件（`kind = image`）。
     SaveImage,
+    /// 复制图片已识别的非空文字（OCR 启用时）。
+    CopyImageText,
     /// 打开拆词面板，按词挑选后粘贴或复制（`kind = text`）。
     SplitWords,
     /// 在浏览器打开链接（`sub_kind = url`）。

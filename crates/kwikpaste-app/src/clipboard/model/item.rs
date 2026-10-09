@@ -60,6 +60,7 @@ pub enum ItemAction {
     PasteAsPath,
     Copy,
     SaveImage,
+    CopyImageText,
     SplitWords,
     OpenLink,
     SendEmail,

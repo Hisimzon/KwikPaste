@@ -56,6 +56,7 @@ pub(crate) struct CoreInner {
     pub(crate) file_icons: FileIconStore,
     pub(crate) window_state: WindowStateStore,
     pub(crate) cleanup: clipboard::cleanup::CleanupScheduler,
+    pub(crate) ocr: crate::ocr::Scheduler,
     /// 来源应用缓存，监听与偏好页共用。
     pub(crate) apps: AppsRegistry,
     /// 局域网同步：已配对设备随 core 读入，网络部分由宿主启用。
@@ -107,6 +108,7 @@ impl Core {
                 file_icons,
                 window_state,
                 cleanup: Default::default(),
+                ocr: Default::default(),
                 apps: AppsRegistry::default(),
                 sync: crate::sync::LanSyncService::new(Arc::new(peers)),
                 watcher_pause: WatcherPause::default(),
@@ -119,6 +121,8 @@ impl Core {
             });
 
             inner.sync.bind(Arc::downgrade(&inner));
+            inner.ocr.bind(Arc::downgrade(&inner));
+            inner.ocr.startup().await;
             if let Err(err) = inner.apps.load_from_db(&inner).await {
                 log::warn!("apps registry: initial DB load failed: {err}");
             }
@@ -142,6 +146,7 @@ impl Core {
         drop(lock(&self.0.watcher).take());
         let core = self.clone();
         self.hop(async move {
+            core.0.ocr.shutdown().await;
             crate::sync::shutdown(&core.0).await;
             if let Some(task) = core.0.cleanup_task().take() {
                 task.abort();
@@ -272,6 +277,9 @@ impl Core {
             if delta.touches("sync") {
                 crate::sync::settings_changed(&core.0);
             }
+            if delta.touches("clipboard.ocr") {
+                core.0.ocr.settings_changed();
+            }
             core.emit_settings(&next, delta);
             Ok(next)
         })
@@ -283,6 +291,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let next = core.0.settings.reset()?;
+            core.0.ocr.settings_changed();
             clipboard::cleanup::request(&core.0);
             crate::sync::settings_changed(&core.0);
             core.emit_settings(&next, SettingsDelta::replaced());
@@ -414,12 +423,16 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let pool = core.0.db.pool().await;
-            let (rows, total) = db::items::query_items_page(&pool, &query).await?;
+            let mut query = query;
             let clipboard = core.0.settings.snapshot().clipboard;
+            query.ocr_enabled = clipboard.ocr.enabled;
+            let (rows, total) = db::items::query_items_page(&pool, &query).await?;
             let ctx = core.list_context(&pool, &clipboard);
             let mut list = Vec::with_capacity(rows.len());
             for row in rows {
-                list.push(presenter::present_list_item(&ctx, row).await?);
+                let mut view = presenter::present_list_item(&ctx, row).await?;
+                crate::ocr::attach_view(&pool, &mut view, &query).await?;
+                list.push(view);
             }
             let has_more = query.offset + (list.len() as i64) < total;
 
@@ -443,8 +456,13 @@ impl Core {
                 return Ok(None);
             };
             let clipboard = core.0.settings.snapshot().clipboard;
-            let view =
+            let mut view =
                 presenter::present_list_item(&core.list_context(&pool, &clipboard), item).await?;
+            let query = ClipboardItemQuery {
+                ocr_enabled: clipboard.ocr.enabled,
+                ..Default::default()
+            };
+            crate::ocr::attach_view(&pool, &mut view, &query).await?;
             Ok(Some(view))
         })
         .await

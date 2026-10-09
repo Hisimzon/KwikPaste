@@ -593,6 +593,7 @@ async fn stage_scoped_source(
         .context("failed to open the partial backup database")?;
     let pruned = async {
         prune_to_scope(&copy, scope).await?;
+        strip_ocr_backup(&copy).await?;
         let counts = load_counts(&copy).await?;
         let images = sqlx::query_scalar::<_, String>(
             "SELECT DISTINCT content FROM clipboard_items WHERE kind = 'image'",
@@ -652,6 +653,21 @@ async fn stage_scoped_source(
     .await?;
 
     Ok((staged, counts))
+}
+
+/// 部分备份不带图片识别文字：删掉派生的 OCR 正文、重建它的索引再 VACUUM，删掉的文字不留在索引段或空闲页里。
+async fn strip_ocr_backup(pool: &SqlitePool) -> Result<()> {
+    for statement in [
+        "DELETE FROM image_texts",
+        "INSERT INTO image_texts_fts(image_texts_fts) VALUES ('rebuild')",
+        "VACUUM",
+    ] {
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .context("failed to strip derived OCR data from backup")?;
+    }
+    Ok(())
 }
 
 /// 删掉范围外的记录，以及不再被引用的分组、来源应用和全部文件类型图标（缓存，键里可能有完整路径）。
@@ -1169,6 +1185,7 @@ async fn merge_import(
     let imported_resources = blocking(move || copy_dir_missing(&resources, &resources_dir)).await?;
     refresh_apps_registry(core).await;
     core.events.emit(CoreEvent::ClipboardReloaded);
+    core.ocr.nudge();
 
     let mut imported_settings = false;
     if import_settings {
@@ -1210,6 +1227,7 @@ async fn overwrite_import(
     {
         // 先停新的采集，再等在途的入库与清理结束，换库期间没有人写库或删图片文件。
         let _pause = core.watcher_pause.pause_scoped();
+        let _ocr = core.ocr.suspend().await;
         let _upsert = core.upsert_lock.lock().await;
         let _exclusive = core.cleanup.exclusive().await;
 
@@ -1235,6 +1253,7 @@ async fn overwrite_import(
 
         refresh_apps_registry(core).await;
         core.events.emit(CoreEvent::ClipboardReloaded);
+        core.ocr.nudge();
     }
 
     let imported_settings = settings.is_some();
@@ -1630,6 +1649,9 @@ fn apply_imported_settings(
     settings: crate::settings::Settings,
     delta: SettingsDelta,
 ) {
+    if delta.touches("clipboard.ocr") {
+        core.ocr.settings_changed();
+    }
     if delta.touches("clipboard.history") {
         clipboard::cleanup::request(core);
     }
