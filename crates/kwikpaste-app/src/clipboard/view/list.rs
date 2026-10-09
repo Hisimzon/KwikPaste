@@ -52,7 +52,7 @@ use super::{
     editing::{self, EditTarget},
     frame::{FrameTimer, FrameTiming, ListFrame, PaintedCallback, Snapshot, WidthHint},
     host::ItemHost,
-    image_cache::{ImageKey, ImageState, KpImageCache, path_of},
+    image_cache::{ImageKey, ImageState, KpImageCache, ResizeMode, path_of},
 };
 
 use crate::{
@@ -61,7 +61,7 @@ use crate::{
             actions::{DeletePolicy, QuickAction, visible_actions},
             controller::{ListController, ListUpdate, Nav, NavOutcome, UpdateAction},
             freshness::{Activation, Freshness},
-            item::ListItem,
+            item::{FilesPreview, ItemKind, ListItem},
             layout::LayoutSpec,
             list_model::{Applied, FetchRequest, ListModel},
             selection::Selection,
@@ -84,6 +84,8 @@ const MIN_HEIGHT_SAMPLES: u64 = 8;
 const MAX_HEIGHT_SAMPLES: u64 = 5000;
 /// 缩略图路径缓存的上限（1.x `useImageThumbnail` 的 512）。
 const THUMBNAIL_PATHS_MAX: usize = 512;
+/// 列表视图里最多保留的已缩放应用/文件图标数。
+const ICON_CACHE_CAPACITY: usize = 128;
 
 /// 列表发出的事件：粘贴类是已交给宿主的通知；拆词面板与快捷键列表还没做，先只发事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,6 +236,7 @@ pub struct ClipboardList {
     focus: FocusHandle,
     window: AnyWindowHandle,
     pub(super) images: Entity<KpImageCache>,
+    icons: Entity<KpImageCache>,
     thumbnails: HashMap<Arc<str>, Thumbnail>,
     rows: Rows,
     visible: bool,
@@ -307,7 +310,9 @@ impl ClipboardList {
         cx: &mut Context<Self>,
     ) -> Self {
         let images = cx.new(|_| KpImageCache::new());
+        let icons = cx.new(|_| KpImageCache::with_capacity(ICON_CACHE_CAPACITY));
         let mut subscriptions = vec![cx.observe(&images, |_, _, cx| cx.notify())];
+        subscriptions.push(cx.observe(&icons, |_, _, cx| cx.notify()));
         // 面板的事件实体在面板窗口打开之前就有了，构造时直接订阅。
         if let Some(panel) = cx.try_global::<Panel>() {
             let events = panel.events().clone();
@@ -328,6 +333,7 @@ impl ClipboardList {
             focus: cx.focus_handle(),
             window: window.window_handle(),
             images,
+            icons,
             thumbnails: HashMap::new(),
             rows: Rows::default(),
             visible: false,
@@ -497,7 +503,8 @@ impl ClipboardList {
                     self.finish_note(false, window, cx);
                 }
                 // 隐藏即释放（附录 B §5.3）：缩略图位图全部还给图集，行缓存只留第一页。
-                self.images.update(cx, |images, cx| images.clear(None, cx));
+                self.images
+                    .update(cx, |images, cx| images.clear(Some(window), cx));
                 self.model.release_rows();
                 // 缩略图路径只是字符串，留着；与 1.x 的 `useImageThumbnail` 一样封顶 512 条。
                 if self.thumbnails.len() > THUMBNAIL_PATHS_MAX {
@@ -1368,6 +1375,7 @@ impl ClipboardList {
             path: path_of(&path),
             width: to_physical(target.display.width),
             height: to_physical(target.display.height),
+            resize: ResizeMode::Exact,
         };
 
         Some(
@@ -1380,6 +1388,65 @@ impl ClipboardList {
                 ImageState::Failed => Visual::Failed,
             },
         )
+    }
+
+    /// 请求一枚按窗口物理尺寸等比缩放的图标；图标缓存独立于隐藏时清空的缩略图缓存。
+    fn icon(
+        &mut self,
+        path: &str,
+        logical_size: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Visual {
+        let physical = (px_rems(logical_size).to_pixels(self.rem).as_f32() * window.scale_factor())
+            .ceil()
+            .max(1.) as u32;
+        let key = ImageKey {
+            path: path_of(path),
+            width: physical,
+            height: physical,
+            resize: ResizeMode::Contain,
+        };
+        match self
+            .icons
+            .update(cx, |icons, cx| icons.request(key, window, cx))
+        {
+            ImageState::Ready(image) => Visual::Ready(image),
+            ImageState::Loading => Visual::Loading,
+            ImageState::Failed => Visual::Failed,
+        }
+    }
+
+    /// 卡片要的来源应用图标和文件行图标（顺序与 `ListItem::file_rows()` 相同）。
+    fn card_icons(
+        &mut self,
+        item: &ListItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Option<Visual>, Vec<Option<Visual>>) {
+        let app_size = if self.layout.header_row { 14. } else { 16. };
+        let app_icon = item
+            .source_app_id
+            .as_ref()
+            .and(item.source_app_icon_path.as_deref())
+            .map(|path| self.icon(path, app_size, window, cx));
+
+        let file_icons = if item.kind == ItemKind::Files
+            && item.files_preview_kind != Some(FilesPreview::ImagePreview)
+        {
+            item.file_rows()
+                .iter()
+                .map(|row| {
+                    row.icon_path
+                        .as_deref()
+                        .map(|path| self.icon(path, 20., window, cx))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        (app_icon, file_icons)
     }
 
     fn request_thumbnail(&mut self, file_name: Arc<str>, cx: &mut Context<Self>) {
@@ -1416,6 +1483,7 @@ impl ClipboardList {
             return card::placeholder(env);
         };
         let image = self.visual(&item, window, cx);
+        let (app_icon, file_icons) = self.card_icons(&item, window, cx);
         let active = self.controller.is_active(index, &item.id);
         let selecting = self.selection.active();
         let hovered = self.hovered.as_ref() == Some(&item.id);
@@ -1462,6 +1530,8 @@ impl ClipboardList {
             active,
             hovered,
             image,
+            app_icon,
+            file_icons,
             show_original: hovered && self.settings.clipboard.content.show_original_preview,
             hint,
             checked: selecting && self.selection.is_checked(&item.id),
@@ -1752,6 +1822,7 @@ impl Render for ClipboardList {
                 let local_x = source.origin.x - root.origin.x;
                 let local_y = ghost_top - root.origin.y;
                 let image = self.visual(&item, window, cx);
+                let (app_icon, file_icons) = self.card_icons(&item, window, cx);
                 let ghost = card::card(
                     &env,
                     &item,
@@ -1760,6 +1831,8 @@ impl Render for ClipboardList {
                         active: false,
                         hovered: false,
                         image,
+                        app_icon,
+                        file_icons,
                         show_original: false,
                         hint: None,
                         checked: false,

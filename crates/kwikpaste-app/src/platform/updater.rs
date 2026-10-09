@@ -15,7 +15,7 @@ use async_channel::Sender;
 use futures::channel::oneshot;
 use gpui::{
     Animation, AnimationExt as _, App, AppContext as _, AsyncApp, Context, Entity, Global,
-    ImageSource, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    ImageSource, InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
     StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
     WindowOptions, div, img, prelude::FluentBuilder as _, pulsating_between, px, relative, size,
 };
@@ -32,7 +32,7 @@ use super::panel::{PanelCommand, Trigger, TriggerSource};
 use super::{hotkey, instance, tray};
 use crate::{
     core_host,
-    i18n::{t, t_args},
+    i18n::{self, t, t_args},
 };
 
 /// 交接要求的退出码；`main` 在 GPUI 的循环结束后据此退出。
@@ -40,6 +40,129 @@ static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
 
 /// 更新窗「正在检查」进度条一次呼吸的时长。
 const CHECKING_PULSE: Duration = Duration::from_secs(2);
+const UPDATE_WINDOW_COMPACT_HEIGHT: f32 = 230.;
+const UPDATE_WINDOW_NOTES_HEIGHT: f32 = 360.;
+const RELEASE_NOTES_BLOCK_HEIGHT: f32 = 160.;
+const RELEASE_NOTES_SEPARATOR: &str = "<hr>";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UpdateWindowHeight {
+    Compact,
+    Notes,
+}
+
+/// 取当前语言对应的发布说明，并把 Markdown 压平成更新窗可读的纯文字。
+fn usable_release_notes(body: Option<&str>, language: i18n::Language) -> Option<String> {
+    let body = body?.trim();
+    let selected = body
+        .split_once(RELEASE_NOTES_SEPARATOR)
+        .map_or(body, |(english, chinese)| match language {
+            i18n::Language::EnUs => english,
+            i18n::Language::ZhCn => chinese,
+        })
+        .trim();
+    if selected.is_empty() {
+        return None;
+    }
+
+    let flattened = flatten_release_notes(selected);
+    if flattened.is_empty() || is_placeholder_release_notes(&flattened) {
+        return None;
+    }
+    Some(flattened)
+}
+
+/// 将发布流水线生成的 Markdown 列表变成不依赖渲染器的纯文字行。
+fn flatten_release_notes(markdown: &str) -> String {
+    let normalized = markdown.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines = Vec::new();
+    for source in normalized.lines() {
+        let trimmed = source.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let indent = &source[..source.len() - source.trim_start().len()];
+        let mut content = source.trim_start();
+        let heading = content.starts_with('#');
+        if heading {
+            content = content.trim_start_matches('#').trim_start();
+        }
+        let bullet = content
+            .strip_prefix("- ")
+            .or_else(|| content.strip_prefix("* "))
+            .map(|line| format!("{indent}• {}", line.trim_start()));
+        let content = bullet.as_deref().unwrap_or(content);
+        let content = strip_markdown_links(content)
+            .replace("**", "")
+            .replace('`', "");
+        let content = if heading && bullet.is_none() {
+            content.trim_start().to_owned()
+        } else {
+            content
+        };
+        if !content.trim().is_empty() {
+            lines.push(content);
+        }
+    }
+    lines.join("\n")
+}
+
+fn strip_markdown_links(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        output.push_str(&rest[..open]);
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find(']') else {
+            output.push_str(&rest[open..]);
+            return output;
+        };
+        let close_index = open + close + 1;
+        let after_close = &rest[close_index + 1..];
+        let Some(url) = after_close.strip_prefix('(') else {
+            output.push_str(&rest[open..=close_index]);
+            rest = after_close;
+            continue;
+        };
+        let Some(end) = url.find(')') else {
+            output.push_str(&rest[open..]);
+            return output;
+        };
+        output.push_str(&rest[open + 1..close_index]);
+        rest = &url[end + 1..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn is_placeholder_release_notes(notes: &str) -> bool {
+    let normalized = notes
+        .trim()
+        .trim_matches(|character: char| {
+            character.is_ascii_punctuation() || character.is_whitespace()
+        })
+        .to_ascii_lowercase();
+    normalized == "sample notes"
+}
+
+fn update_window_height(status: &UpdateStatus, language: i18n::Language) -> UpdateWindowHeight {
+    let usable = status.update.as_ref().is_some_and(|update| {
+        !update.downloaded && usable_release_notes(update.body.as_deref(), language).is_some()
+    });
+    if usable {
+        UpdateWindowHeight::Notes
+    } else {
+        UpdateWindowHeight::Compact
+    }
+}
+
+fn update_window_height_px(height: UpdateWindowHeight) -> f32 {
+    match height {
+        UpdateWindowHeight::Compact => UPDATE_WINDOW_COMPACT_HEIGHT,
+        UpdateWindowHeight::Notes => UPDATE_WINDOW_NOTES_HEIGHT,
+    }
+}
 
 /// 运行中的更新器，UI 的更新窗、偏好页经 [`updater`] 取用。
 pub struct UpdaterHost(Updater);
@@ -118,7 +241,11 @@ pub fn check_now(cx: &mut App) {
         log::warn!("the updater is unavailable; the manual update check was skipped");
         return;
     };
-    open_update_window(status, cx);
+    if cx.try_global::<UpdateWindowHost>().is_none() {
+        open_update_window_with_height(status, cx, Some(UpdateWindowHeight::Compact));
+    } else {
+        open_update_window(status, cx);
+    }
     if let Some(view) = cx
         .try_global::<UpdateWindowHost>()
         .map(|host| host.view.clone())
@@ -137,7 +264,10 @@ pub fn selftest_update_window(cx: &mut App) {
         current_version: status.current_version.clone(),
         version: "9.9.9-selftest".to_owned(),
         date: Some("2026-10-03".to_owned()),
-        body: Some("Self-test release notes\n\nThis window is a local UI preview.".to_owned()),
+        body: Some(
+            "- Added a longer self-test bullet so wrapped lines and scrolling are visible.\n- Updated the `native-updater` flow with [release details](https://example.invalid/details)\n- Added a third English bullet for the scroll preview.\n- Added a fourth English bullet for the scroll preview.\n- Added a fifth English bullet for the scroll preview.\n\n<hr>\n\n- 新增较长的自测说明，用于检查换行和滚动。\n- 更新 `native-updater` 流程，查看[发布详情](https://example.invalid/details)\n- 新增第三条中文自测说明。\n- 新增第四条中文自测说明。\n- 新增第五条中文自测说明。"
+                .to_owned(),
+        ),
         target: "selftest".to_owned(),
         download_url: "https://example.invalid/selftest".to_owned(),
         downloaded: false,
@@ -375,18 +505,42 @@ fn open_update_window(status: UpdateStatus, cx: &mut App) {
         .try_global::<UpdateWindowHost>()
         .map(|host| (host.view.clone(), host.handle))
     {
-        view.update(cx, |view, cx| view.set_status(status, cx));
-        raise_update_window(handle, cx);
+        let reopen = view.update(cx, |view, cx| view.set_status(status.clone(), cx));
+        if reopen {
+            reopen_update_window(status, cx);
+        } else {
+            raise_update_window(handle, cx);
+        }
         return;
     }
+    open_update_window_with_height(status, cx, None);
+}
+
+fn reopen_update_window(status: UpdateStatus, cx: &mut App) {
+    if let Some(handle) = cx.try_global::<UpdateWindowHost>().map(|host| host.handle) {
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        let _ = cx.remove_global::<UpdateWindowHost>();
+    }
+    open_update_window_with_height(status, cx, None);
+}
+
+fn open_update_window_with_height(
+    status: UpdateStatus,
+    cx: &mut App,
+    height_override: Option<UpdateWindowHeight>,
+) {
     let Some(updater) = updater(cx).cloned() else {
         return;
     };
     let Some(requests) = cx.try_global::<UiBus>().map(|bus| bus.requests.clone()) else {
         return;
     };
+    let height = height_override.unwrap_or_else(|| update_window_height(&status, i18n::language()));
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(520.), px(230.)), cx)),
+        window_bounds: Some(WindowBounds::centered(
+            size(px(520.), px(update_window_height_px(height))),
+            cx,
+        )),
         titlebar: Some(TitlebarOptions {
             title: Some(t("common:update.title")),
             ..Default::default()
@@ -463,14 +617,17 @@ struct UpdateWindow {
     downloading: bool,
     installing: bool,
     error: Option<String>,
+    notes_scroll: ScrollHandle,
     /// `error` 来自检查（而不是下载或安装）：标题换成「检查更新失败」，并提供「重新检查」。
     check_failed: bool,
+    height: UpdateWindowHeight,
     /// 已经设到原生标题栏的标题；只在变化时再设，免得每帧都发 `SetWindowTextW`。
     window_title: String,
 }
 
 impl UpdateWindow {
     fn new(updater: Updater, status: UpdateStatus, requests: Sender<UiRequest>) -> Self {
+        let height = update_window_height(&status, i18n::language());
         Self {
             updater,
             requests,
@@ -481,12 +638,15 @@ impl UpdateWindow {
             downloading: false,
             installing: false,
             error: None,
+            notes_scroll: ScrollHandle::new(),
             check_failed: false,
+            height,
             window_title: String::new(),
         }
     }
 
-    fn set_status(&mut self, status: UpdateStatus, cx: &mut Context<Self>) {
+    fn set_status(&mut self, status: UpdateStatus, cx: &mut Context<Self>) -> bool {
+        let previous_height = self.height;
         // 下载中途又收到同一版本的检查结果时保留进度，避免按钮回到“安装更新”被重复点下载。
         let same_version = self.status.update.as_ref().map(|update| &update.version)
             == status.update.as_ref().map(|update| &update.version);
@@ -499,7 +659,12 @@ impl UpdateWindow {
             self.downloading = false;
             self.installing = false;
         }
-        cx.notify();
+        self.height = update_window_height(&self.status, i18n::language());
+        let height_changed = previous_height != self.height;
+        if !height_changed {
+            cx.notify();
+        }
+        height_changed
     }
 
     /// 手动检查：窗里显示「正在检查」，结果回来后换成新状态或检查失败。
@@ -517,7 +682,12 @@ impl UpdateWindow {
             if let Err(err) = view.update(cx, |view, cx| {
                 view.checking = false;
                 match result {
-                    Ok(status) => view.set_status(status, cx),
+                    Ok(status) => {
+                        let reopen = view.set_status(status.clone(), cx);
+                        if reopen {
+                            cx.defer(move |cx| reopen_update_window(status, cx));
+                        }
+                    }
                     Err(err) => {
                         log::warn!("manual update check failed: {err:#}");
                         view.error = Some(err.to_string());
@@ -708,6 +878,11 @@ impl Render for UpdateWindow {
         } else {
             progress_fill.into_any_element()
         };
+        let release_notes = update
+            .filter(|_| {
+                !self.downloading && !self.installing && !downloaded && self.error.is_none()
+            })
+            .and_then(|update| usable_release_notes(update.body.as_deref(), i18n::language()));
         let show_release_notes = update.is_some() && self.error.is_none();
         let window_title = if self.downloading || self.installing {
             t("common:update.updatingTitle")
@@ -720,6 +895,7 @@ impl Render for UpdateWindow {
         }
         div()
             .size_full()
+            .relative()
             .flex()
             .gap(px(20.))
             .p(px(20.))
@@ -737,9 +913,12 @@ impl Render for UpdateWindow {
                 div()
                     .min_w_0()
                     .flex_1()
+                    .min_h_0()
                     .flex()
                     .flex_col()
                     .gap(px(6.))
+                    .pb(px(64.))
+                    .overflow_hidden()
                     .child(div().kp_text(TextSize::Lg).child(title))
                     .child(
                         div()
@@ -747,6 +926,48 @@ impl Render for UpdateWindow {
                             .text_color(tokens.text.secondary)
                             .child(description),
                     )
+                    .when_some(release_notes, |element, notes| {
+                        let lines = notes.lines().map(|line| {
+                            div()
+                                .w_full()
+                                .kp_text(TextSize::Sm)
+                                .text_color(tokens.text.secondary)
+                                .child(line.to_owned())
+                        });
+                        element.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_none()
+                                .gap(px(4.))
+                                .h(px(RELEASE_NOTES_BLOCK_HEIGHT))
+                                .max_h(px(RELEASE_NOTES_BLOCK_HEIGHT))
+                                .min_h_0()
+                                .overflow_hidden()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(tokens.border.subtle)
+                                .bg(tokens.surface.raised)
+                                .p(px(8.))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .kp_text(TextSize::Sm)
+                                        .text_color(tokens.text.secondary)
+                                        .child(t("common:update.notes")),
+                                )
+                                .child(
+                                    div()
+                                        .id("update-notes-scroll")
+                                        .flex_none()
+                                        .h(px(120.))
+                                        .min_h_0()
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.notes_scroll)
+                                        .child(div().flex().flex_col().children(lines)),
+                                ),
+                        )
+                    })
                     .when(show_release_notes, |element| {
                         // 纯文字链接，左边缘与说明文字对齐（链接按钮自带左右内边距，会缩进一截）。
                         let label = t("common:update.releaseNotes");
@@ -884,3 +1105,64 @@ struct UiBus {
 }
 
 impl Global for UiBus {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_notes_choose_the_requested_language() {
+        let notes = Some("- English\n\n<hr>\n\n- 中文");
+        assert_eq!(
+            usable_release_notes(notes, i18n::Language::EnUs).as_deref(),
+            Some("• English")
+        );
+        assert_eq!(
+            usable_release_notes(notes, i18n::Language::ZhCn).as_deref(),
+            Some("• 中文")
+        );
+    }
+
+    #[test]
+    fn release_notes_handle_empty_and_missing_sections() {
+        assert_eq!(usable_release_notes(None, i18n::Language::EnUs), None);
+        assert_eq!(
+            usable_release_notes(Some("  \n\r\n"), i18n::Language::EnUs),
+            None
+        );
+        assert_eq!(
+            usable_release_notes(Some("<hr>"), i18n::Language::EnUs),
+            None
+        );
+        assert_eq!(
+            usable_release_notes(Some("<hr>"), i18n::Language::ZhCn),
+            None
+        );
+        assert_eq!(
+            usable_release_notes(Some("- no separator"), i18n::Language::EnUs).as_deref(),
+            Some("• no separator")
+        );
+        assert_eq!(
+            usable_release_notes(Some("Sample notes"), i18n::Language::EnUs),
+            None
+        );
+    }
+
+    #[test]
+    fn release_notes_flatten_markdown_without_panicking() {
+        let notes = "# 标题\r\n  - **粗体** and `code`\r\n    * nested [链接](https://example.invalid)\r\n\r\n最后一行";
+        assert_eq!(
+            flatten_release_notes(notes),
+            "标题\n  • 粗体 and code\n    • nested 链接\n最后一行"
+        );
+    }
+
+    #[test]
+    fn release_notes_keep_unicode_and_long_lines() {
+        let long = "- ".to_owned() + &"很长的说明".repeat(256);
+        let flattened = flatten_release_notes(&long);
+        assert!(flattened.starts_with("• 很长的说明"));
+        assert!(flattened.chars().count() > 256);
+        assert_eq!(flatten_release_notes("* 项目 🚀"), "• 项目 🚀");
+    }
+}

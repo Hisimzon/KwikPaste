@@ -6,7 +6,7 @@ use gpui::{
     prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
-    CoreEvent, app_ids,
+    CoreEvent, StorageLocation, app_ids,
     backup::{self, BackupContainerMode, BackupExportMode, BackupImportStrategy, BackupScope},
     db::overview::{ClearScope, ContentCategory},
     ops::{PreferenceDirectory, StorageOverview},
@@ -19,11 +19,19 @@ use kwikpaste_ui::{
     Button, Checkbox, ConfirmSpec, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
     NumberInputState, ScrollArea, Select, SelectOption, SelectState, Switch, TextInput,
     form_dialog,
-    theme::{self, SemanticTokens, TextSize, space},
+    theme::{self, SemanticTokens, TextSize, px_rems, space},
     toast::{self, Toast},
 };
 use serde_json::json;
-use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc};
+use std::{
+    cell::Cell,
+    path::PathBuf,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use super::{
     icons::PrefIcon,
@@ -31,7 +39,14 @@ use super::{
     sortable, text, values,
 };
 use crate::{
-    clipboard::{self, source::ClipboardSource, view::group_dialogs},
+    clipboard::{
+        self,
+        source::ClipboardSource,
+        view::{
+            group_dialogs,
+            image_cache::{ImageKey, ImageState, KpImageCache, ResizeMode, path_of},
+        },
+    },
     core_host, i18n,
     platform::{core_events, hotkey},
 };
@@ -85,6 +100,8 @@ fn initial_tab() -> TabId {
     }
 }
 
+static STORAGE_WARNING_SHOWN: AtomicBool = AtomicBool::new(false);
+
 pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     if let Some(handle) = cx
         .try_global::<PreferencesWindow>()
@@ -106,6 +123,19 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
         view.update(cx, |this, cx| this.refresh_storage_overview(cx));
+        if view
+            .read(cx)
+            .storage_location
+            .as_ref()
+            .is_some_and(|location| location.unavailable_custom_path.is_some())
+            && !STORAGE_WARNING_SHOWN.swap(true, Ordering::Relaxed)
+        {
+            toast::show(
+                Toast::warning(i18n::t("preferences:storageLocation.unavailableToast")),
+                window,
+                cx,
+            );
+        }
         crate::platform::reveal_after_first_frame(window, cx, |window, _| {
             bring_window_to_front(window);
         });
@@ -186,15 +216,78 @@ struct Preferences {
     focus: FocusHandle,
     recording: Option<&'static str>,
     storage_overview: Option<StorageOverview>,
+    storage_location: Option<StorageLocation>,
+    storage_migrating: bool,
     lan_state: Option<LanSyncState>,
     lan_code_hidden: bool,
     lan_name: TextInput,
     lan_max_image: NumberInputState,
+    icons: gpui::Entity<KpImageCache>,
 }
 
 impl Preferences {
+    /// 偏好窗口里的来源应用图标缓存；图标只保留物理显示尺寸的位图。
+    pub(super) fn cached_app_icon(
+        &self,
+        path: Option<&str>,
+        tokens: &kwikpaste_ui::theme::SemanticTokens,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let size = rems(1.25);
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
+            return div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(IconName::Monitor)
+                        .size(rems(1.1))
+                        .color(tokens.text.muted),
+                )
+                .into_any_element();
+        };
+        let physical = (px_rems(20.).to_pixels(window.rem_size()).as_f32() * window.scale_factor())
+            .ceil()
+            .max(1.) as u32;
+        let state = self.icons.update(cx, |icons, cx| {
+            icons.request(
+                ImageKey {
+                    path: path_of(path),
+                    width: physical,
+                    height: physical,
+                    resize: ResizeMode::Contain,
+                },
+                window,
+                cx,
+            )
+        });
+        match state {
+            ImageState::Ready(image) => img(ImageSource::Render(image))
+                .size(size)
+                .flex_none()
+                .into_any_element(),
+            ImageState::Loading => div().size(size).flex_none().into_any_element(),
+            ImageState::Failed => div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(IconName::Monitor)
+                        .size(rems(1.1))
+                        .color(tokens.text.muted),
+                )
+                .into_any_element(),
+        }
+    }
+
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = core_host::core(cx).map_or_else(Settings::default, |core| core.settings());
+        let icons = cx.new(|_| KpImageCache::with_capacity(128));
         let search = TextInput::new(i18n::t("preferences:search.placeholder"), window, cx);
         let search_subscription = search.on_change(cx, |_, _, cx| cx.notify());
         let theme = settings.appearance.theme;
@@ -267,6 +360,7 @@ impl Preferences {
             this.update("sync.lan.maxImageMb", json!(value), cx);
         });
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
+        let storage_location = core_host::core(cx).and_then(|core| core.storage_location().ok());
         let mut selects = std::collections::HashMap::new();
         let mut number_inputs = std::collections::HashMap::new();
         let mut setting_subscriptions = Vec::new();
@@ -435,7 +529,7 @@ impl Preferences {
             .detach();
         }
         let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
-        let subscriptions = core_events(cx)
+        let subscriptions: Vec<Subscription> = core_events(cx)
             .map(|events| {
                 cx.subscribe(&events, |this, _, event: &CoreEvent, cx| {
                     if matches!(
@@ -447,6 +541,12 @@ impl Preferences {
                         cx.notify();
                     }
                     // 停在数据概览页时，新采集、清理和分组变化都实时反映到统计上。
+                    if matches!(event, CoreEvent::ClipboardReloaded) {
+                        this.storage_location =
+                            core_host::core(cx).and_then(|core| core.storage_location().ok());
+                        this.icons.update(cx, |icons, cx| icons.clear(None, cx));
+                        cx.notify();
+                    }
                     if this.tab == TabId::Overview
                         && matches!(
                             event,
@@ -474,6 +574,8 @@ impl Preferences {
             ])
             .chain(setting_subscriptions)
             .collect();
+        let mut subscriptions = subscriptions;
+        subscriptions.push(cx.observe(&icons, |_, _, cx| cx.notify()));
         Self {
             tab: initial_tab(),
             settings,
@@ -487,10 +589,13 @@ impl Preferences {
             focus: cx.focus_handle(),
             recording: None,
             storage_overview: None,
+            storage_location,
+            storage_migrating: false,
             lan_state,
             lan_code_hidden: false,
             lan_name,
             lan_max_image,
+            icons,
         }
     }
 
@@ -871,6 +976,207 @@ impl Preferences {
                 });
             })
             .detach();
+    }
+
+    /// 数据目录行右侧的打开 / 更改 / 还原；迁移中或自定义目录不可用时只能打开。
+    fn render_storage_actions(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let location = self.storage_location.as_ref();
+        let fallback = location.and_then(|location| location.unavailable_custom_path.as_deref());
+        let disabled = self.storage_migrating || fallback.is_some();
+        let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
+        let open = Button::new("storage-open", i18n::t("preferences:storageLocation.open"))
+            .disabled(self.storage_migrating)
+            .on_click(
+                cx.listener(|this, _, _, cx| this.open_directory(PreferenceDirectory::Data, cx)),
+            );
+        let change = Button::new(
+            "storage-change",
+            i18n::t("preferences:storageLocation.change"),
+        )
+        .disabled(disabled)
+        .loading(self.storage_migrating)
+        .on_click(cx.listener(|this, _, window, cx| this.change_storage_directory(window, cx)));
+        let reset = Button::new(
+            "storage-reset",
+            i18n::t("preferences:storageLocation.reset"),
+        )
+        .disabled(disabled || !location.is_some_and(|location| location.is_custom))
+        .on_click(cx.listener(|this, _, window, cx| this.reset_storage_directory(window, cx)));
+        let mut actions = div().flex().items_center().gap(space(2.)).child(open);
+        if !portable {
+            actions = actions.child(change);
+        }
+        if !portable
+            && location.is_some_and(|location| {
+                location.is_custom || location.unavailable_custom_path.is_some()
+            })
+        {
+            actions = actions.child(reset);
+        }
+        actions.into_any_element()
+    }
+
+    fn change_storage_directory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.storage_migrating
+            || self
+                .storage_location
+                .as_ref()
+                .is_some_and(|location| location.unavailable_custom_path.is_some())
+        {
+            return;
+        }
+        let task = crate::clipboard::view::pin::prompt_for_paths(
+            gpui::PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: false,
+                prompt: Some(i18n::t("preferences:storageLocation.pickTitle")),
+            },
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                let Some(paths) = task.await else {
+                    return;
+                };
+                let Some(parent) = paths.into_iter().next() else {
+                    return;
+                };
+                let _ = entity.update_in(cx, |this, window, cx| {
+                    if kwikpaste_core::cloud_sync_provider(&parent).is_some() {
+                        let answer = kwikpaste_ui::confirm(
+                            ConfirmSpec::new(i18n::t(
+                                "preferences:storageLocation.cloudConfirmTitle",
+                            ))
+                            .content(i18n::t("preferences:storageLocation.cloudConfirmContent"))
+                            .ok_text(i18n::t("common:actions.continue"))
+                            .cancel_text(i18n::t("common:actions.cancel")),
+                            window,
+                            cx,
+                        );
+                        let entity = cx.entity().downgrade();
+                        window
+                            .spawn(cx, async move |cx| {
+                                if answer.await.unwrap_or(false) {
+                                    let _ = entity.update(cx, |this, cx| {
+                                        this.start_storage_change(parent, cx)
+                                    });
+                                }
+                            })
+                            .detach();
+                    } else {
+                        this.start_storage_change(parent, cx);
+                    }
+                });
+            })
+            .detach();
+    }
+
+    fn start_storage_change(&mut self, parent: PathBuf, cx: &mut Context<Self>) {
+        if self.storage_migrating {
+            return;
+        }
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        self.storage_migrating = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = core.change_storage_location(parent).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.storage_migrating = false;
+                match result {
+                    Ok(result) => {
+                        this.storage_location = Some(result.location);
+                        this.storage_overview = None;
+                        this.refresh_storage_overview(cx);
+                        toast::show(
+                            Toast::success(i18n::t("preferences:storageLocation.changed")),
+                            window,
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!("storage location switch failed: {error:#}");
+                        let message = i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.changeStorageLocation")),
+                                ("message", &error.to_string()),
+                            ],
+                        );
+                        toast::show(Toast::error(message), window, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn reset_storage_directory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.storage_migrating {
+            return;
+        }
+        let answer = kwikpaste_ui::confirm(
+            ConfirmSpec::new(i18n::t("preferences:storageLocation.resetConfirmTitle"))
+                .content(i18n::t("preferences:storageLocation.resetConfirmContent"))
+                .ok_text(i18n::t("preferences:storageLocation.reset"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            window,
+            cx,
+        );
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if answer.await.unwrap_or(false) {
+                    let _ = entity.update(cx, |this, cx| this.start_storage_reset(cx));
+                }
+            })
+            .detach();
+    }
+
+    fn start_storage_reset(&mut self, cx: &mut Context<Self>) {
+        if self.storage_migrating {
+            return;
+        }
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        self.storage_migrating = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = core.reset_storage_location().await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.storage_migrating = false;
+                match result {
+                    Ok(result) => {
+                        this.storage_location = Some(result.location);
+                        this.storage_overview = None;
+                        this.refresh_storage_overview(cx);
+                        toast::show(
+                            Toast::success(i18n::t("preferences:storageLocation.restored")),
+                            window,
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!("storage location switch failed: {error:#}");
+                        let message = i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.resetStorageLocation")),
+                                ("message", &error.to_string()),
+                            ],
+                        );
+                        toast::show(Toast::error(message), window, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn open_directory(&self, target: PreferenceDirectory, cx: &mut Context<Self>) {
@@ -2402,9 +2708,51 @@ impl Preferences {
         &self,
         setting: &Setting,
         first: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let title = text::setting_title(setting);
+        if setting.id == "localData.dataDirectory" {
+            let tokens = theme::semantic(cx);
+            let location = self.storage_location.as_ref();
+            let description = match location {
+                _ if self.storage_migrating => {
+                    i18n::t("preferences:storageLocation.migrating").to_string()
+                }
+                Some(location) if location.is_custom => format!(
+                    "{} · {}",
+                    i18n::t("preferences:storageLocation.custom"),
+                    location.current_path
+                ),
+                Some(location) => location.current_path.clone(),
+                None => text::setting_description(setting).to_string(),
+            };
+            let warning = location
+                .and_then(|location| location.unavailable_custom_path.as_deref())
+                .map(|path| {
+                    div()
+                        .kp_text(TextSize::Xs)
+                        .text_color(tokens.status.warning.solid)
+                        .child(i18n::t_args(
+                            "preferences:storageLocation.unavailable",
+                            &[("path", path)],
+                        ))
+                });
+            return row_frame(first, tokens)
+                .child(
+                    row_label(title, description.into(), tokens)
+                        .when_some(warning, |label, warning| label.child(warning)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_end()
+                        .child(self.render_storage_actions(cx)),
+                )
+                .into_any_element();
+        }
         let description = text::setting_description(setting);
         let path = setting.path;
         let settings_json = values::to_json(&self.settings);
@@ -2489,7 +2837,26 @@ impl Preferences {
                     })
                     .into_any_element()
             }
-            Control::StorageOverview => self.render_storage_overview(cx),
+            #[cfg(target_os = "macos")]
+            Control::Permission(
+                kind @ (PermissionKind::Accessibility | PermissionKind::FullDiskAccess),
+            ) => Button::new(
+                format!("permission-{}", setting.id),
+                i18n::t("common:actions.open"),
+            )
+            .accessibility_label(title.clone())
+            .on_click(move |_, _, _| {
+                let opened = if kind == PermissionKind::FullDiskAccess {
+                    kwikpaste_os::mac::permissions::open_full_disk_access_settings()
+                } else {
+                    kwikpaste_os::mac::permissions::open_accessibility_settings()
+                };
+                if let Err(error) = opened {
+                    log::warn!("macOS privacy settings could not be opened: {error}");
+                }
+            })
+            .into_any_element(),
+            Control::StorageOverview => self.render_storage_overview(window, cx),
             Control::CaptureKinds => self.render_capture_kinds(value, cx),
             Control::CaptureOrder => self.render_capture_order(cx),
             Control::Retention => self.render_retention(cx),
@@ -2518,7 +2885,7 @@ impl Preferences {
             .into_any_element()
     }
 
-    fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_page(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
         let tab = tabs.into_iter().find(|tab| tab.id == self.tab);
@@ -2530,7 +2897,7 @@ impl Preferences {
         let mut blocks: Vec<gpui::AnyElement> = Vec::new();
         for section in sections {
             if self.tab == TabId::Overview {
-                blocks.push(self.render_storage_overview(cx));
+                blocks.push(self.render_storage_overview(window, cx));
                 continue;
             }
             let visible: Vec<&Setting> = section
@@ -2549,7 +2916,7 @@ impl Preferences {
             }
             let mut rows = Vec::with_capacity(visible.len());
             for (index, setting) in visible.into_iter().enumerate() {
-                rows.push(self.render_setting(setting, index == 0, cx));
+                rows.push(self.render_setting(setting, index == 0, window, cx));
             }
             blocks.push(section_block(
                 show_titles.then(|| text::section_title(&section)),
@@ -3475,6 +3842,7 @@ fn segment(
 struct SourceAppsDialog {
     apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
     selected: Vec<String>,
+    icons: gpui::Entity<KpImageCache>,
 }
 
 impl SourceAppsDialog {
@@ -3485,28 +3853,83 @@ impl SourceAppsDialog {
 }
 
 /// 显示来源应用缓存图标；抽取失败时用固定尺寸的中性窗口图标占位。
+impl SourceAppsDialog {
+    fn cached_app_icon(
+        &mut self,
+        path: Option<&str>,
+        tokens: &kwikpaste_ui::theme::SemanticTokens,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let size = rems(1.25);
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
+            return div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(IconName::Monitor)
+                        .size(rems(1.1))
+                        .color(tokens.text.muted),
+                )
+                .into_any_element();
+        };
+        let physical = (px_rems(20.).to_pixels(window.rem_size()).as_f32() * window.scale_factor())
+            .ceil()
+            .max(1.) as u32;
+        let state = self.icons.update(cx, |icons, cx| {
+            icons.request(
+                ImageKey {
+                    path: path_of(path),
+                    width: physical,
+                    height: physical,
+                    resize: ResizeMode::Contain,
+                },
+                window,
+                cx,
+            )
+        });
+        match state {
+            ImageState::Ready(image) => img(ImageSource::Render(image))
+                .size(size)
+                .flex_none()
+                .into_any_element(),
+            ImageState::Loading => div().size(size).flex_none().into_any_element(),
+            ImageState::Failed => div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(IconName::Monitor)
+                        .size(rems(1.1))
+                        .color(tokens.text.muted),
+                )
+                .into_any_element(),
+        }
+    }
+}
+
+/// 在不带缓存上下文的引导/概览行里显示来源应用图标。
 pub(super) fn app_icon(
-    path: Option<&str>,
+    _path: Option<&str>,
     tokens: &kwikpaste_ui::theme::SemanticTokens,
 ) -> gpui::AnyElement {
-    match path.filter(|path| !path.is_empty()) {
-        Some(path) => img(PathBuf::from(path))
-            .size(rems(1.25))
-            .flex_none()
-            .into_any_element(),
-        None => div()
-            .size(rems(1.25))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                Icon::new(IconName::Monitor)
-                    .size(rems(1.1))
-                    .color(tokens.text.muted),
-            )
-            .into_any_element(),
-    }
+    div()
+        .size(rems(1.25))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            Icon::new(IconName::Monitor)
+                .size(rems(1.1))
+                .color(tokens.text.muted),
+        )
+        .into_any_element()
 }
 
 /// 设置里的顺序在前（去重），缺的动作按默认顺序补在末尾，弹框始终列出全部动作。
@@ -3654,11 +4077,13 @@ impl Render for ActionVisibilityDialog {
 
 impl Render for SourceAppsDialog {
     /// 浅灰列表块里每行一个应用：勾选框、应用图标和应用名，下面一行灰色小字是路径（同引导的忽略应用）。
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
-        let rows = self.apps.iter().enumerate().map(|(index, app)| {
+        let apps = self.apps.clone();
+        let selected = self.selected.clone();
+        let rows = apps.iter().enumerate().map(|(index, app)| {
             let id = app.id.clone();
-            let checked = app_ids::contains_app(&self.selected, &id);
+            let checked = app_ids::contains_app(&selected, &id);
             let name = if app.name.is_empty() {
                 id.clone()
             } else {
@@ -3712,7 +4137,12 @@ impl Render for SourceAppsDialog {
                                         });
                                     }
                                 })
-                                .child(app_icon(app.icon_path.as_deref(), tokens))
+                                .child(self.cached_app_icon(
+                                    app.icon_path.as_deref(),
+                                    tokens,
+                                    window,
+                                    cx,
+                                ))
                                 .child(div().min_w_0().truncate().child(name)),
                         ),
                 )
@@ -3744,9 +4174,14 @@ fn open_source_apps_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let dialog = cx.new(|_| SourceAppsDialog {
-        apps,
-        selected: excluded,
+    let icons = cx.new(|_| KpImageCache::with_capacity(128));
+    let dialog = cx.new(|cx| {
+        cx.observe(&icons, |_, _, cx| cx.notify()).detach();
+        SourceAppsDialog {
+            apps,
+            selected: excluded,
+            icons,
+        }
     });
     let content = dialog.clone();
     let adder = dialog.downgrade();
@@ -4323,7 +4758,7 @@ fn platform_label(platform: kwikpaste_core::db::models::Platform) -> &'static st
 }
 
 impl Render for Preferences {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .track_focus(&self.focus)
@@ -4338,7 +4773,7 @@ impl Render for Preferences {
             )
             .text_color(theme::semantic(cx).text.primary)
             .child(self.render_sidebar(cx))
-            .child(self.render_page(cx))
+            .child(self.render_page(window, cx))
     }
 }
 

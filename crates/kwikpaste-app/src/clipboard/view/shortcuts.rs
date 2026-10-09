@@ -27,7 +27,11 @@ const SHORTCUTS: &[(&str, &[&str])] = &[
     ("clipboard:shortcuts.pinSelected", &["CmdOrCtrl", "T"]),
     (
         "clipboard:shortcuts.deleteSelected",
-        &["CmdOrCtrl", "Backspace"],
+        if cfg!(target_os = "macos") {
+            &["CmdOrCtrl", "Backspace"]
+        } else {
+            &["Delete"]
+        },
     ),
     ("clipboard:shortcuts.selectAll", &["CmdOrCtrl", "A"]),
     ("clipboard:shortcuts.navigate", &["↑", "/", "↓"]),

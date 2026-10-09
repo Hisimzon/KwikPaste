@@ -619,8 +619,12 @@ impl Drop for WindowsWindow {
             .spawn(async move {
                 this.dialog_owner.when_idle().await;
                 let handle = this.hwnd;
+                // [kwikpaste patch 0008] WM_DESTROY revokes the drop target now. A window closed
+                // by WM_CLOSE is already destroyed here.
+                if !unsafe { IsWindow(Some(handle)) }.as_bool() {
+                    return;
+                }
                 unsafe {
-                    RevokeDragDrop(handle).log_err();
                     DestroyWindow(handle).log_err();
                 }
             })

@@ -46,6 +46,8 @@ pub fn create(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<()
     let settings = core_host::core(cx)
         .map(|core| core.settings())
         .unwrap_or_default();
+    #[cfg(target_os = "windows")]
+    kwikpaste_os::win::menu_theme::allow_dark_menus();
     let icon = TrayIconBuilder::new()
         .with_id(TRAY_ID)
         .with_icon(load_icon()?)

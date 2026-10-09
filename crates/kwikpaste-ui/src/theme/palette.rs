@@ -217,7 +217,7 @@ const MATERIALS: Materials = Materials {
     chrome_mica_alpha: 0.,
     chrome_acrylic_alpha: 0.45,
 };
-/// macOS 面板以外的窗口只有不带色调的模糊（GPUI `Blurred`），两种材质都要铺底色。
+/// macOS 所有窗口都是系统 `NSVisualEffectView`：自带色调，但花哨的桌面仍会透出来，两种材质都要铺底色。
 #[cfg(target_os = "macos")]
 const MATERIALS: Materials = Materials {
     panel_mica_alpha: 0.58,

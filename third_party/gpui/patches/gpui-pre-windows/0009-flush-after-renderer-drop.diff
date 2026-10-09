@@ -1,0 +1,24 @@
+diff --git a/src/directx_renderer.rs b/src/directx_renderer.rs
+index e59ce22..d3a7245 100644
+--- a/src/directx_renderer.rs
++++ b/src/directx_renderer.rs
+@@ -1296,6 +1296,19 @@ struct PathSprite {
+ 
+ impl Drop for DirectXRenderer {
+     fn drop(&mut self) {
++        // [kwikpaste patch 0009] D3D11 destroys released objects only when the shared immediate
++        // context flushes, and only once nothing is bound to it. Without this a closed window's
++        // swap chain and MSAA targets stay alive until another window draws a frame, which for
++        // a hidden panel can be hours. `ClearState` also resets the rasterizer state that is
++        // only set when resources are created, so set it again for the remaining windows.
++        self.direct_composition.take();
++        self.resources.take();
++        if let Some(devices) = &self.devices {
++            unsafe { devices.device_context.ClearState() };
++            set_rasterizer_state(&devices.device, &devices.device_context).log_err();
++            unsafe { devices.device_context.Flush() };
++        }
++
+         #[cfg(debug_assertions)]
+         if let Some(devices) = &self.devices {
+             report_live_objects(&devices.device).ok();

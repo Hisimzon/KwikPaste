@@ -26,6 +26,10 @@ pub fn label(key: Key) -> &'static str {
         Key::PortableStorageFixed => {
             "KwikPaste Portable always keeps its data in the data folder next to the app"
         }
+        Key::StorageInsufficientSpace => "There is not enough free space on the target disk to move your data",
+        Key::StorageSpaceUnavailable => "Cannot read the target disk’s free space. Check folder permissions and connectivity",
+        Key::StorageTargetHasData => "The target directory already contains KwikPaste data",
+        Key::StorageCustomUnavailable => "The custom data directory is unavailable. Reconnect it and restart KwikPaste before changing directories",
         Key::SyncNotRunning => "Turn on LAN sync first",
         Key::SyncInvalidCode => "The pairing code is 6 digits",
         Key::SyncWrongCode => "The pairing code is incorrect",

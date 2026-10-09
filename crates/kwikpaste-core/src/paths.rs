@@ -14,6 +14,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -54,6 +55,8 @@ pub struct StorageLocation {
     pub current_path: String,
     pub default_path: String,
     pub is_custom: bool,
+    /// 启动时不可用的自定义目录；本次运行使用默认目录，但 manifest 保留原位置。
+    pub unavailable_custom_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +77,7 @@ struct StorageIdentity {
 }
 
 /// 一次运行里固定不变的根目录；其余目录都由它推导。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CorePaths {
     env: AppEnv,
     /// 安装版的 `<app_local_data>`：Windows `%LOCALAPPDATA%\<id>`，macOS `~/Library/Application Support/<id>`。
@@ -83,7 +86,25 @@ pub struct CorePaths {
     log_root: PathBuf,
     /// 便携数据根 `<exe 目录>/data`；非便携模式为 `None`。
     portable_root: Option<PathBuf>,
+    resolved: Arc<Mutex<Option<ResolvedStorage>>>,
 }
+
+#[derive(Debug, Clone)]
+struct ResolvedStorage {
+    data_dir: PathBuf,
+    unavailable_custom_path: Option<PathBuf>,
+}
+
+impl PartialEq for CorePaths {
+    fn eq(&self, other: &Self) -> bool {
+        self.env == other.env
+            && self.local_data_root == other.local_data_root
+            && self.log_root == other.log_root
+            && self.portable_root == other.portable_root
+    }
+}
+
+impl Eq for CorePaths {}
 
 impl CorePaths {
     /// 用宿主给定的根目录构造，测试与自定义宿主用。
@@ -98,6 +119,7 @@ impl CorePaths {
             local_data_root,
             log_root,
             portable_root,
+            resolved: Arc::default(),
         }
     }
 
@@ -158,12 +180,16 @@ impl CorePaths {
 
     /// 返回当前真实数据根、默认数据根，以及是否处于自定义目录。
     pub fn storage_location(&self) -> Result<StorageLocation> {
-        let current = self.app_data_dir()?;
+        let resolved = self.resolved_storage()?;
+        let current = resolved.data_dir;
         let default = self.default_data_dir();
         Ok(StorageLocation {
             is_custom: current != default,
             current_path: current.to_string_lossy().into_owned(),
             default_path: default.to_string_lossy().into_owned(),
+            unavailable_custom_path: resolved
+                .unavailable_custom_path
+                .map(|path| path.to_string_lossy().into_owned()),
         })
     }
 
@@ -173,6 +199,21 @@ impl CorePaths {
     /// 便携模式固定用 exe 旁的数据根、不读写 manifest：manifest 记的是绝对路径，
     /// U 盘换了盘符就会失效。
     pub fn app_data_dir(&self) -> Result<PathBuf> {
+        Ok(self.resolved_storage()?.data_dir)
+    }
+
+    /// 克隆共享首次解析结果，避免挂载变化或外部 manifest 改动在运行中移动数据根。
+    fn resolved_storage(&self) -> Result<ResolvedStorage> {
+        let mut resolved = self.resolved.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(resolved) = resolved.as_ref() {
+            return Ok(resolved.clone());
+        }
+        let next = self.resolve_storage()?;
+        *resolved = Some(next.clone());
+        Ok(next)
+    }
+
+    fn resolve_storage(&self) -> Result<ResolvedStorage> {
         let bootstrap = self.bootstrap_dir();
         let default = self.default_data_dir();
         let manifest_path = storage_manifest_path(&bootstrap);
@@ -181,7 +222,10 @@ impl CorePaths {
             .with_context(|| format!("failed to create bootstrap dir at {bootstrap:?}"))?;
 
         if self.is_portable() {
-            return Ok(default);
+            return Ok(ResolvedStorage {
+                data_dir: default,
+                unavailable_custom_path: None,
+            });
         }
 
         let manifest = match read_storage_manifest(&manifest_path) {
@@ -205,7 +249,10 @@ impl CorePaths {
             log::warn!("storage manifest metadata mismatch, using default data dir");
             let manifest = self.storage_manifest(default.clone());
             write_storage_manifest(&manifest_path, &manifest)?;
-            return Ok(default);
+            return Ok(ResolvedStorage {
+                data_dir: default,
+                unavailable_custom_path: None,
+            });
         }
 
         if !manifest.data_dir.exists() {
@@ -213,9 +260,11 @@ impl CorePaths {
                 "storage data dir {:?} is missing, falling back to default data dir",
                 manifest.data_dir
             );
-            let manifest = self.storage_manifest(default.clone());
-            write_storage_manifest(&manifest_path, &manifest)?;
-            return Ok(default);
+            return Ok(ResolvedStorage {
+                data_dir: default.clone(),
+                unavailable_custom_path: (manifest.data_dir != default)
+                    .then_some(manifest.data_dir),
+            });
         }
 
         if manifest.data_dir != default {
@@ -228,7 +277,10 @@ impl CorePaths {
                     );
                     let manifest = self.storage_manifest(default.clone());
                     write_storage_manifest(&manifest_path, &manifest)?;
-                    return Ok(default);
+                    return Ok(ResolvedStorage {
+                        data_dir: default,
+                        unavailable_custom_path: None,
+                    });
                 }
                 Err(err) => {
                     log::warn!(
@@ -237,25 +289,39 @@ impl CorePaths {
                     );
                     let manifest = self.storage_manifest(default.clone());
                     write_storage_manifest(&manifest_path, &manifest)?;
-                    return Ok(default);
+                    return Ok(ResolvedStorage {
+                        data_dir: default,
+                        unavailable_custom_path: None,
+                    });
                 }
             }
         }
 
-        Ok(manifest.data_dir)
+        Ok(ResolvedStorage {
+            data_dir: manifest.data_dir,
+            unavailable_custom_path: None,
+        })
     }
 
     /// 将当前真实数据根切换到指定目录。调用方负责在写入前完成数据迁移。
     pub fn set_app_data_dir(&self, data_dir: PathBuf) -> Result<()> {
+        let mut resolved = self.resolved.lock().unwrap_or_else(|err| err.into_inner());
         let bootstrap = self.bootstrap_dir();
         fs::create_dir_all(&bootstrap)
             .with_context(|| format!("failed to create bootstrap dir at {bootstrap:?}"))?;
 
-        self.write_storage_identity(&data_dir)?;
+        if !data_dir.join(STORAGE_IDENTITY_FILENAME).exists() {
+            self.write_storage_identity(&data_dir)?;
+        }
         write_storage_manifest(
             &storage_manifest_path(&bootstrap),
-            &self.storage_manifest(data_dir),
-        )
+            &self.storage_manifest(data_dir.clone()),
+        )?;
+        *resolved = Some(ResolvedStorage {
+            data_dir,
+            unavailable_custom_path: None,
+        });
+        Ok(())
     }
 
     /// 写入真实数据根 identity manifest，供迁移目标目录校验。
@@ -303,6 +369,18 @@ impl CorePaths {
         }
 
         Ok(())
+    }
+
+    /// 已匹配 identity 的目标仍可能保存另一份历史，不能用当前运行覆盖它。
+    pub(crate) fn storage_target_has_data(&self, data_dir: &Path) -> Result<bool> {
+        let db = data_dir.join(DB_DIR);
+        if !db.exists() {
+            return Ok(false);
+        }
+        Ok(fs::read_dir(&db)
+            .with_context(|| format!("failed to read storage database dir {db:?}"))?
+            .next()
+            .is_some())
     }
 
     /// 日志目录：便携模式在 `data/logs`，否则是系统日志目录。与 1.x 日志插件的落盘位置一致。
@@ -374,6 +452,48 @@ impl CorePaths {
         Ok(identity.version == STORAGE_MANIFEST_VERSION
             && identity.environment == self.env.dir_name())
     }
+}
+
+/// 识别常见云同步目录，不读写目标目录；宿主用于迁移前提示 SQLite 同步风险。
+pub fn cloud_sync_provider(path: &Path) -> Option<&'static str> {
+    let onedrive: Vec<PathBuf> = ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    cloud_sync_provider_with_roots(path, &onedrive, dirs::home_dir().as_deref())
+}
+
+/// 将环境根作为输入，匹配按路径组件而不是子串，避免 DropboxBackup 等误报。
+fn cloud_sync_provider_with_roots(
+    path: &Path,
+    onedrive: &[PathBuf],
+    home: Option<&Path>,
+) -> Option<&'static str> {
+    fn components(path: &Path) -> Vec<String> {
+        path.components()
+            .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    }
+    let parts = components(path);
+    if onedrive
+        .iter()
+        .any(|root| parts.starts_with(&components(root)))
+    {
+        return Some("OneDrive");
+    }
+    if home
+        .is_some_and(|home| parts.starts_with(&components(&home.join("Library/Mobile Documents"))))
+    {
+        return Some("iCloud Drive");
+    }
+    parts.iter().find_map(|part| match part.as_str() {
+        "dropbox" => Some("Dropbox"),
+        "google drive" => Some("Google Drive"),
+        "iclouddrive" => Some("iCloud Drive"),
+        _ => None,
+    })
 }
 
 fn storage_manifest_path(bootstrap: &Path) -> PathBuf {
@@ -503,6 +623,44 @@ mod tests {
     }
 
     #[test]
+    fn cloud_sync_provider_matches_known_roots_and_components() {
+        let home = PathBuf::from("C:/Users/test");
+        let onedrive = [PathBuf::from("C:/Users/test/OneDrive")];
+        assert_eq!(
+            cloud_sync_provider_with_roots(
+                &PathBuf::from("C:/Users/test/OneDrive/KwikPaste"),
+                &onedrive,
+                Some(&home)
+            ),
+            Some("OneDrive")
+        );
+        assert_eq!(
+            cloud_sync_provider_with_roots(
+                &home.join("Library/Mobile Documents/com~apple~CloudDocs"),
+                &[],
+                Some(&home)
+            ),
+            Some("iCloud Drive")
+        );
+        assert_eq!(
+            cloud_sync_provider_with_roots(
+                &PathBuf::from("D:/Dropbox/KwikPaste"),
+                &[],
+                Some(&home)
+            ),
+            Some("Dropbox")
+        );
+        assert_eq!(
+            cloud_sync_provider_with_roots(
+                &PathBuf::from("D:/DropboxBackup/KwikPaste"),
+                &[],
+                Some(&home)
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn installed_layout_separates_dev_and_prod() {
         let temp = TempDir::new();
         let local = temp.path().join("local").join(APP_IDENTIFIER);
@@ -577,9 +735,40 @@ mod tests {
         let paths = installed(&temp, AppEnv::Prod);
         let custom = paths.custom_data_dir(&temp.path().join("usb"));
 
-        paths.set_app_data_dir(custom.clone()).unwrap();
-        fs::remove_dir_all(&custom).unwrap();
+        let manifest = paths.storage_manifest(custom.clone());
+        fs::create_dir_all(paths.bootstrap_dir()).unwrap();
+        write_storage_manifest(
+            &paths.bootstrap_dir().join(STORAGE_MANIFEST_FILENAME),
+            &manifest,
+        )
+        .unwrap();
+        fs::remove_dir_all(custom).ok();
 
+        assert_eq!(paths.app_data_dir().unwrap(), paths.default_data_dir());
+        let persisted =
+            read_storage_manifest(&paths.bootstrap_dir().join(STORAGE_MANIFEST_FILENAME))
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            persisted.data_dir,
+            paths.custom_data_dir(&temp.path().join("usb"))
+        );
+    }
+
+    #[test]
+    fn missing_custom_root_stays_fallback_when_drive_reappears() {
+        let temp = TempDir::new();
+        let paths = installed(&temp, AppEnv::Prod);
+        let custom = paths.custom_data_dir(&temp.path().join("usb"));
+        let manifest = paths.storage_manifest(custom.clone());
+        fs::create_dir_all(paths.bootstrap_dir()).unwrap();
+        write_storage_manifest(
+            &paths.bootstrap_dir().join(STORAGE_MANIFEST_FILENAME),
+            &manifest,
+        )
+        .unwrap();
+        assert_eq!(paths.app_data_dir().unwrap(), paths.default_data_dir());
+        paths.write_storage_identity(&custom).unwrap();
         assert_eq!(paths.app_data_dir().unwrap(), paths.default_data_dir());
     }
 

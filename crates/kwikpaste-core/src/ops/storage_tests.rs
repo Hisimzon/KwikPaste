@@ -168,6 +168,46 @@ fn storage_switch_rejects_nested_and_foreign_targets_without_moving() {
 }
 
 #[test]
+fn storage_switch_rejects_existing_kwikpaste_data_target() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let parent = fixture.root().join("existing");
+    let target = fixture.paths.custom_data_dir(&parent);
+    fixture.paths.write_storage_identity(&target).unwrap();
+    fs::create_dir_all(target.join("db")).unwrap();
+    fs::write(target.join("db").join("clipboard.db"), b"existing").unwrap();
+
+    let error = block_on(core.change_storage_location(parent))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error, label(core.language(), Key::StorageTargetHasData));
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn unavailable_custom_storage_cannot_be_moved_until_restart() {
+    let mut fixture = Fixture::new();
+    let local = fixture.root().join("local");
+    let installed = || CorePaths::new(AppEnv::Dev, local.clone(), local.join("logs"), None);
+    let custom = installed().custom_data_dir(&fixture.root().join("usb"));
+    installed().set_app_data_dir(custom.clone()).unwrap();
+    fs::remove_dir_all(&custom).unwrap();
+    fixture.paths = installed();
+    let core = fixture.start();
+
+    let err = block_on(core.change_storage_location(fixture.root().join("elsewhere")))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err, label(core.language(), Key::StorageCustomUnavailable));
+    assert!(block_on(core.reset_storage_location()).is_err());
+    assert_eq!(
+        core.storage_location().unwrap().unavailable_custom_path,
+        Some(custom.to_string_lossy().into_owned())
+    );
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
 fn portable_storage_cannot_be_moved() {
     let mut fixture = Fixture::new();
     let local = fixture.root().join("local");

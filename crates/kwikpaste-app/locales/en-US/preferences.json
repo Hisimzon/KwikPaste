@@ -1060,11 +1060,19 @@
   },
   "storageLocation": {
     "change": "Change data directory",
+    "changed": "Data directory changed",
+    "cloudConfirmContent": "Cloud sync can corrupt an open database. Continue?",
+    "cloudConfirmTitle": "Cloud sync folder warning",
+    "custom": "Custom",
+    "migrating": "Moving data…",
     "open": "Open data directory",
     "pickTitle": "Choose New Data Directory Location",
     "reset": "Reset to default directory",
     "resetConfirmContent": "KwikPaste will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
-    "resetConfirmTitle": "Reset Data Directory"
+    "resetConfirmTitle": "Reset Data Directory",
+    "restored": "Data directory restored",
+    "unavailable": "Custom data directory {{path}} is unavailable. This run uses the default directory. Reconnect it and restart KwikPaste to restore it.",
+    "unavailableToast": "The custom data directory is unavailable; using the default directory for now"
   },
   "title": "KwikPaste Preferences",
   "windowTitle": "Preferences"

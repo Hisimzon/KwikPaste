@@ -1,0 +1,35 @@
+diff --git a/src/events.rs b/src/events.rs
+index ee2e69b..a4ef810 100644
+--- a/src/events.rs
++++ b/src/events.rs
+@@ -349,6 +349,12 @@ impl WindowsWindowInner {
+     }
+ 
+     fn handle_destroy_msg(&self, handle: HWND) -> Option<isize> {
++        // [kwikpaste patch 0008] The drop target registered in `register_drag_drop` holds an
++        // `Rc` to this window. OLE only releases it in `RevokeDragDrop`, which fails once the
++        // HWND is gone, so a window closed by WM_CLOSE (title bar, Alt+F4) used to leak its
++        // whole state and renderer. The HWND is still valid during WM_DESTROY, on both the
++        // WM_CLOSE path and `DestroyWindow` from `WindowsWindow::drop`.
++        unsafe { windows::Win32::System::Ole::RevokeDragDrop(handle).log_err() };
+         let callback = { self.state.callbacks.close.take() };
+         // Re-enable parent window if this was a modal dialog
+         if let Some(parent_hwnd) = self.parent_hwnd {
+diff --git a/src/window.rs b/src/window.rs
+index 2702ab0..c9b6ba3 100644
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -619,8 +619,12 @@ impl Drop for WindowsWindow {
+             .spawn(async move {
+                 this.dialog_owner.when_idle().await;
+                 let handle = this.hwnd;
++                // [kwikpaste patch 0008] WM_DESTROY revokes the drop target now. A window closed
++                // by WM_CLOSE is already destroyed here.
++                if !unsafe { IsWindow(Some(handle)) }.as_bool() {
++                    return;
++                }
+                 unsafe {
+-                    RevokeDragDrop(handle).log_err();
+                     DestroyWindow(handle).log_err();
+                 }
+             })

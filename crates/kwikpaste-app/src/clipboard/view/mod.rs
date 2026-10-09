@@ -13,7 +13,7 @@ mod group_bar;
 pub mod group_dialogs;
 mod header;
 pub mod host;
-mod image_cache;
+pub(crate) mod image_cache;
 mod list;
 mod panel;
 pub mod pin;
@@ -70,7 +70,7 @@ actions!(
         TogglePinned,
         /// Mod+M：编辑当前项的备注。
         EditNote,
-        /// Mod+Backspace / Mod+Delete：删除当前项；多选时删除已勾选的记录。
+        /// Delete / Mod+Delete / Mod+Backspace：删除当前项；多选时删除已勾选的记录。
         DeleteSelected,
         /// Mod+O：打开链接 / 邮箱 / 文件位置。
         OpenSelected,
@@ -118,6 +118,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-d", ToggleFavorite, panel),
         KeyBinding::new("secondary-t", TogglePinned, panel),
         KeyBinding::new("secondary-m", EditNote, panel),
+        KeyBinding::new("delete", DeleteSelected, panel),
         KeyBinding::new("secondary-backspace", DeleteSelected, panel),
         KeyBinding::new("secondary-delete", DeleteSelected, panel),
         KeyBinding::new("secondary-o", OpenSelected, panel),
@@ -159,10 +160,10 @@ pub fn init(cx: &mut App) {
 mod tests {
     use super::*;
 
-    /// 钩子吞下的每个键都有绑定（不然按下去什么也不发生，目标应用也收不到）。空格是按住预览，
+    /// 钩子吞下的每个精确组合都有面板绑定（不然目标应用收不到，面板也不处理）。无修饰空格是按住预览，
     /// 由列表的按下、松开监听处理，不走绑定。
     #[test]
-    fn every_hooked_key_is_bound() {
+    fn every_hooked_combo_has_an_exact_panel_binding() {
         let bound: Vec<String> = bindings()
             .iter()
             .filter(|binding| {
@@ -180,19 +181,46 @@ mod tests {
             })
             .collect();
 
-        for entry in kwikpaste_os::hook_keys::HOOK_KEYS {
-            if entry.key == "space" {
+        for combo in kwikpaste_os::hook_keys::keystrokes() {
+            if combo == "space" {
                 continue;
             }
-            let wanted = match entry.kind {
-                kwikpaste_os::hook_keys::HookKeyKind::Ctrl => {
-                    gpui::Keystroke::parse(&format!("secondary-{}", entry.key))
-                }
-                _ => gpui::Keystroke::parse(entry.key),
-            }
-            .map(|keystroke| keystroke.unparse())
-            .unwrap_or_default();
-            assert!(bound.contains(&wanted), "{wanted} is hooked but not bound");
+            // Windows 的 Ctrl 在 macOS 绑定里对应 secondary（⌘），其余修饰键仍须精确一致。
+            let portable = combo
+                .strip_prefix("ctrl-")
+                .map(|rest| format!("secondary-{rest}"))
+                .unwrap_or_else(|| combo.clone());
+            let wanted = gpui::Keystroke::parse(&portable)
+                .expect("hook combo parses")
+                .unparse();
+            assert!(
+                bound.contains(&wanted),
+                "{combo} is hooked but not exactly bound"
+            );
+        }
+    }
+
+    #[test]
+    fn delete_shortcuts_share_the_panel_action_without_overriding_inputs() {
+        let bindings = bindings();
+        let delete_bindings: Vec<_> = bindings
+            .iter()
+            .filter(|binding| binding.action().as_any().is::<DeleteSelected>())
+            .collect();
+        assert_eq!(delete_bindings.len(), 3);
+        for binding in &delete_bindings {
+            assert_eq!(
+                binding.predicate().expect("panel context").to_string(),
+                KEY_CONTEXT
+            );
+        }
+        for combo in ["delete", "secondary-delete", "secondary-backspace"] {
+            let wanted = gpui::Keystroke::parse(combo)
+                .expect("delete combo parses")
+                .unparse();
+            assert!(delete_bindings.iter().any(|binding| {
+                binding.keystrokes().len() == 1 && binding.keystrokes()[0].unparse() == wanted
+            }));
         }
     }
 }

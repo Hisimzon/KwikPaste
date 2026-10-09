@@ -315,8 +315,9 @@ fn handle_key(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
         return true;
     }
 
+    let repeat = down && SWALLOWED[usize::from(vk)].load(Ordering::SeqCst);
     if !navigation || !captured || !(down || up) {
-        return false;
+        return repeat;
     }
 
     if is_control(vk) {
@@ -326,15 +327,22 @@ fn handle_key(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
         return false;
     }
 
-    if !down || key_down(VK_MENU) || key_down(VK_LWIN) || key_down(VK_RWIN) {
+    if !down {
         return false;
     }
 
-    let Some(entry) = hook_keys::lookup(vk, key_down(VK_CONTROL)) else {
+    let Some(entry) = key_down_entry(
+        vk,
+        key_down(VK_CONTROL),
+        key_down(VK_SHIFT),
+        key_down(VK_MENU),
+        key_down(VK_LWIN) || key_down(VK_RWIN),
+        repeat,
+    ) else {
         return false;
     };
 
-    let repeat = SWALLOWED[usize::from(vk)].swap(true, Ordering::SeqCst);
+    SWALLOWED[usize::from(vk)].store(true, Ordering::SeqCst);
     match (entry.kind, repeat) {
         (HookKeyKind::Hold, true) => {}
         (_, true) => emit_key(entry.key, KeyPhase::Repeat),
@@ -342,6 +350,25 @@ fn handle_key(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
     }
 
     true
+}
+
+/// 首次按下精确匹配修饰键；已吞下的键继续吞重复，避免中途改修饰键后漏出孤立事件。
+fn key_down_entry(
+    vk: u16,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    win: bool,
+    already_swallowed: bool,
+) -> Option<&'static hook_keys::HookKey> {
+    if already_swallowed {
+        return hook_keys::HOOK_KEYS.iter().find(|entry| entry.vk == vk);
+    }
+    if alt || win {
+        return None;
+    }
+
+    hook_keys::lookup(vk, ctrl, shift)
 }
 
 fn emit_key(key: &'static str, phase: KeyPhase) {
@@ -441,6 +468,25 @@ fn capture_allows_input() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_key_down_requires_an_exact_combo_without_alt_or_win() {
+        assert!(key_down_entry(0x41, true, false, false, false, false).is_some());
+        assert!(key_down_entry(0x41, true, true, false, false, false).is_none());
+        assert!(key_down_entry(0x20, true, false, false, false, false).is_none());
+        assert!(key_down_entry(0x26, false, false, true, false, false).is_none());
+        assert!(key_down_entry(0x26, false, false, false, true, false).is_none());
+    }
+
+    #[test]
+    fn swallowed_repeats_survive_modifier_changes() {
+        assert!(key_down_entry(0x41, false, true, false, false, true).is_some());
+        assert!(key_down_entry(0x26, true, true, true, true, true).is_some());
+        assert_eq!(
+            key_down_entry(0x20, true, true, true, false, true).map(|entry| entry.kind),
+            Some(HookKeyKind::Hold),
+        );
+    }
 
     #[test]
     fn shown_state_captures_only_its_target_or_panel() {

@@ -2,7 +2,8 @@
 //!
 //! - 键是（文件路径，目标物理尺寸）。解码和缩放都在后台线程完成，缓存里只留缩到显示尺寸的位图，
 //!   大图（包括单图文件记录指向的原图，附录 D §8 第 7 条）也不会把原图留在内存或图集里。
-//! - LRU 64 项；淘汰时 `cx.drop_image(image, Some(window))` 把它从窗口的图集里删掉。
+//! - 默认 LRU 64 项；图标视图可用独立的 128 项实例；淘汰时
+//!   `cx.drop_image(image, Some(window))` 把它从窗口的图集里删掉。
 //! - 面板隐藏时 [`KpImageCache::clear`] 全部释放。
 //! - 解码失败记成 [`ImageState::Failed`]，卡片换成静态的“坏图”图标，骨架不再脉动。
 //!
@@ -27,6 +28,17 @@ pub struct ImageKey {
     /// 目标宽高（物理像素）。
     pub width: u32,
     pub height: u32,
+    /// 缩放方式；图标用等比缩放，避免非方形文件图标变形。
+    pub resize: ResizeMode,
+}
+
+/// 图片缩放方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResizeMode {
+    /// 缩放到目标宽高，供剪贴板缩略图使用。
+    Exact,
+    /// 等比缩放到目标方框内，供图标使用。
+    Contain,
 }
 
 /// 一次查询的结果。
@@ -57,16 +69,35 @@ pub struct CacheStats {
     pub evicted: u64,
 }
 
-#[derive(Default)]
 pub struct KpImageCache {
     entries: HashMap<ImageKey, Entry>,
     clock: u64,
     stats: CacheStats,
+    capacity: usize,
+}
+
+impl Default for KpImageCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            clock: 0,
+            stats: CacheStats::default(),
+            capacity: CAPACITY,
+        }
+    }
 }
 
 impl KpImageCache {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_capacity(CAPACITY)
+    }
+
+    /// 创建一个有界图片缓存；图标缓存用 128 项，缩略图仍用默认 64 项。
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            ..Self::default()
+        }
     }
 
     pub fn stats(&self) -> CacheStats {
@@ -121,7 +152,7 @@ impl KpImageCache {
     }
 
     fn evict_for_one(&mut self, window: &mut Window, cx: &mut App) {
-        if self.entries.len() < CAPACITY {
+        if self.entries.len() < self.capacity {
             return;
         }
 
@@ -144,9 +175,13 @@ impl KpImageCache {
     fn spawn_decode(&mut self, key: ImageKey, cx: &mut Context<Self>) -> Task<()> {
         let path = key.path.to_path_buf();
         let (width, height) = (key.width, key.height);
-        let decode = cx
-            .background_executor()
-            .spawn(async move { decode(&path, width, height) });
+        let resize = key.resize;
+        let decode = cx.background_executor().spawn(async move {
+            match resize {
+                ResizeMode::Exact => decode(&path, width, height),
+                ResizeMode::Contain => decode_contained(&path, width, height),
+            }
+        });
 
         cx.spawn(async move |this, cx| {
             let result = decode.await;
@@ -195,6 +230,24 @@ pub fn decode(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImag
     } else {
         image.resize_exact(width, height, image::imageops::FilterType::Triangle)
     };
+
+    let mut pixels = image.into_rgba8();
+    for pixel in pixels.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+
+    Ok(RenderImage::new(vec![image::Frame::new(pixels)]))
+}
+
+/// 解码并等比缩放到目标方框内，供图标使用。
+pub fn decode_contained(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImage> {
+    anyhow::ensure!(
+        width > 0 && height > 0,
+        "empty target size {width}x{height}"
+    );
+    kwikpaste_core::imaging::check_rgba_size(width, height)?;
+    let image = kwikpaste_core::imaging::open(path)?.decode()?;
+    let image = image.resize(width, height, image::imageops::FilterType::Triangle);
 
     let mut pixels = image.into_rgba8();
     for pixel in pixels.pixels_mut() {

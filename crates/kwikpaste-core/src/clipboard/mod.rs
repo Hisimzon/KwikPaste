@@ -10,7 +10,7 @@ mod detect;
 mod file_icon_store;
 mod fragment;
 mod guard;
-mod icon;
+pub mod icon;
 mod ingest;
 mod payload;
 pub(crate) mod persist;
@@ -34,6 +34,8 @@ pub use fragment::{
     WordSpan, WordSplit, WordToken, MAX_SPLIT_CHARS,
 };
 pub use guard::WritebackGuard;
+#[cfg(target_os = "windows")]
+pub use icon::set_helper_exe;
 pub use icon::{get_icon_cache_key, icon_png, DIR_CACHE_KEY};
 #[cfg(test)]
 pub use ingest::build_item;

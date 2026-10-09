@@ -23,6 +23,9 @@ use super::{
     schema::{self, Control},
     text, values, view,
 };
+use crate::clipboard::view::image_cache::{
+    ImageKey, ImageState, KpImageCache, ResizeMode, path_of,
+};
 use crate::{core_host, i18n, platform::hotkey};
 
 const WINDOW_SIZE: gpui::Size<gpui::Pixels> = size(px(880.), px(640.));
@@ -94,6 +97,7 @@ struct Onboarding {
     content_width: Pixels,
     _subscriptions: Vec<Subscription>,
     finishing: bool,
+    icons: Entity<KpImageCache>,
 }
 
 /// 快捷键一步里下拉选项的候选项（值、当前语言的文字）。
@@ -184,6 +188,8 @@ impl Onboarding {
             }));
             selects.insert(setting.id, state);
         }
+        let icons = cx.new(|_| KpImageCache::with_capacity(128));
+        subscriptions.push(cx.observe(&icons, |_, _, cx| cx.notify()));
         Self {
             step: initial_step.min(steps.saturating_sub(1)),
             settings,
@@ -199,6 +205,7 @@ impl Onboarding {
             content_width: px(0.),
             _subscriptions: subscriptions,
             finishing: false,
+            icons,
         }
     }
 
@@ -623,9 +630,10 @@ impl Onboarding {
                         "preferences:schema.settings.permissions.accessibility.title",
                     ))
                     .on_click(|_, _, _| {
-                        if let Err(error) = kwikpaste_os::keystroke::ensure_accessibility_trusted()
+                        if let Err(error) =
+                            kwikpaste_os::mac::permissions::open_accessibility_settings()
                         {
-                            log::debug!("accessibility permission is not available: {error}");
+                            log::warn!("accessibility settings could not be opened: {error}");
                         }
                     });
             rows.push(self.permission_tile(
@@ -759,84 +767,143 @@ impl Onboarding {
             .into_any_element()
     }
 
+    /// 引导窗里的来源应用图标缓存；图标只解码到物理显示尺寸。
+    fn cached_app_icon(
+        &self,
+        path: Option<&str>,
+        tokens: &kwikpaste_ui::theme::SemanticTokens,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let size = rems(1.25);
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
+            return view::app_icon(None, tokens);
+        };
+        let physical = (kwikpaste_ui::theme::px_rems(20.)
+            .to_pixels(window.rem_size())
+            .as_f32()
+            * window.scale_factor())
+        .ceil()
+        .max(1.) as u32;
+        let state = self.icons.update(cx, |icons, cx| {
+            icons.request(
+                ImageKey {
+                    path: path_of(path),
+                    width: physical,
+                    height: physical,
+                    resize: ResizeMode::Contain,
+                },
+                window,
+                cx,
+            )
+        });
+        match state {
+            ImageState::Ready(image) => img(ImageSource::Render(image))
+                .size(size)
+                .into_any_element(),
+            ImageState::Loading => div().size(size).into_any_element(),
+            ImageState::Failed => view::app_icon(None, tokens),
+        }
+    }
+
     /// 忽略应用：浅灰列表块里每行一个应用，勾选框、应用图标和应用名，下面一行灰色小字是路径。
-    fn render_ignore_apps(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_ignore_apps(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let entity = cx.entity().downgrade();
         let tokens = theme::semantic(cx);
-        let rows = self.source_apps.iter().enumerate().map(|(index, app)| {
-            let id = app.id.clone();
-            let name = if app.name.is_empty() {
-                id.clone()
-            } else {
-                app.name.clone()
-            };
-            let checked =
-                app_ids::contains_app(&self.settings.clipboard.filters.excluded_app_ids, &id);
-            let path = (!app.name.is_empty()).then(|| id.clone());
-            div()
-                .flex()
-                .flex_col()
-                .gap(space(0.5))
-                .px(space(4.))
-                .py(space(2.5))
-                .when(index > 0, |row| {
-                    row.border_t_1().border_color(tokens.border.divider)
-                })
-                .child(
+        let icon_states: Vec<_> = self
+            .source_apps
+            .iter()
+            .map(|app| self.cached_app_icon(app.icon_path.as_deref(), tokens, window, cx))
+            .collect();
+        let rows =
+            self.source_apps
+                .iter()
+                .zip(icon_states)
+                .enumerate()
+                .map(|(index, (app, icon))| {
+                    let id = app.id.clone();
+                    let name = if app.name.is_empty() {
+                        id.clone()
+                    } else {
+                        app.name.clone()
+                    };
+                    let checked = app_ids::contains_app(
+                        &self.settings.clipboard.filters.excluded_app_ids,
+                        &id,
+                    );
+                    let path = (!app.name.is_empty()).then(|| id.clone());
                     div()
                         .flex()
-                        .items_center()
-                        .gap(space(2.))
-                        .child(
-                            Checkbox::new(format!("onboarding-ignore-{id}"))
-                                .accessibility_label(name.clone())
-                                .checked(checked)
-                                .on_change({
-                                    let entity = entity.clone();
-                                    let id = id.clone();
-                                    move |checked, _, cx| {
-                                        if let Some(entity) = entity.upgrade() {
-                                            entity.update(cx, |this, cx| {
-                                                this.set_excluded_app(id.clone(), checked, cx);
-                                            });
-                                        }
-                                    }
-                                }),
-                        )
+                        .flex_col()
+                        .gap(space(0.5))
+                        .px(space(4.))
+                        .py(space(2.5))
+                        .when(index > 0, |row| {
+                            row.border_t_1().border_color(tokens.border.divider)
+                        })
                         .child(
                             div()
-                                .id(format!("onboarding-ignore-label-{index}"))
                                 .flex()
-                                .flex_1()
-                                .min_w_0()
                                 .items_center()
                                 .gap(space(2.))
-                                .cursor_pointer()
-                                .on_click({
-                                    let entity = entity.clone();
-                                    move |_, _, cx| {
-                                        if let Some(entity) = entity.upgrade() {
-                                            entity.update(cx, |this, cx| {
-                                                this.set_excluded_app(id.clone(), !checked, cx);
-                                            });
-                                        }
-                                    }
-                                })
-                                .child(view::app_icon(app.icon_path.as_deref(), tokens))
-                                .child(div().min_w_0().truncate().child(name)),
-                        ),
-                )
-                .children(path.map(|path| {
-                    // 与应用名左对齐（16 px 方框、20 px 图标及其间距）。
-                    div()
-                        .pl(space(13.))
-                        .kp_text(TextSize::Xs)
-                        .text_color(tokens.text.muted)
-                        .truncate()
-                        .child(path)
-                }))
-                .into_any_element()
-        });
+                                .child(
+                                    Checkbox::new(format!("onboarding-ignore-{id}"))
+                                        .accessibility_label(name.clone())
+                                        .checked(checked)
+                                        .on_change({
+                                            let entity = entity.clone();
+                                            let id = id.clone();
+                                            move |checked, _, cx| {
+                                                if let Some(entity) = entity.upgrade() {
+                                                    entity.update(cx, |this, cx| {
+                                                        this.set_excluded_app(
+                                                            id.clone(),
+                                                            checked,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id(format!("onboarding-ignore-label-{index}"))
+                                        .flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .items_center()
+                                        .gap(space(2.))
+                                        .cursor_pointer()
+                                        .on_click({
+                                            let entity = entity.clone();
+                                            move |_, _, cx| {
+                                                if let Some(entity) = entity.upgrade() {
+                                                    entity.update(cx, |this, cx| {
+                                                        this.set_excluded_app(
+                                                            id.clone(),
+                                                            !checked,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }
+                                        })
+                                        .child(icon)
+                                        .child(div().min_w_0().truncate().child(name)),
+                                ),
+                        )
+                        .children(path.map(|path| {
+                            // 与应用名左对齐（16 px 方框、20 px 图标及其间距）。
+                            div()
+                                .pl(space(13.))
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.text.muted)
+                                .truncate()
+                                .child(path)
+                        }))
+                        .into_any_element()
+                });
         div()
             .flex()
             .flex_col()
@@ -865,12 +932,12 @@ impl Onboarding {
             .into_any_element()
     }
 
-    fn render_step(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_step(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         match self.current_kind() {
             WELCOME => self.render_welcome(cx),
             PERMISSIONS => self.render_permissions(cx),
             SHORTCUTS => self.render_shortcuts(cx),
-            IGNORE_APPS => self.render_ignore_apps(cx),
+            IGNORE_APPS => self.render_ignore_apps(window, cx),
             DONE => self.render_done(cx),
             _ => div().into_any_element(),
         }
@@ -979,7 +1046,7 @@ impl Render for Onboarding {
                             .w_full()
                             .max_w(rems(48.))
                             .mx_auto()
-                            .child(self.render_step(cx)),
+                            .child(self.render_step(window, cx)),
                     ),
             )
             .child(

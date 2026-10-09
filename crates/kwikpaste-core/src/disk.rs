@@ -53,6 +53,52 @@ pub fn dir_size_excluding(path: &Path, excluded: &[PathBuf]) -> Result<u64> {
     Ok(total)
 }
 
+/// 未创建的目标目录沿父级回溯，查询最近已存在目录所在卷的可用字节数。
+pub fn available_space(path: &Path) -> Result<u64> {
+    let ancestor = path
+        .ancestors()
+        .find(|ancestor| ancestor.is_dir())
+        .context("no existing ancestor for storage target")?;
+    available_space_at(ancestor)
+}
+
+#[cfg(target_os = "windows")]
+fn available_space_at(path: &Path) -> Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0;
+    // 缓冲区以 NUL 结尾，输出指针仅在调用期间有效；读取当前用户实际可用的空间。
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            path.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(anyhow::anyhow!(std::io::Error::last_os_error()).into());
+    }
+    Ok(available)
+}
+
+#[cfg(target_os = "macos")]
+fn available_space_at(path: &Path) -> Result<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes()).context("target path contains NUL")?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // statvfs 成功才读初始化后的结构体；f_bavail 不包含仅 root 可用的保留块。
+    if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return Err(anyhow::anyhow!(std::io::Error::last_os_error()).into());
+    }
+    let stat = unsafe { stat.assume_init() };
+    Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

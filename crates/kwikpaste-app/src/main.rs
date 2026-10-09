@@ -17,8 +17,22 @@ fn main() -> anyhow::Result<()> {
     if health::run_watchdog_if_requested() {
         return Ok(());
     }
+    #[cfg(target_os = "windows")]
+    if std::env::args().nth(1).as_deref() == Some("--icon-helper") {
+        let result =
+            kwikpaste_core::clipboard::icon::run_helper(std::io::stdin(), std::io::stdout().lock());
+        if let Err(err) = result {
+            eprintln!("icon helper stopped: {err}");
+        }
+        return Ok(());
+    }
     // 第一步：日志与 panic hook（崩溃记录、崩溃重启），见 `health`。
     health::install();
+    #[cfg(target_os = "windows")]
+    match std::env::current_exe() {
+        Ok(path) => kwikpaste_core::clipboard::set_helper_exe(path),
+        Err(err) => log::warn!("icon helper executable path is unavailable: {err}"),
+    }
     let Some(launch) = platform::launch()? else {
         return Ok(());
     };

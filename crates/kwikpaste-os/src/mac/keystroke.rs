@@ -1,7 +1,6 @@
 //! macOS 的按键注入（1.x `keystroke/macos.rs`），CGEvent 换成 objc2-core-graphics。
 
 use std::io;
-use std::process::Command;
 
 use objc2_app_kit::{NSEvent, NSEventModifierFlags};
 use objc2_core_graphics::{
@@ -25,10 +24,7 @@ pub fn ensure_accessibility_trusted() -> io::Result<()> {
     }
 
     log::warn!("macOS Accessibility permission is missing; opening System Settings");
-    if let Err(err) = Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-        .spawn()
-    {
+    if let Err(err) = super::permissions::open_accessibility_settings() {
         log::warn!("could not open macOS Accessibility settings: {err}");
     }
     Err(io::Error::new(
