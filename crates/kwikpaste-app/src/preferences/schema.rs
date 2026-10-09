@@ -668,7 +668,7 @@ fn capture_sections() -> Vec<Section> {
                 .keywords(&["image", "picture", "size", "limit", "mb"]),
                 Setting::new("copy.sound", Control::Switch)
                     .path("clipboard.feedback.copySound")
-                    .keywords(&["sound", "feedback", "copy"]),
+                    .keywords(&["sound", "feedback", "copy", "音效", "提示音", "声音"]),
             ],
         },
         Section {
