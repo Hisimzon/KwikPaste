@@ -3,7 +3,7 @@ use kwikpaste_core::ocr::{
     OcrSupport,
     protocol::{MAX_TEXT_CHARS, Outcome},
 };
-use objc2::{ClassType, rc::autoreleasepool, runtime::AnyClass};
+use objc2::{AnyThread, rc::autoreleasepool, runtime::AnyClass};
 use objc2_core_foundation::CFURL;
 use objc2_core_graphics::CGImage;
 use objc2_foundation::{NSArray, NSDictionary, NSString};
