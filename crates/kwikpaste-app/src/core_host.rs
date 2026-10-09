@@ -112,7 +112,8 @@ pub fn start() -> anyhow::Result<StartedCore> {
     })
 }
 
-/// `--selftest-ocr-demo`：按采集流程存入 `KP_OCR_DEMO_DIR` 下的 PNG（重复内容会去重），再开启识别。
+/// `--selftest-ocr-demo`：按采集流程存入 `KP_OCR_DEMO_DIR` 下的 PNG（重复内容会去重），再按
+/// `KP_OCR_DEMO_MODE` 开关识别。
 fn seed_ocr_demo(core: &Core) -> anyhow::Result<()> {
     use kwikpaste_core::clipboard::{ClipboardPayload, ImagePayload};
 
@@ -134,8 +135,14 @@ fn seed_ocr_demo(core: &Core) -> anyhow::Result<()> {
             futures::executor::block_on(core.store_item(item, None))?;
         }
     }
+    // `KP_OCR_DEMO_MODE=off` 关掉识别；`fresh` 先清掉识别结果再开启，内存对比时让每次都真的识别一遍。
+    let mode = std::env::var("KP_OCR_DEMO_MODE").unwrap_or_default();
+    if mode == "fresh" {
+        futures::executor::block_on(core.clear_ocr_data())?;
+    }
+    let enabled = mode != "off";
     futures::executor::block_on(
-        core.update_settings(serde_json::json!({ "clipboard": { "ocr": { "enabled": true } } })),
+        core.update_settings(serde_json::json!({ "clipboard": { "ocr": { "enabled": enabled } } })),
     )?;
     Ok(())
 }

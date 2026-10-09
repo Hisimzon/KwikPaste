@@ -176,6 +176,15 @@ pub trait ClipboardSource: Send + Sync + 'static {
     /// 预览窗的数据与内容度量；记录已经不在时为 `None`。
     fn preview(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<Option<Preview>>>;
 
+    /// 图片识别出的文字按文本记录的样子给预览窗（纯文本 / 选词视图）；没有识别文字时为 `None`。
+    /// 夹具没有识别文字。
+    fn image_text_preview(
+        &self,
+        _id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<Option<Preview>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// 改预览文本的展示方式（设置 `clipboard.preview.textView`）。
     fn set_preview_text_view(
         &self,

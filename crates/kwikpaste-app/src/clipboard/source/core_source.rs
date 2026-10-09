@@ -342,6 +342,21 @@ impl ClipboardSource for CoreSource {
         .boxed()
     }
 
+    fn image_text_preview(
+        &self,
+        id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<Option<Preview>>> {
+        let core = self.core.clone();
+
+        async move {
+            Ok(core
+                .image_text_preview(&id)
+                .await?
+                .map(|(payload, metrics)| Preview { payload, metrics }))
+        }
+        .boxed()
+    }
+
     fn set_preview_text_view(
         &self,
         view: PreviewTextView,
@@ -516,6 +531,7 @@ impl From<ClipboardItemView> for ListItem {
                 width: size.width as f32,
                 height: size.height as f32,
             }),
+            has_image_text: view.has_image_text,
             image_text_snippet: view.image_text_snippet.map(|snippet| TextSnippet {
                 text: shared(snippet.text),
                 matched: snippet.matched,

@@ -23,11 +23,14 @@
   "title": {
     "files": "{{count}} 个项目",
     "image": "图片预览",
+    "imageText": "图中文字",
     "loading": "正在加载",
     "text": "文本预览"
   },
   "view": {
+    "image": "图片",
     "plain": "默认",
+    "text": "文字",
     "words": "选词"
   },
   "words": {
