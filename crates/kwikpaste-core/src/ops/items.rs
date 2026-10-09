@@ -10,8 +10,9 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::clipboard::{
-    self, build_item_with_settings, materialize_source, resolve_fragment, split_words,
-    validate_image_file_name, ClipboardFragment, ClipboardPayload, ClipboardReader, WordSplit,
+    self, build_item_with_settings, materialize_source, resolve_fragment, select_words,
+    split_words, validate_image_file_name, ClipboardFragment, ClipboardPayload, ClipboardReader,
+    WordSplit,
 };
 use crate::db::items::{
     clear_items, delete_item, delete_items, find_item_by_id, find_item_id_at,
@@ -245,12 +246,30 @@ async fn load_fragment_text(
     fragment: &ClipboardFragment,
 ) -> Result<(ClipboardKind, String)> {
     let item = find_required(pool, id).await?;
-    let text = (item.kind == ClipboardKind::Text)
-        .then(|| resolve_fragment(&item, fragment))
-        .flatten()
-        .ok_or_else(|| {
-            AppError::Clipboard(label(core.language(), Key::FragmentUnavailable).to_owned())
-        })?;
+    let text = match fragment {
+        ClipboardFragment::ImageWords { indices }
+            if item.kind == ClipboardKind::Image
+                && core.settings.snapshot().clipboard.ocr.enabled =>
+        {
+            let recognized: Option<String> = sqlx::query_scalar(
+                "SELECT text FROM image_texts WHERE item_id = ? AND status = 'done'",
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(anyhow::Error::from)?;
+            recognized.and_then(|text| select_words(&text, indices))
+        }
+        ClipboardFragment::Snippet { .. } | ClipboardFragment::Words { .. }
+            if item.kind == ClipboardKind::Text =>
+        {
+            resolve_fragment(&item, fragment)
+        }
+        _ => None,
+    }
+    .ok_or_else(|| {
+        AppError::Clipboard(label(core.language(), Key::FragmentUnavailable).to_owned())
+    })?;
 
     Ok((item.kind, text))
 }

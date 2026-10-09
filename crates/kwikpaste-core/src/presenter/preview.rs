@@ -10,7 +10,9 @@ use super::files::{
     count_file_paths, is_image_path, path_to_string, resolve_file_icon_path,
     resolve_preview_file_is_dir, resolve_preview_file_size,
 };
-use super::text::{preview_sub_kind, preview_text, preview_text_rows, preview_text_source};
+use super::text::{
+    count_preview_text_rows, preview_sub_kind, preview_text, preview_text_rows, preview_text_source,
+};
 use crate::clipboard::{
     split_words, validate_image_file_name, word_spans, FileIconStore, ImageStore, WordSpan,
 };
@@ -167,8 +169,19 @@ fn preview_text_metrics(
     redact_sensitive: bool,
     text_view: PreviewTextView,
 ) -> PreviewContentMetrics {
-    if text_view == PreviewTextView::Words && !(redact_sensitive && item.is_sensitive) {
-        let split = split_words(preview_text_source(item));
+    if redact_sensitive && item.is_sensitive {
+        return PreviewContentMetrics::Text {
+            rows: preview_text_rows(item, redact_sensitive),
+        };
+    }
+
+    preview_plain_text_metrics(preview_text_source(item), text_view)
+}
+
+/// 普通文本与图片识别文本共用的度量：有词可拆时按词块，否则按软切后的文本行。
+fn preview_plain_text_metrics(text: &str, text_view: PreviewTextView) -> PreviewContentMetrics {
+    if text_view == PreviewTextView::Words {
+        let split = split_words(text);
         if !split.tokens.is_empty() {
             return PreviewContentMetrics::Words {
                 chips: split
@@ -181,8 +194,37 @@ fn preview_text_metrics(
     }
 
     PreviewContentMetrics::Text {
-        rows: preview_text_rows(item, redact_sensitive),
+        rows: count_preview_text_rows(text, false),
     }
+}
+
+/// 图片识别文本按普通文本预览展示，保留图片记录的身份和时间，不带图片或文件字段。
+pub(crate) fn build_image_text_preview(
+    item: &ClipboardItem,
+    text: String,
+    text_view: PreviewTextView,
+) -> (ClipboardPreviewPayload, PreviewContentMetrics) {
+    let metrics = preview_plain_text_metrics(&text, text_view);
+    let (words, words_truncated) = word_spans(&text);
+    let payload = ClipboardPreviewPayload {
+        id: item.id.clone(),
+        kind: ClipboardKind::Text,
+        sub_kind: None,
+        updated_at: item.updated_at,
+        text: Some(text),
+        image_path: None,
+        image_width: None,
+        image_height: None,
+        size: None,
+        is_sensitive: false,
+        image_exists: false,
+        files: Vec::new(),
+        total_files: 0,
+        words,
+        words_truncated,
+    };
+
+    (payload, metrics)
 }
 
 /// 将完整记录转为预览面板的轻量数据模型。必须在 core runtime 里调用（文件图标可能要抽取）。

@@ -22,7 +22,9 @@ pub use view::{
 
 pub(crate) use files::resolve_file_icon_path;
 pub(crate) use list::{present_list_item, ListContext};
-pub(crate) use preview::{build_preview_payload, preview_content_metrics};
+pub(crate) use preview::{
+    build_image_text_preview, build_preview_payload, preview_content_metrics,
+};
 
 use crate::clipboard::THUMBNAIL_MAX;
 

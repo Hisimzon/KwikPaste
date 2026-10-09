@@ -18,7 +18,7 @@ use crate::clipboard::{
     ImageStore, WatcherPause, WritebackGuard,
 };
 use crate::db::items::UpsertResult;
-use crate::db::models::{ClipboardApp, ClipboardItem, ClipboardItemQuery};
+use crate::db::models::{ClipboardApp, ClipboardItem, ClipboardItemQuery, ClipboardKind};
 use crate::db::{self, DatabaseState};
 use crate::env::{AppInfo, CoreOptions};
 use crate::error::Result;
@@ -493,6 +493,39 @@ impl Core {
             )
             .await?;
             Ok(Some(payload))
+        })
+        .await
+    }
+
+    /// 图片识别文本的预览，形状与文本记录一致，可直接使用原文和选词视图。
+    /// OCR 关闭、记录不是图片或没有已完成的非空识别文本时返回 `None`。
+    pub async fn image_text_preview(
+        &self,
+        id: &str,
+    ) -> Result<Option<(ClipboardPreviewPayload, PreviewContentMetrics)>> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let clipboard = core.0.settings.snapshot().clipboard;
+            if !clipboard.ocr.enabled {
+                return Ok(None);
+            }
+            let pool = core.0.db.pool().await;
+            let Some(item) = db::items::find_item_by_id(&pool, &id).await? else {
+                return Ok(None);
+            };
+            if item.kind != ClipboardKind::Image {
+                return Ok(None);
+            }
+            let Some(text) = core.image_text(&id).await?.filter(|text| !text.is_empty()) else {
+                return Ok(None);
+            };
+
+            Ok(Some(presenter::build_image_text_preview(
+                &item,
+                text,
+                clipboard.preview.text_view,
+            )))
         })
         .await
     }

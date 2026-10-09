@@ -65,6 +65,8 @@ pub enum ClipboardFragment {
     Snippet { text: String },
     /// 拆词面板里选中的词序号，对应 [`split_words`] 的结果。
     Words { indices: Vec<usize> },
+    /// 图片文字预览里选中的词序号，对应识别文本的 [`split_words`] 结果。
+    ImageWords { indices: Vec<usize> },
 }
 
 /// 拆词面板里的一个词。
@@ -330,12 +332,14 @@ pub fn resolve_fragment(item: &ClipboardItem, fragment: &ClipboardFragment) -> O
             (!text.is_empty() && source.contains(text.as_str())).then(|| text.clone())
         }
         ClipboardFragment::Words { indices } => select_words(source, indices),
+        // 图片识别文本来自派生表，由 core 的片段加载入口读取后拆词。
+        ClipboardFragment::ImageWords { .. } => None,
     }
 }
 
 /// 按拆词序号拼出选区：相邻的词按原文连续截取，保留中间的空格与换行；
 /// 不相邻的几段之间，只有两侧都是西文字母或数字时才补一个空格，中文等直接相连。
-fn select_words(text: &str, indices: &[usize]) -> Option<String> {
+pub(crate) fn select_words(text: &str, indices: &[usize]) -> Option<String> {
     let split = split_words(text);
     let mut sorted = indices.to_vec();
     sorted.sort_unstable();

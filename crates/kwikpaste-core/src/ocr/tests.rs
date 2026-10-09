@@ -2,7 +2,10 @@
 use super::*;
 use crate::{
     clipboard::ClipboardPayload,
-    db::{items, models::ClipboardItemQuery},
+    db::{
+        items,
+        models::{ClipboardItem, ClipboardItemQuery, ClipboardKind},
+    },
     testing::{block_on, sample_png, Fixture},
 };
 
@@ -38,6 +41,329 @@ fn done(text: &str) -> Outcome {
         text: text.into(),
         language: "zh-Hans-CN".into(),
     }
+}
+
+/// 写入指定识别结果，不启动 OCR helper，也不接触系统剪贴板。
+fn save_outcome(fixture: &Fixture, core: &Core, item: &ClipboardItem, outcome: &Outcome) {
+    fixture.runtime.handle().block_on(async {
+        let mut connection = connect(&core.0).await.unwrap();
+        db::save(&mut connection, &item.id, &item.content_hash, outcome)
+            .await
+            .unwrap();
+        connection.close().await.unwrap();
+    });
+}
+
+#[test]
+fn image_text_preview_requires_enabled_ocr_and_completed_nonempty_image_text() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let image = seed(&fixture, &core, "preview", 1_800_000_001);
+    save_outcome(&fixture, &core, &image, &done("recognized"));
+
+    assert!(block_on(core.image_text_preview(&image.id))
+        .unwrap()
+        .is_none());
+    enable(&core);
+    assert!(block_on(core.image_text_preview(&image.id))
+        .unwrap()
+        .is_some());
+    assert!(block_on(core.image_text_preview("missing"))
+        .unwrap()
+        .is_none());
+
+    let text = core
+        .build_item(&ClipboardPayload::Text(crate::clipboard::TextPayload {
+            text: "not an image".into(),
+            html: None,
+            rtf: None,
+        }))
+        .unwrap()
+        .unwrap();
+    block_on(core.store_item(text.clone(), None)).unwrap();
+    assert!(block_on(core.image_text_preview(&text.id))
+        .unwrap()
+        .is_none());
+
+    let pending = seed(&fixture, &core, "pending", 1_800_000_002);
+    assert!(block_on(core.image_text_preview(&pending.id))
+        .unwrap()
+        .is_none());
+    for outcome in [
+        done(""),
+        Outcome::Failed {
+            reason: "test".into(),
+        },
+        Outcome::Skipped {
+            reason: "test".into(),
+        },
+    ] {
+        save_outcome(&fixture, &core, &image, &outcome);
+        assert!(block_on(core.image_text_preview(&image.id))
+            .unwrap()
+            .is_none());
+    }
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn image_text_preview_returns_plain_text_payload_and_soft_wrapped_rows() {
+    use crate::clipboard::word_spans;
+    use crate::presenter::PreviewContentMetrics;
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let image = seed(&fixture, &core, "plain-preview", 1_800_000_001);
+    let text = format!(
+        "{}🙏\n订单 20260924 已发货，联系 138 1234 5678\n",
+        "a".repeat(31)
+    );
+    save_outcome(&fixture, &core, &image, &done(&text));
+    enable(&core);
+    block_on(
+        core.update_settings(serde_json::json!({"clipboard":{"preview":{"textView":"plain"}}})),
+    )
+    .unwrap();
+
+    let (payload, metrics) = block_on(core.image_text_preview(&image.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(payload.id, image.id);
+    assert_eq!(payload.kind, ClipboardKind::Text);
+    assert_eq!(payload.sub_kind, None);
+    assert_eq!(payload.updated_at, image.updated_at);
+    assert_eq!(payload.text.as_deref(), Some(text.as_str()));
+    assert_eq!((payload.words, payload.words_truncated), word_spans(&text));
+    assert!(payload.image_path.is_none());
+    assert!(payload.image_width.is_none());
+    assert!(payload.image_height.is_none());
+    assert!(payload.size.is_none());
+    assert!(!payload.is_sensitive);
+    assert!(!payload.image_exists);
+    assert!(payload.files.is_empty());
+    assert_eq!(payload.total_files, 0);
+    assert_eq!(metrics, PreviewContentMetrics::Text { rows: 4 });
+    assert_eq!(
+        block_on(core.find_item(&image.id))
+            .unwrap()
+            .unwrap()
+            .updated_at,
+        image.updated_at
+    );
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn image_text_preview_words_share_text_record_metrics_and_limits() {
+    use crate::clipboard::{word_spans, MAX_SPLIT_CHARS};
+    use crate::presenter::{preview_content_metrics, PreviewContentMetrics, PreviewWordChip};
+    use crate::settings::PreviewTextView;
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let image = seed(&fixture, &core, "words-preview", 1_800_000_001);
+    enable(&core);
+    block_on(
+        core.update_settings(serde_json::json!({"clipboard":{"preview":{"textView":"words"}}})),
+    )
+    .unwrap();
+
+    for text in [
+        "订单 20260924\nhello world".to_owned(),
+        "字".repeat(MAX_SPLIT_CHARS + 10),
+        " \n ".to_owned(),
+    ] {
+        save_outcome(&fixture, &core, &image, &done(&text));
+        let (payload, metrics) = block_on(core.image_text_preview(&image.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload.text.as_deref(), Some(text.as_str()));
+        assert_eq!((payload.words, payload.words_truncated), word_spans(&text));
+        let split = crate::clipboard::split_words(&text);
+        let expected = if split.tokens.is_empty() {
+            PreviewContentMetrics::Text { rows: 2 }
+        } else {
+            PreviewContentMetrics::Words {
+                chips: split
+                    .tokens
+                    .iter()
+                    .map(|token| PreviewWordChip::new(&token.text, token.line_break))
+                    .collect(),
+            }
+        };
+        assert_eq!(metrics, expected);
+
+        let mut text_item = image.clone();
+        text_item.kind = ClipboardKind::Text;
+        text_item.content = text;
+        let mut clipboard = core.settings().clipboard;
+        for view in [PreviewTextView::Plain, PreviewTextView::Words] {
+            clipboard.preview.text_view = view;
+            block_on(
+                core.update_settings(
+                    serde_json::json!({"clipboard":{"preview":{"textView":view}}}),
+                ),
+            )
+            .unwrap();
+            let (_, image_metrics) = block_on(core.image_text_preview(&image.id))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                image_metrics,
+                preview_content_metrics(&text_item, &clipboard)
+            );
+        }
+    }
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn image_words_copy_and_paste_use_memory_clipboard_and_normal_reuse_rules() {
+    use crate::clipboard::ClipboardFragment;
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let image = seed(&fixture, &core, "image-words", 1_800_000_001);
+    save_outcome(
+        &fixture,
+        &core,
+        &image,
+        &done("订单 20260924 已发货\nhello  world again"),
+    );
+    enable(&core);
+    block_on(core.update_settings(serde_json::json!({"clipboard":{"content":{"copyThenHideWindow":true,"updateOnReuse":true}}}))).unwrap();
+
+    assert!(
+        block_on(core.copy_fragment(
+            &image.id,
+            ClipboardFragment::ImageWords {
+                indices: vec![7, 6, 7]
+            }
+        ))
+        .unwrap()
+        .hide_window
+    );
+    assert_eq!(
+        fixture.clipboard.snapshot().text.as_deref(),
+        Some("hello  world")
+    );
+    block_on(core.prepare_paste_fragment(
+        &image.id,
+        ClipboardFragment::ImageWords {
+            indices: vec![2, 8],
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot().text.as_deref(),
+        Some("20260924 again")
+    );
+    let reused = block_on(core.find_item(&image.id)).unwrap().unwrap();
+    assert_eq!(reused.use_count, image.use_count + 2);
+    assert_eq!(reused.kind, ClipboardKind::Image);
+    assert_eq!(reused.content, image.content);
+    assert_eq!(
+        block_on(core.list_items(ClipboardItemQuery::default()))
+            .unwrap()
+            .total,
+        1
+    );
+
+    block_on(
+        core.update_settings(serde_json::json!({"clipboard":{"content":{"updateOnReuse":false}}})),
+    )
+    .unwrap();
+    block_on(core.copy_fragment(
+        &image.id,
+        ClipboardFragment::ImageWords {
+            indices: vec![0, 1, 2],
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot().text.as_deref(),
+        Some("订单 20260924")
+    );
+    assert_eq!(
+        block_on(core.find_item(&image.id))
+            .unwrap()
+            .unwrap()
+            .use_count,
+        reused.use_count
+    );
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn image_words_reject_invalid_indices_non_images_and_unavailable_text() {
+    use crate::clipboard::{ClipboardFragment, TextPayload};
+
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let image = seed(&fixture, &core, "invalid-image-words", 1_800_000_001);
+    save_outcome(&fixture, &core, &image, &done("hello world"));
+    enable(&core);
+    let text = core
+        .build_item(&ClipboardPayload::Text(TextPayload {
+            text: "hello world".into(),
+            html: None,
+            rtf: None,
+        }))
+        .unwrap()
+        .unwrap();
+    block_on(core.store_item(text.clone(), None)).unwrap();
+    let expected =
+        block_on(core.copy_fragment(&text.id, ClipboardFragment::Words { indices: vec![] }))
+            .unwrap_err();
+    assert!(matches!(expected, crate::AppError::Clipboard(_)));
+    let expected_message = expected.to_string();
+    let check = |id: &str, indices: Vec<usize>| {
+        let error = block_on(core.copy_fragment(
+            id,
+            ClipboardFragment::ImageWords {
+                indices: indices.clone(),
+            },
+        ))
+        .unwrap_err();
+        assert!(matches!(error, crate::AppError::Clipboard(_)));
+        assert_eq!(error.to_string(), expected_message);
+        let error =
+            block_on(core.prepare_paste_fragment(id, ClipboardFragment::ImageWords { indices }))
+                .unwrap_err();
+        assert!(matches!(error, crate::AppError::Clipboard(_)));
+        assert_eq!(error.to_string(), expected_message);
+        assert!(fixture.clipboard.snapshot().text.is_none());
+    };
+    check(&image.id, vec![]);
+    check(&image.id, vec![0, 2]);
+    check(&image.id, vec![usize::MAX]);
+    check(&text.id, vec![0]);
+    let pending = seed(&fixture, &core, "no-image-text", 1_800_000_002);
+    check(&pending.id, vec![0]);
+    for outcome in [
+        done(""),
+        Outcome::Failed {
+            reason: "test".into(),
+        },
+        Outcome::Skipped {
+            reason: "test".into(),
+        },
+    ] {
+        save_outcome(&fixture, &core, &image, &outcome);
+        check(&image.id, vec![0]);
+    }
+    save_outcome(&fixture, &core, &image, &done("hello world"));
+    block_on(core.update_settings(serde_json::json!({"clipboard":{"ocr":{"enabled":false}}})))
+        .unwrap();
+    check(&image.id, vec![0]);
+    assert_eq!(
+        block_on(core.find_item(&image.id))
+            .unwrap()
+            .unwrap()
+            .use_count,
+        image.use_count
+    );
+    block_on(core.shutdown()).unwrap();
 }
 
 #[test]
