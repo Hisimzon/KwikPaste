@@ -79,6 +79,51 @@
     "shortcutInUse": "已被其他程序占用",
     "shortcutNotSet": "未设置"
   },
+  "imageText": {
+    "checking": "正在检查系统的文字识别能力…",
+    "deleted": "已删除识别文字",
+    "deleteFailed": "删除识别文字",
+    "done": {
+      "title": "{{count}} 张图片已全部识别"
+    },
+    "empty": {
+      "description": "复制的图片会自动识别。",
+      "title": "还没有图片"
+    },
+    "failed": "{{count}} 张无法识别",
+    "language": "识别语言：{{languages}}",
+    "languageSeparator": "、",
+    "languages": {
+      "en": "英文",
+      "ja": "日文",
+      "ko": "韩文",
+      "zh-Hans": "中文（简体）",
+      "zh-Hant": "中文（繁体）"
+    },
+    "missingLanguage": {
+      "action": "打开语言设置",
+      "description": "在 Windows 设置 › 时间和语言 › 语言和区域 里，给中文或英文添加「光学字符识别」。",
+      "title": "系统缺少文字识别语言"
+    },
+    "queued": {
+      "title": "{{count}} 张图片等待识别"
+    },
+    "running": {
+      "description": "识别在单独的后台进程里进行，完成后自动退出，不增加常驻内存。",
+      "title": "正在识别 {{done}} / {{total}} 张图片"
+    },
+    "saved": {
+      "action": "删除",
+      "description": "{{count}} 张图片的识别结果还在本机，重新开启后直接可用。",
+      "title": "已保存的识别文字"
+    },
+    "unsupported": {
+      "descriptionMac": "需要 macOS 10.15 或更高版本。",
+      "descriptionWindows": "需要 Windows 10 或更高版本。",
+      "title": "当前系统不支持图片文字识别"
+    },
+    "withText": "{{count}} 张包含文字"
+  },
   "lanSync": {
     "connect": {
       "addressPlaceholder": "例如 [fe80::1%12]:41573",
@@ -400,6 +445,9 @@
       },
       "globalShortcuts": {
         "title": "全局快捷键"
+      },
+      "imageText": {
+        "title": "图片文字识别"
       },
       "lanContent": {
         "title": "同步内容"
@@ -729,6 +777,15 @@
             "remind": "仅提醒"
           },
           "title": "超出上限时"
+        }
+      },
+      "ocr": {
+        "enabled": {
+          "description": "开启后可以用图片里的文字搜到图片，也能直接复制图中文字。识别在本机完成，不上传。",
+          "title": "识别图片中的文字"
+        },
+        "status": {
+          "title": "识别状态"
         }
       },
       "organizing": {

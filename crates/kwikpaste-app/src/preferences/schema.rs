@@ -137,6 +137,8 @@ pub enum Control {
     StorageOverview,
     /// 局域网同步的设备、配对与连接控制面板。
     LanSync,
+    /// 图片文字识别的进度、结果和系统能力（开关下面的一行，按状态换标题和按钮）。
+    ImageTextStatus,
     ShortcutRecorder,
 }
 
@@ -670,6 +672,22 @@ fn capture_sections() -> Vec<Section> {
                 )
                 .path("clipboard.capture.maxImageMb")
                 .keywords(&["image", "picture", "size", "limit", "mb"]),
+            ],
+        },
+        Section {
+            id: "imageText",
+            settings: vec![
+                Setting::new("ocr.enabled", Control::Switch)
+                    .path("clipboard.ocr.enabled")
+                    .keywords(&["ocr", "image", "picture", "text", "recognize", "search"]),
+                Setting::new("ocr.status", Control::ImageTextStatus).keywords(&[
+                    "ocr",
+                    "image",
+                    "text",
+                    "recognize",
+                    "progress",
+                    "language",
+                ]),
             ],
         },
         Section {

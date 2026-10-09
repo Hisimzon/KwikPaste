@@ -100,8 +100,7 @@ pub trait ClipboardSource: Send + Sync + 'static {
     /// 写回剪贴板（不粘贴）。返回设置是否要求随后隐藏窗口。
     fn copy(&self, id: Arc<str>, plain: bool) -> BoxFuture<'static, anyhow::Result<bool>>;
 
-    /// 图片识别文本的复制派发；夹具没有 OCR 数据，真实数据源转给 core。
-    #[allow(dead_code)]
+    /// 把图片识别出的文字写回剪贴板；夹具没有识别文字，真实数据源转给 core。
     fn copy_image_text(&self, _id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
         Box::pin(async { anyhow::bail!("image text is unavailable for this source") })
     }

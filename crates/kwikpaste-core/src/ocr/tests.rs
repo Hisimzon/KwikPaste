@@ -300,3 +300,26 @@ fn old_settings_default_to_disabled_and_new_setting_roundtrips() {
     assert_eq!(value["clipboard"]["ocr"]["enabled"], true);
     block_on(core.shutdown()).unwrap();
 }
+
+/// 片段围绕第一次命中，换行压成空格，命中范围正好框住关键词。
+#[test]
+fn snippet_centers_on_the_first_match() {
+    let text =
+        "增值税电子普通发票\n开票日期 2026-10-02\n购买方 名称：快贴科技有限公司 纳税人识别号 9131";
+    let found = snippet(text, "开票").unwrap();
+    assert!(!found.text.starts_with('…'));
+    assert_eq!(&found.text[found.matched.clone()], "开票");
+    assert!(!found.text.contains('\n'));
+
+    let long = format!("{}Invoice NUMBER 0402{}", "前".repeat(40), "后".repeat(80));
+    let found = snippet(&long, "number").unwrap();
+    assert!(found.text.starts_with('…') && found.text.ends_with('…'));
+    assert_eq!(&found.text[found.matched.clone()], "NUMBER");
+
+    let fallback = snippet("只有开头", "不存在").unwrap();
+    assert_eq!(
+        (fallback.text.as_str(), fallback.matched),
+        ("只有开头", 0..0)
+    );
+    assert!(snippet(" \n ", "x").is_none());
+}

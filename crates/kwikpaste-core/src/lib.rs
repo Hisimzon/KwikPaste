@@ -39,4 +39,4 @@ pub use paths::{cloud_sync_provider, CorePaths, StorageLocation};
 pub use root::Core;
 pub use runtime::CoreRuntime;
 
-pub use ocr::{OcrStatus, OcrSupport};
+pub use ocr::{OcrStatus, OcrSupport, TextSnippet};

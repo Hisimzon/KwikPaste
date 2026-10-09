@@ -12,6 +12,7 @@ pub enum MenuAction {
     PasteAsPath,
     Copy,
     SaveImage,
+    CopyImageText,
     SplitWords,
     OpenLink,
     SendEmail,
@@ -33,6 +34,7 @@ const GROUPS: [&[MenuAction]; 4] = [
         MenuAction::PasteAsPath,
         MenuAction::Copy,
         MenuAction::SaveImage,
+        MenuAction::CopyImageText,
         MenuAction::SplitWords,
     ],
     &[
@@ -59,6 +61,7 @@ impl MenuAction {
             Self::PasteAsPath => ItemAction::PasteAsPath,
             Self::Copy => ItemAction::Copy,
             Self::SaveImage => ItemAction::SaveImage,
+            Self::CopyImageText => ItemAction::CopyImageText,
             Self::SplitWords => ItemAction::SplitWords,
             Self::OpenLink => ItemAction::OpenLink,
             Self::SendEmail => ItemAction::SendEmail,
@@ -87,7 +90,7 @@ impl MenuAction {
             Self::TogglePinned => Some("CmdOrCtrl+T"),
             Self::EditNote => Some("CmdOrCtrl+M"),
             Self::Delete => Some(super::shortcut::DELETE_SELECTED),
-            Self::SaveImage | Self::MoveToGroup | Self::Select => None,
+            Self::SaveImage | Self::CopyImageText | Self::MoveToGroup | Self::Select => None,
         }
     }
 
@@ -99,6 +102,7 @@ impl MenuAction {
             Self::PasteAsPath => "clipboard:menu.pasteAsPath",
             Self::Copy => "clipboard:menu.copy",
             Self::SaveImage => "clipboard:menu.saveImage",
+            Self::CopyImageText => "clipboard:menu.copyImageText",
             Self::SplitWords => "clipboard:menu.splitWords",
             Self::OpenLink => "clipboard:menu.openLink",
             Self::SendEmail => "clipboard:menu.sendEmail",

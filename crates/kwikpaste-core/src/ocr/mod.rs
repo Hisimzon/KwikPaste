@@ -33,6 +33,67 @@ pub struct OcrStatus {
     pub running: bool,
 }
 
+/// 识别文字里命中关键词的一小段：`matched` 是关键词在 `text` 里的字节范围（可能为空）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextSnippet {
+    pub text: String,
+    pub matched: std::ops::Range<usize>,
+}
+
+/// 片段最多的字符数，以及命中处前面保留的字符数。
+const SNIPPET_CHARS: usize = 48;
+const SNIPPET_LEAD: usize = 10;
+
+/// 在识别文字里找关键词（先整串、再逐个词，不分大小写），截一段带省略号的单行片段。
+/// 换行和连续空白压成一个空格；都找不到时从开头截。
+pub(crate) fn snippet(text: &str, keyword: &str) -> Option<TextSnippet> {
+    let flat: Vec<char> = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .collect();
+    if flat.is_empty() {
+        return None;
+    }
+    let fold = |c: char| c.to_lowercase().next().unwrap_or(c);
+    let lower: Vec<char> = flat.iter().copied().map(fold).collect();
+    let keyword = keyword.trim();
+    let found = std::iter::once(keyword)
+        .chain(keyword.split_whitespace())
+        .map(|needle| needle.chars().map(fold).collect::<Vec<_>>())
+        .filter(|needle| !needle.is_empty() && needle.len() <= lower.len())
+        .find_map(|needle| {
+            lower
+                .windows(needle.len())
+                .position(|window| window == needle.as_slice())
+                .map(|at| (at, needle.len()))
+        });
+    let (at, len) = found.unwrap_or((0, 0));
+    let mut start = at.saturating_sub(SNIPPET_LEAD);
+    let end = (start + SNIPPET_CHARS).max(at + len).min(flat.len());
+    start = start.min(end.saturating_sub(SNIPPET_CHARS));
+
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    let mut matched = 0..0;
+    for (index, ch) in flat.iter().enumerate().take(end).skip(start) {
+        if index == at && len > 0 {
+            matched.start = out.len();
+        }
+        out.push(*ch);
+        if index + 1 == at + len && len > 0 {
+            matched.end = out.len();
+        }
+    }
+    if end < flat.len() {
+        out.push('…');
+    }
+    Some(TextSnippet { text: out, matched })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OcrSupport {
     Available { languages: Vec<String> },
@@ -486,6 +547,18 @@ pub(crate) async fn attach_view(
         crate::db::items::image_text_flags(pool, &view.item.id, query.keyword.as_deref()).await?;
     view.has_image_text = has_text;
     view.image_text_matched = matched;
+    if matched {
+        if let Some(keyword) = query.keyword.as_deref() {
+            let text: Option<String> = sqlx::query_scalar(
+                "SELECT text FROM image_texts WHERE item_id = ? AND status = 'done'",
+            )
+            .bind(&view.item.id)
+            .fetch_optional(pool)
+            .await
+            .map_err(anyhow::Error::from)?;
+            view.image_text_snippet = text.and_then(|text| snippet(&text, keyword));
+        }
+    }
     if has_text {
         if let Some(index) = view
             .available_actions

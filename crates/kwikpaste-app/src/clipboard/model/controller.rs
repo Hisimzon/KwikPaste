@@ -41,6 +41,8 @@ pub enum ListUpdate {
     Cleaned { removed: u64 },
     /// 历史数据整体换了一份：导入备份、切换存储位置（core `ClipboardReloaded`，1.x `imported`）。
     Reloaded,
+    /// 图片文字识别有了进展或开关变了（core `OcrChanged`）：只影响带关键词的搜索结果。
+    ImageTextChanged,
 }
 
 /// 收到列表变化后要做的事。
@@ -213,6 +215,12 @@ impl ListController {
                 }
                 false
             }
+            ListUpdate::ImageTextChanged => {
+                if !self.filter.searching() || !self.filter.may_include(Some(ItemKind::Image)) {
+                    return UpdateAction::Ignore;
+                }
+                false
+            }
         };
         if reset_selection {
             self.selected = None;
@@ -303,6 +311,7 @@ mod tests {
             color_preview: None,
             quick_snippets: Vec::new(),
             image_display: None,
+            image_text_snippet: None,
         })
     }
 
@@ -534,6 +543,40 @@ mod tests {
             }
         );
         assert!(controller.selected().is_none());
+    }
+
+    /// 识别进展只刷新带关键词、可能含图片的结果，而且不清掉当前选中。
+    #[test]
+    fn image_text_progress_refreshes_only_image_searches() {
+        let mut controller = ListController::new();
+        controller.hover(&"r1".into());
+        assert_eq!(
+            controller.on_update(ListUpdate::ImageTextChanged, true, true),
+            UpdateAction::Ignore
+        );
+
+        controller.set_filter(ListFilter {
+            keyword: "发票".into(),
+            ..ListFilter::default()
+        });
+        controller.hover(&"r1".into());
+        assert_eq!(
+            controller.on_update(ListUpdate::ImageTextChanged, true, true),
+            UpdateAction::ReloadNow {
+                reset_selection: false
+            }
+        );
+        assert_eq!(controller.selected().map(|id| &**id), Some("r1"));
+
+        controller.set_filter(ListFilter {
+            keyword: "发票".into(),
+            category: Some(ItemKind::Text),
+            ..ListFilter::default()
+        });
+        assert_eq!(
+            controller.on_update(ListUpdate::ImageTextChanged, true, true),
+            UpdateAction::Ignore
+        );
     }
 
     #[test]

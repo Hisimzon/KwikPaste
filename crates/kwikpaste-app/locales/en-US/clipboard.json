@@ -62,6 +62,7 @@
   "menu": {
     "addNote": "Add Note",
     "copy": "Copy",
+    "copyImageText": "Copy Text in Image",
     "delete": "Delete",
     "editNote": "Edit Note",
     "favorite": "Favorite",

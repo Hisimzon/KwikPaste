@@ -509,6 +509,7 @@ mod tests {
             color_preview: None,
             quick_snippets: Vec::new(),
             image_display: None,
+            image_text_snippet: None,
         })
     }
 

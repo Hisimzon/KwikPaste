@@ -51,6 +51,7 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
+mod image_text;
 mod overview;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(960.), px(600.));
@@ -122,7 +123,10 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     };
     let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
-        view.update(cx, |this, cx| this.refresh_storage_overview(cx));
+        view.update(cx, |this, cx| {
+            this.refresh_storage_overview(cx);
+            this.refresh_image_text(cx);
+        });
         if view
             .read(cx)
             .storage_location
@@ -165,7 +169,10 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     };
     let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
-        view.update(cx, |this, cx| this.refresh_storage_overview(cx));
+        view.update(cx, |this, cx| {
+            this.refresh_storage_overview(cx);
+            this.refresh_image_text(cx);
+        });
         crate::platform::reveal_after_first_frame(window, cx, |window, _| {
             bring_window_to_front(window);
         });
@@ -221,6 +228,10 @@ struct Preferences {
     storage_migrating: bool,
     lan_state: Option<LanSyncState>,
     lan_code_hidden: bool,
+    /// 图片文字识别的计数（采集页状态行），打开窗口和收到 `OcrChanged` 时刷新。
+    ocr_status: Option<kwikpaste_core::OcrStatus>,
+    /// 系统的识别能力；只在开着识别时探测。
+    ocr_support: Option<kwikpaste_core::OcrSupport>,
     lan_name: TextInput,
     lan_max_image: NumberInputState,
     icons: gpui::Entity<KpImageCache>,
@@ -559,6 +570,17 @@ impl Preferences {
                         this.lan_state = Some(core.lan_sync_state());
                         cx.notify();
                     }
+                    // 识别进度和开关变化：采集页的状态行跟着刷新。
+                    if this.tab == TabId::Capture
+                        && (matches!(event, CoreEvent::OcrChanged)
+                            || matches!(
+                                event,
+                                CoreEvent::SettingsUpdated { delta, .. }
+                                    if delta.touches("clipboard.ocr")
+                            ))
+                    {
+                        this.refresh_image_text(cx);
+                    }
                     // 停在数据概览页时，新采集、清理和分组变化都实时反映到统计上。
                     if matches!(event, CoreEvent::ClipboardReloaded) {
                         this.storage_location =
@@ -613,6 +635,8 @@ impl Preferences {
             storage_migrating: false,
             lan_state,
             lan_code_hidden: false,
+            ocr_status: None,
+            ocr_support: None,
             lan_name,
             lan_max_image,
             icons,
@@ -2624,6 +2648,9 @@ impl Preferences {
                         if id == TabId::Overview {
                             this.refresh_storage_overview(cx);
                         }
+                        if id == TabId::Capture {
+                            this.refresh_image_text(cx);
+                        }
                         cx.notify();
                     })),
             );
@@ -2724,6 +2751,9 @@ impl Preferences {
         if setting.is_collapsed(&self.settings) {
             return false;
         }
+        if setting.id == "ocr.status" && !self.image_text_row_visible() {
+            return false;
+        }
         let query = self.search.value(cx);
         if query.is_empty() {
             return true;
@@ -2743,6 +2773,9 @@ impl Preferences {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if setting.id == "ocr.status" {
+            return self.render_image_text_status(first, cx);
+        }
         let title = text::setting_title(setting);
         if setting.id == "localData.dataDirectory" {
             let tokens = theme::semantic(cx);

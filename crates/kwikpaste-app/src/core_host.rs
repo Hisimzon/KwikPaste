@@ -79,6 +79,11 @@ pub fn start() -> anyhow::Result<StartedCore> {
     } else {
         core.set_clipboard_provider(Arc::new(MemoryClipboard::new()));
     }
+    if crate::selftest::enabled(crate::selftest::OCR_DEMO)
+        && let Err(err) = seed_ocr_demo(&core)
+    {
+        log::error!("the OCR demo images could not be stored: {err:#}");
+    }
     let lan_network = if crate::selftest::active() {
         LanSyncNetwork::loopback()
     } else {
@@ -105,6 +110,34 @@ pub fn start() -> anyhow::Result<StartedCore> {
         },
         events,
     })
+}
+
+/// `--selftest-ocr-demo`：按采集流程存入 `KP_OCR_DEMO_DIR` 下的 PNG（重复内容会去重），再开启识别。
+fn seed_ocr_demo(core: &Core) -> anyhow::Result<()> {
+    use kwikpaste_core::clipboard::{ClipboardPayload, ImagePayload};
+
+    let dir = std::env::var_os("KP_OCR_DEMO_DIR").context("KP_OCR_DEMO_DIR is not set")?;
+    let mut paths: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "png"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let bytes = std::fs::read(&path)?;
+        let (width, height) = image::image_dimensions(&path)?;
+        let payload = ClipboardPayload::Image(ImagePayload {
+            bytes,
+            width,
+            height,
+        });
+        if let Some(item) = core.build_item(&payload)? {
+            futures::executor::block_on(core.store_item(item, None))?;
+        }
+    }
+    futures::executor::block_on(
+        core.update_settings(serde_json::json!({ "clipboard": { "ocr": { "enabled": true } } })),
+    )?;
+    Ok(())
 }
 
 impl CoreHost {

@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
 use gpui::{App, Task, Window};
 use kwikpaste_core::clipboard::ClipboardFragment;
 
@@ -28,6 +29,9 @@ pub trait ItemHost {
     ) -> Task<anyhow::Result<()>>;
 
     fn copy(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>>;
+
+    /// 把图片识别出的文字写回剪贴板，隐藏规则同 [`ItemHost::copy`]。
+    fn copy_image_text(&self, id: Arc<str>, cx: &mut App) -> Task<anyhow::Result<()>>;
 
     fn copy_fragment(
         &self,
@@ -71,6 +75,11 @@ impl ItemHost for PlatformHost {
 
     fn copy(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>> {
         let task = platform::paste::copy(cx, id.to_string(), plain, pin::pinned(cx));
+        ok_or_anyhow(task, cx)
+    }
+
+    fn copy_image_text(&self, id: Arc<str>, cx: &mut App) -> Task<anyhow::Result<()>> {
+        let task = platform::paste::copy_image_text(cx, id.to_string(), pin::pinned(cx));
         ok_or_anyhow(task, cx)
     }
 
@@ -123,20 +132,11 @@ impl ItemHost for SourceHost {
     }
 
     fn copy(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>> {
-        let future = self.source.copy(id, plain);
+        self.copy_with(self.source.copy(id, plain), cx)
+    }
 
-        cx.spawn(async move |cx| {
-            let hide = future.await?;
-            let keep_visible = cx.update(|cx| pin::pinned(cx));
-            if hide && !keep_visible {
-                cx.update(|cx| {
-                    request_panel(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)))
-                });
-            } else if keep_visible {
-                cx.update(|cx| request_panel(cx, PanelCommand::SetInputCapture(false)));
-            }
-            Ok(())
-        })
+    fn copy_image_text(&self, id: Arc<str>, cx: &mut App) -> Task<anyhow::Result<()>> {
+        self.copy_with(self.source.copy_image_text(id), cx)
     }
 
     fn copy_fragment(
@@ -155,5 +155,27 @@ impl ItemHost for SourceHost {
     fn drag_out(&self, id: Arc<str>, _: &Window, _: &mut App) -> Task<anyhow::Result<()>> {
         log::info!("no drag-out for {id}: the data is not the host core's");
         Task::ready(Ok(()))
+    }
+}
+
+impl SourceHost {
+    /// 数据源写完剪贴板后按设置隐藏面板；钉住时只交还输入焦点。
+    fn copy_with(
+        &self,
+        future: BoxFuture<'static, anyhow::Result<bool>>,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>> {
+        cx.spawn(async move |cx| {
+            let hide = future.await?;
+            let keep_visible = cx.update(|cx| pin::pinned(cx));
+            if hide && !keep_visible {
+                cx.update(|cx| {
+                    request_panel(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)))
+                });
+            } else if keep_visible {
+                cx.update(|cx| request_panel(cx, PanelCommand::SetInputCapture(false)));
+            }
+            Ok(())
+        })
     }
 }

@@ -126,6 +126,7 @@ impl ClipboardList {
             MenuAction::Paste => self.paste_item(id, false, cx),
             MenuAction::PasteAsPlainText | MenuAction::PasteAsPath => self.paste_item(id, true, cx),
             MenuAction::Copy => self.copy(id, false, None, window, cx),
+            MenuAction::CopyImageText => self.copy_image_text(id, window, cx),
             MenuAction::SaveImage => {
                 self.close_preview_of(&id, cx);
                 self.save_image(id, window, cx);

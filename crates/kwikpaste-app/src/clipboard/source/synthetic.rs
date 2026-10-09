@@ -407,6 +407,7 @@ pub fn item(assets: &AssetSet, index: usize, options: GenerateOptions) -> ListIt
             .flatten(),
         quick_snippets,
         image_display: None,
+        image_text_snippet: None,
     }
 }
 

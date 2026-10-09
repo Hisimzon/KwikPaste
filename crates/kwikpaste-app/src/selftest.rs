@@ -90,6 +90,9 @@ pub const LIST_BENCH: &str = "--selftest-list-bench";
 pub const LIST_DEMO: &str = "--selftest-list-demo";
 /// 列表数据改由临时目录里的真 core 提供（灌入合成记录），可与 `--selftest-list-demo` 合用。
 pub const CORE_LIST: &str = "--selftest-core-list";
+/// 图片文字识别演示：完整应用跑在自己的数据目录里，启动时存入 `KP_OCR_DEMO_DIR` 下的 PNG 并开启识别，
+/// 供截图核对面板搜索、右键菜单和偏好页状态行。不读写系统剪贴板。
+pub const OCR_DEMO: &str = "--selftest-ocr-demo";
 /// 主窗口交互自测：示例夹具上按脚本派发按键、检查状态（见 `clipboard::view::selftest`），退出码表示结果。
 pub const PANEL_UI: &str = "--selftest-panel-ui";
 /// 偏好设置窗口交互自测：打开窗口、切换页面、写入开关并验证搜索路径。
@@ -126,6 +129,7 @@ pub fn kind() -> Option<&'static str> {
         (LIST_BENCH, "list-bench"),
         (LIST_DEMO, "list-demo"),
         (CORE_LIST, "core-list"),
+        (OCR_DEMO, "ocr-demo"),
         (PANEL_UI, "panel-ui"),
         (PREFERENCES, "preferences"),
         (ONBOARDING, "onboarding"),

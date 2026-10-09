@@ -15,6 +15,9 @@ pub struct ClipboardItemView {
     pub has_image_text: bool,
     #[serde(skip)]
     pub image_text_matched: bool,
+    /// 靠识别文字命中搜索时，命中处附近的一小段文字，卡片在缩略图下展示。
+    #[serde(skip)]
+    pub image_text_snippet: Option<crate::ocr::TextSnippet>,
     /// 数据库行。列表查询里文本记录的 `content` / `search_text` 已置空，卡片用 `summary` 渲染；
     /// 敏感内容按设置脱敏后 `summary` 是遮罩过的。
     #[serde(flatten)]
@@ -68,6 +71,7 @@ impl ClipboardItemView {
             image_display_size: None,
             has_image_text: false,
             image_text_matched: false,
+            image_text_snippet: None,
         }
     }
 }

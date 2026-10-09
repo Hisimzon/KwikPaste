@@ -399,6 +399,7 @@ impl ClipboardList {
                     ListUpdate::Cleaned { removed: *removed }
                 }
                 CoreEvent::ClipboardReloaded => ListUpdate::Reloaded,
+                CoreEvent::OcrChanged => ListUpdate::ImageTextChanged,
                 _ => return,
             };
             list.on_update(update, cx);

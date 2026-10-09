@@ -31,11 +31,13 @@ const ICONS = [
   "lucide:monitor",
   "lucide:notebook-pen",
   "lucide:pencil",
+  "lucide:scan-text",
   "lucide:settings-2",
   "lucide:square-arrow-out-up-right",
   "lucide:text-select",
   "lucide:trash",
   "lucide:trash-2",
+  "lucide:triangle-alert",
   "ph:push-pin-bold",
   // 主窗口头部与分组栏。
   "lets-icons:file-dock",

@@ -323,6 +323,22 @@ impl ClipboardList {
         .detach();
     }
 
+    /// 复制图片里识别出的文字（右键菜单「复制图中文字」）。
+    pub fn copy_image_text(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_preview_of(&id, cx);
+        let task = self.host.copy_image_text(id, cx);
+
+        cx.spawn_in(window, async move |list, cx| {
+            let result = task.await;
+            list.update_in(cx, |_, window, cx| match result {
+                Ok(()) => Self::toast_success("commands:messages.copied", window, cx),
+                Err(err) => Self::toast_error("commands:labels.copyImageText", &err, window, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn show_copied(&mut self, id: Arc<str>, action: QuickAction, cx: &mut Context<Self>) {
         self.copied = Some((id, action));
         self.copied_reset = Some(cx.spawn(async move |list, cx| {

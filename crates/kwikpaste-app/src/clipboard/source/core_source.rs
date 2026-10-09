@@ -25,7 +25,10 @@ use super::{
 use crate::clipboard::model::{
     actions::OpenTarget,
     filter::ListFilter,
-    item::{FileRow, FilesPreview, ItemAction, ItemKind, ItemRef, ListItem, Platform, SubKind},
+    item::{
+        FileRow, FilesPreview, ItemAction, ItemKind, ItemRef, ListItem, Platform, SubKind,
+        TextSnippet,
+    },
     layout::ImageBox,
     list_model::Page,
 };
@@ -512,6 +515,10 @@ impl From<ClipboardItemView> for ListItem {
             image_display: view.image_display_size.map(|size| ImageBox {
                 width: size.width as f32,
                 height: size.height as f32,
+            }),
+            image_text_snippet: view.image_text_snippet.map(|snippet| TextSnippet {
+                text: shared(snippet.text),
+                matched: snippet.matched,
             }),
         }
     }
