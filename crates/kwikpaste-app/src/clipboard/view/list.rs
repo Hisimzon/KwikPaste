@@ -1458,17 +1458,6 @@ impl ClipboardList {
             });
             handler
         });
-        let after_highlight = index
-            .checked_sub(1)
-            .and_then(|previous| {
-                let prior = self.model.get(previous)?;
-                Some(card::is_highlighted(
-                    self.controller.is_active(previous, &prior.id),
-                    self.hovered.as_ref() == Some(&prior.id),
-                    selecting && self.selection.is_checked(&prior.id),
-                ))
-            })
-            .unwrap_or(false);
         let state = CardState {
             active,
             hovered,
@@ -1476,7 +1465,6 @@ impl ClipboardList {
             show_original: hovered && self.settings.clipboard.content.show_original_preview,
             hint,
             checked: selecting && self.selection.is_checked(&item.id),
-            after_highlight,
             actions,
             checkbox,
             on_snippet,
@@ -1775,7 +1763,6 @@ impl Render for ClipboardList {
                         show_original: false,
                         hint: None,
                         checked: false,
-                        after_highlight: false,
                         actions: None,
                         checkbox: None,
                         on_snippet: None,

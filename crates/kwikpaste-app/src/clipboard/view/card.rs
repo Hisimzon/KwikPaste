@@ -63,8 +63,6 @@ pub struct CardState {
     pub hint: Option<char>,
     /// 多选时已勾上：卡片铺一层淡主色。
     pub checked: bool,
-    /// 上一行铺了底色（当前项、悬停或勾选）：这一行上方的分隔线不画，免得贴着色块多出一道线。
-    pub after_highlight: bool,
     /// 悬停快捷动作（列表画好的按钮行）；有它时头部行不显示时间。
     pub actions: Option<AnyElement>,
     /// 多选的复选框。
@@ -88,11 +86,6 @@ pub type SnippetHandler = Rc<dyn Fn(Arc<str>, &mut Window, &mut App)>;
 
 /// 链接正文被点了。
 pub type LinkHandler = Rc<dyn Fn(&mut Window, &mut App)>;
-
-/// 这一行会不会铺底色（当前项、悬停或勾选）。
-pub fn is_highlighted(active: bool, hovered: bool, checked: bool) -> bool {
-    active || hovered || checked
-}
 
 /// 超过这个长度的片段（多为链接）大概率会被截断，悬停时补一个完整内容的提示（1.x 同）。
 const SNIPPET_TOOLTIP_MIN_CHARS: usize = 32;
@@ -120,19 +113,8 @@ pub fn card(
     let actions = state.actions;
     let checkbox = state.checkbox;
     let on_snippet = state.on_snippet;
-    let highlighted = is_highlighted(state.active, state.hovered, state.checked);
-    let divider = !layout.seamless && state.position > 1 && !highlighted && !state.after_highlight;
-    // 分隔线左端与正文对齐：紧凑密度的正文在 16 px 来源图标右侧。
-    let divider_left = layout.item_padding_x
-        + layout.card_padding_x
-        + if layout.header_row {
-            0.
-        } else {
-            16. + layout.body_gap
-        };
-
-    // 条目是扁平的行：平时没有底色和描边，悬停、当前项（中性灰）、勾选（淡主色）时才铺一层
-    // 底色。卡片风格是圆角块、行间画细分隔线；无间风格贴边，用底边线分隔。
+    // 条目平时没有底色，悬停、当前项（中性灰）、勾选（淡主色）时才铺一层。
+    // 卡片风格是圆角块，整圈描边平时浅灰、选中或置顶时主色；无间风格贴边，只用底边线分隔。
     let lifted = state.lifted;
     let highlight = if lifted {
         Some(tokens.surface.raised)
@@ -155,11 +137,15 @@ pub fn card(
         .when(layout.seamless, |frame| {
             frame.border_b_1().border_color(tokens.border.divider)
         })
-        // 卡片风格保留 1 px 的透明描边：行高估算里算了这圈描边。
+        // 卡片风格的整圈描边：平时浅灰，选中或置顶时主色。描边固定 1 px，行高估算按它计算。
         .when(!layout.seamless, |frame| {
             frame
                 .border_1()
-                .border_color(kwikpaste_ui::theme::transparent())
+                .border_color(if state.active || pinned {
+                    tokens.accent.solid
+                } else {
+                    tokens.border.subtle
+                })
                 .rounded(radius::LG)
         })
         .when_some(highlight, |frame, highlight| frame.bg(highlight))
@@ -249,18 +235,6 @@ pub fn card(
         .when(state.dragged, |row| row.opacity(env.reorder_source_opacity))
         .px(space((layout.item_padding_x) / 4.))
         .pt(space((layout.item_gap) / 4.))
-        // 卡片风格的行间分隔线画在行上方的间距里，左右与正文对齐；第一行和挨着色块的不画。
-        .when(divider, |row| {
-            row.child(
-                div()
-                    .absolute()
-                    .top(space((layout.item_gap / 2.) / 4.))
-                    .left(space((divider_left) / 4.))
-                    .right(space((layout.item_padding_x + layout.card_padding_x) / 4.))
-                    .h(gpui::px(1.))
-                    .bg(tokens.border.divider),
-            )
-        })
         .child(frame)
         .when(state.active, |row| row.aria_active_descendant())
 }
@@ -303,7 +277,7 @@ pub fn placeholder(env: &CardEnv<'_>) -> AnyElement {
         .border_color(if layout.seamless {
             tokens.border.divider
         } else {
-            kwikpaste_ui::theme::transparent()
+            tokens.border.subtle
         })
         .when(layout.seamless, |frame| frame.border_b_1())
         .when(!layout.seamless, |frame| {
