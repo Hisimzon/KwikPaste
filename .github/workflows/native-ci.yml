@@ -167,9 +167,10 @@ jobs:
             exit 1
           fi
 
+      # core 的扩展测试要真实启动 OCR 扩展，cargo test 不会编出其它包的二进制。
       - name: Test
         shell: bash
-        run: cargo test --locked --workspace
+        run: cargo build --locked -p kwikpaste-ext-ocr && cargo test --locked --workspace
 
       # e2e-overrides 只在端到端测试的构建里开，发布产物不开；这里确认它编得过、测得过。
       - name: Updater with e2e overrides
@@ -198,7 +199,7 @@ jobs:
           key: native-core-macos
 
       - name: Test
-        run: cargo test --locked -p kwikpaste-core -p kwikpaste-os -p kwikpaste-updater
+        run: cargo build --locked -p kwikpaste-ext-ocr && cargo test --locked -p kwikpaste-core -p kwikpaste-os -p kwikpaste-updater
 
       - name: Updater clippy
         run: cargo clippy --locked -p kwikpaste-updater --no-deps --all-targets -- -D warnings
