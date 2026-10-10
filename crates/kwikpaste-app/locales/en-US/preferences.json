@@ -79,6 +79,26 @@
     "shortcutInUse": "In use by another app",
     "shortcutNotSet": "Not set"
   },
+  "extensions": {
+    "downloading": "Downloading {{percent}}%",
+    "downloadSize": "Download size: {{size}}",
+    "enable": "Enable {{name}}",
+    "install": "Install",
+    "installed": "Installed {{version}}",
+    "installing": "Installing…",
+    "notInstalled": "Not installed",
+    "ocr": {
+      "description": "Recognizes text in images for search and copying, using the system's built-in recognition.",
+      "name": "Image text recognition",
+      "uninstallContent": "New images will no longer be recognized; recognized text is kept."
+    },
+    "retry": "Retry",
+    "unavailable": "Temporarily unavailable. Please try again later.",
+    "uninstall": "Uninstall",
+    "uninstallTitle": "Uninstall extension",
+    "update": "Update",
+    "updateAvailable": "New version {{version}} available"
+  },
   "imageText": {
     "checking": "Checking text recognition on this system…",
     "deleted": "Image text deleted",
@@ -450,6 +470,9 @@
       "diagnostics": {
         "title": "Diagnostics & Recovery"
       },
+      "extensions": {
+        "title": "Extensions"
+      },
       "format": {
         "title": "Default Format"
       },
@@ -734,6 +757,11 @@
           "controlLabel": "Reset",
           "description": "Restore all preference defaults while keeping history records.",
           "title": "Reset All Preferences"
+        }
+      },
+      "extensions": {
+        "manager": {
+          "title": "Extensions"
         }
       },
       "history": {
@@ -1086,6 +1114,9 @@
       },
       "data": {
         "title": "Data"
+      },
+      "extensions": {
+        "title": "Extensions"
       },
       "general": {
         "title": "General"

@@ -79,6 +79,26 @@
     "shortcutInUse": "已被其他程序占用",
     "shortcutNotSet": "未设置"
   },
+  "extensions": {
+    "downloading": "正在下载 {{percent}}%",
+    "downloadSize": "下载大小：{{size}}",
+    "enable": "启用{{name}}",
+    "install": "安装",
+    "installed": "已安装 {{version}}",
+    "installing": "正在安装…",
+    "notInstalled": "未安装",
+    "ocr": {
+      "description": "识别图片里的文字，用于搜索和复制，使用系统自带的识别能力。",
+      "name": "图片文字识别",
+      "uninstallContent": "卸载后不再识别新图片，已识别的文字会保留。"
+    },
+    "retry": "重试",
+    "unavailable": "暂时无法获取，请稍后重试",
+    "uninstall": "卸载",
+    "uninstallTitle": "卸载扩展",
+    "update": "更新",
+    "updateAvailable": "有新版本 {{version}}"
+  },
   "imageText": {
     "checking": "正在检查系统的文字识别能力…",
     "deleted": "已删除识别文字",
@@ -440,6 +460,9 @@
       "diagnostics": {
         "title": "诊断与恢复"
       },
+      "extensions": {
+        "title": "扩展"
+      },
       "format": {
         "title": "默认格式"
       },
@@ -724,6 +747,11 @@
           "controlLabel": "重置",
           "description": "恢复所有偏好默认值，同时保留历史记录。",
           "title": "重置所有偏好"
+        }
+      },
+      "extensions": {
+        "manager": {
+          "title": "扩展"
         }
       },
       "history": {
@@ -1075,6 +1103,9 @@
       },
       "data": {
         "title": "数据"
+      },
+      "extensions": {
+        "title": "扩展"
       },
       "general": {
         "title": "通用"

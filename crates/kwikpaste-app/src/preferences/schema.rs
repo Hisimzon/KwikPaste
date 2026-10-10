@@ -17,6 +17,7 @@ pub enum TabId {
     Paste,
     Items,
     Sync,
+    Extensions,
     Overview,
     Data,
     About,
@@ -33,6 +34,7 @@ impl TabId {
             Self::Paste => "paste",
             Self::Items => "items",
             Self::Sync => "sync",
+            Self::Extensions => "extensions",
             Self::Overview => "overview",
             Self::Data => "data",
             Self::About => "about",
@@ -137,6 +139,8 @@ pub enum Control {
     StorageOverview,
     /// 局域网同步的设备、配对与连接控制面板。
     LanSync,
+    /// 官方扩展的安装、更新与启用控制面板。
+    Extensions,
     /// 图片文字识别的进度、结果和系统能力（开关下面的一行，按状态换标题和按钮）。
     ImageTextStatus,
     ShortcutRecorder,
@@ -148,7 +152,11 @@ impl Control {
     pub fn full_width(self) -> bool {
         matches!(
             self,
-            Self::CaptureKinds | Self::CaptureOrder | Self::RetentionRules | Self::LanSync
+            Self::CaptureKinds
+                | Self::CaptureOrder
+                | Self::RetentionRules
+                | Self::LanSync
+                | Self::Extensions
         )
     }
 }
@@ -322,6 +330,12 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
             }],
         },
         Tab {
+            id: TabId::Extensions,
+            group: Group::Data,
+            icon: PrefIcon::Puzzle,
+            sections: extensions_sections(),
+        },
+        Tab {
             id: TabId::Overview,
             group: Group::Data,
             icon: PrefIcon::ChartPie,
@@ -352,6 +366,39 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
             group: Group::Data,
             icon: PrefIcon::Info,
             sections: about_sections(),
+        },
+    ]
+}
+
+/// 扩展卡片下保留原有识别状态行，设置项标识不随页面迁移改变。
+fn extensions_sections() -> Vec<Section> {
+    vec![
+        Section {
+            id: "extensions",
+            settings: vec![
+                Setting::new("extensions.manager", Control::Extensions).keywords(&[
+                    "扩展",
+                    "插件",
+                    "extension",
+                    "plugin",
+                    "OCR",
+                    "文字识别",
+                ]),
+            ],
+        },
+        Section {
+            id: "imageText",
+            settings: vec![
+                Setting::new("ocr.status", Control::ImageTextStatus).keywords(&[
+                    "ocr",
+                    "image",
+                    "text",
+                    "recognize",
+                    "progress",
+                    "language",
+                    "文字识别",
+                ]),
+            ],
         },
     ]
 }
@@ -672,19 +719,6 @@ fn capture_sections() -> Vec<Section> {
                 )
                 .path("clipboard.capture.maxImageMb")
                 .keywords(&["image", "picture", "size", "limit", "mb"]),
-            ],
-        },
-        Section {
-            id: "imageText",
-            settings: vec![
-                Setting::new("ocr.status", Control::ImageTextStatus).keywords(&[
-                    "ocr",
-                    "image",
-                    "text",
-                    "recognize",
-                    "progress",
-                    "language",
-                ]),
             ],
         },
         Section {
@@ -1140,14 +1174,33 @@ mod tests {
         }
     }
     #[test]
-    fn capture_retains_image_text_status_but_not_the_removed_ocr_switch() {
+    fn image_text_status_lives_only_in_extensions() {
         let capture = capture_sections();
         let rows: Vec<_> = capture
             .iter()
             .flat_map(|section| &section.settings)
             .collect();
         assert!(rows.iter().all(|setting| setting.id != "ocr.enabled"));
-        assert!(rows.iter().any(|setting| setting.id == "ocr.status"
-            && matches!(setting.control, Control::ImageTextStatus)));
+        assert!(rows.iter().all(|setting| setting.id != "ocr.status"));
+        let extensions = extensions_sections();
+        assert!(
+            extensions
+                .iter()
+                .flat_map(|section| &section.settings)
+                .any(|setting| setting.id == "ocr.status"
+                    && matches!(setting.control, Control::ImageTextStatus))
+        );
+        let tabs = tabs(false);
+        let sync = tabs.iter().position(|tab| tab.id == TabId::Sync).unwrap();
+        assert_eq!(tabs[sync + 1].id, TabId::Extensions);
+        let manager = &extensions[0].settings[0];
+        assert!(manager.control.full_width());
+        for keyword in ["扩展", "插件", "extension", "plugin", "OCR", "文字识别"] {
+            assert!(super::super::view::search_matches(
+                keyword,
+                "",
+                manager.keywords
+            ));
+        }
     }
 }

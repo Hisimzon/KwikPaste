@@ -180,7 +180,6 @@ pub fn updater(cx: &App) -> Option<&Updater> {
 }
 
 /// 扩展页沿用更新器宿主，不另建运行时或调度器。
-#[allow(dead_code, reason = "下一轮扩展 UI 接线接口")]
 pub fn extensions(cx: &App) -> Option<&ExtensionManager> {
     updater(cx).map(Updater::extensions)
 }

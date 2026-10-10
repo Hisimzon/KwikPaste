@@ -1,0 +1,368 @@
+//! 官方扩展页：沿用同步页的设置行与分组，状态由更新器宿主推送。
+
+use gpui::{App, Context, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div};
+use kwikpaste_ui::{
+    Button, DialogSpec, KpStyled as _, Switch, form_dialog,
+    theme::{self, TextSize, space},
+    toast::{self, Toast},
+};
+use kwikpaste_updater::extensions::{ExtensionStatus, OperationState};
+
+use super::{Preferences, row_frame, section_block, setting_row, text};
+use crate::{i18n, platform::updater};
+
+#[derive(Clone, Copy)]
+enum Action {
+    Refresh,
+    Install,
+    Uninstall,
+    Enable(bool),
+}
+
+/// 读取可观察宿主的快照；宿主不可用时仍显示已知扩展的不可用卡片。
+fn statuses(cx: &App) -> Vec<ExtensionStatus> {
+    if let Some(host) = cx.try_global::<updater::ExtensionStateHost>() {
+        return host.0.read(cx).0.clone();
+    }
+    updater::extensions(cx).map_or_else(
+        || {
+            vec![ExtensionStatus {
+                id: "ocr".to_owned(),
+                catalog: None,
+                installed: None,
+                operation: OperationState::Idle,
+                update_available: false,
+            }]
+        },
+        |manager| manager.status(),
+    )
+}
+
+pub(super) fn ocr_installed(cx: &App) -> bool {
+    statuses(cx)
+        .iter()
+        .any(|status| status.id == "ocr" && status.installed.is_some())
+}
+
+impl Preferences {
+    pub(super) fn refresh_extensions(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run_extension_action(String::new(), Action::Refresh, window, cx);
+    }
+
+    /// 卸载先确认；所有管理器操作都在窗口任务里执行，失败显示原始根因。
+    fn run_extension_action(
+        &self,
+        id: String,
+        action: Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(manager) = updater::extensions(cx).cloned() else {
+            toast::show(
+                Toast::error(i18n::t("preferences:extensions.unavailable")),
+                window,
+                cx,
+            );
+            return;
+        };
+        let answer = if matches!(action, Action::Uninstall) {
+            Some(form_dialog(
+                DialogSpec::new(i18n::t("preferences:extensions.uninstallTitle"))
+                    .ok_text(i18n::t("preferences:extensions.uninstall"))
+                    .cancel_text(i18n::t("common:actions.cancel"))
+                    .danger(),
+                |_, _| {
+                    div()
+                        .kp_text(TextSize::Sm)
+                        .child(i18n::t("preferences:extensions.ocr.uninstallContent"))
+                        .into_any_element()
+                },
+                window,
+                cx,
+            ))
+        } else {
+            None
+        };
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                if let Some(answer) = answer
+                    && !answer.await.unwrap_or(false)
+                {
+                    return;
+                }
+                let result = match action {
+                    Action::Refresh => manager.refresh().await.map(|_| ()),
+                    Action::Install => manager.install(id).await,
+                    Action::Uninstall => manager.uninstall(id).await,
+                    Action::Enable(enabled) => manager.set_enabled(id, enabled).await,
+                };
+                if let Err(error) = result {
+                    let _ = entity.update_in(cx, |_, window, cx| {
+                        toast::show(Toast::error(error.to_string()), window, cx);
+                    });
+                }
+            })
+            .detach();
+    }
+
+    /// 每个已知扩展一张卡片，操作中的按钮和开关不可用。
+    pub(super) fn render_extensions(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let tokens = theme::semantic(cx);
+        let entity = cx.entity().downgrade();
+        let mut cards = Vec::new();
+        for status in statuses(cx) {
+            let busy = matches!(
+                status.operation,
+                OperationState::Downloading { .. } | OperationState::Installing
+            );
+            let mut controls = div().flex().items_center().gap(space(2.));
+            let button = |key: &'static str, action: Action| {
+                let entity = entity.clone();
+                let id = status.id.clone();
+                Button::new(
+                    format!("extension-{}-{key}", status.id),
+                    i18n::t(&format!("preferences:extensions.{key}")),
+                )
+                .disabled(busy)
+                .on_click(move |_, window, cx| {
+                    if let Some(entity) = entity.upgrade() {
+                        entity.update(cx, |this, cx| {
+                            this.run_extension_action(id.clone(), action, window, cx);
+                        });
+                    }
+                })
+            };
+            if !matches!(status.operation, OperationState::Error { .. })
+                && status.installed.is_none()
+                && (status.catalog.is_some() || busy)
+            {
+                controls = controls.child(button("install", Action::Install));
+            }
+            if let Some(installed) = &status.installed {
+                let entity = entity.clone();
+                let id = status.id.clone();
+                controls = controls
+                    .child(
+                        Switch::new(format!("extension-{}-enabled", status.id))
+                            .accessibility_label(i18n::t_args(
+                                "preferences:extensions.enable",
+                                &[(
+                                    "name",
+                                    &i18n::t(&format!("preferences:extensions.{}.name", status.id)),
+                                )],
+                            ))
+                            .checked(installed.enabled)
+                            .disabled(busy)
+                            .on_change(move |enabled, window, cx| {
+                                if let Some(entity) = entity.upgrade() {
+                                    entity.update(cx, |this, cx| {
+                                        this.run_extension_action(
+                                            id.clone(),
+                                            Action::Enable(enabled),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }),
+                    )
+                    .child(button("uninstall", Action::Uninstall));
+            }
+            let title = div()
+                .flex()
+                .items_baseline()
+                .gap(space(2.))
+                .child(div().kp_text(TextSize::Sm).child(i18n::t(&format!(
+                    "preferences:extensions.{}.name",
+                    status.id
+                ))))
+                .children(metadata(&status).map(|metadata| {
+                    div()
+                        .kp_text(TextSize::Xs)
+                        .text_color(tokens.text.secondary)
+                        .child(metadata)
+                }));
+            let mut rows = vec![
+                row_frame(true, tokens)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(space(0.5))
+                            .child(title)
+                            .child(
+                                div()
+                                    .kp_text(TextSize::Xs)
+                                    .text_color(tokens.text.muted)
+                                    .child(i18n::t(&format!(
+                                        "preferences:extensions.{}.description",
+                                        status.id
+                                    ))),
+                            ),
+                    )
+                    .child(controls.flex_none())
+                    .into_any_element(),
+            ];
+            if let Some(note) = status_text(&status, self.settings.update.auto_check) {
+                let action = match status.operation {
+                    OperationState::Error { .. } => Some(button("retry", Action::Refresh)),
+                    OperationState::Idle if status.update_available => {
+                        Some(button("update", Action::Install))
+                    }
+                    _ => None,
+                };
+                rows.push(setting_row(
+                    false,
+                    note,
+                    SharedString::default(),
+                    action.map(IntoElement::into_any_element),
+                    tokens,
+                ));
+            }
+            if status.id == "ocr"
+                && status
+                    .installed
+                    .as_ref()
+                    .is_some_and(|installed| installed.enabled)
+            {
+                rows.push(self.render_image_text_status(false, cx));
+            }
+            cards.push(section_block(None, None, rows, tokens));
+        }
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(space(5.))
+            .children(cards)
+            .into_any_element()
+    }
+}
+
+/// 操作状态优先于版本信息；自动更新关闭时才显示可手动更新的新版本。
+fn status_text(status: &ExtensionStatus, auto_update: bool) -> Option<SharedString> {
+    match &status.operation {
+        OperationState::Downloading { progress } => {
+            let percent = (progress.progress.unwrap_or(0.0).clamp(0.0, 1.0) * 100.0)
+                .round()
+                .to_string();
+            return Some(i18n::t_args(
+                "preferences:extensions.downloading",
+                &[("percent", &percent)],
+            ));
+        }
+        OperationState::Installing => return Some(i18n::t("preferences:extensions.installing")),
+        OperationState::Error { message } => return Some(message.clone().into()),
+        OperationState::Idle => {}
+    }
+    if status.installed.is_some() {
+        if status.update_available
+            && !auto_update
+            && let Some(catalog) = &status.catalog
+        {
+            return Some(i18n::t_args(
+                "preferences:extensions.updateAvailable",
+                &[("version", &catalog.version)],
+            ));
+        }
+        return None;
+    }
+    status
+        .catalog
+        .is_none()
+        .then(|| i18n::t("preferences:extensions.unavailable"))
+}
+
+/// 版本或下载大小紧跟卡片标题，不再占用独立设置行。
+fn metadata(status: &ExtensionStatus) -> Option<SharedString> {
+    status
+        .installed
+        .as_ref()
+        .map(|installed| installed.version.clone().into())
+        .or_else(|| {
+            status
+                .catalog
+                .as_ref()
+                .map(|catalog| text::format_bytes(catalog.size).into())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kwikpaste_core::extensions::InstalledExtension;
+    use kwikpaste_updater::DownloadProgress;
+
+    #[test]
+    fn card_status_follows_availability_version_and_operation() {
+        let mut status = ExtensionStatus {
+            id: "ocr".to_owned(),
+            catalog: None,
+            installed: None,
+            operation: OperationState::Idle,
+            update_available: false,
+        };
+        assert_eq!(
+            status_text(&status, false),
+            Some(i18n::t("preferences:extensions.unavailable"))
+        );
+        assert_eq!(metadata(&status), None);
+        status.catalog = Some(
+            serde_json::from_value(serde_json::json!({
+                "id": "ocr", "version": "1.2.3", "protocol": 1, "size": 1258291,
+                "signature": "", "url": "https://example.invalid/ocr",
+                "notesZh": "", "notesEn": ""
+            }))
+            .expect("有效目录夹具"),
+        );
+        assert_eq!(status_text(&status, false), None);
+        assert_eq!(metadata(&status).as_deref(), Some("1.2 MB"));
+        status.installed = Some(InstalledExtension {
+            version: "1.0.0".to_owned(),
+            protocol: 1,
+            enabled: true,
+        });
+        assert_eq!(metadata(&status).as_deref(), Some("1.0.0"));
+        assert_eq!(status_text(&status, false), None);
+        status.update_available = true;
+        assert_eq!(
+            status_text(&status, false),
+            Some(i18n::t_args(
+                "preferences:extensions.updateAvailable",
+                &[("version", "1.2.3")],
+            ))
+        );
+        assert_eq!(status_text(&status, true), None);
+        status.operation = OperationState::Downloading {
+            progress: DownloadProgress {
+                downloaded: 51,
+                total: Some(100),
+                progress: Some(0.51),
+            },
+        };
+        assert_eq!(
+            status_text(&status, false),
+            Some(i18n::t_args(
+                "preferences:extensions.downloading",
+                &[("percent", "51")],
+            ))
+        );
+        status.operation = OperationState::Installing;
+        assert_eq!(
+            status_text(&status, false),
+            Some(i18n::t("preferences:extensions.installing"))
+        );
+        status.operation = OperationState::Error {
+            message: "test failure".to_owned(),
+        };
+        assert_eq!(status_text(&status, false).as_deref(), Some("test failure"));
+        status.operation = OperationState::Idle;
+        status.catalog = None;
+        status.update_available = false;
+        assert_eq!(status_text(&status, false), None);
+        assert_eq!(metadata(&status).as_deref(), Some("1.0.0"));
+    }
+}
