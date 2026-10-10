@@ -201,7 +201,7 @@ impl Render for Header {
                             .child(
                                 Input::search(&self.input)
                                     .small()
-                                    .width(space((160.) / 4.))
+                                    .width(space((260.) / 4.))
                                     .hint_key(hint("F"))
                                     .accessibility_label(t("clipboard:header.searchPlaceholder")),
                             ),

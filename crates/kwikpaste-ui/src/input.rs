@@ -176,7 +176,7 @@ impl Input {
         }
     }
 
-    /// 搜索框：前缀放搜索图标、可清空。主窗口头部用 `.small()` 加 `.width(rems(10.))`（160 px）。
+    /// 搜索框:前缀放搜索图标、可清空。主窗口头部用 `.small()` 加 `.width(space((260.) / 4.))`(260 px)。
     pub fn search(input: &TextInput) -> Self {
         Self {
             search: true,
