@@ -117,12 +117,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: ${{ matrix.triple }}
+      # 带令牌才不会撞上匿名 API 限流；MSVC 由 rustc 和 openssl-src 自己查注册表找到，
+      # 不用 msvc-dev-cmd（它和 bash 里 Git 自带的 link.exe 冲突）。
       - uses: arduino/setup-protoc@v3
         if: needs.prepare.outputs.id == 'wetype'
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows' && needs.prepare.outputs.id == 'wetype'
         with:
-          arch: ${{ matrix.triple == 'aarch64-pc-windows-msvc' && 'amd64_arm64' || 'amd64' }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup NASM and Strawberry Perl
         if: runner.os == 'Windows' && needs.prepare.outputs.id == 'wetype'
         shell: pwsh
