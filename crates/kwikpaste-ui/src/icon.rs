@@ -77,6 +77,8 @@ pub enum IconName {
     /// 1.x `i-ph:push-pin-bold`：置顶标记。
     PushPin,
     Plus,
+    /// `i-lucide:scan-text`：图片里识别出的文字。
+    ScanText,
     Search,
     Settings,
     /// 1.x `i-lucide:settings-2`：管理分组。
@@ -90,6 +92,8 @@ pub enum IconName {
     /// 1.x `i-lucide:text-select`：拆词。
     TextSelect,
     TextSize,
+    /// `i-lucide:triangle-alert`：需要用户处理的提示。
+    TriangleAlert,
     /// 1.x `i-lucide:trash`：删除记录。
     Trash,
     /// 1.x `i-lucide:trash-2`：删除分组。
@@ -124,10 +128,12 @@ impl IconName {
             Self::Pencil => "lucide-pencil.svg",
             Self::PinWindow => "lets-icons-pin.svg",
             Self::PushPin => "ph-push-pin-bold.svg",
+            Self::ScanText => "lucide-scan-text.svg",
             Self::Settings2 => "lucide-settings-2.svg",
             Self::SettingLine => "lets-icons-setting-line.svg",
             Self::SquareArrowOutUpRight => "lucide-square-arrow-out-up-right.svg",
             Self::TextSelect => "lucide-text-select.svg",
+            Self::TriangleAlert => "lucide-triangle-alert.svg",
             Self::Trash => "lucide-trash.svg",
             Self::Trash2 => "lucide-trash-2.svg",
             _ => return None,

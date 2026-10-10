@@ -23,11 +23,14 @@
   "title": {
     "files": "{{count}} items",
     "image": "Image preview",
+    "imageText": "Text in image",
     "loading": "Loading",
     "text": "Text preview"
   },
   "view": {
+    "image": "Image",
     "plain": "Default",
+    "text": "Text",
     "words": "Words"
   },
   "words": {

@@ -79,6 +79,51 @@
     "shortcutInUse": "In use by another app",
     "shortcutNotSet": "Not set"
   },
+  "imageText": {
+    "checking": "Checking text recognition on this system…",
+    "deleted": "Image text deleted",
+    "deleteFailed": "Delete image text",
+    "done": {
+      "title": "All {{count}} images recognized"
+    },
+    "empty": {
+      "description": "Images you copy are recognized automatically.",
+      "title": "No images yet"
+    },
+    "failed": "{{count}} couldn't be read",
+    "language": "Language: {{languages}}",
+    "languageSeparator": ", ",
+    "languages": {
+      "en": "English",
+      "ja": "Japanese",
+      "ko": "Korean",
+      "zh-Hans": "Chinese (Simplified)",
+      "zh-Hant": "Chinese (Traditional)"
+    },
+    "missingLanguage": {
+      "action": "Open language settings",
+      "description": "In Windows Settings › Time & language › Language & region, add Optical character recognition for Chinese or English.",
+      "title": "No text recognition language installed"
+    },
+    "queued": {
+      "title": "{{count}} images waiting"
+    },
+    "running": {
+      "description": "Recognition runs in a separate background process that exits when it's done, so it doesn't add to memory use.",
+      "title": "Recognizing {{done}} of {{total}} images"
+    },
+    "saved": {
+      "action": "Delete",
+      "description": "Text from {{count}} images is still on this device and is used again when you turn this back on.",
+      "title": "Saved image text"
+    },
+    "unsupported": {
+      "descriptionMac": "Requires macOS 10.15 or later.",
+      "descriptionWindows": "Requires Windows 10 or later.",
+      "title": "This system can't recognize text in images"
+    },
+    "withText": "{{count}} with text"
+  },
   "lanSync": {
     "connect": {
       "addressPlaceholder": "e.g. [fe80::1%12]:41573",
@@ -411,6 +456,9 @@
       "globalShortcuts": {
         "title": "Global Shortcuts"
       },
+      "imageText": {
+        "title": "Text in images"
+      },
       "lanContent": {
         "title": "What to Sync"
       },
@@ -443,6 +491,9 @@
       },
       "sort": {
         "title": "Sorting"
+      },
+      "sound": {
+        "title": "Sound"
       },
       "startup": {
         "title": "Startup & Icons"
@@ -660,8 +711,15 @@
           "title": "Copy as Plain Text by Default"
         },
         "sound": {
-          "preview": "Preview sound",
-          "title": "Copy Sound"
+          "preview": {
+            "controlLabel": "Preview",
+            "title": "Preview sound"
+          },
+          "title": "Copy Sound",
+          "volume": {
+            "description": "Drag to adjust, release to save; 0% is silent.",
+            "title": "Sound volume"
+          }
         },
         "updateOnReuse": {
           "description": "Refresh a record's last-used time and use count when you copy or paste it again.",
@@ -729,6 +787,15 @@
             "remind": "Remind only"
           },
           "title": "When Over Limit"
+        }
+      },
+      "ocr": {
+        "enabled": {
+          "description": "Find images by the text inside them and copy that text. Recognition runs on this device and nothing is uploaded.",
+          "title": "Recognize text in images"
+        },
+        "status": {
+          "title": "Recognition status"
         }
       },
       "organizing": {

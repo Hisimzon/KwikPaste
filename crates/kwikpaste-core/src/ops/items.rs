@@ -10,8 +10,9 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::clipboard::{
-    self, build_item_with_settings, materialize_source, resolve_fragment, split_words,
-    validate_image_file_name, ClipboardFragment, ClipboardPayload, ClipboardReader, WordSplit,
+    self, build_item_with_settings, materialize_source, resolve_fragment, select_words,
+    split_words, validate_image_file_name, ClipboardFragment, ClipboardPayload, ClipboardReader,
+    WordSplit,
 };
 use crate::db::items::{
     clear_items, delete_item, delete_items, find_item_by_id, find_item_id_at,
@@ -245,12 +246,30 @@ async fn load_fragment_text(
     fragment: &ClipboardFragment,
 ) -> Result<(ClipboardKind, String)> {
     let item = find_required(pool, id).await?;
-    let text = (item.kind == ClipboardKind::Text)
-        .then(|| resolve_fragment(&item, fragment))
-        .flatten()
-        .ok_or_else(|| {
-            AppError::Clipboard(label(core.language(), Key::FragmentUnavailable).to_owned())
-        })?;
+    let text = match fragment {
+        ClipboardFragment::ImageWords { indices }
+            if item.kind == ClipboardKind::Image
+                && core.settings.snapshot().clipboard.ocr.enabled =>
+        {
+            let recognized: Option<String> = sqlx::query_scalar(
+                "SELECT text FROM image_texts WHERE item_id = ? AND status = 'done'",
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(anyhow::Error::from)?;
+            recognized.and_then(|text| select_words(&text, indices))
+        }
+        ClipboardFragment::Snippet { .. } | ClipboardFragment::Words { .. }
+            if item.kind == ClipboardKind::Text =>
+        {
+            resolve_fragment(&item, fragment)
+        }
+        _ => None,
+    }
+    .ok_or_else(|| {
+        AppError::Clipboard(label(core.language(), Key::FragmentUnavailable).to_owned())
+    })?;
 
     Ok((item.kind, text))
 }
@@ -270,6 +289,36 @@ impl Core {
             mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await?;
             Ok(CopyOutcome {
                 hide_window: content.copy_then_hide_window,
+            })
+        })
+        .await
+    }
+
+    /// 将图片识别结果按普通文本复制规则写回；识别写入本身不计复用，用户复制才计。
+    pub async fn copy_image_text(&self, id: &str) -> Result<CopyOutcome> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let settings = core.settings().clipboard;
+            if !settings.ocr.enabled {
+                return Err(AppError::Clipboard(
+                    "image text recognition is disabled".into(),
+                ));
+            }
+            let pool = core.0.db.pool().await;
+            let item = find_required(&pool, &id).await?;
+            if item.kind != ClipboardKind::Image {
+                return Err(AppError::Clipboard("not an image item".into()));
+            }
+            let text = core
+                .image_text(&id)
+                .await?
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| AppError::Clipboard("no recognized image text".into()))?;
+            write_fragment(&core.0, &text)?;
+            mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await?;
+            Ok(CopyOutcome {
+                hide_window: settings.content.copy_then_hide_window,
             })
         })
         .await
@@ -568,6 +617,7 @@ impl Core {
         let core = self.clone();
         let id = id.to_owned();
         self.hop(async move {
+            let _ocr = core.0.ocr.suspend().await;
             let pool = core.0.db.pool().await;
             if let Some(file_name) = delete_item(&pool, &id).await? {
                 if let Err(err) = core.0.images.remove(&file_name) {
@@ -584,6 +634,7 @@ impl Core {
     pub async fn delete_items(&self, ids: Vec<String>) -> Result<u64> {
         let core = self.clone();
         self.hop(async move {
+            let _ocr = core.0.ocr.suspend().await;
             let pool = core.0.db.pool().await;
             let outcome = delete_items(&pool, &ids).await?;
 
@@ -601,6 +652,7 @@ impl Core {
     pub async fn clear_items(&self, delete_favorites: bool, delete_pinned: bool) -> Result<u64> {
         let core = self.clone();
         self.hop(async move {
+            let _ocr = core.0.ocr.suspend().await;
             let pool = core.0.db.pool().await;
             let outcome = clear_items(&pool, delete_favorites, delete_pinned).await?;
 
@@ -622,6 +674,7 @@ impl Core {
     pub async fn clear_items_in_scope(&self, scope: ClearScope) -> Result<u64> {
         let core = self.clone();
         self.hop(async move {
+            let _ocr = core.0.ocr.suspend().await;
             let pool = core.0.db.pool().await;
             let outcome = clear_scope(&pool, &scope).await?;
             clipboard::cleanup::apply_outcome(&core.0, &outcome, "scoped");
@@ -633,8 +686,12 @@ impl Core {
     /// 全选 / 区间选择用：按列表同款过滤与排序返回全部匹配记录的 id 与收藏 / 置顶标记。
     pub async fn list_item_refs(&self, query: ClipboardItemQuery) -> Result<Vec<ClipboardItemRef>> {
         let core = self.clone();
-        self.hop(async move { list_item_refs(&core.0.db.pool().await, &query).await })
-            .await
+        self.hop(async move {
+            let mut query = query;
+            query.ocr_enabled = core.settings().clipboard.ocr.enabled;
+            list_item_refs(&core.0.db.pool().await, &query).await
+        })
+        .await
     }
 
     /// 「打开链接」/「发送邮件」的目标；内容为空时返回 `None`。宿主用系统默认浏览器 / 邮件客户端打开。

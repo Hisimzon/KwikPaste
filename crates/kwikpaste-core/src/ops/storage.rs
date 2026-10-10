@@ -285,6 +285,7 @@ async fn switch_storage_location(
     {
         // 先停新的采集，再等在途的入库与清理结束，复制期间没有人写库或删图片文件。
         let _pause = core.watcher_pause.pause_scoped();
+        let _ocr = core.ocr.suspend().await;
         let _upsert = core.upsert_lock.lock().await;
         let _exclusive = core.cleanup.exclusive().await;
         let switch_error = Mutex::new(None::<AppError>);

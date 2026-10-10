@@ -4,8 +4,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
-    ParentElement, SharedString, Stateful, StyleRefinement, Styled, Window, div,
+    AnyElement, App, Context, Div, ElementId, Focusable as _, InteractiveElement, Interactivity,
+    IntoElement, ParentElement, SharedString, Stateful, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _,
 };
 use gpui_base::Selectable;
@@ -221,6 +221,9 @@ fn menu_item(item: MenuItem, cx: &App) -> PopupMenuItem {
 }
 
 /// 给元素挂右键菜单。`build` 在每次打开时调用；返回空列表时不弹出。
+///
+/// 菜单在帧外构建时就拿走焦点：gpui-component 要到画菜单那一帧的 prepaint 里才聚焦菜单，
+/// 那时先画的元素（例如列表）已按旧焦点向无障碍树报过焦点，同一帧两个节点报焦点在 debug 下会 panic。
 pub fn context_menu<E>(
     element: E,
     build: impl Fn(&mut Window, &mut App) -> Vec<MenuEntry> + 'static,
@@ -231,7 +234,11 @@ where
     element
         .context_menu(move |menu, window, cx| {
             let entries = build(window, cx);
-            build_menu(menu, entries, window, cx)
+            let menu = build_menu(menu, entries, window, cx);
+            if !menu.is_empty() {
+                window.focus(&menu.focus_handle(cx), cx);
+            }
+            menu
         })
         .into_any_element()
 }

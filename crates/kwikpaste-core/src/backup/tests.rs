@@ -1150,3 +1150,51 @@ fn export_samples_for_v1() {
     }
     block_on(source.core.shutdown()).unwrap();
 }
+
+/// 完整备份原样带上识别文字；部分备份删掉它，正文和索引里都找不到。
+#[test]
+fn partial_backup_strips_ocr_text_while_full_backup_keeps_it() {
+    let source = source();
+    block_on(source.core.toggle_favorite(&source.image_id)).unwrap();
+    block_on(source.core.hop({
+        let core = source.core.clone();
+        async move {
+            sqlx::query("INSERT INTO image_texts(item_id,status,text,attempts,created_at,updated_at) SELECT id,'done','private OCR sentinel',1,created_at,created_at FROM clipboard_items WHERE kind='image'")
+                .execute(&core.0.db.pool().await).await.unwrap();
+            Ok(())
+        }
+    })).unwrap();
+    let full = export(&source, BackupExportMode::Plain, None);
+    let partial = PathBuf::from(
+        export_scoped(&source, "favorites", favorites())
+            .unwrap()
+            .path,
+    );
+    for (path, expected) in [(full, 1), (partial, 0)] {
+        let payload = read_backup_payload(&path, None).unwrap();
+        let root = extract_payload_zip(&payload).unwrap();
+        source.fixture.runtime.handle().block_on(async {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    SqliteConnectOptions::new()
+                        .filename(root.path().join(DB_ARCHIVE_DIR).join(DB_FILENAME)),
+                )
+                .await
+                .unwrap();
+            let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM image_texts")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let hits: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM image_texts_fts WHERE image_texts_fts MATCH 'sentinel'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!((rows, hits), (expected, expected));
+            pool.close().await;
+        });
+    }
+    block_on(source.core.shutdown()).unwrap();
+}

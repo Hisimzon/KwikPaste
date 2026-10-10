@@ -36,8 +36,10 @@ pub(crate) async fn persist_and_notify(
         }
     };
     crate::sync::on_local_capture(core, &item_to_write, seq);
-    if core.settings.snapshot().clipboard.feedback.copy_sound {
-        core.platform().play_copy_sound();
+    let feedback = core.settings.snapshot().clipboard.feedback;
+    if feedback.copy_sound {
+        core.platform()
+            .play_copy_sound(feedback.copy_sound_volume.min(100));
     }
     Ok(result)
 }
@@ -58,6 +60,11 @@ pub(crate) async fn store_and_emit(core: &CoreInner, item: &ClipboardItem) -> Re
         // 图片行两列都没有文本,排不进索引,也就没有重算的必要。
         if item.search_text.is_some() || item.note.is_some() {
             crate::db::pinyin::queue_update(&core.db.pool().await, &result.id);
+        }
+        if item.kind == crate::db::models::ClipboardKind::Image
+            && core.settings.snapshot().clipboard.ocr.enabled
+        {
+            core.ocr.nudge();
         }
     }
 

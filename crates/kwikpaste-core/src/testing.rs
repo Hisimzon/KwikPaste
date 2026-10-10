@@ -48,12 +48,13 @@ pub(crate) fn sample_png(w: u32, h: u32) -> Vec<u8> {
     out.into_inner()
 }
 
-/// 假的平台层：前台应用与运行中应用由测试指定，提示音只计数。
+/// 假的平台层：前台应用与运行中应用由测试指定，提示音只记录次数和音量，不发声。
 #[derive(Default)]
 pub(crate) struct FakePlatform {
     pub frontmost: Mutex<Option<FrontmostApp>>,
     pub running: Mutex<Vec<ScannedApp>>,
     pub sounds: AtomicUsize,
+    pub sound_volumes: Mutex<Vec<u8>>,
 }
 
 impl FakePlatform {
@@ -103,8 +104,9 @@ impl PlatformServices for FakePlatform {
         None
     }
 
-    fn play_copy_sound(&self) {
+    fn play_copy_sound(&self, volume_percent: u8) {
         self.sounds.fetch_add(1, Ordering::SeqCst);
+        self.sound_volumes.lock().unwrap().push(volume_percent);
     }
 }
 

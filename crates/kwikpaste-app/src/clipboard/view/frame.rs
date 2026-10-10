@@ -19,7 +19,7 @@ use gpui::{
 /// 一行在视口里的位置。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RowGeom {
-    /// 列表行号（不含置顶块）。
+    /// 列表行号，也是模型下标（包含置顶行）。
     pub ix: usize,
     /// 行顶相对视口顶的偏移（px，可为负）。
     pub top: f32,

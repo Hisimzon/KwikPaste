@@ -29,6 +29,7 @@ pub use backend::{
 pub use cleanup::{CleanupPreview, CleanupReport, CleanupStatus, RulePreview, StorageCheck};
 pub use detect::{detect_text_sub_kind, sanitize_css_color};
 pub use file_icon_store::FileIconStore;
+pub(crate) use fragment::select_words;
 pub use fragment::{
     fragment_source, quick_snippets, resolve_fragment, split_words, word_spans, ClipboardFragment,
     WordSpan, WordSplit, WordToken, MAX_SPLIT_CHARS,

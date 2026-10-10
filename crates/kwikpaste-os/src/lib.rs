@@ -11,6 +11,7 @@ pub mod geometry;
 pub mod hook_keys;
 pub mod keystroke;
 pub mod locale;
+pub mod ocr;
 pub mod services;
 pub mod single_instance;
 mod sound;

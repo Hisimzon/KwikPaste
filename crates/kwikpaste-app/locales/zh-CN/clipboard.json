@@ -62,6 +62,7 @@
   "menu": {
     "addNote": "添加备注",
     "copy": "复制",
+    "copyImageText": "复制图中文字",
     "delete": "删除",
     "editNote": "编辑备注",
     "favorite": "收藏",

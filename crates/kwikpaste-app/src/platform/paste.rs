@@ -101,6 +101,27 @@ pub fn copy(
     })
 }
 
+/// 把图片识别出的文字写回剪贴板（不粘贴），隐藏规则同 [`copy`]。
+pub fn copy_image_text(cx: &mut App, id: String, keep_visible: bool) -> Task<Result<CopyOutcome>> {
+    let Some(core) = core_host::core(cx).cloned() else {
+        return Task::ready(Err(core_missing()));
+    };
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let outcome = core.copy_image_text(&id).await?;
+        if keep_visible {
+            cx.update(|cx| {
+                super::request(cx, PanelCommand::SetInputCapture(false));
+            });
+        } else if outcome.hide_window {
+            cx.update(|cx| {
+                super::request(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)));
+            });
+        }
+        probe::copied(&id, false, outcome.hide_window);
+        Ok(outcome)
+    })
+}
+
 /// 把记录里的片段（快捷信息、拆词选区）写回剪贴板（不粘贴），隐藏规则同 [`copy`]。
 pub fn copy_fragment(
     cx: &mut App,

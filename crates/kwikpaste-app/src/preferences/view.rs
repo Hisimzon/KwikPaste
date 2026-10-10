@@ -17,8 +17,8 @@ use kwikpaste_core::{
 };
 use kwikpaste_ui::{
     Button, Checkbox, ConfirmSpec, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
-    NumberInputState, ScrollArea, Select, SelectOption, SelectState, Switch, TextInput,
-    form_dialog,
+    NumberInputState, ScrollArea, Select, SelectOption, SelectState, Slider, SliderState, Switch,
+    TextInput, form_dialog,
     theme::{self, SemanticTokens, TextSize, px_rems, space},
     toast::{self, Toast},
 };
@@ -51,6 +51,7 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
+mod image_text;
 mod overview;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(960.), px(600.));
@@ -122,7 +123,10 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     };
     let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
-        view.update(cx, |this, cx| this.refresh_storage_overview(cx));
+        view.update(cx, |this, cx| {
+            this.refresh_storage_overview(cx);
+            this.refresh_image_text(cx);
+        });
         if view
             .read(cx)
             .storage_location
@@ -165,7 +169,10 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     };
     let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
-        view.update(cx, |this, cx| this.refresh_storage_overview(cx));
+        view.update(cx, |this, cx| {
+            this.refresh_storage_overview(cx);
+            this.refresh_image_text(cx);
+        });
         crate::platform::reveal_after_first_frame(window, cx, |window, _| {
             bring_window_to_front(window);
         });
@@ -212,6 +219,7 @@ struct Preferences {
     language: SelectState,
     selects: std::collections::HashMap<&'static str, SelectState>,
     number_inputs: std::collections::HashMap<&'static str, NumberInputState>,
+    sliders: std::collections::HashMap<&'static str, SliderState>,
     scroll: ScrollHandle,
     focus: FocusHandle,
     recording: Option<&'static str>,
@@ -220,6 +228,10 @@ struct Preferences {
     storage_migrating: bool,
     lan_state: Option<LanSyncState>,
     lan_code_hidden: bool,
+    /// 图片文字识别的计数（采集页状态行），打开窗口和收到 `OcrChanged` 时刷新。
+    ocr_status: Option<kwikpaste_core::OcrStatus>,
+    /// 系统的识别能力；只在开着识别时探测。
+    ocr_support: Option<kwikpaste_core::OcrSupport>,
     lan_name: TextInput,
     lan_max_image: NumberInputState,
     icons: gpui::Entity<KpImageCache>,
@@ -363,6 +375,7 @@ impl Preferences {
         let storage_location = core_host::core(cx).and_then(|core| core.storage_location().ok());
         let mut selects = std::collections::HashMap::new();
         let mut number_inputs = std::collections::HashMap::new();
+        let mut sliders = std::collections::HashMap::new();
         let mut setting_subscriptions = Vec::new();
         let settings_json = values::to_json(&settings);
         for tab in schema::tabs(portable) {
@@ -442,6 +455,23 @@ impl Preferences {
                             });
                             setting_subscriptions.push(subscription);
                             selects.insert(setting.id, state);
+                        }
+                        Control::Slider { min, max } => {
+                            let value = values::get_u64(&settings_json, setting.path.unwrap_or(""))
+                                .clamp(u64::from(min), u64::from(max))
+                                as u8;
+                            let state = SliderState::new(value, min, max, cx);
+                            let path = setting.path;
+                            setting_subscriptions.push(state.on_change(cx, |_, cx| cx.notify()));
+                            setting_subscriptions.push(state.on_commit(
+                                cx,
+                                move |this, value, cx| {
+                                    if let Some(path) = path {
+                                        this.update(path, json!(value), cx);
+                                    }
+                                },
+                            ));
+                            sliders.insert(setting.id, state);
                         }
                         Control::Number { min, max, .. } => {
                             let value = values::get(&settings_json, setting.path.unwrap_or(""))
@@ -540,6 +570,17 @@ impl Preferences {
                         this.lan_state = Some(core.lan_sync_state());
                         cx.notify();
                     }
+                    // 识别进度和开关变化：采集页的状态行跟着刷新。
+                    if this.tab == TabId::Capture
+                        && (matches!(event, CoreEvent::OcrChanged)
+                            || matches!(
+                                event,
+                                CoreEvent::SettingsUpdated { delta, .. }
+                                    if delta.touches("clipboard.ocr")
+                            ))
+                    {
+                        this.refresh_image_text(cx);
+                    }
                     // 停在数据概览页时，新采集、清理和分组变化都实时反映到统计上。
                     if matches!(event, CoreEvent::ClipboardReloaded) {
                         this.storage_location =
@@ -585,6 +626,7 @@ impl Preferences {
             language,
             selects,
             number_inputs,
+            sliders,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             recording: None,
@@ -593,6 +635,8 @@ impl Preferences {
             storage_migrating: false,
             lan_state,
             lan_code_hidden: false,
+            ocr_status: None,
+            ocr_support: None,
             lan_name,
             lan_max_image,
             icons,
@@ -1218,6 +1262,7 @@ impl Preferences {
                     return;
                 };
                 entity.update(cx, |this, cx| match id {
+                    "copy.sound.preview" => this.preview_copy_sound(cx),
                     "backup.export" => this.open_export(ExportKind::Backup, window, cx),
                     "backup.importHistory" => this.import_backup(window, cx),
                     "localData.cleanCache" => this.clean_resource_cache(cx),
@@ -1246,6 +1291,17 @@ impl Preferences {
                 });
             })
             .into_any_element()
+    }
+
+    /// 试听取滑块当前值，不等待异步落盘；平台层在工作线程播放，不阻塞偏好窗。
+    fn preview_copy_sound(&self, cx: &App) {
+        let volume_percent = self.sliders.get("copy.sound.volume").map_or(
+            self.settings.clipboard.feedback.copy_sound_volume.min(100),
+            |state| state.value(cx),
+        );
+        if let Some(core) = core_host::core(cx) {
+            core.play_copy_sound(volume_percent);
+        }
     }
 
     /// 拖放按当前位置移入目标行；未启用的格式仍保留在顺序中，避免开关采集类型时丢失位置。
@@ -2592,6 +2648,9 @@ impl Preferences {
                         if id == TabId::Overview {
                             this.refresh_storage_overview(cx);
                         }
+                        if id == TabId::Capture {
+                            this.refresh_image_text(cx);
+                        }
                         cx.notify();
                     })),
             );
@@ -2692,6 +2751,9 @@ impl Preferences {
         if setting.is_collapsed(&self.settings) {
             return false;
         }
+        if setting.id == "ocr.status" && !self.image_text_row_visible() {
+            return false;
+        }
         let query = self.search.value(cx);
         if query.is_empty() {
             return true;
@@ -2711,6 +2773,9 @@ impl Preferences {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if setting.id == "ocr.status" {
+            return self.render_image_text_status(first, cx);
+        }
         let title = text::setting_title(setting);
         if setting.id == "localData.dataDirectory" {
             let tokens = theme::semantic(cx);
@@ -2788,6 +2853,29 @@ impl Preferences {
                         .width(CONTROL_WIDTH)
                         .disabled(setting.is_disabled(&self.settings))
                         .accessibility_label(title.clone())
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                }
+            }
+            Control::Slider { .. } => {
+                if let Some(state) = self.sliders.get(setting.id) {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(space(3.))
+                        .child(
+                            Slider::new(state)
+                                .width(CONTROL_WIDTH)
+                                .disabled(setting.is_disabled(&self.settings))
+                                .accessibility_label(title.clone()),
+                        )
+                        .child(
+                            div()
+                                .w(rems(3.))
+                                .text_right()
+                                .child(format!("{}%", state.value(cx))),
+                        )
                         .into_any_element()
                 } else {
                     div().into_any_element()

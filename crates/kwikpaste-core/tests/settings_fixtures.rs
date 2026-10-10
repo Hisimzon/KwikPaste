@@ -79,6 +79,46 @@ fn every_released_settings_file_loads_without_fallback() {
             "{name}: {report:?}"
         );
         assert!(!report.history_degraded(), "{name}");
+        assert!(
+            !store.snapshot().clipboard.ocr.enabled,
+            "{name}: OCR must remain opt-in"
+        );
+        assert_eq!(
+            store.snapshot().clipboard.feedback.copy_sound_volume,
+            100,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn missing_copy_sound_volume_preserves_old_feedback_and_defaults_to_full_volume() {
+    for sound in [false, true] {
+        let json = format!(r#"{{"clipboard":{{"feedback":{{"copySound":{sound}}}}}}}"#);
+        let settings: Settings = serde_json::from_str(&json).unwrap();
+        let (_temp, _paths, store) = load(&json);
+        assert_eq!(settings.clipboard.feedback.copy_sound, sound);
+        assert_eq!(settings.clipboard.feedback.copy_sound_volume, 100);
+        assert_eq!(
+            store.snapshot().clipboard.feedback,
+            settings.clipboard.feedback
+        );
+        assert!(store.load_report().fallbacks.is_empty());
+    }
+    let settings: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(settings.clipboard.feedback.copy_sound_volume, 100);
+}
+
+#[test]
+fn copy_sound_volume_round_trips_as_a_camel_case_number() {
+    for volume in [0, 50, 100, 255] {
+        let mut settings = Settings::default();
+        settings.clipboard.feedback.copy_sound = true;
+        settings.clipboard.feedback.copy_sound_volume = volume;
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["clipboard"]["feedback"]["copySoundVolume"], volume);
+        let restored: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, settings);
     }
 }
 
@@ -140,6 +180,8 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
     // 夹具没有免焦点搜索开关,读取后应补上新版本默认值(默认关)。
     expected["clipboard"]["search"]["typeToSearch"] = Value::Bool(false);
+    expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
+    expected["clipboard"]["ocr"] = serde_json::json!({"enabled": false});
     // 2.x 删掉了 1.x 的更新渠道开关。
     let update = expected["update"].as_object_mut().unwrap();
     update.remove("includeBeta");

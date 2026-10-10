@@ -107,6 +107,10 @@ pub enum Control {
         max: u64,
         suffix: Option<&'static str>,
     },
+    Slider {
+        min: u8,
+        max: u8,
+    },
     Tiles(TilesKind),
     /// 要记录的内容类型：一组复选框，提交时展开成 `capture.<kind>` 五个开关。
     CaptureKinds,
@@ -133,6 +137,8 @@ pub enum Control {
     StorageOverview,
     /// 局域网同步的设备、配对与连接控制面板。
     LanSync,
+    /// 图片文字识别的进度、结果和系统能力（开关下面的一行，按状态换标题和按钮）。
+    ImageTextStatus,
     ShortcutRecorder,
 }
 
@@ -666,9 +672,22 @@ fn capture_sections() -> Vec<Section> {
                 )
                 .path("clipboard.capture.maxImageMb")
                 .keywords(&["image", "picture", "size", "limit", "mb"]),
-                Setting::new("copy.sound", Control::Switch)
-                    .path("clipboard.feedback.copySound")
-                    .keywords(&["sound", "feedback", "copy"]),
+            ],
+        },
+        Section {
+            id: "imageText",
+            settings: vec![
+                Setting::new("ocr.enabled", Control::Switch)
+                    .path("clipboard.ocr.enabled")
+                    .keywords(&["ocr", "image", "picture", "text", "recognize", "search"]),
+                Setting::new("ocr.status", Control::ImageTextStatus).keywords(&[
+                    "ocr",
+                    "image",
+                    "text",
+                    "recognize",
+                    "progress",
+                    "language",
+                ]),
             ],
         },
         Section {
@@ -804,6 +823,25 @@ fn paste_sections() -> Vec<Section> {
                 Setting::new("copy.plainDefault", Control::Switch)
                     .path("clipboard.content.copyPlain")
                     .keywords(&["copy", "plain", "format"]),
+            ],
+        },
+        Section {
+            id: "sound",
+            settings: vec![
+                Setting::new("copy.sound", Control::Switch)
+                    .path("clipboard.feedback.copySound")
+                    .keywords(&["sound", "feedback", "copy", "音效", "提示音", "声音"]),
+                Setting::new("copy.sound.volume", Control::Slider { min: 0, max: 100 })
+                    .path("clipboard.feedback.copySoundVolume")
+                    .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
+                    .child_of("copy.sound", |settings| {
+                        !settings.clipboard.feedback.copy_sound
+                    }),
+                Setting::new("copy.sound.preview", Control::Action { danger: false })
+                    .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
+                    .child_of("copy.sound", |settings| {
+                        !settings.clipboard.feedback.copy_sound
+                    }),
             ],
         },
     ]
@@ -1047,6 +1085,66 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn copy_sound_rows_live_on_paste_after_format_and_collapse_with_the_switch() {
+        assert!(
+            capture_sections()
+                .iter()
+                .flat_map(|section| &section.settings)
+                .all(|setting| !setting.id.starts_with("copy.sound"))
+        );
+        let sections = paste_sections();
+        let sound_index = sections
+            .iter()
+            .position(|section| section.id == "sound")
+            .unwrap();
+        assert_eq!(sections[sound_index - 1].id, "format");
+        let sound = &sections[sound_index];
+        assert_eq!(
+            sound
+                .settings
+                .iter()
+                .map(|setting| setting.id)
+                .collect::<Vec<_>>(),
+            ["copy.sound", "copy.sound.volume", "copy.sound.preview"]
+        );
+        assert_eq!(
+            sound.settings[1].path,
+            Some("clipboard.feedback.copySoundVolume")
+        );
+        assert!(matches!(
+            sound.settings[1].control,
+            Control::Slider { min: 0, max: 100 }
+        ));
+        let mut settings = Settings::default();
+        assert!(!sound.settings[0].is_collapsed(&settings));
+        for row in &sound.settings[1..] {
+            assert_eq!(row.parent, Some("copy.sound"));
+            assert!(row.is_collapsed(&settings));
+        }
+        settings.clipboard.feedback.copy_sound = true;
+        assert!(
+            sound
+                .settings
+                .iter()
+                .all(|row| !row.is_collapsed(&settings))
+        );
+        for keyword in ["音效", "提示音", "声音"] {
+            assert!(super::super::view::search_matches(
+                keyword,
+                "",
+                sound.settings[0].keywords
+            ));
+        }
+        for keyword in ["音量", "音效", "试听", "volume", "sound", "preview"] {
+            assert!(super::super::view::search_matches(
+                keyword,
+                "",
+                sound.settings[1].keywords
+            ));
         }
     }
 }

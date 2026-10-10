@@ -25,7 +25,7 @@ use crate::{
         model::preview::{self, HEADER_HEIGHT, RectF},
         source::{Preview, PreviewContentMetrics, PreviewTextView},
         view::preview::{
-            PreviewEvent, PreviewWindow,
+            ImageTextView, PreviewEvent, PreviewWindow,
             native::{self, NativePreview},
         },
     },
@@ -63,6 +63,8 @@ pub(super) struct Previewing {
     /// 这台机器上建不了预览窗（macOS 还没做，或建窗失败）。
     unavailable: bool,
     session: Option<(Arc<str>, PreviewTrigger)>,
+    /// 正在看识别文字（而不是图片本身）的图片记录；换了记录或关上预览就回到图片。
+    image_text: Option<Arc<str>>,
     /// 每次打开、关闭都加一，晚到的结果按它作废。
     request: u64,
     hover_timer: Option<Task<()>>,
@@ -189,6 +191,7 @@ impl ClipboardList {
             }
             PreviewEvent::TextView(view) => self.switch_preview_text_view(*view, cx),
             PreviewEvent::Words { paste } => self.use_preview_words(*paste, cx),
+            PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
         }
     }
 
@@ -325,17 +328,45 @@ impl ClipboardList {
         let request = self.previewing.request;
         self.previewing.session = Some((id.clone(), trigger));
         self.previewing.hover_timer = None;
-        let future = self.source.preview(id.clone());
+        if self.previewing.image_text.as_ref() != Some(&id) {
+            self.previewing.image_text = None;
+        }
+        // 识别出文字的图片给「图片 / 文字」切换；看文字时取识别文字的文本预览，取不到就退回图片。
+        let has_text = self.model.find(&id).is_some_and(|item| item.has_image_text);
+        let mut image_text = has_text.then(|| {
+            if self.previewing.image_text.is_some() {
+                ImageTextView::Text
+            } else {
+                ImageTextView::Image
+            }
+        });
+        let (future, fallback) = if image_text == Some(ImageTextView::Text) {
+            (
+                self.source.image_text_preview(id.clone()),
+                Some(self.source.preview(id.clone())),
+            )
+        } else {
+            (self.source.preview(id.clone()), None)
+        };
         let window = self.window;
 
         cx.spawn(async move |list, cx| {
-            let preview = match future.await {
+            let mut preview = match future.await {
                 Ok(preview) => preview,
                 Err(err) => {
                     log::warn!("preview of {id} is unavailable: {err:#}");
                     None
                 }
             };
+            if preview.is_none()
+                && let Some(fallback) = fallback
+            {
+                image_text = Some(ImageTextView::Image);
+                preview = fallback.await.unwrap_or_else(|err| {
+                    log::warn!("preview of {id} is unavailable: {err:#}");
+                    None
+                });
+            }
             // 指针刚换到这张卡片时，它的位置要等面板画完下一帧才记下；数据往往先到。
             let anchored = list
                 .read_with(cx, |list, _| list.previewing.anchor(&id).is_some())
@@ -349,7 +380,10 @@ impl ClipboardList {
                         if list.previewing.request != request {
                             return None;
                         }
-                        list.place_preview(&id, trigger, preview, window, cx)
+                        if image_text != Some(ImageTextView::Text) {
+                            list.previewing.image_text = None;
+                        }
+                        list.place_preview(&id, trigger, preview, image_text, window, cx)
                     })
                     .ok()
                     .flatten()
@@ -369,6 +403,7 @@ impl ClipboardList {
         self.previewing.hide_timer = None;
         self.previewing.follow_timer = None;
         self.previewing.pointer_inside = false;
+        self.previewing.image_text = None;
         self.previewing.request += 1;
         let was_open = self.previewing.session.take().is_some();
         if !was_open {
@@ -441,7 +476,11 @@ impl ClipboardList {
         let Some((id, indices)) = self.preview_words(cx) else {
             return;
         };
-        let fragment = ClipboardFragment::Words { indices };
+        let fragment = if self.previewing.image_text.as_ref() == Some(&id) {
+            ClipboardFragment::ImageWords { indices }
+        } else {
+            ClipboardFragment::Words { indices }
+        };
         if paste {
             log::info!("preview words paste requested for {id}");
             self.close_preview(cx);
@@ -502,12 +541,22 @@ impl ClipboardList {
         .detach();
     }
 
+    /// 图片在「图片」和「图中文字」之间切换：按选中的一面重开当前预览（尺寸也跟着变）。
+    fn switch_preview_image_text(&mut self, view: ImageTextView, cx: &mut Context<Self>) {
+        let Some((id, trigger)) = self.previewing.session.clone() else {
+            return;
+        };
+        self.previewing.image_text = (view == ImageTextView::Text).then(|| id.clone());
+        self.open_preview(id, trigger, cx);
+    }
+
     /// 按卡片位置算出预览窗在屏幕上的位置，换好内容，返回要显示的原生窗口与位置。
     fn place_preview(
         &mut self,
         id: &Arc<str>,
         trigger: PreviewTrigger,
         preview: Option<Preview>,
+        image_text: Option<ImageTextView>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(Rc<NativePreview>, kwikpaste_os::geometry::Rect, u32)> {
@@ -554,7 +603,7 @@ impl ClipboardList {
         let text_view = self.settings.clipboard.preview.text_view;
         let preview_window = self.previewing.window.as_ref()?;
         preview_window.panel.update(cx, |panel, cx| {
-            panel.set(preview, rows, text_view, image_box, cx)
+            panel.set(preview, rows, text_view, image_box, image_text, cx)
         });
 
         Some((

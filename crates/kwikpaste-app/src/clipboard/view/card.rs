@@ -8,10 +8,10 @@ use std::{rc::Rc, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Local};
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Div, ElementId, Image, ImageSource,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, RenderImage,
-    SharedString, StatefulInteractiveElement as _, Styled, Window, div, img,
-    prelude::FluentBuilder as _, pulsating_between, relative,
+    Animation, AnimationExt as _, AnyElement, App, Div, ElementId, HighlightStyle, Image,
+    ImageSource, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    RenderImage, SharedString, StatefulInteractiveElement as _, Styled, StyledText, Window, div,
+    img, prelude::FluentBuilder as _, pulsating_between, relative,
 };
 use kwikpaste_ui::{
     Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _,
@@ -20,7 +20,9 @@ use kwikpaste_ui::{
 
 use crate::{
     clipboard::model::{
-        item::{FileRow, FilesPreview, ItemKind, ListItem, Platform, SubKind, TypeKey},
+        item::{
+            FileRow, FilesPreview, ItemKind, ListItem, Platform, SubKind, TextSnippet, TypeKey,
+        },
         layout::{ImageBox, LayoutSpec, predict_image_box},
         time_label::time_label,
     },
@@ -550,7 +552,19 @@ fn content(
 
     match item.kind {
         ItemKind::Text => text_body(env, item, on_link),
-        ItemKind::Image => image_body(env, item, index, image),
+        ItemKind::Image => {
+            let body = image_body(env, item, index, image);
+            match &item.image_text_snippet {
+                Some(snippet) => div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(1.5))
+                    .child(body)
+                    .child(image_text_line(env, snippet))
+                    .into_any_element(),
+                None => body,
+            }
+        }
         ItemKind::Files if item.files_preview_kind == Some(FilesPreview::ImagePreview) => {
             image_body(env, item, index, image)
         }
@@ -725,6 +739,46 @@ fn image_body(
             div().flex().child(skeleton).into_any_element()
         }
     }
+}
+
+/// 搜索靠图片里的文字命中时，缩略图下面的一行命中片段，关键词用强调色标出。
+fn image_text_line(env: &CardEnv<'_>, snippet: &TextSnippet) -> AnyElement {
+    let tokens = env.tokens;
+    let text = SharedString::from(snippet.text.clone());
+    let matched = snippet.matched.clone();
+    let highlight = (!matched.is_empty()
+        && matched.end <= text.len()
+        && text.is_char_boundary(matched.start)
+        && text.is_char_boundary(matched.end))
+    .then(|| {
+        (
+            matched,
+            HighlightStyle {
+                color: Some(tokens.accent.text),
+                ..HighlightStyle::default()
+            },
+        )
+    });
+
+    div()
+        .flex()
+        .items_center()
+        .gap(space(1.5))
+        .min_w_0()
+        .kp_text(TextSize::Xs)
+        .text_color(tokens.text.secondary)
+        .child(
+            Icon::new(IconName::ScanText)
+                .size(space(3.))
+                .color(tokens.text.muted),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .child(StyledText::new(text).with_highlights(highlight)),
+        )
+        .into_any_element()
 }
 
 fn files_body(env: &CardEnv<'_>, rows: &[FileRow], file_icons: &[Option<Visual>]) -> AnyElement {

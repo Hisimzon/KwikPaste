@@ -40,8 +40,8 @@ impl PlatformServices for NativeServices {
         native::app_from_id(id)
     }
 
-    fn play_copy_sound(&self) {
-        crate::sound::play_copy();
+    fn play_copy_sound(&self, volume_percent: u8) {
+        crate::sound::play_copy(volume_percent);
     }
 }
 

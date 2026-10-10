@@ -39,6 +39,7 @@ kwikpaste-updater.workspace = true
 log.workspace = true
 raw-window-handle.workspace = true
 semver.workspace = true
+tempfile.workspace = true
 # `rc`：列表条目的字符串用 `Arc<str>`，渲染时零拷贝转成 `SharedString`。
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true

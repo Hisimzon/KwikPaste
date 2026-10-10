@@ -18,7 +18,7 @@ use crate::clipboard::{
     ImageStore, WatcherPause, WritebackGuard,
 };
 use crate::db::items::UpsertResult;
-use crate::db::models::{ClipboardApp, ClipboardItem, ClipboardItemQuery};
+use crate::db::models::{ClipboardApp, ClipboardItem, ClipboardItemQuery, ClipboardKind};
 use crate::db::{self, DatabaseState};
 use crate::env::{AppInfo, CoreOptions};
 use crate::error::Result;
@@ -56,6 +56,7 @@ pub(crate) struct CoreInner {
     pub(crate) file_icons: FileIconStore,
     pub(crate) window_state: WindowStateStore,
     pub(crate) cleanup: clipboard::cleanup::CleanupScheduler,
+    pub(crate) ocr: crate::ocr::Scheduler,
     /// 来源应用缓存，监听与偏好页共用。
     pub(crate) apps: AppsRegistry,
     /// 局域网同步：已配对设备随 core 读入，网络部分由宿主启用。
@@ -107,6 +108,7 @@ impl Core {
                 file_icons,
                 window_state,
                 cleanup: Default::default(),
+                ocr: Default::default(),
                 apps: AppsRegistry::default(),
                 sync: crate::sync::LanSyncService::new(Arc::new(peers)),
                 watcher_pause: WatcherPause::default(),
@@ -119,6 +121,8 @@ impl Core {
             });
 
             inner.sync.bind(Arc::downgrade(&inner));
+            inner.ocr.bind(Arc::downgrade(&inner));
+            inner.ocr.startup().await;
             if let Err(err) = inner.apps.load_from_db(&inner).await {
                 log::warn!("apps registry: initial DB load failed: {err}");
             }
@@ -145,6 +149,7 @@ impl Core {
         drop(lock(&self.0.watcher).take());
         let core = self.clone();
         self.hop(async move {
+            core.0.ocr.shutdown().await;
             crate::sync::shutdown(&core.0).await;
             if let Some(task) = core.0.cleanup_task().take() {
                 task.abort();
@@ -229,8 +234,8 @@ impl Core {
     }
 
     /// 播放一次复制提示音（偏好页试听）。
-    pub fn play_copy_sound(&self) {
-        self.0.platform().play_copy_sound();
+    pub fn play_copy_sound(&self, volume_percent: u8) {
+        self.0.platform().play_copy_sound(volume_percent.min(100));
     }
 
     pub fn info(&self) -> &AppInfo {
@@ -275,6 +280,9 @@ impl Core {
             if delta.touches("sync") {
                 crate::sync::settings_changed(&core.0);
             }
+            if delta.touches("clipboard.ocr") {
+                core.0.ocr.settings_changed();
+            }
             core.emit_settings(&next, delta);
             Ok(next)
         })
@@ -286,6 +294,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let next = core.0.settings.reset()?;
+            core.0.ocr.settings_changed();
             clipboard::cleanup::request(&core.0);
             crate::sync::settings_changed(&core.0);
             core.emit_settings(&next, SettingsDelta::replaced());
@@ -417,12 +426,16 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let pool = core.0.db.pool().await;
-            let (rows, total) = db::items::query_items_page(&pool, &query).await?;
+            let mut query = query;
             let clipboard = core.0.settings.snapshot().clipboard;
+            query.ocr_enabled = clipboard.ocr.enabled;
+            let (rows, total) = db::items::query_items_page(&pool, &query).await?;
             let ctx = core.list_context(&pool, &clipboard);
             let mut list = Vec::with_capacity(rows.len());
             for row in rows {
-                list.push(presenter::present_list_item(&ctx, row).await?);
+                let mut view = presenter::present_list_item(&ctx, row).await?;
+                crate::ocr::attach_view(&pool, &mut view, &query).await?;
+                list.push(view);
             }
             let has_more = query.offset + (list.len() as i64) < total;
 
@@ -446,8 +459,13 @@ impl Core {
                 return Ok(None);
             };
             let clipboard = core.0.settings.snapshot().clipboard;
-            let view =
+            let mut view =
                 presenter::present_list_item(&core.list_context(&pool, &clipboard), item).await?;
+            let query = ClipboardItemQuery {
+                ocr_enabled: clipboard.ocr.enabled,
+                ..Default::default()
+            };
+            crate::ocr::attach_view(&pool, &mut view, &query).await?;
             Ok(Some(view))
         })
         .await
@@ -478,6 +496,39 @@ impl Core {
             )
             .await?;
             Ok(Some(payload))
+        })
+        .await
+    }
+
+    /// 图片识别文本的预览，形状与文本记录一致，可直接使用原文和选词视图。
+    /// OCR 关闭、记录不是图片或没有已完成的非空识别文本时返回 `None`。
+    pub async fn image_text_preview(
+        &self,
+        id: &str,
+    ) -> Result<Option<(ClipboardPreviewPayload, PreviewContentMetrics)>> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let clipboard = core.0.settings.snapshot().clipboard;
+            if !clipboard.ocr.enabled {
+                return Ok(None);
+            }
+            let pool = core.0.db.pool().await;
+            let Some(item) = db::items::find_item_by_id(&pool, &id).await? else {
+                return Ok(None);
+            };
+            if item.kind != ClipboardKind::Image {
+                return Ok(None);
+            }
+            let Some(text) = core.image_text(&id).await?.filter(|text| !text.is_empty()) else {
+                return Ok(None);
+            };
+
+            Ok(Some(presenter::build_image_text_preview(
+                &item,
+                text,
+                clipboard.preview.text_view,
+            )))
         })
         .await
     }

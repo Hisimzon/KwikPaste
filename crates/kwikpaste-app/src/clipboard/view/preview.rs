@@ -8,9 +8,9 @@
 use std::{ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, EventEmitter,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Div, Entity, EventEmitter,
     FontWeight, ImageSource, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ParentElement as _, Render, ScrollHandle, SharedString,
+    MouseMoveEvent, ParentElement as _, Render, ScrollHandle, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, Window, WindowBounds,
     WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
     uniform_list,
@@ -43,6 +43,15 @@ pub enum PreviewEvent {
     TextView(PreviewTextView),
     /// 选词后点了复制或粘贴。
     Words { paste: bool },
+    /// 图片记录在「图片」和「图中文字」之间切换。
+    ImageText(ImageTextView),
+}
+
+/// 有识别文字的图片记录正在看的那一面。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageTextView {
+    Image,
+    Text,
 }
 
 /// 预览窗的内容视图。
@@ -55,6 +64,8 @@ pub struct PreviewPanel {
     selection: WordSelection,
     /// 图片在面板里的显示尺寸（逻辑像素），由列表按面板尺寸算好。
     image_box: Option<(f32, f32)>,
+    /// 图片有识别文字时的「图片 / 文字」切换；`Text` 时 `preview` 是识别文字的文本预览。
+    image_text: Option<ImageTextView>,
     images: Entity<KpImageCache>,
     /// 预览文件图标的独立有界缓存；关闭预览时不清空，避免再次打开时闪烁。
     icons: Entity<KpImageCache>,
@@ -78,6 +89,7 @@ impl PreviewPanel {
             rows: Rc::default(),
             selection: WordSelection::default(),
             image_box: None,
+            image_text: None,
             images,
             icons,
             text_scroll: UniformListScrollHandle::new(),
@@ -92,12 +104,14 @@ impl PreviewPanel {
         rows: Vec<Range<usize>>,
         text_view: PreviewTextView,
         image_box: Option<(f32, f32)>,
+        image_text: Option<ImageTextView>,
         cx: &mut Context<Self>,
     ) {
-        let same_item = matches!(
-            (&self.preview, &preview),
-            (Some(old), Some(new)) if old.payload.id == new.payload.id
-        );
+        let same_item = self.image_text == image_text
+            && matches!(
+                (&self.preview, &preview),
+                (Some(old), Some(new)) if old.payload.id == new.payload.id
+            );
         if !same_item {
             self.selection.clear();
             self.scroll.set_offset(point(px(0.), px(0.)));
@@ -109,6 +123,7 @@ impl PreviewPanel {
         self.preview = preview;
         self.text_view = text_view;
         self.image_box = image_box;
+        self.image_text = image_text;
         cx.notify();
     }
 
@@ -182,6 +197,20 @@ impl PreviewPanel {
                         SharedString::from(format!("{dimensions}{size}")),
                     )
                 }
+                ClipboardKind::Text if self.image_text == Some(ImageTextView::Text) => {
+                    let units = payload
+                        .text
+                        .as_deref()
+                        .map_or(0, |text| text.encode_utf16().count());
+                    (
+                        t("preview:title.imageText"),
+                        t_count(
+                            "preview:meta.characters",
+                            i64::try_from(units).unwrap_or(i64::MAX),
+                            &[],
+                        ),
+                    )
+                }
                 ClipboardKind::Text => {
                     let count = payload.size.unwrap_or_else(|| {
                         let units = payload
@@ -234,19 +263,25 @@ impl PreviewPanel {
                         .flex_none()
                         .items_center()
                         .gap(space((8.) / 4.))
+                        .when_some(self.image_text, |row, current| {
+                            row.child(self.image_text_switch(current, cx))
+                        })
                         .when(self.can_pick_words(), |row| row.child(self.view_switch(cx)))
-                        .child(
-                            div()
-                                .flex()
-                                .h(space((24.) / 4.))
-                                .items_center()
-                                .rounded(radius::SM)
-                                .bg(tokens.fill.subtle)
-                                .px(space((8.) / 4.))
-                                .kp_text(TextSize::Xs)
-                                .text_color(tokens.text.secondary)
-                                .child(t(type_key(payload.kind, payload.sub_kind))),
-                        ),
+                        // 有「图片 / 文字」切换时它已经说明了类型，不再放类型标签。
+                        .when(self.image_text.is_none(), |row| {
+                            row.child(
+                                div()
+                                    .flex()
+                                    .h(space((24.) / 4.))
+                                    .items_center()
+                                    .rounded(radius::SM)
+                                    .bg(tokens.fill.subtle)
+                                    .px(space((8.) / 4.))
+                                    .kp_text(TextSize::Xs)
+                                    .text_color(tokens.text.secondary)
+                                    .child(t(type_key(payload.kind, payload.sub_kind))),
+                            )
+                        }),
                 )
             })
             .into_any_element()
@@ -254,55 +289,46 @@ impl PreviewPanel {
 
     /// 文本方式切换（1.x antd `Segmented size="small"`）。
     fn view_switch(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tokens = theme::semantic(cx);
-        // 选中段在亮色里是浮起的白块（带一层极淡的影），暗色里是亮一档的填充。
-        let thumb = match theme::appearance(cx) {
-            theme::Appearance::Light => tokens.surface.panel,
-            theme::Appearance::Dark => tokens.fill.default,
-        };
         let segment = |view: PreviewTextView, key: &str, cx: &mut Context<Self>| {
-            let selected = self.text_view == view;
-            div()
-                .id(SharedString::from(format!("preview-view-{key}")))
-                .flex()
-                .items_center()
-                .h(space((20.) / 4.))
-                .px(space((8.) / 4.))
-                .rounded(radius::XS)
-                .kp_text(TextSize::Xs)
-                .cursor_pointer()
-                .map(|segment| {
-                    if selected {
-                        segment
-                            .bg(thumb)
-                            .shadow(tokens.shadow.card.to_vec())
-                            .text_color(tokens.text.primary)
-                    } else {
-                        segment
-                            .text_color(tokens.text.secondary)
-                            .hover(|style| style.text_color(tokens.text.primary))
-                    }
-                })
-                .child(t(key))
-                .on_click(cx.listener(move |panel, _, _, cx| {
+            segment(key, self.text_view == view, cx).on_click(cx.listener(
+                move |panel, _, _, cx| {
                     if panel.text_view != view {
                         panel.text_view = view;
                         panel.selection.clear();
                         cx.emit(PreviewEvent::TextView(view));
                         cx.notify();
                     }
-                }))
+                },
+            ))
         };
 
-        div()
-            .flex()
-            .gap(space((2.) / 4.))
-            .p(space((2.) / 4.))
-            .rounded(radius::SM)
-            .bg(tokens.fill.subtle)
-            .child(segment(PreviewTextView::Plain, "preview:view.plain", cx))
-            .child(segment(PreviewTextView::Words, "preview:view.words", cx))
-            .into_any_element()
+        segmented(
+            [
+                segment(PreviewTextView::Plain, "preview:view.plain", cx),
+                segment(PreviewTextView::Words, "preview:view.words", cx),
+            ],
+            cx,
+        )
+    }
+
+    /// 「图片 / 文字」切换：列表按选中的一面重新取内容、重排预览窗。
+    fn image_text_switch(&self, current: ImageTextView, cx: &mut Context<Self>) -> AnyElement {
+        let segment = |view: ImageTextView, key: &str, cx: &mut Context<Self>| {
+            segment(key, current == view, cx).on_click(cx.listener(move |panel, _, _, cx| {
+                if panel.image_text != Some(view) {
+                    panel.selection.clear();
+                    cx.emit(PreviewEvent::ImageText(view));
+                }
+            }))
+        };
+
+        segmented(
+            [
+                segment(ImageTextView::Image, "preview:view.image", cx),
+                segment(ImageTextView::Text, "preview:view.text", cx),
+            ],
+            cx,
+        )
     }
 
     fn empty(key: &str, cx: &App) -> AnyElement {
@@ -743,6 +769,52 @@ impl PreviewPanel {
 }
 
 /// 类型标签的文案 key（1.x `clipboard:types.{subKind ?? kind}`）。
+/// 头部小号分段切换里的一段：选中段在亮色里是浮起的白块（带一层极淡的影），暗色里是亮一档的填充。
+fn segment(key: &str, selected: bool, cx: &App) -> Stateful<Div> {
+    let tokens = theme::semantic(cx);
+    let thumb = match theme::appearance(cx) {
+        theme::Appearance::Light => tokens.surface.panel,
+        theme::Appearance::Dark => tokens.fill.default,
+    };
+
+    div()
+        .id(SharedString::from(format!("preview-view-{key}")))
+        .flex()
+        .items_center()
+        .h(space((20.) / 4.))
+        .px(space((8.) / 4.))
+        .rounded(radius::XS)
+        .kp_text(TextSize::Xs)
+        .cursor_pointer()
+        .map(|segment| {
+            if selected {
+                segment
+                    .bg(thumb)
+                    .shadow(tokens.shadow.card.to_vec())
+                    .text_color(tokens.text.primary)
+            } else {
+                segment
+                    .text_color(tokens.text.secondary)
+                    .hover(|style| style.text_color(tokens.text.primary))
+            }
+        })
+        .child(t(key))
+}
+
+/// 分段切换的底框（1.x antd `Segmented size="small"`）。
+fn segmented(segments: impl IntoIterator<Item = Stateful<Div>>, cx: &App) -> AnyElement {
+    let tokens = theme::semantic(cx);
+
+    div()
+        .flex()
+        .gap(space((2.) / 4.))
+        .p(space((2.) / 4.))
+        .rounded(radius::SM)
+        .bg(tokens.fill.subtle)
+        .children(segments)
+        .into_any_element()
+}
+
 fn type_key(kind: ClipboardKind, sub_kind: Option<ClipboardSubKind>) -> &'static str {
     match (sub_kind, kind) {
         (Some(ClipboardSubKind::Rtf), _) => "clipboard:types.rtf",

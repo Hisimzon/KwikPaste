@@ -205,6 +205,7 @@ pub(crate) async fn run_now(core: &CoreInner) -> Result<CleanupReport> {
         pending.last_storage_check = Some(Instant::now());
     }
 
+    let _ocr = core.ocr.suspend().await;
     let _running = core.cleanup.running.lock().await;
     let paused = core.settings.cleanup_paused();
     let (report, storage) = execute(core, PassScope::FULL, false).await?;
@@ -367,6 +368,7 @@ impl CleanupScheduler {
 /// 后台跑一轮到期的清理；失败只记日志，下一轮再试。
 pub(crate) async fn run_due(core: &CoreInner) {
     let scope = core.cleanup.take_due();
+    let _ocr = core.ocr.suspend().await;
     let _running = core.cleanup.running.lock().await;
     let paused = core.settings.cleanup_paused();
 

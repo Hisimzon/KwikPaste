@@ -100,6 +100,11 @@ pub trait ClipboardSource: Send + Sync + 'static {
     /// 写回剪贴板（不粘贴）。返回设置是否要求随后隐藏窗口。
     fn copy(&self, id: Arc<str>, plain: bool) -> BoxFuture<'static, anyhow::Result<bool>>;
 
+    /// 把图片识别出的文字写回剪贴板；夹具没有识别文字，真实数据源转给 core。
+    fn copy_image_text(&self, _id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        Box::pin(async { anyhow::bail!("image text is unavailable for this source") })
+    }
+
     /// 翻转收藏，返回新状态。
     fn toggle_favorite(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>>;
 
@@ -170,6 +175,15 @@ pub trait ClipboardSource: Send + Sync + 'static {
 
     /// 预览窗的数据与内容度量；记录已经不在时为 `None`。
     fn preview(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<Option<Preview>>>;
+
+    /// 图片识别出的文字按文本记录的样子给预览窗（纯文本 / 选词视图）；没有识别文字时为 `None`。
+    /// 夹具没有识别文字。
+    fn image_text_preview(
+        &self,
+        _id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<Option<Preview>>> {
+        Box::pin(async { Ok(None) })
+    }
 
     /// 改预览文本的展示方式（设置 `clipboard.preview.textView`）。
     fn set_preview_text_view(

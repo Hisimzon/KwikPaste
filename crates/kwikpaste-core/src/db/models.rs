@@ -134,6 +134,9 @@ pub enum ClipboardItemSort {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ClipboardItemQuery {
+    /// 宿主调用 Core 查询时由设置快照覆盖，不接受外部 JSON 控制。
+    #[serde(skip)]
+    pub ocr_enabled: bool,
     pub kind: Option<ClipboardKind>,
     pub group_id: Option<String>,
     pub favorite: Option<bool>,
@@ -161,6 +164,7 @@ pub enum ClipboardGroupFilter {
 impl Default for ClipboardItemQuery {
     fn default() -> Self {
         Self {
+            ocr_enabled: false,
             kind: None,
             group_id: None,
             favorite: None,

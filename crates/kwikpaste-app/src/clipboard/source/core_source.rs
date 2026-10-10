@@ -25,7 +25,10 @@ use super::{
 use crate::clipboard::model::{
     actions::OpenTarget,
     filter::ListFilter,
-    item::{FileRow, FilesPreview, ItemAction, ItemKind, ItemRef, ListItem, Platform, SubKind},
+    item::{
+        FileRow, FilesPreview, ItemAction, ItemKind, ItemRef, ListItem, Platform, SubKind,
+        TextSnippet,
+    },
     layout::ImageBox,
     list_model::Page,
 };
@@ -163,6 +166,11 @@ impl ClipboardSource for CoreSource {
         let core = self.core.clone();
 
         async move { Ok(core.copy_item(&id, plain).await?.hide_window) }.boxed()
+    }
+
+    fn copy_image_text(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        let core = self.core.clone();
+        async move { Ok(core.copy_image_text(&id).await?.hide_window) }.boxed()
     }
 
     fn toggle_favorite(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
@@ -329,6 +337,21 @@ impl ClipboardSource for CoreSource {
                 futures::try_join!(core.preview_payload(&id), core.preview_metrics(&id))?;
             Ok(payload
                 .zip(metrics)
+                .map(|(payload, metrics)| Preview { payload, metrics }))
+        }
+        .boxed()
+    }
+
+    fn image_text_preview(
+        &self,
+        id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<Option<Preview>>> {
+        let core = self.core.clone();
+
+        async move {
+            Ok(core
+                .image_text_preview(&id)
+                .await?
                 .map(|(payload, metrics)| Preview { payload, metrics }))
         }
         .boxed()
@@ -508,6 +531,11 @@ impl From<ClipboardItemView> for ListItem {
                 width: size.width as f32,
                 height: size.height as f32,
             }),
+            has_image_text: view.has_image_text,
+            image_text_snippet: view.image_text_snippet.map(|snippet| TextSnippet {
+                text: shared(snippet.text),
+                matched: snippet.matched,
+            }),
         }
     }
 }
@@ -535,6 +563,7 @@ impl From<ClipboardAction> for ItemAction {
             ClipboardAction::PasteAsPath => Self::PasteAsPath,
             ClipboardAction::Copy => Self::Copy,
             ClipboardAction::SaveImage => Self::SaveImage,
+            ClipboardAction::CopyImageText => Self::CopyImageText,
             ClipboardAction::SplitWords => Self::SplitWords,
             ClipboardAction::OpenLink => Self::OpenLink,
             ClipboardAction::SendEmail => Self::SendEmail,

@@ -60,6 +60,7 @@ pub enum ItemAction {
     PasteAsPath,
     Copy,
     SaveImage,
+    CopyImageText,
     SplitWords,
     OpenLink,
     SendEmail,
@@ -156,6 +157,19 @@ pub struct ListItem {
     /// 夹具没有它，视图按同一公式自己预测（[`super::layout::predict_image_box`]）。
     #[serde(skip)]
     pub image_display: Option<ImageBox>,
+    /// 图片识别出了文字（core `ClipboardItemView::has_image_text`）：预览窗给出「图片 / 文字」切换。
+    #[serde(skip)]
+    pub has_image_text: bool,
+    /// 搜索靠图片识别文字命中时的片段（core `ClipboardItemView::image_text_snippet`）。
+    #[serde(skip)]
+    pub image_text_snippet: Option<TextSnippet>,
+}
+
+/// 识别文字里命中关键词的一小段，`matched` 是关键词在 `text` 里的字节范围（可能为空）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextSnippet {
+    pub text: Arc<str>,
+    pub matched: std::ops::Range<usize>,
 }
 
 fn default_true() -> bool {
