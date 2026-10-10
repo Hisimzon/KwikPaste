@@ -251,6 +251,8 @@ struct Preferences {
     storage_migrating: bool,
     lan_state: Option<LanSyncState>,
     lan_code_hidden: bool,
+    /// 扩展页里展开了详情的扩展 id。
+    extensions_expanded: std::collections::HashSet<String>,
     /// 图片文字识别的计数（采集页状态行），打开窗口和收到 `OcrChanged` 时刷新。
     ocr_status: Option<kwikpaste_core::OcrStatus>,
     ocr_refresh: u64,
@@ -665,6 +667,7 @@ impl Preferences {
             storage_migrating: false,
             lan_state,
             lan_code_hidden: false,
+            extensions_expanded: Default::default(),
             ocr_status: None,
             ocr_refresh: 0,
             ocr_support: None,

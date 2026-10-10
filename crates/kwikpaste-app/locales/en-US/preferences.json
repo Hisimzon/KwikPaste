@@ -80,16 +80,21 @@
     "shortcutNotSet": "Not set"
   },
   "extensions": {
+    "details": {
+      "feature": "What it does",
+      "how": "How it works",
+      "privacy": "Privacy"
+    },
     "downloading": "Downloading {{percent}}%",
-    "downloadSize": "Download size: {{size}}",
     "enable": "Enable {{name}}",
     "install": "Install",
-    "installed": "Installed {{version}}",
     "installing": "Installing…",
-    "notInstalled": "Not installed",
     "ocr": {
       "description": "Recognizes text in images for search and copying, using the system's built-in recognition.",
+      "feature": "Recognizes the text in images you copy. You can then find an image by its text, use “Copy Text in Image” from the context menu, or switch the preview to Text to pick and copy part of it.",
+      "how": "Uses the system's built-in text recognition: Windows.Media.Ocr on Windows and the Vision framework on macOS. Recognition runs in a separate background process that starts only when there are new images and exits when it is done, so it doesn't stay in memory. Supported languages depend on the language packs installed on the system.",
       "name": "Image text recognition",
+      "privacy": "Recognition happens entirely on this device. Neither images nor recognized text are uploaded.",
       "uninstallContent": "New images will no longer be recognized; recognized text is kept."
     },
     "retry": "Retry",

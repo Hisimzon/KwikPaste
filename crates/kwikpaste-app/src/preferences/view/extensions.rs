@@ -1,9 +1,13 @@
 //! 官方扩展页：沿用同步页的设置行与分组，状态由更新器宿主推送。
 
-use gpui::{App, Context, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div};
+use gpui::{
+    App, Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _,
+    radians, rems,
+};
 use kwikpaste_ui::{
-    Button, DialogSpec, KpStyled as _, Switch, form_dialog,
-    theme::{self, TextSize, space},
+    Button, DialogSpec, Icon, IconName, KpStyled as _, Switch, form_dialog,
+    theme::{self, SemanticTokens, TextSize, space},
     toast::{self, Toast},
 };
 use kwikpaste_updater::extensions::{ExtensionStatus, OperationState};
@@ -128,6 +132,10 @@ impl Preferences {
                 .on_click(move |_, window, cx| {
                     if let Some(entity) = entity.upgrade() {
                         entity.update(cx, |this, cx| {
+                            // 装好后直接展开，显示这个扩展的设置。
+                            if matches!(action, Action::Install) {
+                                this.extensions_expanded.insert(id.clone());
+                            }
                             this.run_extension_action(id.clone(), action, window, cx);
                         });
                     }
@@ -183,26 +191,57 @@ impl Preferences {
                         .text_color(tokens.text.secondary)
                         .child(metadata)
                 }));
+            let expanded = self.extensions_expanded.contains(&status.id);
+            let toggle = {
+                let id = status.id.clone();
+                cx.listener(move |this, _, _, cx| {
+                    if !this.extensions_expanded.remove(&id) {
+                        this.extensions_expanded.insert(id.clone());
+                    }
+                    cx.notify();
+                })
+            };
+            let label = div()
+                .id(SharedString::from(format!(
+                    "extension-{}-toggle",
+                    status.id
+                )))
+                .flex()
+                .items_center()
+                .gap(space(2.))
+                .flex_1()
+                .min_w_0()
+                .cursor_pointer()
+                .on_click(toggle)
+                .child(
+                    Icon::new(IconName::ChevronDown)
+                        .size(rems(1.))
+                        .color(tokens.text.muted)
+                        .when(!expanded, |icon| {
+                            icon.rotate(radians(-std::f32::consts::FRAC_PI_2))
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(space(0.5))
+                        .child(title)
+                        .child(
+                            div()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.text.muted)
+                                .child(i18n::t(&format!(
+                                    "preferences:extensions.{}.description",
+                                    status.id
+                                ))),
+                        ),
+                );
             let mut rows = vec![
                 row_frame(true, tokens)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(space(0.5))
-                            .child(title)
-                            .child(
-                                div()
-                                    .kp_text(TextSize::Xs)
-                                    .text_color(tokens.text.muted)
-                                    .child(i18n::t(&format!(
-                                        "preferences:extensions.{}.description",
-                                        status.id
-                                    ))),
-                            ),
-                    )
+                    .child(label)
                     .child(controls.flex_none())
                     .into_any_element(),
             ];
@@ -222,13 +261,17 @@ impl Preferences {
                     tokens,
                 ));
             }
-            if status.id == "ocr"
-                && status
+            // 展开后：启用中的扩展显示它的设置，没装或停用时显示功能介绍。
+            if expanded {
+                let enabled = status
                     .installed
                     .as_ref()
-                    .is_some_and(|installed| installed.enabled)
-            {
-                rows.push(self.render_image_text_status(false, cx));
+                    .is_some_and(|installed| installed.enabled);
+                if enabled && status.id == "ocr" {
+                    rows.push(self.render_image_text_status(false, cx));
+                } else {
+                    rows.push(details(&status.id, tokens));
+                }
             }
             cards.push(section_block(None, None, rows, tokens));
         }
@@ -274,6 +317,39 @@ fn status_text(status: &ExtensionStatus, auto_update: bool) -> Option<SharedStri
         .catalog
         .is_none()
         .then(|| i18n::t("preferences:extensions.unavailable"))
+}
+
+/// 展开的介绍：功能、实现方式、隐私三段，文案按扩展 id 取。
+fn details(id: &str, tokens: &SemanticTokens) -> gpui::AnyElement {
+    let parts = ["feature", "how", "privacy"].map(|part| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(space(1.))
+            .child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.text.muted)
+                    .child(i18n::t(&format!("preferences:extensions.details.{part}"))),
+            )
+            .child(
+                div()
+                    .kp_text(TextSize::Sm)
+                    .text_color(tokens.text.secondary)
+                    .child(i18n::t(&format!("preferences:extensions.{id}.{part}"))),
+            )
+    });
+    row_frame(false, tokens)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(space(3.))
+                .children(parts),
+        )
+        .into_any_element()
 }
 
 /// 版本或下载大小紧跟卡片标题，不再占用独立设置行。
