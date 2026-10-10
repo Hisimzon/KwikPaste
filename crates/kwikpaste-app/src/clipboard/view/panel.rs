@@ -75,6 +75,8 @@ pub struct ClipboardPanel {
     key_hints: bool,
     /// 上一次下发给钩子的免焦点搜索门控,变化时才重发命令。
     type_to_search_gate: bool,
+    /// 本视图已经渲染过至少一帧:只有这时 `menu_open` 去读的 dispatch tree 才有节点。
+    rendered_once: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -117,6 +119,7 @@ impl ClipboardPanel {
             group_list: Vec::new(),
             key_hints: false,
             type_to_search_gate: false,
+            rendered_once: false,
             _subscriptions: subscriptions,
         };
         panel.reload_groups(cx);
@@ -556,7 +559,7 @@ impl ClipboardPanel {
             .type_to_search
             && !pin::pinned(cx)
             && editing::target(cx).is_none()
-            && !menu_open(window)
+            && !(self.rendered_once && menu_open(window))
     }
 
     /// 重算免焦点搜索门控;变化时下发给钩子(Windows 由钩子当场决定是否吞键)。
@@ -650,6 +653,8 @@ impl Render for ClipboardPanel {
         let surface = crate::platform::material::panel_surface(cx);
         // 免焦点搜索门控按设置、固定、菜单、编辑态综合重算;变化时下发给钩子。
         self.sync_type_to_search(window, cx);
+        // 这一帧画完 dispatch tree 才有节点,下一次渲染起 `menu_open` 才是安全的。
+        self.rendered_once = true;
 
         div()
             .id("clipboard-panel")
