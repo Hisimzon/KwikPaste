@@ -66,6 +66,8 @@ pub enum IconName {
     Mail,
     /// 1.x `i-lucide:monitor`：来自 Windows 设备的同步记录。
     Monitor,
+    /// `lucide:smartphone`：来自手机微信输入法的同步记录。
+    Smartphone,
     Moon,
     /// 1.x `i-lucide:notebook-pen`：便签。
     NotebookPen,
@@ -124,6 +126,7 @@ impl IconName {
             Self::ListChecks => "lucide-list-checks.svg",
             Self::Mail => "lucide-mail.svg",
             Self::Monitor => "lucide-monitor.svg",
+            Self::Smartphone => "lucide-smartphone.svg",
             Self::NotebookPen => "lucide-notebook-pen.svg",
             Self::Pencil => "lucide-pencil.svg",
             Self::PinWindow => "lets-icons-pin.svg",
@@ -256,6 +259,7 @@ mod tests {
             IconName::PinWindow,
             IconName::Settings2,
             IconName::SettingLine,
+            IconName::Smartphone,
             IconName::SquareArrowOutUpRight,
             IconName::TextSelect,
             IconName::Trash,

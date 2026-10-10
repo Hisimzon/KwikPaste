@@ -69,24 +69,31 @@ impl Preferences {
             );
             return;
         };
-        let answer = if matches!(action, Action::Uninstall) {
-            Some(form_dialog(
-                DialogSpec::new(i18n::t("preferences:extensions.uninstallTitle"))
-                    .ok_text(i18n::t("preferences:extensions.uninstall"))
-                    .cancel_text(i18n::t("common:actions.cancel"))
-                    .danger(),
-                |_, _| {
+        // 卸载都要确认；微信输入法同步在安装前先说明它是非官方实现。
+        let confirm = match action {
+            Action::Uninstall => Some(("uninstallTitle", "uninstallContent", "uninstall", true)),
+            Action::Install if id == "wetype" => {
+                Some(("wetype.installTitle", "installContent", "install", false))
+            }
+            _ => None,
+        };
+        let answer = confirm.map(|(title, content, ok, danger)| {
+            let content = i18n::t(&format!("preferences:extensions.{id}.{content}"));
+            let spec = DialogSpec::new(i18n::t(&format!("preferences:extensions.{title}")))
+                .ok_text(i18n::t(&format!("preferences:extensions.{ok}")))
+                .cancel_text(i18n::t("common:actions.cancel"));
+            form_dialog(
+                if danger { spec.danger() } else { spec },
+                move |_, _| {
                     div()
                         .kp_text(TextSize::Sm)
-                        .child(i18n::t("preferences:extensions.ocr.uninstallContent"))
+                        .child(content.clone())
                         .into_any_element()
                 },
                 window,
                 cx,
-            ))
-        } else {
-            None
-        };
+            )
+        });
         let entity = cx.entity().downgrade();
         window
             .spawn(cx, async move |cx| {
@@ -267,10 +274,10 @@ impl Preferences {
                     .installed
                     .as_ref()
                     .is_some_and(|installed| installed.enabled);
-                if enabled && status.id == "ocr" {
-                    rows.push(self.render_image_text_status(false, cx));
-                } else {
-                    rows.push(details(&status.id, tokens));
+                match status.id.as_str() {
+                    "ocr" if enabled => rows.push(self.render_image_text_status(false, cx)),
+                    "wetype" if enabled => rows.extend(self.render_wetype(cx)),
+                    id => rows.push(details(id, tokens)),
                 }
             }
             cards.push(section_block(None, None, rows, tokens));

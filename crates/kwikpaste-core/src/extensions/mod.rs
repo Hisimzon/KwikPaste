@@ -4,7 +4,7 @@ pub mod process;
 mod tests;
 
 use crate::{Core, CoreEvent, Result};
-pub use kwikpaste_ext_protocol::OCR_PROTOCOL;
+pub use kwikpaste_ext_protocol::{OCR_PROTOCOL, WETYPE_PROTOCOL};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -32,6 +32,7 @@ pub(crate) struct ExtensionStore {
 fn known(id: &str) -> anyhow::Result<u32> {
     match id {
         "ocr" => Ok(OCR_PROTOCOL),
+        "wetype" => Ok(WETYPE_PROTOCOL),
         _ => anyhow::bail!("unknown extension: {id}"),
     }
 }
@@ -89,6 +90,13 @@ impl ExtensionStore {
             .read()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
+    }
+
+    pub(crate) fn enabled(&self, id: &str) -> bool {
+        let installed = self.installed.read().unwrap_or_else(|p| p.into_inner());
+        installed
+            .get(id)
+            .is_some_and(|entry| entry.enabled && Some(entry.protocol) == known(id).ok())
     }
 
     pub(crate) fn resolve(&self, id: &str) -> Option<PathBuf> {
@@ -212,16 +220,34 @@ impl Core {
             (id.to_owned(), version.to_owned(), staged_path.to_owned());
         self.hop(async move {
             let _operation = core.0.extensions.operations.lock().await;
-            let _probe = core.0.ocr.probe_lock.lock().await;
-            let pause = core.0.ocr.suspend().await;
+            let _probe = if id == "ocr" {
+                Some(core.0.ocr.probe_lock.lock().await)
+            } else {
+                None
+            };
+            let pause = if id == "ocr" {
+                Some(core.0.ocr.suspend().await)
+            } else {
+                None
+            };
+            if id == "wetype" {
+                core.0.wetype.stop().await;
+            }
             let result = core
                 .0
                 .extensions
                 .install(&id, &version, protocol, &staged_path);
-            core.0.ocr.clear_support();
+            if id == "ocr" {
+                core.0.ocr.clear_support();
+            }
             drop(pause);
             core.0.events.emit(CoreEvent::ExtensionsChanged);
-            core.0.ocr.nudge();
+            if id == "ocr" {
+                core.0.ocr.nudge();
+            }
+            if id == "wetype" {
+                core.0.wetype.apply(&core.0).await;
+            }
             result.map_err(Into::into)
         })
         .await
@@ -234,12 +260,32 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let _operation = core.0.extensions.operations.lock().await;
-            let _probe = core.0.ocr.probe_lock.lock().await;
-            let pause = core.0.ocr.suspend().await;
+            let _probe = if id == "ocr" {
+                Some(core.0.ocr.probe_lock.lock().await)
+            } else {
+                None
+            };
+            let pause = if id == "ocr" {
+                Some(core.0.ocr.suspend().await)
+            } else {
+                None
+            };
+            if id == "wetype" {
+                core.0.wetype.stop().await;
+            }
             let result = core.0.extensions.uninstall(&id);
-            core.0.ocr.clear_support();
+            if id == "wetype" && result.is_ok() {
+                core.0.wetype.uninstalled();
+                core.0.events.emit(CoreEvent::WeTypeChanged);
+            }
+            if id == "ocr" {
+                core.0.ocr.clear_support();
+            }
             drop(pause);
             core.0.events.emit(CoreEvent::ExtensionsChanged);
+            if id == "wetype" {
+                core.0.wetype.apply(&core.0).await;
+            }
             result.map_err(Into::into)
         })
         .await
@@ -252,13 +298,31 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let _operation = core.0.extensions.operations.lock().await;
-            let _probe = core.0.ocr.probe_lock.lock().await;
-            let pause = core.0.ocr.suspend().await;
+            let _probe = if id == "ocr" {
+                Some(core.0.ocr.probe_lock.lock().await)
+            } else {
+                None
+            };
+            let pause = if id == "ocr" {
+                Some(core.0.ocr.suspend().await)
+            } else {
+                None
+            };
+            if id == "wetype" {
+                core.0.wetype.stop().await;
+            }
             let result = core.0.extensions.set_enabled(&id, enabled);
-            core.0.ocr.clear_support();
+            if id == "ocr" {
+                core.0.ocr.clear_support();
+            }
             drop(pause);
             core.0.events.emit(CoreEvent::ExtensionsChanged);
-            core.0.ocr.nudge();
+            if id == "ocr" {
+                core.0.ocr.nudge();
+            }
+            if id == "wetype" {
+                core.0.wetype.apply(&core.0).await;
+            }
             result.map_err(Into::into)
         })
         .await

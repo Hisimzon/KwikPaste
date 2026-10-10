@@ -29,6 +29,7 @@ const ICONS = [
   "lucide:list-checks",
   "lucide:mail",
   "lucide:monitor",
+  "lucide:smartphone",
   "lucide:notebook-pen",
   "lucide:pencil",
   "lucide:scan-text",

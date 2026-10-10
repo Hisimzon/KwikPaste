@@ -90,6 +90,11 @@ fn every_released_settings_file_loads_without_fallback() {
             100,
             "{name}"
         );
+        assert_eq!(
+            store.snapshot().extensions.wetype,
+            kwikpaste_core::settings::WeTypeSettings::default(),
+            "{name}"
+        );
     }
 }
 
@@ -181,6 +186,8 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pauseAppIds"] = Value::Array(Vec::new());
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
+    expected["extensions"] =
+        serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});
     // 2.x 删掉了 1.x 的更新渠道开关。
     let update = expected["update"].as_object_mut().unwrap();
     update.remove("includeBeta");

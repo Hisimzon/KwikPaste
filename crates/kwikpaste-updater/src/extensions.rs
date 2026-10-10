@@ -6,12 +6,12 @@ use std::time::{Duration, Instant};
 use kwikpaste_core::extensions::InstalledExtension;
 use kwikpaste_core::runtime::hop;
 use kwikpaste_core::{Core, Result};
-use kwikpaste_ext_protocol::OCR_PROTOCOL;
+use kwikpaste_ext_protocol::{OCR_PROTOCOL, WETYPE_PROTOCOL};
 use serde::{Deserialize, Serialize};
 
 use crate::{DownloadProgress, UpdaterUi, lock, other};
 
-const KNOWN: &[(&str, u32)] = &[("ocr", OCR_PROTOCOL)];
+const KNOWN: &[(&str, u32)] = &[("ocr", OCR_PROTOCOL), ("wetype", WETYPE_PROTOCOL)];
 const DAILY: Duration = Duration::from_secs(24 * 60 * 60);
 #[cfg(not(debug_assertions))]
 const ENDPOINT: &str = "https://paste.fastthree.com/api/v1/extensions";

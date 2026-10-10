@@ -19,6 +19,7 @@ pub struct Settings {
     pub shortcuts: Shortcuts,
     pub clipboard: Clipboard,
     pub sync: SyncSettings,
+    pub extensions: ExtensionSettings,
     pub onboarding: Onboarding,
     pub update: Update,
 }
@@ -937,4 +938,29 @@ pub enum UpdateFrequency {
     Daily,
     Weekly,
     Monthly,
+}
+
+/// 扩展的宿主设置，不包含身份或远程设备数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ExtensionSettings {
+    pub wetype: WeTypeSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WeTypeSettings {
+    pub send_text: bool,
+    pub send_image: bool,
+    pub write_clipboard: bool,
+}
+
+impl Default for WeTypeSettings {
+    fn default() -> Self {
+        Self {
+            send_text: true,
+            send_image: true,
+            write_clipboard: true,
+        }
+    }
 }

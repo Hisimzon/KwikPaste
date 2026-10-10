@@ -15,8 +15,10 @@ pub struct ProcessHost<Q, A> {
     pub child: ChildHandle,
     requests: Option<mpsc::SyncSender<Q>>,
     replies: Option<mpsc::Receiver<io::Result<A>>>,
+    events: Option<tokio::sync::mpsc::Receiver<io::Result<A>>>,
     reader: Option<JoinHandle<()>>,
     logger: Option<JoinHandle<()>>,
+    writer: Option<JoinHandle<()>>,
     #[cfg(target_os = "windows")]
     _job: std::os::windows::io::OwnedHandle,
 }
@@ -24,7 +26,41 @@ pub struct ProcessHost<Q, A> {
 impl<Q: Serialize + Send + 'static, A: DeserializeOwned + Send + 'static> ProcessHost<Q, A> {
     /// 启动自己的 helper；隔离策略设置失败时必须杀掉子进程而非降级。
     pub fn start(id: &str, exe: &std::path::Path) -> io::Result<Self> {
+        Self::start_mode(id, exe, &[], false, protocol::MAX_FRAME_BYTES)
+    }
+
+    pub fn sender(&self) -> io::Result<mpsc::SyncSender<Q>> {
+        self.requests
+            .clone()
+            .ok_or_else(|| io::Error::other("extension input closed"))
+    }
+
+    /// 移交常驻扩展事件接收端；停机前需丢弃它，解除管道线程的背压等待。
+    pub fn take_events(&mut self) -> io::Result<tokio::sync::mpsc::Receiver<io::Result<A>>> {
+        self.events
+            .take()
+            .ok_or_else(|| io::Error::other("extension events closed"))
+    }
+
+    /// 双向常驻模式：写入与读取独立，允许扩展主动推送事件。
+    pub fn start_duplex(
+        id: &str,
+        exe: &std::path::Path,
+        args: &[std::ffi::OsString],
+        frame_limit: usize,
+    ) -> io::Result<Self> {
+        Self::start_mode(id, exe, args, true, frame_limit)
+    }
+
+    fn start_mode(
+        id: &str,
+        exe: &std::path::Path,
+        args: &[std::ffi::OsString],
+        duplex: bool,
+        frame_limit: usize,
+    ) -> io::Result<Self> {
         let mut command = Command::new(exe);
+        command.args(args);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -88,29 +124,86 @@ impl<Q: Serialize + Send + 'static, A: DeserializeOwned + Send + 'static> Proces
                 return Err(err);
             }
         };
-        let (sender, replies) = mpsc::sync_channel(1);
-        let (requests, input) = mpsc::sync_channel::<Q>(1);
-        let reader = match std::thread::Builder::new()
-            .name("ext-pipe".into())
-            .spawn(move || {
-                let mut buffer = Vec::new();
-                while let Ok(request) = input.recv() {
-                    let response = protocol::write_frame(&mut stdin, &request, &mut buffer)
-                        .and_then(|()| protocol::read_frame(&mut stdout, &mut buffer))
-                        .and_then(|response| {
-                            response.ok_or_else(|| {
-                                io::Error::new(
-                                    io::ErrorKind::UnexpectedEof,
-                                    "extension helper closed stdout",
-                                )
-                            })
-                        });
-                    let failed = response.is_err();
-                    if sender.send(response).is_err() || failed {
-                        break;
+        let capacity = if duplex { 16 } else { 1 };
+        let (requests, input) = mpsc::sync_channel::<Q>(capacity);
+        let mut replies = None;
+        let mut events = None;
+        let mut writer = None;
+        let reader = if duplex {
+            let (sender, receiver) = tokio::sync::mpsc::channel(capacity);
+            events = Some(receiver);
+            let errors = sender.clone();
+            let writing =
+                match std::thread::Builder::new()
+                    .name("ext-writer".into())
+                    .spawn(move || {
+                        let mut buffer = Vec::new();
+                        while let Ok(command) = input.recv() {
+                            if let Err(err) = protocol::write_frame_with_limit(
+                                &mut stdin,
+                                &command,
+                                &mut buffer,
+                                frame_limit,
+                            ) {
+                                let _ = errors.blocking_send(Err(err));
+                                break;
+                            }
+                        }
+                    }) {
+                    Ok(thread) => thread,
+                    Err(err) => {
+                        kill(&child);
+                        return Err(err);
                     }
-                }
-            }) {
+                };
+            writer = Some(writing);
+            std::thread::Builder::new()
+                .name("ext-reader".into())
+                .spawn(move || {
+                    let mut buffer = Vec::new();
+                    loop {
+                        let response =
+                            protocol::read_frame_with_limit(&mut stdout, &mut buffer, frame_limit)
+                                .and_then(|value| {
+                                    value.ok_or_else(|| {
+                                        io::Error::new(
+                                            io::ErrorKind::UnexpectedEof,
+                                            "extension closed stdout",
+                                        )
+                                    })
+                                });
+                        let failed = response.is_err();
+                        if sender.blocking_send(response).is_err() || failed {
+                            break;
+                        }
+                    }
+                })
+        } else {
+            let (sender, receiver) = mpsc::sync_channel(capacity);
+            replies = Some(receiver);
+            std::thread::Builder::new()
+                .name("ext-pipe".into())
+                .spawn(move || {
+                    let mut buffer = Vec::new();
+                    while let Ok(request) = input.recv() {
+                        let response = protocol::write_frame(&mut stdin, &request, &mut buffer)
+                            .and_then(|()| protocol::read_frame(&mut stdout, &mut buffer))
+                            .and_then(|response| {
+                                response.ok_or_else(|| {
+                                    io::Error::new(
+                                        io::ErrorKind::UnexpectedEof,
+                                        "extension helper closed stdout",
+                                    )
+                                })
+                            });
+                        let failed = response.is_err();
+                        if sender.send(response).is_err() || failed {
+                            break;
+                        }
+                    }
+                })
+        };
+        let reader = match reader {
             Ok(reader) => reader,
             Err(err) => {
                 kill(&child);
@@ -120,9 +213,11 @@ impl<Q: Serialize + Send + 'static, A: DeserializeOwned + Send + 'static> Proces
         Ok(Self {
             child,
             requests: Some(requests),
-            replies: Some(replies),
+            replies,
+            events,
             reader: Some(reader),
             logger: Some(logger),
+            writer,
             #[cfg(target_os = "windows")]
             _job: job,
         })
@@ -170,6 +265,7 @@ impl<Q, A> ProcessHost<Q, A> {
         // 关闭 stdin 使正常 helper 在 EOF 上退出；异常路径仅杀自己持有的 PID。
         self.requests.take();
         self.replies.take();
+        self.events.take();
         let deadline = std::time::Instant::now() + Duration::from_millis(500);
         loop {
             let done = self
@@ -187,6 +283,9 @@ impl<Q, A> ProcessHost<Q, A> {
                     break;
                 }
             }
+        }
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
         }
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();

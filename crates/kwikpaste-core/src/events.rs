@@ -34,6 +34,8 @@ impl EventSink for NoopSink {
 #[derive(Debug, Clone)]
 pub enum CoreEvent {
     ExtensionsChanged,
+    /// 微信输入法的进程、配对、设备或错误状态变化。
+    WeTypeChanged,
     /// 图片文字识别状态变化，运行中进度最多每秒两次。
     OcrChanged,
     /// 一条记录入库或命中已有内容（1.x `clipboard://updated` 的 `{ id, kind, deduplicated }`）。

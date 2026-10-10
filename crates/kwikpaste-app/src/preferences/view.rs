@@ -54,6 +54,7 @@ use crate::{
 mod extensions;
 mod image_text;
 mod overview;
+mod wetype;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(960.), px(600.));
 
@@ -594,6 +595,9 @@ impl Preferences {
                     ) && let Some(core) = core_host::core(cx)
                     {
                         this.lan_state = Some(core.lan_sync_state());
+                        cx.notify();
+                    }
+                    if matches!(event, CoreEvent::WeTypeChanged) && this.tab == TabId::Extensions {
                         cx.notify();
                     }
                     // 扩展生命周期变化会使缓存的能力状态失效，并刷新识别状态。

@@ -22,6 +22,7 @@ name: Native CI
       - main
     paths:
       - "crates/**"
+      - "extensions/wetype/**"
       - "third_party/**"
       - "scripts/gpui/**"
       - "scripts/ci/**"
@@ -47,6 +48,7 @@ name: Native CI
       - main
     paths:
       - "crates/**"
+      - "extensions/wetype/**"
       - "third_party/**"
       - "scripts/gpui/**"
       - "scripts/ci/**"
@@ -180,6 +182,37 @@ jobs:
 
           cargo clippy --locked -p kwikpaste-updater --all-targets --features e2e-overrides -- -D warnings
           cargo test --locked -p kwikpaste-updater --features e2e-overrides
+
+  wetype:
+    name: WeType (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+      - uses: arduino/setup-protoc@v3
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+      - name: Setup NASM and Strawberry Perl
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          'C:\Program Files\NASM' >> $env:GITHUB_PATH
+          'C:\Strawberry\perl\bin' >> $env:GITHUB_PATH
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: extensions/wetype
+      - name: Format, clippy and tests
+        working-directory: extensions/wetype
+        run: |
+          cargo fmt --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked
+          exit $LASTEXITCODE
 
   core-macos:
     name: Core, OS and updater tests (macOS)

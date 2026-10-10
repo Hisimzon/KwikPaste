@@ -36,6 +36,7 @@ pub(crate) async fn persist_and_notify(
         }
     };
     crate::sync::on_local_capture(core, &item_to_write, seq);
+    crate::wetype::on_local_capture(core, &item_to_write, seq);
     let feedback = core.settings.snapshot().clipboard.feedback;
     if feedback.copy_sound {
         core.platform()

@@ -4,6 +4,64 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub const OCR_PROTOCOL: u32 = 1;
+pub const WETYPE_PROTOCOL: u32 = 1;
+pub const WETYPE_MAX_TEXT_BYTES: usize = 1024 * 1024;
+pub const WETYPE_MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WeTypeDevice {
+    pub uin: u64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "tag", deny_unknown_fields)]
+pub enum WeTypeCommand {
+    Pair {
+        code: String,
+        device_name: String,
+    },
+    Unpair,
+    SendText {
+        text: String,
+    },
+    SendImage {
+        path: String,
+    },
+    /// 单条待确认接收；宿主提交或明确跳过后才允许 SDK 推进水位线。
+    Acknowledge,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "tag", deny_unknown_fields)]
+pub enum WeTypeContent {
+    Text { text: String },
+    Image { path: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "tag", deny_unknown_fields)]
+pub enum WeTypeEvent {
+    State {
+        paired: bool,
+        self_name: String,
+        devices: Vec<WeTypeDevice>,
+        error: Option<String>,
+    },
+    PairResult {
+        ok: bool,
+        error: Option<String>,
+    },
+    Received {
+        from_uin: u64,
+        from_name: String,
+        content: WeTypeContent,
+    },
+    SendResult {
+        ok: bool,
+        error: Option<String>,
+    },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OcrSupport {
@@ -14,6 +72,8 @@ pub enum OcrSupport {
     Disabled,
 }
 
+// JSON 的控制字符最多膨胀六倍，另留出路径、设备名和事件元数据空间。
+pub const WETYPE_MAX_FRAME_BYTES: usize = WETYPE_MAX_TEXT_BYTES * 6 + 64 * 1024;
 pub const MAX_FRAME_BYTES: usize = 512 * 1024;
 pub const MAX_TEXT_CHARS: usize = 64 * 1024;
 
@@ -44,6 +104,15 @@ pub fn read_frame<T: DeserializeOwned>(
     reader: &mut impl Read,
     buffer: &mut Vec<u8>,
 ) -> io::Result<Option<T>> {
+    read_frame_with_limit(reader, buffer, MAX_FRAME_BYTES)
+}
+
+/// 同一帧格式按扩展使用不同正文上限，不改变 OCR 已有边界。
+pub fn read_frame_with_limit<T: DeserializeOwned>(
+    reader: &mut impl Read,
+    buffer: &mut Vec<u8>,
+    limit: usize,
+) -> io::Result<Option<T>> {
     let mut length = [0; 4];
     match reader.read_exact(&mut length[..1]) {
         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
@@ -51,10 +120,10 @@ pub fn read_frame<T: DeserializeOwned>(
     }
     reader.read_exact(&mut length[1..])?;
     let length = u32::from_le_bytes(length) as usize;
-    if length == 0 || length > MAX_FRAME_BYTES {
+    if length == 0 || length > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "invalid OCR frame length",
+            "invalid extension frame length",
         ));
     }
     buffer.resize(length, 0);
@@ -70,14 +139,24 @@ pub fn write_frame<T: Serialize>(
     value: &T,
     buffer: &mut Vec<u8>,
 ) -> io::Result<()> {
+    write_frame_with_limit(writer, value, buffer, MAX_FRAME_BYTES)
+}
+
+/// 共用编码器按指定上限编码，包含 JSON 转义后的长度。
+pub fn write_frame_with_limit<T: Serialize>(
+    writer: &mut impl Write,
+    value: &T,
+    buffer: &mut Vec<u8>,
+    limit: usize,
+) -> io::Result<()> {
     buffer.clear();
-    struct Limited<'a>(&'a mut Vec<u8>);
+    struct Limited<'a>(&'a mut Vec<u8>, usize);
     impl Write for Limited<'_> {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            if self.0.len().saturating_add(bytes.len()) > MAX_FRAME_BYTES {
+            if self.0.len().saturating_add(bytes.len()) > self.1 {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "OCR frame too large",
+                    "extension frame too large",
                 ));
             }
             self.0.extend_from_slice(bytes);
@@ -87,11 +166,11 @@ pub fn write_frame<T: Serialize>(
             Ok(())
         }
     }
-    serde_json::to_writer(Limited(buffer), value)?;
-    if buffer.len() > MAX_FRAME_BYTES {
+    serde_json::to_writer(Limited(buffer, limit), value)?;
+    if buffer.len() > limit || buffer.len() > u32::MAX as usize {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "OCR frame too large",
+            "extension frame too large",
         ));
     }
     writer.write_all(&(buffer.len() as u32).to_le_bytes())?;
@@ -103,6 +182,102 @@ pub fn write_frame<T: Serialize>(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    fn wetype_roundtrip<T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug>(
+        value: T,
+    ) -> io::Result<()> {
+        let mut wire = Vec::new();
+        let mut buffer = Vec::new();
+        write_frame_with_limit(&mut wire, &value, &mut buffer, WETYPE_MAX_FRAME_BYTES)?;
+        assert_eq!(
+            read_frame_with_limit::<T>(
+                &mut Cursor::new(wire),
+                &mut buffer,
+                WETYPE_MAX_FRAME_BYTES
+            )?,
+            Some(value)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wetype_commands_and_events_roundtrip() -> io::Result<()> {
+        for command in [
+            WeTypeCommand::Pair {
+                code: "123456".into(),
+                device_name: "KwikPaste · 电脑".into(),
+            },
+            WeTypeCommand::Unpair,
+            WeTypeCommand::SendText {
+                text: "中文\ntext".into(),
+            },
+            WeTypeCommand::SendImage {
+                path: "C:\\图片.png".into(),
+            },
+            WeTypeCommand::Acknowledge,
+        ] {
+            wetype_roundtrip(command)?;
+        }
+        for event in [
+            WeTypeEvent::State {
+                paired: true,
+                self_name: "KwikPaste".into(),
+                devices: vec![WeTypeDevice {
+                    uin: u64::MAX,
+                    name: "Phone".into(),
+                }],
+                error: None,
+            },
+            WeTypeEvent::PairResult {
+                ok: false,
+                error: Some("invalid code".into()),
+            },
+            WeTypeEvent::Received {
+                from_uin: 1,
+                from_name: "Phone".into(),
+                content: WeTypeContent::Text {
+                    text: "text".into(),
+                },
+            },
+            WeTypeEvent::Received {
+                from_uin: 1,
+                from_name: "Phone".into(),
+                content: WeTypeContent::Image {
+                    path: "/state/inbox/image".into(),
+                },
+            },
+            WeTypeEvent::SendResult {
+                ok: true,
+                error: None,
+            },
+        ] {
+            wetype_roundtrip(event)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wetype_full_megabyte_including_json_escapes_and_ocr_limit() -> io::Result<()> {
+        wetype_roundtrip(WeTypeCommand::SendText {
+            text: "x".repeat(WETYPE_MAX_TEXT_BYTES),
+        })?;
+        wetype_roundtrip(WeTypeCommand::SendText {
+            text: "\0".repeat(WETYPE_MAX_TEXT_BYTES),
+        })?;
+        let command = WeTypeCommand::SendText {
+            text: "x".repeat(WETYPE_MAX_TEXT_BYTES),
+        };
+        assert!(write_frame(&mut Vec::new(), &command, &mut Vec::new()).is_err());
+        assert!(
+            read_frame_with_limit::<WeTypeCommand>(
+                &mut Cursor::new((WETYPE_MAX_FRAME_BYTES as u32 + 1).to_le_bytes()),
+                &mut Vec::new(),
+                WETYPE_MAX_FRAME_BYTES
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn roundtrip_and_eof() {

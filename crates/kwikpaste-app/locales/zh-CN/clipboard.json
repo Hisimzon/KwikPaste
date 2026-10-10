@@ -91,7 +91,8 @@
     "title": "编辑备注"
   },
   "origin": {
-    "fromDevice": "来自 {{name}}"
+    "fromDevice": "来自 {{name}}",
+    "fromWeType": "来自 微信输入法 · {{name}}"
   },
   "quickActions": {
     "copy": "复制",

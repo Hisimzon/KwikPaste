@@ -17,6 +17,12 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "time"] }
 wx-ime-sdk = { git = "https://github.com/mkdir700/wx-ime-sdk", rev = "1ec70393cc9524c6c341cf768f090b0176586f72", features = ["vendored-openssl"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 panic = "abort"
 lto = true

@@ -675,7 +675,9 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "kwikpaste-ext-protocol",
+ "libc",
  "serde_json",
+ "tempfile",
  "tokio",
  "wx-ime-sdk",
 ]
