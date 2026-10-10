@@ -350,6 +350,8 @@ pub async fn update_item_note(pool: &SqlitePool, id: &str, note: Option<&str>) -
         .execute(pool)
         .await
         .context("failed to update clipboard item note")?;
+    // 备注是拼音索引的输入之一,异步重算。
+    super::pinyin::queue_update(pool, id);
     Ok(())
 }
 
@@ -524,7 +526,7 @@ pub(crate) fn absorb_deleted(outcome: &mut CleanupOutcome, rows: Vec<DeletedRow>
     }
 }
 
-/// 清空记录，返回删除行数与被删图片文件名；未显式删除的收藏 / 置顶项会保留。
+/// 清空记录,返回删除行数与被删图片文件名;未显式删除的收藏 / 置顶项会保留。
 pub async fn clear_items(
     pool: &SqlitePool,
     delete_favorites: bool,
@@ -558,9 +560,13 @@ pub async fn clear_items(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum KeywordFilter {
     None,
-    /// `clipboard_items_fts MATCH ?` 的表达式，已含前缀通配。
-    Fts(String),
-    /// 已转义 `% _ \` 的关键词；下游统一拼成 `%<kw>%` 多列模糊匹配。
+    /// `clipboard_items_fts MATCH ?` 的表达式(已含前缀通配)与它的原始关键词;
+    /// 拼音列不能从 FTS 表达式反推(要去引号、去通配、还原分词),所以原始串一并带上。
+    Fts {
+        expr: String,
+        raw: String,
+    },
+    /// 原始关键词(未转义)。
     Like(String),
 }
 
@@ -583,15 +589,18 @@ impl KeywordFilter {
 
         if fts_viable {
             if let Some(expr) = build_fts_expr(trimmed) {
-                return Self::Fts(expr);
+                return Self::Fts {
+                    expr,
+                    raw: trimmed.to_owned(),
+                };
             }
         }
 
-        Self::Like(escape_like(trimmed))
+        Self::Like(trimmed.to_owned())
     }
 }
 
-/// 把用户关键词拆成 FTS5 前缀匹配表达式（如 `foo bar` -> `"foo"* "bar"*`）。
+/// 把用户关键词拆成 FTS5 前缀匹配表达式(如 `foo bar` -> `"foo"* "bar"*`)。
 /// 双引号包裹 + 转义，避免关键词中的 FTS5 语法字符被当作运算符。空白关键词返回 `None`。
 fn build_fts_expr(keyword: &str) -> Option<String> {
     let expr = keyword
@@ -603,7 +612,7 @@ fn build_fts_expr(keyword: &str) -> Option<String> {
     (!expr.is_empty()).then_some(expr)
 }
 
-/// 转义 LIKE 的特殊字符（`\ % _`），配合 SQL 端 `ESCAPE '\\'`。
+/// 转义 LIKE 的特殊字符(`\ % _`),配合 SQL 端 `ESCAPE '\\'`。
 fn escape_like(keyword: &str) -> String {
     let mut out = String::with_capacity(keyword.len());
     for ch in keyword.chars() {
@@ -613,6 +622,29 @@ fn escape_like(keyword: &str) -> String {
         out.push(ch);
     }
     out
+}
+
+/// CJK 表意文字。假名、拉丁字母等直接按原文匹配,不需要走拼音列。
+fn is_cjk(ch: char) -> bool {
+    matches!(ch as u32, 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF)
+}
+
+/// 关键词在拼音列上的 LIKE 模式;`None` 表示不必查拼音列。
+///
+/// 含汉字的关键词在拼音列上不可能命中(索引里只有拼音),白扫一遍没意义。
+/// 其余情况把空白分词归一成单空格:`search_pinyin` 同时存紧凑串与音节串,
+/// 所以 `beizhu` 和 `bei zhu` 都能对上。
+fn pinyin_pattern(keyword: &str) -> Option<String> {
+    if keyword.chars().any(is_cjk) {
+        return None;
+    }
+
+    let normalized = keyword.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(format!("%{}%", escape_like(&normalized)))
 }
 
 /// 按 [`push_list_query`] 取一页列表项。
@@ -687,7 +719,21 @@ async fn fetch_items_count(
     Ok(row.0)
 }
 
-/// 把当前查询的过滤条件追加到 `qb`（不含 ORDER BY / LIMIT / OFFSET），供列表查询与计数共用。
+/// 追加拼音列上的匹配分支。调用方负责已经开好一个 `(` 并在之后补 `)`,
+/// 两个关键词分支都复用同一段 SQL,避免命中范围不一致。
+fn push_pinyin_match(qb: &mut QueryBuilder<Sqlite>, keyword: &str) {
+    let Some(pattern) = pinyin_pattern(keyword) else {
+        return;
+    };
+
+    qb.push(" OR clipboard_items.search_pinyin LIKE ")
+        .push_bind(pattern.clone())
+        .push(" ESCAPE '\\' OR clipboard_items.search_pinyin_initials LIKE ")
+        .push_bind(pattern)
+        .push(" ESCAPE '\\'");
+}
+
+/// 把当前查询的过滤条件追加到 `qb`(不含 ORDER BY / LIMIT / OFFSET),供列表查询与计数共用。
 fn push_filter_clauses(
     qb: &mut QueryBuilder<Sqlite>,
     q: &ClipboardItemQuery,
@@ -695,22 +741,26 @@ fn push_filter_clauses(
 ) {
     match keyword {
         KeywordFilter::None => {}
-        KeywordFilter::Fts(expr) => {
+        KeywordFilter::Fts { expr, raw } => {
             qb.push(
-                " AND clipboard_items.rowid IN (SELECT rowid FROM clipboard_items_fts WHERE clipboard_items_fts MATCH ",
+                " AND (clipboard_items.rowid IN (SELECT rowid FROM clipboard_items_fts WHERE clipboard_items_fts MATCH ",
             )
             .push_bind(expr.clone())
             .push(")");
+            push_pinyin_match(qb, raw);
+            qb.push(")");
         }
-        KeywordFilter::Like(kw) => {
-            // FTS 索引覆盖 search_text / note 两列，LIKE 兜底也跟齐，
+        KeywordFilter::Like(raw) => {
+            // FTS 索引覆盖 search_text / note 两列,LIKE 兜底也跟齐,
             // 让 1–2 字符短词的命中范围与长词一致。
-            let pattern = format!("%{kw}%");
+            let pattern = format!("%{}%", escape_like(raw));
             qb.push(" AND (clipboard_items.search_text LIKE ")
                 .push_bind(pattern.clone())
                 .push(" ESCAPE '\\' OR clipboard_items.note LIKE ")
                 .push_bind(pattern)
-                .push(" ESCAPE '\\')");
+                .push(" ESCAPE '\\'");
+            push_pinyin_match(qb, raw);
+            qb.push(")");
         }
     }
     // group（UI Tab）覆盖显式 kind / favorite；为 None 时回退到显式字段（单测使用）。
@@ -1617,18 +1667,27 @@ mod tests {
             KeywordFilter::Like("中文".to_owned())
         );
 
-        // ≥3 字符走 FTS。
+        // ≥3 字符走 FTS;`raw` 保留 trim 后的原始关键词,供拼音列使用。
         assert_eq!(
             KeywordFilter::from_keyword(Some("foo")),
-            KeywordFilter::Fts("\"foo\"*".to_owned())
+            KeywordFilter::Fts {
+                expr: "\"foo\"*".to_owned(),
+                raw: "foo".to_owned(),
+            }
         );
         assert_eq!(
             KeywordFilter::from_keyword(Some("foo bar")),
-            KeywordFilter::Fts("\"foo\"* \"bar\"*".to_owned())
+            KeywordFilter::Fts {
+                expr: "\"foo\"* \"bar\"*".to_owned(),
+                raw: "foo bar".to_owned(),
+            }
         );
         assert_eq!(
             KeywordFilter::from_keyword(Some("a\"b")),
-            KeywordFilter::Fts("\"a\"\"b\"*".to_owned())
+            KeywordFilter::Fts {
+                expr: "\"a\"\"b\"*".to_owned(),
+                raw: "a\"b".to_owned(),
+            }
         );
     }
 
@@ -1649,10 +1708,13 @@ mod tests {
             KeywordFilter::from_keyword(Some("foo b")),
             KeywordFilter::Like("foo b".to_owned())
         );
-        // 所有分词均 ≥3 字符仍走 FTS（回归保障，语义不变）。
+        // 所有分词均 ≥3 字符仍走 FTS(回归保障,语义不变)。
         assert_eq!(
             KeywordFilter::from_keyword(Some("foo bar baz")),
-            KeywordFilter::Fts("\"foo\"* \"bar\"* \"baz\"*".to_owned())
+            KeywordFilter::Fts {
+                expr: "\"foo\"* \"bar\"* \"baz\"*".to_owned(),
+                raw: "foo bar baz".to_owned(),
+            }
         );
     }
 
@@ -1670,8 +1732,8 @@ mod tests {
             ..Default::default()
         };
 
-        // 旧逻辑按整串字符数（5 ≥ 3）判走 FTS：`"ab"* "cd"*`，两个 token 均 <3 字符，
-        // trigram 返回 0 行 → 搜不到刚插入的记录。现按分词长度降级 LIKE `%ab cd%`，命中。
+        // 旧逻辑按整串字符数(5 ≥ 3)判走 FTS:`"ab"* "cd"*`,两个 token 均 <3 字符,
+        // trigram 返回 0 行 → 搜不到刚插入的记录。现按分词长度降级 LIKE `%ab cd%`,命中。
         let found = query_items(&pool, &q).await.unwrap();
         assert_eq!(ids(&found), ["short"]);
     }
@@ -2119,5 +2181,112 @@ mod tests {
                 "{label}: list query sorts in a temp b-tree: {plan:?}"
             );
         }
+    }
+
+    /// 写入行并补齐拼音索引,模拟入库后的状态。
+    async fn insert_with_pinyin(pool: &SqlitePool, item: &ClipboardItem) {
+        insert_item(pool, item).await.unwrap();
+        crate::db::pinyin::update_items(pool, std::slice::from_ref(&item.id))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn pinyin_pattern_skips_cjk_and_normalizes_whitespace() {
+        assert!(pinyin_pattern("新增").is_none());
+        assert_eq!(pinyin_pattern("bei zhu").as_deref(), Some("%bei zhu%"));
+        assert_eq!(pinyin_pattern("bei   zhu").as_deref(), Some("%bei zhu%"));
+        assert_eq!(pinyin_pattern("100%").as_deref(), Some("%100\\%%"));
+    }
+
+    #[tokio::test]
+    async fn pinyin_keyword_matches_chinese_content() {
+        let pool = memory_pool().await;
+        let mut item = sample_item("cn");
+        item.content = "新增备注".to_owned();
+        item.search_text = Some("新增备注".to_owned());
+        item.content_hash = content_hash(ClipboardKind::Text, &item.content);
+        insert_with_pinyin(&pool, &item).await;
+
+        // 紧凑、带空格、首字母三种写法都要命中。
+        for keyword in ["beizhu", "bei zhu", "bz"] {
+            let query = ClipboardItemQuery {
+                keyword: Some(keyword.to_owned()),
+                ..Default::default()
+            };
+            let found = query_items(&pool, &query).await.unwrap();
+            assert_eq!(ids(&found), ["cn"], "{keyword}");
+        }
+    }
+
+    #[tokio::test]
+    async fn latin_keyword_on_a_pure_latin_row_uses_the_pinyin_columns() {
+        let pool = memory_pool().await;
+        let mut item = sample_item("latin");
+        item.content = "deploy script".to_owned();
+        item.search_text = Some("deploy script".to_owned());
+        item.content_hash = content_hash(ClipboardKind::Text, &item.content);
+        insert_with_pinyin(&pool, &item).await;
+
+        // 拉丁正文没有拼音,两列是空串;拼音分支命中不了任何行,但两个分支都能正常收敛。
+        let stored: (String, String) = sqlx::query_as(
+            "SELECT search_pinyin, search_pinyin_initials FROM clipboard_items WHERE id = ?",
+        )
+        .bind(item.id.as_str())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, (String::new(), String::new()));
+
+        let query = ClipboardItemQuery {
+            keyword: Some("deploy".to_owned()),
+            ..Default::default()
+        };
+        let found = query_items(&pool, &query).await.unwrap();
+        assert_eq!(ids(&found), ["latin"]);
+    }
+
+    #[tokio::test]
+    async fn backfill_stamps_every_row_so_it_does_not_loop() {
+        let pool = memory_pool().await;
+        let mut item = sample_item("cn");
+        item.content = "备注".to_owned();
+        item.search_text = Some("备注".to_owned());
+        item.content_hash = content_hash(ClipboardKind::Text, &item.content);
+        insert_item(&pool, &item).await.unwrap();
+
+        crate::db::pinyin::backfill(&pool).await.unwrap();
+        // 回填后所有行都有值,下次回填立刻结束:没有值就说明还会被反复选中。
+        let missing: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM clipboard_items \
+             WHERE search_pinyin IS NULL OR search_pinyin_initials IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(missing, 0);
+    }
+
+    #[tokio::test]
+    async fn pinyin_search_still_respects_kind_filters() {
+        let pool = memory_pool().await;
+        let mut text = sample_item("text");
+        text.content = "备注".to_owned();
+        text.search_text = Some("备注".to_owned());
+        text.content_hash = content_hash(ClipboardKind::Text, &text.content);
+        insert_with_pinyin(&pool, &text).await;
+
+        let mut image = sample_item("image");
+        image.kind = ClipboardKind::Image;
+        image.content = "a.png".to_owned();
+        image.content_hash = content_hash(ClipboardKind::Image, &image.content);
+        insert_item(&pool, &image).await.unwrap();
+
+        let query = ClipboardItemQuery {
+            keyword: Some("beizhu".to_owned()),
+            kind: Some(ClipboardKind::Image),
+            ..Default::default()
+        };
+        assert!(query_items(&pool, &query).await.unwrap().is_empty());
     }
 }

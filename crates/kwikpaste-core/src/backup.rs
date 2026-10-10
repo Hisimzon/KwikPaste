@@ -1163,6 +1163,8 @@ async fn merge_import(
     // 先关掉备份库再处理结果：Windows 上打开着的文件删不掉，临时目录会留下来。
     backup_pool.close().await;
     let outcome = merged?;
+    // 合进来的行拼音索引缺失或不完整,且事务已提交,后台按当前库补齐。
+    crate::db::pinyin::queue_backfill(&core.db.pool().await);
 
     let resources = root.join(RESOURCES_ARCHIVE_DIR);
     let resources_dir = core.paths.resources_dir()?;
@@ -1226,6 +1228,8 @@ async fn overwrite_import(
         }
         // 导入的记录都不是这台电脑复制的：不能当成本机采集补齐给已配对设备；计数器不回退。
         crate::db::sync::reset_after_import(&core.db.pool().await, counter).await?;
+        // 备份库的拼音列可能是旧版本写的或整个是 NULL,后台按换进来的库补齐。
+        crate::db::pinyin::queue_backfill(&core.db.pool().await);
 
         let resources_src = root.join(RESOURCES_ARCHIVE_DIR);
         if resources_src.exists() {

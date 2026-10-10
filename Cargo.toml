@@ -44,6 +44,8 @@ thiserror = "2"
 tokio = "1"
 unicode-segmentation = "1"
 uuid = { version = "1", features = ["v4"] }
+# kwikpaste-core 的拼音搜索索引:只要 plain 拼音,不拉带声调的数据表。
+pinyin = { version = "0.11", default-features = false, features = ["plain"] }
 # kwikpaste-core 的剪贴板管线，与 src-tauri 相同。
 clipboard-rs = "0.3"
 clipboard-win = "5"

@@ -54,6 +54,11 @@ pub(crate) async fn store_and_emit(core: &CoreInner, item: &ClipboardItem) -> Re
     };
     if !result.deduplicated {
         super::cleanup::notify_inserted(core);
+        // 新行补拼音索引;重去重命中的已有行索引不会变,不用重算。
+        // 图片行两列都没有文本,排不进索引,也就没有重算的必要。
+        if item.search_text.is_some() || item.note.is_some() {
+            crate::db::pinyin::queue_update(&core.db.pool().await, &result.id);
+        }
     }
 
     core.events.emit(CoreEvent::ClipboardUpserted {

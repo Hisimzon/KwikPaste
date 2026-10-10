@@ -123,6 +123,9 @@ impl Core {
                 log::warn!("apps registry: initial DB load failed: {err}");
             }
 
+            // 迁移只加了列,存量行的拼音索引由后台补齐:不堵住启动,失败只记日志。
+            crate::db::pinyin::queue_backfill(&inner.db.pool().await);
+
             if inner.settings.cleanup_paused() {
                 log::warn!(
                     "history settings fell back on load; automatic cleanup is paused until they are saved"

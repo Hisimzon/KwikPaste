@@ -22,7 +22,7 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// 已发布（含 2.0 新增）迁移的 sha384：LF 是 macOS 检出的字节，CRLF 是 Windows 检出的字节。
 /// 用户库的 `_sqlx_migrations` 里存的就是这两种之一，对不上的话存量用户启动即失败；
 /// 跨平台覆盖导入备份时按这张表换算（[`adopt_published_checksums`]）。新增迁移要在这里补上两种值。
-pub(crate) const PUBLISHED: [(i64, &str, &str); 7] = [
+pub(crate) const PUBLISHED: [(i64, &str, &str); 8] = [
     (
         1,
         "bfa656aa68eed66f8dab5bacb9efa4bafeb11713fd417239e05f7b4c5757330fae5eafeeb138771c6d18785670c44b05",
@@ -57,6 +57,11 @@ pub(crate) const PUBLISHED: [(i64, &str, &str); 7] = [
         7,
         "0766fc81a02997e2e9aa5d5b63be0e2d3371a5c08377c5f7e8c67277361706dc91399874fc65df55de3c3529d8c614ed",
         "1362c23e2e06f89ea2e0265702cd12c7e69722fc3890562108970452a205a25a15d27318778fb10aae41a5e9ba293fbe",
+    ),
+    (
+        8,
+        "ddde6370231c2ac1d0b173715b3b5818691bc043837b18a418c26e758279639fff7dfc0fb9dbbe63019d1ee0c4548441",
+        "cec0050451e7937da63e453d3559c9000cc73da6f3f2404e2bb163659d83d68bb51657ad86ee446b88ae50a4bf51a4b0",
     ),
 ];
 

@@ -321,6 +321,8 @@ async fn switch_storage_location(
 
         let settings = rebase_storage_states(core).await?;
         crate::sync::settings_changed(core);
+        // 新位置的库可能是 1.x 写的(没有拼音列的值),后台补齐索引。
+        crate::db::pinyin::queue_backfill(&core.db.pool().await);
         if let Err(error) = remove_old_storage_data(paths, &current) {
             log::warn!("old storage cleanup failed; keeping completed switch: {error:#}");
         }

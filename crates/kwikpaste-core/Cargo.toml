@@ -24,6 +24,7 @@ if-addrs.workspace = true
 image = { workspace = true, features = ["bmp", "gif", "ico", "jpeg", "tiff", "webp"] }
 log.workspace = true
 mdns-sd.workspace = true
+pinyin.workspace = true
 rand.workspace = true
 regex.workspace = true
 rust_xlsxwriter.workspace = true
