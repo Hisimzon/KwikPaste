@@ -200,6 +200,8 @@ jobs:
           choco install nasm --no-progress -y
           'C:\Program Files\NASM' >> $env:GITHUB_PATH
           'C:\Strawberry\perl\bin' >> $env:GITHUB_PATH
+          # bash 里 Git 自带的 MSYS perl 排在前面，编不了 MSVC 版 OpenSSL。
+          'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: extensions/wetype
