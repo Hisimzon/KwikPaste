@@ -439,3 +439,19 @@ fn sent_item_written_back_by_the_official_pc_client_is_not_sent_again() -> anyho
     block_on(core.shutdown())?;
     Ok(())
 }
+
+#[test]
+fn official_client_clipboard_files_are_recognized_by_path() {
+    assert!(super::is_official_client_path(
+        r"C:\Users\A\AppData\LocalLow\Tencent\WeType\ClipboardTmp\1791654918404_d.png"
+    ));
+    assert!(super::is_official_client_path(
+        "c:/users/a/appdata/locallow/tencent/wetype/clipboardtmp/x.png"
+    ));
+    assert!(!super::is_official_client_path(
+        r"C:\Users\A\Pictures\x.png"
+    ));
+    assert!(!super::is_official_client_path(
+        r"C:\Users\A\AppData\LocalLow\Tencent\WeType\ClipboardTmp"
+    ));
+}

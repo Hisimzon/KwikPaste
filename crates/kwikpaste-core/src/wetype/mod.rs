@@ -505,6 +505,20 @@ fn truncate_name(mut name: String, bytes: usize) -> String {
     name
 }
 
+/// 同一台电脑上的官方微信输入法会把收到的图片（包括本扩展发出去的）以文件形式写进剪贴板，
+/// 文件在它的 `ClipboardTmp` 目录里。本扩展开着时这些内容已经由扩展自己收发，不再多记一条文件记录。
+pub(crate) fn is_official_client_copy(core: &CoreInner, item: &ClipboardItem) -> bool {
+    item.kind == ClipboardKind::Files
+        && core.extensions.enabled("wetype")
+        && item.content.lines().all(is_official_client_path)
+}
+
+fn is_official_client_path(path: &str) -> bool {
+    path.to_ascii_lowercase()
+        .replace('/', "\\")
+        .contains(r"\tencent\wetype\clipboardtmp\")
+}
+
 /// 采集的同步序号是本机来源证明；LAN/WeType 的入库不会走这个发送入口。
 pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem, seq: Option<i64>) {
     let state = core.wetype.snapshot();

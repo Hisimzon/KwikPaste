@@ -176,6 +176,9 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
     if repeat || own_writeback {
         return None;
     }
+    if crate::wetype::is_official_client_copy(core, &item) {
+        return None;
+    }
 
     let source_app = source.map(|src| materialize_source(&core.app_icons, Some(&core.apps), src));
     if let Some(src) = &source_app {
