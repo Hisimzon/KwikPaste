@@ -138,6 +138,8 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pauseInFullscreen"] = Value::Bool(true);
     expected["shortcuts"]["pauseAppIds"] = Value::Array(Vec::new());
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
+    // 夹具没有免焦点搜索开关,读取后应补上新版本默认值(默认关)。
+    expected["clipboard"]["search"]["typeToSearch"] = Value::Bool(false);
     // 2.x 删掉了 1.x 的更新渠道开关。
     let update = expected["update"].as_object_mut().unwrap();
     update.remove("includeBeta");

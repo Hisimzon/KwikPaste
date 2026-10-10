@@ -73,6 +73,8 @@ pub struct ClipboardPanel {
     groups: Entity<GroupBar>,
     group_list: Vec<Group>,
     key_hints: bool,
+    /// 上一次下发给钩子的免焦点搜索门控,变化时才重发命令。
+    type_to_search_gate: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -114,6 +116,7 @@ impl ClipboardPanel {
             groups,
             group_list: Vec::new(),
             key_hints: false,
+            type_to_search_gate: false,
             _subscriptions: subscriptions,
         };
         panel.reload_groups(cx);
@@ -388,7 +391,7 @@ impl ClipboardPanel {
         &mut self,
         _: &Entity<Header>,
         event: &HeaderEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
@@ -399,7 +402,7 @@ impl ClipboardPanel {
             HeaderEvent::RequestEditing(trigger) => {
                 editing::begin(EditTarget::Search, *trigger, cx);
             }
-            HeaderEvent::TogglePin => self.toggle_pin(cx),
+            HeaderEvent::TogglePin => self.toggle_pin(window, cx),
             HeaderEvent::OpenPreferences => self.emit_intent(PanelIntent::OpenPreferences, cx),
         }
     }
@@ -416,12 +419,14 @@ impl ClipboardPanel {
     }
 
     /// 固定 / 取消固定窗口（头部图钉、Mod+P）：点外部不隐藏，粘贴、复制后留着面板。
-    fn toggle_pin(&mut self, cx: &mut Context<Self>) {
+    fn toggle_pin(&mut self, window: &Window, cx: &mut Context<Self>) {
         let pinned = !pin::pinned(cx);
         log::info!("panel pinned: {pinned}");
         pin::set_pinned(pinned, cx);
         self.header
             .update(cx, |header, cx| header.set_pinned(pinned, cx));
+        // 固定后免焦点搜索让路:敲字母照常进目标应用。
+        self.sync_type_to_search(window, cx);
     }
 
     /// 面板事件：显示时按设置重置筛选与搜索框，编辑态的进出交给对应的输入框。
@@ -435,6 +440,7 @@ impl ClipboardPanel {
                     self.clear_search(window, cx);
                 }
                 self.set_key_hints(false, cx);
+                self.sync_type_to_search(window, cx);
                 // 还开着的分组弹框、确认框当作取消（隐藏时编辑态已经结束，再显示时名称框打不了字）。
                 for _ in 0..4 {
                     if !has_dialog(window, cx) {
@@ -449,6 +455,7 @@ impl ClipboardPanel {
                         header.set_editing(true, cx);
                         header.focus_input(window, cx);
                     });
+                    self.sync_type_to_search(window, cx);
                 }
                 Some(EditTarget::Dialog) => self.focus_dialog_input(window, cx),
                 _ => {}
@@ -457,6 +464,7 @@ impl ClipboardPanel {
                 Some(EditTarget::Search) => {
                     editing::clear(cx);
                     self.focus_list(window, cx);
+                    self.sync_type_to_search(window, cx);
                 }
                 // 没拿到前台也聚焦，Esc 仍能关掉弹框。
                 Some(EditTarget::Dialog) => self.focus_dialog_input(window, cx),
@@ -466,8 +474,24 @@ impl ClipboardPanel {
                 self.header
                     .update(cx, |header, cx| header.set_editing(false, cx));
                 editing::clear(cx);
+                self.sync_type_to_search(window, cx);
             }
             PanelEvent::PopupDismissed => {}
+            // 免焦点搜索:钩子转来的字符直接进搜索框,不改焦点、不进编辑态。
+            PanelEvent::TypedChar(ch) => {
+                if !self.type_to_search_active(window, cx) {
+                    return;
+                }
+                self.header
+                    .update(cx, |header, cx| header.append_char(ch, window, cx));
+            }
+            PanelEvent::TypeBackspace => {
+                if !self.type_to_search_active(window, cx) {
+                    return;
+                }
+                self.header
+                    .update(cx, |header, cx| header.backspace(window, cx));
+            }
         }
     }
 
@@ -509,15 +533,40 @@ impl ClipboardPanel {
             cx,
         );
 
-        if settings.search.default_focus {
+        // 免焦点搜索打开时不请求编辑态:那会在每次显示面板时抢一次前台,和这个开关的目的相反。
+        if settings.search.default_focus && !settings.search.type_to_search {
             editing::begin(EditTarget::Search, EditTrigger::Keyboard, cx);
         }
+        self.sync_type_to_search(window, cx);
     }
 
     fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.header
             .update(cx, |header, cx| header.clear(window, cx));
         self.update_filter(|filter| filter.keyword = Arc::from(""), cx);
+    }
+
+    /// 免焦点搜索当前是否生效:设置开着、面板可见、未固定、未开菜单、未进编辑态。
+    fn type_to_search_active(&self, window: &Window, cx: &Context<Self>) -> bool {
+        self.list
+            .read(cx)
+            .settings()
+            .clipboard
+            .search
+            .type_to_search
+            && !pin::pinned(cx)
+            && editing::target(cx).is_none()
+            && !menu_open(window)
+    }
+
+    /// 重算免焦点搜索门控;变化时下发给钩子(Windows 由钩子当场决定是否吞键)。
+    fn sync_type_to_search(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let gate = self.type_to_search_active(window, cx);
+        if gate == self.type_to_search_gate {
+            return;
+        }
+        self.type_to_search_gate = gate;
+        request_panel(cx, PanelCommand::SetTypeToSearch(gate));
     }
 
     fn set_key_hints(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -596,9 +645,11 @@ impl ClipboardPanel {
 }
 
 impl Render for ClipboardPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
         let surface = crate::platform::material::panel_surface(cx);
+        // 免焦点搜索门控按设置、固定、菜单、编辑态综合重算;变化时下发给钩子。
+        self.sync_type_to_search(window, cx);
 
         div()
             .id("clipboard-panel")
@@ -727,8 +778,8 @@ impl Render for ClipboardPanel {
                     panel.list.update(cx, |list, cx| list.quick_paste(key, cx));
                 })),
             )
-            .on_action(cx.listener(unless_menu(|panel, _: &PinWindow, _, cx| {
-                panel.toggle_pin(cx)
+            .on_action(cx.listener(unless_menu(|panel, _: &PinWindow, window, cx| {
+                panel.toggle_pin(window, cx)
             })))
             .on_action(
                 cx.listener(unless_menu(|panel, _: &OpenPreferences, _, cx| {

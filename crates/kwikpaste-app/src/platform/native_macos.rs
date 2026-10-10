@@ -120,6 +120,9 @@ impl NativePanel {
 
     pub fn set_input_capture(&self, _captured: bool) {}
 
+    /// macOS 没有键盘钩子;免焦点搜索走 NSPanel 的 key window,不在这里接管。
+    pub fn set_type_to_search(&self, _enabled: bool) {}
+
     pub fn verify(&self, _: &Placement) {}
 
     pub fn raise(&self) {

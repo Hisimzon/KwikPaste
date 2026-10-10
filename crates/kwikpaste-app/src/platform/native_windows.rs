@@ -202,6 +202,11 @@ impl NativePanel {
         }
     }
 
+    /// 免焦点搜索门控:钩子是否把可打印键转成搜索字符。
+    pub fn set_type_to_search(&self, enabled: bool) {
+        keyboard::set_type_to_search(enabled);
+    }
+
     /// 显示后外框必须等于写入的矩形；不等（例如 DPI 变化改了尺寸）就记错误并重放一次。
     pub fn verify(&self, placement: &Placement) {
         match self.panel.window_rect() {

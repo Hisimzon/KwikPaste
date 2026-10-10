@@ -107,6 +107,8 @@ pub enum PanelCommand {
     SetHideOnOutsideClick(bool),
     /// 非激活窗口上的鼠标按下重新捕获或释放导航键。
     SetInputCapture(bool),
+    /// 免焦点搜索门控(Windows):钩子是否接管可打印键、转成搜索框字符。
+    SetTypeToSearch(bool),
     /// 原生层截获了面板拖动区/缩放边的按下，GPUI 没有机会让弹出菜单自行收起。
     DismissPopup,
 }
@@ -127,6 +129,10 @@ pub enum PanelEvent {
     EditingEnded,
     /// 原生鼠标按下发生在菜单之外（包括不激活的拖动/缩放区域）。
     PopupDismissed,
+    /// Windows 上钩子接管了免焦点搜索:一个可打印字符进入搜索框。
+    TypedChar(char),
+    /// 免焦点搜索吞下的 Backspace:删掉搜索框最后一个字符。
+    TypeBackspace,
 }
 
 /// 发出 [`PanelEvent`] 的实体。面板窗口打开之前就已建好，UI 在构造自己的视图时即可订阅。
@@ -344,6 +350,10 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
             }
             PanelCommand::SetInputCapture(captured) => {
                 parts.native.set_input_capture(captured);
+                continue;
+            }
+            PanelCommand::SetTypeToSearch(enabled) => {
+                parts.native.set_type_to_search(enabled);
                 continue;
             }
             PanelCommand::DismissPopup => {

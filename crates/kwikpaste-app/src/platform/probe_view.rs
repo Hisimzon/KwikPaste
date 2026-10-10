@@ -88,6 +88,7 @@ impl ProbeView {
             }
             PanelEvent::Hidden => {}
             PanelEvent::PopupDismissed => {}
+            PanelEvent::TypedChar(_) | PanelEvent::TypeBackspace => {}
         }
         cx.notify();
     }

@@ -485,6 +485,8 @@ impl ClipboardList {
             PanelEvent::PopupDismissed => {
                 dismiss_menu(window, cx);
             }
+            // 免焦点搜索:面板视图直接把字符写进搜索框,列表不受影响。
+            PanelEvent::TypedChar(_) | PanelEvent::TypeBackspace => {}
             PanelEvent::Hidden => {
                 self.visible = false;
                 self.cancel_reorder(cx);

@@ -31,6 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
+use super::type_to_search::{self, TypeKey};
 use crate::hook_keys::{self, HookKeyKind};
 
 /// 自己注入的输入写进 `dwExtraInfo` 的标记（ASCII "KPMB"），钩子据此认出并处理。
@@ -56,7 +57,11 @@ pub enum HookEvent {
         ctrl: bool,
         shift: bool,
     },
-    /// Ctrl 按下或松开（不吞，供界面显示快捷键提示）。
+    /// 免焦点搜索吞下的一个可打印字符。
+    Type { ch: char },
+    /// 免焦点搜索吞下的 Backspace:删掉搜索框最后一个字符。
+    TypeBackspace,
+    /// Ctrl 按下或松开(不吞,供界面显示快捷键提示)。
     Control { down: bool },
 }
 
@@ -76,6 +81,8 @@ static TARGET_HWND: AtomicIsize = AtomicIsize::new(0);
 /// 按下被吞、还没松开的键。
 static SWALLOWED: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
 static CONTROL_DOWN: AtomicBool = AtomicBool::new(false);
+/// 免焦点搜索:非编辑态下把可打印键转成搜索字符。
+static TYPE_TO_SEARCH: AtomicBool = AtomicBool::new(false);
 static MARKED_ALT_SEEN: AtomicU32 = AtomicU32::new(0);
 /// 钩子线程 id；`None` 表示没有线程。
 static THREAD: Mutex<Option<u32>> = Mutex::new(None);
@@ -134,6 +141,11 @@ pub fn stop() {
 /// 编辑态关导航（键盘消息直接进面板），退出编辑态再打开。钩子线程保留：取前台还要它吞 Alt。
 pub fn set_navigation(enabled: bool) {
     NAVIGATION.store(enabled && ACTIVE.load(Ordering::SeqCst), Ordering::SeqCst);
+}
+
+/// 免焦点搜索开关:面板可见、未固定、未进编辑态时由界面打开。
+pub fn set_type_to_search(enabled: bool) {
+    TYPE_TO_SEARCH.store(enabled, Ordering::SeqCst);
 }
 
 pub fn is_running() -> bool {
@@ -329,6 +341,24 @@ fn handle_key(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
 
     if !down {
         return false;
+    }
+
+    // 免焦点搜索:先按当前布局求字符;命中就吞掉(松开时照现有逻辑吞,目标应用收不到孤立松开)。
+    if TYPE_TO_SEARCH.load(Ordering::SeqCst)
+        && let Some(typed) = type_to_search::classify(
+            vk,
+            key_down(VK_CONTROL),
+            key_down(VK_SHIFT),
+            key_down(VK_MENU),
+            key_down(VK_LWIN) || key_down(VK_RWIN),
+        )
+    {
+        SWALLOWED[usize::from(vk)].store(true, Ordering::SeqCst);
+        emit(match typed {
+            TypeKey::Char(ch) => HookEvent::Type { ch },
+            TypeKey::Backspace => HookEvent::TypeBackspace,
+        });
+        return true;
     }
 
     let Some(entry) = key_down_entry(

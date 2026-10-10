@@ -821,6 +821,10 @@
         "defaultFocus": {
           "title": "聚焦搜索框"
         },
+        "typeToSearch": {
+          "description": "面板显示时不用先点搜索框:直接敲字母就开始搜索,Backspace 删字符。开启后这些按键不再进入当前应用。",
+          "title": "直接输入搜索"
+        },
         "sort": {
           "options": {
             "createdAtDesc": "创建时间",

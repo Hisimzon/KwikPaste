@@ -18,6 +18,7 @@ pub mod panel;
 pub mod single_instance;
 pub mod system;
 pub mod trigger_pause;
+pub mod type_to_search;
 pub mod win_v;
 
 use std::{ffi::c_void, io, mem::size_of};

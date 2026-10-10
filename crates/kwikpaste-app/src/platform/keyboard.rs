@@ -48,7 +48,12 @@ fn dispatch(
     use gpui::{Capslock, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, PlatformInput};
     use kwikpaste_os::win::keyboard::{HookEvent, KeyPhase};
 
+    use super::panel::PanelEvent;
     use super::probe;
+
+    let panel_events = cx
+        .try_global::<super::panel::Panel>()
+        .map(|panel| panel.events().clone());
 
     let dispatched = window.update(cx, |_, window, cx| match event {
         HookEvent::Key {
@@ -87,6 +92,18 @@ fn dispatch(
                 cx,
             );
             false
+        }
+        HookEvent::Type { ch } => {
+            if let Some(events) = &panel_events {
+                events.update(cx, |_, cx| cx.emit(PanelEvent::TypedChar(ch)));
+            }
+            true
+        }
+        HookEvent::TypeBackspace => {
+            if let Some(events) = &panel_events {
+                events.update(cx, |_, cx| cx.emit(PanelEvent::TypeBackspace));
+            }
+            true
         }
     });
 

@@ -193,6 +193,10 @@ pub fn hook_key(event: &kwikpaste_os::win::keyboard::HookEvent, handled: bool) {
             json_string(key)
         ),
         HookEvent::Control { down } => format!(r#","key":"control","down":{down}"#),
+        HookEvent::Type { ch } => {
+            format!(r#","key":"type","text":{}"#, json_string(&ch.to_string()))
+        }
+        HookEvent::TypeBackspace => r#","key":"type_backspace""#.to_string(),
     };
     write("hook_key", &fields);
 }

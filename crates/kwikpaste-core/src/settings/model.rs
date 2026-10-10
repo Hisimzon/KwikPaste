@@ -768,6 +768,9 @@ pub struct Search {
     pub default_focus: bool,
     /// 剪贴板窗口隐藏时清空搜索关键词。
     pub clear_on_hide: bool,
+    /// 免焦点搜索(Windows):面板不激活时敲字母直接进搜索框,按 Backspace 删字符。
+    /// 开启后「面板可见时敲字母不再进目标应用」,默认关。
+    pub type_to_search: bool,
 }
 
 impl Default for Search {
@@ -775,6 +778,7 @@ impl Default for Search {
         Self {
             default_focus: false,
             clear_on_hide: true,
+            type_to_search: false,
         }
     }
 }

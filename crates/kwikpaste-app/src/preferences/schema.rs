@@ -723,6 +723,11 @@ fn window_sections() -> Vec<Section> {
                 Setting::new("search.clearOnHide", Control::Switch)
                     .path("clipboard.search.clearOnHide")
                     .keywords(&["search", "clear", "hide"]),
+                // 免焦点搜索只在 Windows 上有钩子,别的平台不显示。
+                #[cfg(target_os = "windows")]
+                Setting::new("search.typeToSearch", Control::Switch)
+                    .path("clipboard.search.typeToSearch")
+                    .keywords(&["search", "focus", "type", "keyboard"]),
             ],
         },
         Section {

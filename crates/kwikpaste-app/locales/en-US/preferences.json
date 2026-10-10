@@ -831,6 +831,10 @@
         "defaultFocus": {
           "title": "Focus Search Box"
         },
+        "typeToSearch": {
+          "description": "Start typing to search without clicking the search box first; Backspace deletes a character. Those keys no longer reach the app behind the panel.",
+          "title": "Type to Search"
+        },
         "sort": {
           "options": {
             "createdAtDesc": "Created Time",

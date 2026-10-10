@@ -115,6 +115,26 @@ impl Header {
         self.debounce_keyword(SharedString::from(value.to_owned()), cx);
     }
 
+    /// 免焦点搜索:把钩子转来的字符追加到搜索框末尾,不改焦点、不进编辑态。
+    pub fn append_char(&mut self, ch: char, window: &mut Window, cx: &mut Context<Self>) {
+        let mut value = self.input.value(cx).to_string();
+        value.push(ch);
+        self.input.set_value(value.clone(), window, cx);
+        self.debounce_keyword(SharedString::from(value), cx);
+        cx.notify();
+    }
+
+    /// 免焦点搜索:删掉搜索框最后一个字符,不改焦点、不进编辑态。
+    pub fn backspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut value = self.input.value(cx).to_string();
+        if value.pop().is_none() {
+            return;
+        }
+        self.input.set_value(value.clone(), window, cx);
+        self.debounce_keyword(SharedString::from(value), cx);
+        cx.notify();
+    }
+
     fn debounce_keyword(&mut self, value: SharedString, cx: &mut Context<Self>) {
         let keyword: Arc<str> = Arc::from(value.trim());
         // 只记长度：搜索词是用户内容，不进日志。
