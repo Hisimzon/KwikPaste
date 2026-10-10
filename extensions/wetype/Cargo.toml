@@ -1,0 +1,24 @@
+# 微信输入法剪贴板桥接扩展。独立 workspace：wx-ime-sdk 要从源码编 OpenSSL（需要 protoc、Perl、NASM），
+# 不进根 workspace，根目录的 clippy/test 和提交钩子都不会编它。
+[workspace]
+
+[package]
+name = "kwikpaste-ext-wetype"
+version = "1.0.0"
+edition = "2024"
+authors = ["LILTT"]
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = "1"
+kwikpaste-ext-protocol = { path = "../../crates/kwikpaste-ext-protocol" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "time"] }
+wx-ime-sdk = { git = "https://github.com/mkdir700/wx-ime-sdk", rev = "1ec70393cc9524c6c341cf768f090b0176586f72", features = ["vendored-openssl"] }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+strip = true
