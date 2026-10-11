@@ -132,6 +132,8 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
     }
 
     let source = core.platform().frontmost_app();
+    let owner = core.platform().clipboard_owner();
+    log::debug!("clipboard change: owner {owner:?}");
     let settings = core.settings.snapshot();
 
     // 用户在偏好里勾选了「过滤此应用」时整条丢弃，省掉无效的读取与图片解码。按应用比较：
@@ -176,7 +178,7 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
     if repeat || own_writeback {
         return None;
     }
-    if crate::wetype::is_official_client_copy(core, &item) {
+    if crate::wetype::written_by_official_client(core, owner.as_deref()) {
         return None;
     }
 

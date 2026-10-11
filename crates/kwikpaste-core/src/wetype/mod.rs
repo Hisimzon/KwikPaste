@@ -175,12 +175,14 @@ impl WeTypeService {
                 from_name,
                 content,
             } => {
+                // 本机官方客户端上传的是这台电脑自己的复制，监听已经记过，不再记一遍。
+                let own_client = from_name == crate::sync::default_device_name();
                 self.names.update(&[WeTypeDevice {
                     uin: from_uin,
                     name: from_name,
                 }])?;
                 core.events.emit(CoreEvent::WeTypeChanged);
-                self.receive(core, from_uin, content).await?;
+                self.receive(core, from_uin, content, own_client).await?;
                 // 成功提交或明确跳过才确认；失败使监督器重启，SDK 从持久化待收记录重投。
                 self.send(Command::Acknowledge)?;
             }
@@ -201,11 +203,12 @@ impl WeTypeService {
         core: &Arc<CoreInner>,
         uin: u64,
         content: Content,
+        own_client: bool,
     ) -> anyhow::Result<()> {
         let options = core.settings.snapshot().extensions.wetype;
         let (wire, attachment, cleanup) = match content {
             Content::Text { text } => {
-                if text.len() > WETYPE_MAX_TEXT_BYTES || text.trim().is_empty() {
+                if own_client || text.len() > WETYPE_MAX_TEXT_BYTES || text.trim().is_empty() {
                     return Ok(());
                 }
                 (wire(ClipboardKind::Text, text), Vec::new(), None)
@@ -213,6 +216,12 @@ impl WeTypeService {
             Content::Image { path } => {
                 let inbox = core.paths.extensions_dir().join("wetype/state/inbox");
                 let path = validated_inbox_path(&inbox, Path::new(&path))?;
+                if own_client {
+                    if let Err(err) = std::fs::remove_file(&path) {
+                        log::warn!("WeType skipped inbox cleanup failed: {err}");
+                    }
+                    return Ok(());
+                }
                 let load = path.clone();
                 let bytes = tokio::task::spawn_blocking(move || read_image(&load))
                     .await
@@ -237,7 +246,8 @@ impl WeTypeService {
             ReceiveOptions {
                 text: true,
                 image: true,
-                write_clipboard: options.write_clipboard,
+                // 官方客户端在运行时它会自己写剪贴板，再写一次会被它当成本机复制传回去。
+                write_clipboard: options.write_clipboard && !official_client_running(core),
                 max_image_bytes: WETYPE_MAX_IMAGE_BYTES,
                 allow_jpeg: true,
             },
@@ -421,6 +431,11 @@ impl Core {
         self.0.wetype.snapshot()
     }
 
+    /// 同一台电脑上的官方微信输入法是否在运行；运行时本扩展只记录，不写剪贴板也不发送。
+    pub fn wetype_official_client_running(&self) -> bool {
+        official_client_running(&self.0)
+    }
+
     /// 等待 PairResult，最多 90 秒；UI 可在任何执行器调用，不需要 tokio 上下文。
     pub async fn wetype_pair(&self, code: String) -> Result<()> {
         if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
@@ -505,25 +520,34 @@ fn truncate_name(mut name: String, bytes: usize) -> String {
     name
 }
 
-/// 同一台电脑上的官方微信输入法会把收到的图片（包括本扩展发出去的）以文件形式写进剪贴板，
-/// 文件在它的 `ClipboardTmp` 目录里。本扩展开着时这些内容已经由扩展自己收发，不再多记一条文件记录。
-pub(crate) fn is_official_client_copy(core: &CoreInner, item: &ClipboardItem) -> bool {
-    item.kind == ClipboardKind::Files
-        && core.extensions.enabled("wetype")
-        && item.content.lines().all(is_official_client_path)
+/// 同一台电脑上的官方微信输入法会把收到的内容写进剪贴板（文字原样，图片以文件形式）。
+/// 本扩展开着时这些内容扩展自己会收到并带上来源，不再当作本机复制记录和转发：
+/// 否则会多一条重复记录，转发出去还会顶掉设备组里手机发来的那条最新内容。
+pub(crate) fn written_by_official_client(core: &CoreInner, owner: Option<&Path>) -> bool {
+    owner.is_some_and(is_official_client_exe) && core.extensions.enabled("wetype")
 }
 
-fn is_official_client_path(path: &str) -> bool {
-    path.to_ascii_lowercase()
+const OFFICIAL_CLIENT_PROCESS: &str = "wetype_server.exe";
+
+/// 同一台电脑上的官方微信输入法在运行：剪贴板互传交给它，本扩展只把手机发来的内容记进历史。
+pub(crate) fn official_client_running(core: &CoreInner) -> bool {
+    core.platform().process_running(OFFICIAL_CLIENT_PROCESS)
+}
+
+fn is_official_client_exe(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
         .replace('/', "\\")
-        .contains(r"\tencent\wetype\clipboardtmp\")
+        .contains(r"\tencent\wetype\")
 }
 
 /// 采集的同步序号是本机来源证明；LAN/WeType 的入库不会走这个发送入口。
 pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem, seq: Option<i64>) {
     let state = core.wetype.snapshot();
     let settings = core.settings.snapshot().extensions.wetype;
+    // 官方客户端在运行时本机复制由它发给手机，本扩展再发就是重复的一条。
     if !sendable(item, seq, &state, &settings)
+        || official_client_running(core)
         || lock(&core.wetype.echo).is_echo(&item.content_hash)
         || !lock(&core.wetype.sent).should_send(&item.content_hash)
     {
