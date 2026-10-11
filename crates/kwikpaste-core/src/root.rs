@@ -57,6 +57,8 @@ pub(crate) struct CoreInner {
     pub(crate) window_state: WindowStateStore,
     pub(crate) cleanup: clipboard::cleanup::CleanupScheduler,
     pub(crate) ocr: crate::ocr::Scheduler,
+    pub(crate) extensions: crate::extensions::ExtensionStore,
+    pub(crate) wetype: crate::wetype::WeTypeService,
     /// 来源应用缓存，监听与偏好页共用。
     pub(crate) apps: AppsRegistry,
     /// 局域网同步：已配对设备随 core 读入，网络部分由宿主启用。
@@ -91,7 +93,9 @@ impl Core {
             let app_icons = AppIconStore::new(&paths)?;
             let file_icons = FileIconStore::new(&paths)?;
             let window_state = WindowStateStore::new(&paths)?;
+            let extensions = crate::extensions::ExtensionStore::load(paths.extensions_dir());
             let peers = crate::sync::PeerStore::load(&paths.sync_dir());
+            let wetype = crate::wetype::WeTypeService::new(paths.extensions_dir().join("wetype"));
 
             let inner = Arc::new(CoreInner {
                 info,
@@ -109,6 +113,8 @@ impl Core {
                 window_state,
                 cleanup: Default::default(),
                 ocr: Default::default(),
+                wetype,
+                extensions,
                 apps: AppsRegistry::default(),
                 sync: crate::sync::LanSyncService::new(Arc::new(peers)),
                 watcher_pause: WatcherPause::default(),
@@ -123,6 +129,7 @@ impl Core {
             inner.sync.bind(Arc::downgrade(&inner));
             inner.ocr.bind(Arc::downgrade(&inner));
             inner.ocr.startup().await;
+            inner.wetype.apply(&inner).await;
             if let Err(err) = inner.apps.load_from_db(&inner).await {
                 log::warn!("apps registry: initial DB load failed: {err}");
             }
@@ -149,6 +156,7 @@ impl Core {
         drop(lock(&self.0.watcher).take());
         let core = self.clone();
         self.hop(async move {
+            core.0.wetype.shutdown().await;
             core.0.ocr.shutdown().await;
             crate::sync::shutdown(&core.0).await;
             if let Some(task) = core.0.cleanup_task().take() {
@@ -279,9 +287,6 @@ impl Core {
             }
             if delta.touches("sync") {
                 crate::sync::settings_changed(&core.0);
-            }
-            if delta.touches("clipboard.ocr") {
-                core.0.ocr.settings_changed();
             }
             core.emit_settings(&next, delta);
             Ok(next)
@@ -428,7 +433,7 @@ impl Core {
             let pool = core.0.db.pool().await;
             let mut query = query;
             let clipboard = core.0.settings.snapshot().clipboard;
-            query.ocr_enabled = clipboard.ocr.enabled;
+            query.ocr_enabled = core.ocr_enabled();
             let (rows, total) = db::items::query_items_page(&pool, &query).await?;
             let ctx = core.list_context(&pool, &clipboard);
             let mut list = Vec::with_capacity(rows.len());
@@ -462,7 +467,7 @@ impl Core {
             let mut view =
                 presenter::present_list_item(&core.list_context(&pool, &clipboard), item).await?;
             let query = ClipboardItemQuery {
-                ocr_enabled: clipboard.ocr.enabled,
+                ocr_enabled: core.ocr_enabled(),
                 ..Default::default()
             };
             crate::ocr::attach_view(&pool, &mut view, &query).await?;
@@ -510,7 +515,7 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let clipboard = core.0.settings.snapshot().clipboard;
-            if !clipboard.ocr.enabled {
+            if !core.ocr_enabled() {
                 return Ok(None);
             }
             let pool = core.0.db.pool().await;
@@ -650,6 +655,7 @@ impl Core {
             chrono::Local::now(),
         )
         .with_devices(self.0.sync.peers())
+        .with_wetype_devices(&self.0.wetype.names)
     }
 
     fn emit_settings(&self, settings: &Settings, delta: SettingsDelta) {

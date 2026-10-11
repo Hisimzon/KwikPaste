@@ -79,6 +79,59 @@
     "shortcutInUse": "In use by another app",
     "shortcutNotSet": "Not set"
   },
+  "extensions": {
+    "details": {
+      "feature": "What it does",
+      "how": "How it works",
+      "privacy": "Privacy"
+    },
+    "downloading": "Downloading {{percent}}%",
+    "enable": "Enable {{name}}",
+    "install": "Install",
+    "installing": "Installing…",
+    "ocr": {
+      "description": "Recognizes text in images for search and copying, using the system's built-in recognition.",
+      "feature": "Recognizes the text in images you copy. You can then find an image by its text, use “Copy Text in Image” from the context menu, or switch the preview to Text to pick and copy part of it.",
+      "how": "Uses the system's built-in text recognition: Windows.Media.Ocr on Windows and the Vision framework on macOS. Recognition runs in a separate background process that starts only when there are new images and exits when it is done, so it doesn't stay in memory. Supported languages depend on the language packs installed on the system.",
+      "name": "Image text recognition",
+      "privacy": "Recognition happens entirely on this device. Neither images nor recognized text are uploaded.",
+      "uninstallContent": "New images will no longer be recognized; recognized text is kept."
+    },
+    "retry": "Retry",
+    "unavailable": "Temporarily unavailable. Please try again later.",
+    "uninstall": "Uninstall",
+    "uninstallTitle": "Uninstall extension",
+    "update": "Update",
+    "updateAvailable": "New version {{version}} available",
+    "wetype": {
+      "codePlaceholder": "6-digit code",
+      "coexist": "WeType is running on this computer: it handles clipboard exchange, and KwikPaste only records what your phone sends into history.",
+      "description": "Exchange copied text and images with WeType (微信输入法) on your phone.",
+      "deviceSeparator": ", ",
+      "devices": "Devices in the group",
+      "feature": "Text and images you copy here appear in WeType's clipboard on your phone, and what you copy on the phone comes into KwikPaste, usually within seconds. Your phone needs WeType with this computer linked under 跨设备粘贴传送 (cross-device paste).",
+      "how": "Built on an analysis of WeType's cross-device clipboard protocol (the open-source wx-ime-sdk) and runs in a separate background process. It is not an interface provided by Tencent: it may stop working after a WeType update, and Tencent may restrict it.",
+      "installContent": "This is an unofficial feature based on an analysis of WeType's protocol, not an interface provided by Tencent. It may stop working after a WeType update, Tencent may restrict it, and synced content passes through Tencent's servers. Install it?",
+      "installTitle": "Install WeType sync",
+      "name": "WeType sync",
+      "notPaired": "Not paired",
+      "notPairedDescription": "In WeType on your phone, open 跨设备粘贴传送 (cross-device paste), link a device, and enter the 6-digit code shown.",
+      "pair": "Pair",
+      "paired": "Paired",
+      "pairedDescription": "This computer appears as “{{name}}” on your phone.",
+      "pairedToast": "Paired. Copied items now sync automatically.",
+      "pairTitle": "Pair with WeType",
+      "privacy": "Synced content passes through Tencent's servers, just like WeType's own cross-device paste. Items marked sensitive and files are never sent.",
+      "sendImage": "Send images copied here",
+      "sendText": "Send text copied here",
+      "starting": "Starting…",
+      "uninstallContent": "Uninstalling removes this computer's pairing identity. Remove this computer from the device list in WeType on your phone.",
+      "unpair": "Unpair",
+      "unpairContent": "This only removes this computer's pairing identity. Remove “{{name}}” from the device list in WeType on your phone.",
+      "unpairTitle": "Unpair",
+      "writeClipboard": "Write received items to the clipboard"
+    }
+  },
   "imageText": {
     "checking": "Checking text recognition on this system…",
     "deleted": "Image text deleted",
@@ -450,6 +503,9 @@
       "diagnostics": {
         "title": "Diagnostics & Recovery"
       },
+      "extensions": {
+        "title": "Extensions"
+      },
       "format": {
         "title": "Default Format"
       },
@@ -704,6 +760,7 @@
       },
       "copy": {
         "hideWindow": {
+          "description": "Applies to copying only. The window always hides after pasting; pin the window to keep it open.",
           "title": "Hide Window After Copy"
         },
         "plainDefault": {
@@ -735,6 +792,11 @@
           "title": "Reset All Preferences"
         }
       },
+      "extensions": {
+        "manager": {
+          "title": "Extensions"
+        }
+      },
       "history": {
         "cleanupStatus": {
           "controlLabel": "Clean Up Now",
@@ -756,10 +818,10 @@
       },
       "localData": {
         "cleanCache": {
-          "confirmContent": "Images, thumbnails and icons no longer referenced by history will be deleted, and the database file will be compacted. Resources in use are kept. This can take a few seconds with a large history.",
+          "confirmContent": "File records whose files no longer exist on disk will be deleted (favorites and pinned items are kept), along with images, thumbnails and icons no longer referenced by history, and the database file will be compacted. Resources in use are kept. This can take a few seconds with a large history.",
           "confirmTitle": "Clean Resource Cache",
           "controlLabel": "Clean Cache",
-          "description": "Remove images, thumbnails and icons no longer referenced by history, and compact the database file.",
+          "description": "Remove file records whose files were deleted, plus images, thumbnails and icons no longer referenced by history, and compact the database file.",
           "title": "Clean Cache"
         },
         "clearHistory": {
@@ -863,6 +925,8 @@
         },
         "runAsAdministrator": {
           "description": "Used to restart KwikPaste with administrator privileges and keep future launches elevated when needed.",
+          "statusElevated": "Currently running as administrator.",
+          "statusNormal": "Currently not running as administrator.",
           "title": "Run as Administrator"
         }
       },
@@ -898,10 +962,6 @@
         "defaultFocus": {
           "title": "Focus Search Box"
         },
-        "typeToSearch": {
-          "description": "Start typing to search without clicking the search box first; Backspace deletes a character. Those keys no longer reach the app behind the panel.",
-          "title": "Type to Search"
-        },
         "sort": {
           "options": {
             "createdAtDesc": "Created Time",
@@ -909,6 +969,10 @@
             "useCountDesc": "Usage Frequency"
           },
           "title": "Default Sort Order"
+        },
+        "typeToSearch": {
+          "description": "Start typing to search without clicking the search box first; Backspace deletes a character. Those keys no longer reach the app behind the panel.",
+          "title": "Type to Search"
         }
       },
       "sensitive": {
@@ -1089,6 +1153,9 @@
       },
       "data": {
         "title": "Data"
+      },
+      "extensions": {
+        "title": "Extensions"
       },
       "general": {
         "title": "General"

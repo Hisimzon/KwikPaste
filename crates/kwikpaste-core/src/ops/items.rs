@@ -18,7 +18,7 @@ use crate::db::items::{
     clear_items, delete_item, delete_items, find_item_by_id, find_item_id_at,
     increment_item_use_count, list_item_refs, mark_item_favorite, reorder_item,
     toggle_item_favorite, toggle_item_pinned, touch_item_last_used, update_item_group,
-    update_item_note, ReorderAnchor, ReorderSection,
+    update_item_note, update_item_text_content, ReorderAnchor, ReorderSection,
 };
 use crate::db::models::{ClipboardItem, ClipboardItemQuery, ClipboardItemRef, ClipboardKind};
 use crate::db::overview::{clear_scope, ClearScope};
@@ -248,8 +248,7 @@ async fn load_fragment_text(
     let item = find_required(pool, id).await?;
     let text = match fragment {
         ClipboardFragment::ImageWords { indices }
-            if item.kind == ClipboardKind::Image
-                && core.settings.snapshot().clipboard.ocr.enabled =>
+            if item.kind == ClipboardKind::Image && core.extensions.resolve("ocr").is_some() =>
         {
             let recognized: Option<String> = sqlx::query_scalar(
                 "SELECT text FROM image_texts WHERE item_id = ? AND status = 'done'",
@@ -300,7 +299,7 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let settings = core.settings().clipboard;
-            if !settings.ocr.enabled {
+            if !core.ocr_enabled() {
                 return Err(AppError::Clipboard(
                     "image text recognition is disabled".into(),
                 ));
@@ -584,6 +583,42 @@ impl Core {
         .await
     }
 
+    /// 编辑文本记录：按采集规则重建内容字段，保留元数据，不发布同步或复用事件。
+    pub async fn update_text_content(&self, id: &str, content: String) -> Result<()> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            let mut item = find_required(&pool, &id).await?;
+            if item.kind != ClipboardKind::Text {
+                return Err(AppError::Clipboard(
+                    "Only text records can be edited".to_owned(),
+                ));
+            }
+            if content.trim().is_empty() {
+                return Err(AppError::Clipboard("Content cannot be empty".to_owned()));
+            }
+            let current = if matches!(
+                item.sub_kind,
+                Some(
+                    crate::db::models::ClipboardSubKind::Html
+                        | crate::db::models::ClipboardSubKind::Rtf
+                )
+            ) {
+                item.search_text.as_deref().unwrap_or(&item.content)
+            } else {
+                &item.content
+            };
+            if content == current {
+                return Ok(());
+            }
+
+            clipboard::rewrite_text_content(&mut item, &content);
+            update_item_text_content(&pool, &item).await
+        })
+        .await
+    }
+
     /// 把记录移到自定义分组；分组不存在时报错。
     pub async fn set_item_group(&self, id: &str, group_id: &str) -> Result<()> {
         let core = self.clone();
@@ -688,7 +723,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let mut query = query;
-            query.ocr_enabled = core.settings().clipboard.ocr.enabled;
+            query.ocr_enabled = core.ocr_enabled();
             list_item_refs(&core.0.db.pool().await, &query).await
         })
         .await

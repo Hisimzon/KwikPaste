@@ -80,12 +80,19 @@ fn every_released_settings_file_loads_without_fallback() {
         );
         assert!(!report.history_degraded(), "{name}");
         assert!(
-            !store.snapshot().clipboard.ocr.enabled,
-            "{name}: OCR must remain opt-in"
+            serde_json::to_value(store.snapshot()).unwrap()["clipboard"]
+                .get("ocr")
+                .is_none(),
+            "{name}: OCR must not be a setting"
         );
         assert_eq!(
             store.snapshot().clipboard.feedback.copy_sound_volume,
             100,
+            "{name}"
+        );
+        assert_eq!(
+            store.snapshot().extensions.wetype,
+            kwikpaste_core::settings::WeTypeSettings::default(),
             "{name}"
         );
     }
@@ -181,7 +188,8 @@ fn customized_settings_round_trip_exactly() {
     // 夹具没有免焦点搜索开关,读取后应补上新版本默认值(默认关)。
     expected["clipboard"]["search"]["typeToSearch"] = Value::Bool(false);
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
-    expected["clipboard"]["ocr"] = serde_json::json!({"enabled": false});
+    expected["extensions"] =
+        serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});
     // 2.x 删掉了 1.x 的更新渠道开关。
     let update = expected["update"].as_object_mut().unwrap();
     update.remove("includeBeta");

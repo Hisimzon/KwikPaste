@@ -79,6 +79,59 @@
     "shortcutInUse": "已被其他程序占用",
     "shortcutNotSet": "未设置"
   },
+  "extensions": {
+    "details": {
+      "feature": "功能",
+      "how": "实现方式",
+      "privacy": "隐私"
+    },
+    "downloading": "正在下载 {{percent}}%",
+    "enable": "启用{{name}}",
+    "install": "安装",
+    "installing": "正在安装…",
+    "ocr": {
+      "description": "识别图片里的文字，用于搜索和复制，使用系统自带的识别能力。",
+      "feature": "复制图片后自动识别其中的文字。之后可以用文字搜到这张图片，在右键菜单里「复制图中文字」，或在预览里切换到「文字」挑选部分文字复制。",
+      "how": "使用系统自带的文字识别：Windows 上是 Windows.Media.Ocr，macOS 上是 Vision 框架。识别在单独的后台进程里进行，有新图片时才启动，处理完自动退出，不常驻内存。能识别哪些语言取决于系统安装的语言包。",
+      "name": "图片文字识别",
+      "privacy": "识别全部在本机完成，图片和识别出的文字都不会上传。",
+      "uninstallContent": "卸载后不再识别新图片，已识别的文字会保留。"
+    },
+    "retry": "重试",
+    "unavailable": "暂时无法获取，请稍后重试",
+    "uninstall": "卸载",
+    "uninstallTitle": "卸载扩展",
+    "update": "更新",
+    "updateAvailable": "有新版本 {{version}}",
+    "wetype": {
+      "codePlaceholder": "6 位配对码",
+      "coexist": "电脑上的微信输入法正在运行：剪贴板互传由它负责，快贴只把手机发来的内容记进历史。",
+      "description": "和手机上的微信输入法互传复制的文字和图片。",
+      "deviceSeparator": "、",
+      "devices": "同组设备",
+      "feature": "电脑上复制的文字和图片会出现在手机微信输入法的剪贴板里，手机上复制的也会自动进入快贴，通常几秒内到达。手机需要安装微信输入法，并在「跨设备粘贴传送」里关联这台电脑。",
+      "how": "基于对微信输入法跨设备剪贴板协议的分析实现（开源项目 wx-ime-sdk），在单独的后台进程里运行。这不是腾讯提供的接口：微信输入法更新后可能失效，腾讯也可能限制使用。",
+      "installContent": "这是非官方功能，通过分析微信输入法的协议实现，不是腾讯提供的接口。微信输入法更新后可能失效，腾讯也可能限制使用；同步的内容会经过腾讯的服务器。确定要安装吗？",
+      "installTitle": "安装微信输入法同步",
+      "name": "微信输入法同步",
+      "notPaired": "未配对",
+      "notPairedDescription": "在手机微信输入法的「跨设备粘贴传送」里选择关联设备，输入屏幕上显示的 6 位配对码。",
+      "pair": "配对",
+      "paired": "已配对",
+      "pairedDescription": "这台电脑在手机上显示为「{{name}}」。",
+      "pairedToast": "已配对，复制的内容会自动同步",
+      "pairTitle": "和微信输入法配对",
+      "privacy": "同步的内容会经过腾讯的服务器，和微信输入法自己的跨设备粘贴一样。标记为敏感的内容和文件不会发送。",
+      "sendImage": "发送本机复制的图片",
+      "sendText": "发送本机复制的文字",
+      "starting": "正在启动…",
+      "uninstallContent": "卸载会清除本机的配对身份。请到手机微信输入法的设备列表里移除这台电脑。",
+      "unpair": "解除配对",
+      "unpairContent": "只会清除本机的配对身份。请到手机微信输入法的设备列表里移除「{{name}}」。",
+      "unpairTitle": "解除配对",
+      "writeClipboard": "收到的内容写入剪贴板"
+    }
+  },
   "imageText": {
     "checking": "正在检查系统的文字识别能力…",
     "deleted": "已删除识别文字",
@@ -440,6 +493,9 @@
       "diagnostics": {
         "title": "诊断与恢复"
       },
+      "extensions": {
+        "title": "扩展"
+      },
       "format": {
         "title": "默认格式"
       },
@@ -694,6 +750,7 @@
       },
       "copy": {
         "hideWindow": {
+          "description": "只对复制生效。粘贴后窗口总会隐藏，想保留窗口请先固定窗口。",
           "title": "复制后隐藏窗口"
         },
         "plainDefault": {
@@ -725,6 +782,11 @@
           "title": "重置所有偏好"
         }
       },
+      "extensions": {
+        "manager": {
+          "title": "扩展"
+        }
+      },
       "history": {
         "cleanupStatus": {
           "controlLabel": "立即清理",
@@ -746,10 +808,10 @@
       },
       "localData": {
         "cleanCache": {
-          "confirmContent": "将删除不再被历史记录引用的图片、缩略图和图标缓存，并压缩数据库文件。仍在使用的资源会保留，记录较多时可能需要几秒。",
+          "confirmContent": "将删除文件已不在磁盘上的文件记录（收藏与置顶保留），以及不再被历史记录引用的图片、缩略图和图标缓存，并压缩数据库文件。仍在使用的资源会保留，记录较多时可能需要几秒。",
           "confirmTitle": "清理资源缓存",
           "controlLabel": "清理缓存",
-          "description": "移除不再被历史记录引用的图片、缩略图和图标缓存，并压缩数据库文件。",
+          "description": "移除文件已被删除的文件记录，以及不再被历史记录引用的图片、缩略图和图标缓存，并压缩数据库文件。",
           "title": "清理缓存"
         },
         "clearHistory": {
@@ -853,6 +915,8 @@
         },
         "runAsAdministrator": {
           "description": "用于以管理员权限重启 快贴，并在需要时让后续启动保持提权运行。",
+          "statusElevated": "当前：已以管理员身份运行。",
+          "statusNormal": "当前：未以管理员身份运行。",
           "title": "管理员权限启动"
         }
       },
@@ -888,10 +952,6 @@
         "defaultFocus": {
           "title": "聚焦搜索框"
         },
-        "typeToSearch": {
-          "description": "面板显示时不用先点搜索框:直接敲字母就开始搜索,Backspace 删字符。开启后这些按键不再进入当前应用。",
-          "title": "直接输入搜索"
-        },
         "sort": {
           "options": {
             "createdAtDesc": "创建时间",
@@ -899,6 +959,10 @@
             "useCountDesc": "使用频率"
           },
           "title": "默认排序方式"
+        },
+        "typeToSearch": {
+          "description": "面板显示时不用先点搜索框:直接敲字母就开始搜索,Backspace 删字符。开启后这些按键不再进入当前应用。",
+          "title": "直接输入搜索"
         }
       },
       "sensitive": {
@@ -1078,6 +1142,9 @@
       },
       "data": {
         "title": "数据"
+      },
+      "extensions": {
+        "title": "扩展"
       },
       "general": {
         "title": "通用"

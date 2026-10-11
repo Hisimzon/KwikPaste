@@ -28,8 +28,8 @@ const CUSTOM_STORAGE_CONTAINER_DIR: &str = "KwikPasteData";
 const CLIPBOARD_IMAGES_DIR: &str = "clipboard-images";
 const APP_ICONS_DIR: &str = "app-icons";
 const FILE_ICONS_DIR: &str = "file-icons";
-/// 数据迁出默认位置时启动锚点里要留下的条目：manifest 与本机同步身份目录。
-const BOOTSTRAP_KEEP: [&str; 2] = ["storage.json", "sync"];
+/// 数据迁移时启动锚点需保留的清单、本机同步身份目录和扩展目录。
+const BOOTSTRAP_KEEP: [&str; 3] = ["storage.json", "sync", crate::paths::EXTENSIONS_DIR];
 
 /// 偏好页侧栏展示的本地存储占用概览。
 #[derive(Debug, Clone, Serialize)]
@@ -189,10 +189,10 @@ impl Core {
         .await
     }
 
-    /// 删除资源目录中不再被记录或资源索引引用的文件，再整库 VACUUM 压缩数据库。
+    /// 删除路径已全部不在磁盘上的文件记录（收藏与置顶保留），再删除资源目录中不再被记录或
+    /// 资源索引引用的文件，最后整库 VACUUM 压缩数据库。
     ///
-    /// 不删任何记录，所以历史设置回落、自动清理暂停时也照常执行；与自动清理互斥，
-    /// 正在清理时等它结束再开始。
+    /// 历史设置回落、自动清理暂停时也照常执行；与自动清理互斥，正在清理时等它结束再开始。
     pub async fn clean_resource_cache(&self) -> Result<CleanCacheResult> {
         let core = self.clone();
         self.hop(async move {
@@ -202,6 +202,7 @@ impl Core {
             {
                 let _exclusive = inner.cleanup.exclusive().await;
                 let pool = inner.db.pool().await;
+                remove_missing_file_items(inner, &pool).await?;
                 removed = sweep_resource_cache(inner, &pool, CacheSweep::Delete).await?;
 
                 let before = database_bytes(&inner.paths)?;
@@ -435,8 +436,8 @@ fn remove_custom_storage_root(old: &Path) -> Result<()> {
     }
 }
 
-/// 默认数据根同时是启动锚点：只删数据，保留 `storage.json` 和不随数据搬走的 `sync/`
-/// （本机同步身份与已配对设备，见 [`CorePaths::sync_dir`]）。
+/// 默认数据根同时是启动锚点：只删数据，保留 `storage.json` 和不随数据搬走的 `sync/`、`extensions/`
+/// （本机同步身份与已配对设备见 [`CorePaths::sync_dir`]，扩展见 [`CorePaths::extensions_dir`]）。
 fn remove_bootstrap_storage_payload(dir: &Path) -> Result<()> {
     if !dir.exists() {
         return Ok(());
@@ -505,6 +506,29 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
         fs::copy(&src_path, &dst_path)
             .with_context(|| format!("failed to copy {src_path:?} to {dst_path:?}"))?;
     }
+    Ok(())
+}
+
+/// 删除路径已全部不在磁盘上的文件记录并通知列表刷新；还有一个路径在就保留。
+async fn remove_missing_file_items(core: &CoreInner, pool: &SqlitePool) -> Result<()> {
+    let candidates = crate::db::items::unprotected_file_items(pool).await?;
+    let missing = tokio::task::spawn_blocking(move || {
+        candidates
+            .into_iter()
+            .filter(|(_, content)| {
+                content
+                    .split('\n')
+                    .filter(|path| !path.is_empty())
+                    .all(|path| matches!(Path::new(path).try_exists(), Ok(false)))
+            })
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+    })
+    .await
+    .context("failed to check file paths")?;
+
+    let outcome = crate::db::items::delete_items(pool, &missing).await?;
+    clipboard::cleanup::apply_outcome(core, &outcome, "missing files");
     Ok(())
 }
 
@@ -789,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_storage_cleanup_keeps_only_manifest_and_sync_identity() {
+    fn bootstrap_storage_cleanup_keeps_manifest_sync_identity_and_extensions() {
         let temp = TempDir::new();
         fs::write(temp.path().join("storage.json"), "{}").unwrap();
         fs::write(temp.path().join(".kwikpaste-storage.json"), "{}").unwrap();
@@ -800,7 +824,12 @@ mod tests {
         fs::create_dir_all(temp.path().join("sync")).unwrap();
         fs::write(temp.path().join("sync").join("identity.json"), b"{}").unwrap();
 
+        fs::create_dir_all(temp.path().join("extensions/ocr/state")).unwrap();
+        fs::write(temp.path().join("extensions/installed.json"), b"{}").unwrap();
+        fs::write(temp.path().join("extensions/ocr/state/data"), b"state").unwrap();
         remove_bootstrap_storage_payload(temp.path()).unwrap();
+        assert!(temp.path().join("extensions/installed.json").exists());
+        assert!(temp.path().join("extensions/ocr/state/data").exists());
 
         assert!(temp.path().join("storage.json").exists());
         assert!(temp.path().join("sync").join("identity.json").exists());

@@ -12,6 +12,16 @@ use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorks
 
 /// 当前前台应用。在剪贴板变化回调里同步调用；没有 bundle id 的进程（命令行子进程等）返回 `None`，
 /// 避免主键不稳定。
+/// macOS 的粘贴板没有「所有者进程」这个概念。
+pub fn clipboard_owner() -> Option<PathBuf> {
+    None
+}
+
+/// 目前只用来认 Windows 版官方微信输入法，macOS 不检测。
+pub fn process_running(_exe_name: &str) -> bool {
+    false
+}
+
 pub fn frontmost_app() -> Option<FrontmostApp> {
     autoreleasepool(|_| {
         let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;

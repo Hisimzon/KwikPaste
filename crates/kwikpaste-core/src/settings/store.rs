@@ -397,6 +397,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn old_settings_without_extensions_load_with_additive_defaults() -> anyhow::Result<()> {
+        let fixture = crate::testing::Fixture::new();
+        let old = serde_json::json!({
+            "general": {"trayIcon": false},
+            "sync": {"lan": {"enabled": false}},
+            "clipboard": {"capture": {"text": true}}
+        });
+        let config = fixture.paths.config_dir()?;
+        std::fs::create_dir_all(&config)?;
+        std::fs::write(config.join("settings.json"), serde_json::to_vec(&old)?)?;
+        let core = fixture.start();
+        assert_eq!(
+            core.settings().extensions.wetype,
+            crate::settings::WeTypeSettings::default()
+        );
+        assert!(!core.settings().general.tray_icon);
+        crate::testing::block_on(core.shutdown())?;
+        Ok(())
+    }
+
+    #[test]
     fn deep_merge_overrides_leaves_and_recurses_objects() {
         let mut base = serde_json::json!({
             "general": {"autoStart": false, "trayIcon": true},
@@ -484,7 +505,9 @@ mod tests {
             crate::db::models::ClipboardItemSort::UpdatedAt
         );
         assert!(!parsed.clipboard.content.copy_then_hide_window);
-        assert!(!parsed.clipboard.ocr.enabled);
+        assert!(serde_json::to_value(&parsed).unwrap()["clipboard"]
+            .get("ocr")
+            .is_none());
         assert!(
             parsed
                 .clipboard

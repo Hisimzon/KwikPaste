@@ -55,6 +55,8 @@ pub(crate) struct FakePlatform {
     pub running: Mutex<Vec<ScannedApp>>,
     pub sounds: AtomicUsize,
     pub sound_volumes: Mutex<Vec<u8>>,
+    /// 测试里视为正在运行的进程文件名。
+    pub processes: Mutex<Vec<String>>,
 }
 
 impl FakePlatform {
@@ -102,6 +104,14 @@ impl PlatformServices for FakePlatform {
 
     fn app_from_id(&self, _id: &str) -> Option<ScannedApp> {
         None
+    }
+
+    fn process_running(&self, exe_name: &str) -> bool {
+        self.processes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(exe_name))
     }
 
     fn play_copy_sound(&self, volume_percent: u8) {

@@ -14,6 +14,7 @@ pub mod disk;
 pub mod env;
 pub mod error;
 pub mod events;
+pub mod extensions;
 pub mod i18n;
 pub mod imaging;
 pub mod legacy;
@@ -30,6 +31,7 @@ pub mod settings;
 pub mod sync;
 #[cfg(test)]
 mod testing;
+pub mod wetype;
 pub mod window_state;
 
 pub use env::{AppEnv, AppInfo, CoreOptions, APP_IDENTIFIER, APP_NAME};
@@ -40,3 +42,4 @@ pub use root::Core;
 pub use runtime::CoreRuntime;
 
 pub use ocr::{OcrStatus, OcrSupport, TextSnippet};
+pub use wetype::{WeTypeDevice, WeTypeState};

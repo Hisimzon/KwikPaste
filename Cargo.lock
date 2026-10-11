@@ -4233,7 +4233,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-app"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4264,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-core"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4277,6 +4277,7 @@ dependencies = [
  "file_icon_provider",
  "if-addrs",
  "image",
+ "kwikpaste-ext-protocol",
  "libc",
  "log",
  "mdns-sd",
@@ -4304,26 +4305,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "kwikpaste-ext-ocr"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "kwikpaste-ext-protocol",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-image-io",
+ "objc2-vision",
+ "tempfile",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "kwikpaste-ext-protocol"
+version = "2.0.2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kwikpaste-os"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "auto-launch",
  "block2 0.6.2",
  "dispatch2",
- "image",
  "kwikpaste-core",
- "libc",
  "log",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
- "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
- "objc2-image-io",
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
- "objc2-vision",
  "plist",
  "tempfile",
  "windows 0.62.2",
@@ -4333,7 +4355,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ui"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "futures",
@@ -4346,7 +4368,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-updater"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4355,6 +4377,7 @@ dependencies = [
  "ed25519-dalek",
  "flate2",
  "kwikpaste-core",
+ "kwikpaste-ext-protocol",
  "log",
  "minisign-verify",
  "rand 0.8.8",

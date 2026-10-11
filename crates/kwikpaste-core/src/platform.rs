@@ -40,6 +40,16 @@ pub trait PlatformServices: Send + Sync + 'static {
     /// Windows `GetForegroundWindow` + `QueryFullProcessImageNameW`。
     fn frontmost_app(&self) -> Option<FrontmostApp>;
 
+    /// 剪贴板当前所有者进程的 exe（Windows `GetClipboardOwner`）；macOS 没有这个概念，返回 `None`。
+    fn clipboard_owner(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// 有没有文件名为 `exe_name` 的进程在运行（Windows 进程快照）；macOS 不检测，返回 `false`。
+    fn process_running(&self, _exe_name: &str) -> bool {
+        false
+    }
+
     /// 当前运行中的用户应用，按 id 去重。1.x 实现：macOS 取 activationPolicy 为 Regular 的
     /// `runningApplications`；Windows 枚举可见且有标题的顶层窗口所属进程的 exe（规范化路径）。
     fn running_apps(&self) -> Vec<ScannedApp>;

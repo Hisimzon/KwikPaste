@@ -56,26 +56,39 @@ impl EchoFilter {
         fresh
     }
 
-    fn is_echo(&self, content_hash: &str) -> bool {
+    pub(crate) fn is_echo(&self, content_hash: &str) -> bool {
         self.last
             .as_ref()
             .is_some_and(|(hash, at)| hash == content_hash && at.elapsed() <= ECHO_WINDOW)
     }
 
-    fn remember(&mut self, content_hash: &str) {
+    pub(crate) fn remember(&mut self, content_hash: &str) {
         self.last = Some((content_hash.to_owned(), Instant::now()));
+    }
+
+    /// 测试模拟官方客户端数秒后写回，不实际等待或依赖系统时钟。
+    #[cfg(test)]
+    pub(crate) fn remember_elapsed_for_test(&mut self, hash: &str, elapsed: Duration) {
+        self.last = Instant::now()
+            .checked_sub(elapsed)
+            .map(|at| (hash.to_owned(), at));
     }
 }
 
 /// 这条记录按当前设置是否参与同步。文件和敏感内容不同步。
 pub fn is_syncable(item: &ClipboardItem, lan: &LanSync) -> bool {
+    is_syncable_types(item, lan.text, lan.image)
+}
+
+/// 各传输共用的类型与敏感内容规则，不依赖 LAN 设置模型。
+pub(crate) fn is_syncable_types(item: &ClipboardItem, text: bool, image: bool) -> bool {
     if item.is_sensitive {
         return false;
     }
 
     match item.kind {
-        ClipboardKind::Text => lan.text,
-        ClipboardKind::Image => lan.image,
+        ClipboardKind::Text => text,
+        ClipboardKind::Image => image,
         ClipboardKind::Files => false,
     }
 }
@@ -216,22 +229,61 @@ pub async fn receive(
     attachment: Vec<u8>,
     live: bool,
 ) -> anyhow::Result<()> {
+    let lan = core.settings.snapshot().sync.lan;
+    receive_with_options(
+        core,
+        echo,
+        peer_id,
+        peer_platform,
+        wire,
+        attachment,
+        live,
+        ReceiveOptions {
+            text: lan.text,
+            image: lan.image,
+            write_clipboard: lan.write_clipboard,
+            max_image_bytes: lan.max_image_bytes(),
+            allow_jpeg: false,
+        },
+    )
+    .await
+}
+
+/// 接收策略独立于传输；LAN 与 WeType 共用构建、入库、回声和剪贴板写回。
+#[derive(Clone, Copy)]
+pub(crate) struct ReceiveOptions {
+    pub text: bool,
+    pub image: bool,
+    pub write_clipboard: bool,
+    pub max_image_bytes: u64,
+    pub allow_jpeg: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn receive_with_options(
+    core: &Arc<CoreInner>,
+    echo: &std::sync::Mutex<EchoFilter>,
+    peer_id: &str,
+    peer_platform: Platform,
+    wire: WireItem,
+    attachment: Vec<u8>,
+    live: bool,
+    options: ReceiveOptions,
+) -> anyhow::Result<()> {
     let settings = core.settings.snapshot();
-    let lan = &settings.sync.lan;
     let payload = match wire.kind {
-        ClipboardKind::Text if lan.text => text_payload(&wire)?,
-        ClipboardKind::Image if lan.image => {
-            if attachment.len() as u64 > lan.max_image_bytes() {
+        ClipboardKind::Text if options.text => text_payload(&wire)?,
+        ClipboardKind::Image if options.image => {
+            if attachment.len() as u64 > options.max_image_bytes {
                 log::info!("lan sync drops image over the size limit");
                 return Ok(());
             }
-            let (width, height) = png_dimensions(&attachment)
-                .ok_or_else(|| anyhow!("received image is not a PNG"))?;
-            ClipboardPayload::Image(ImagePayload {
-                bytes: attachment,
-                width,
-                height,
-            })
+            let allow_jpeg = options.allow_jpeg;
+            ClipboardPayload::Image(
+                tokio::task::spawn_blocking(move || received_image(attachment, allow_jpeg))
+                    .await
+                    .context("received image decode task failed")??,
+            )
         }
         _ => return Ok(()),
     };
@@ -265,14 +317,15 @@ pub async fn receive(
 
     // 补齐的是历史记录，不代表对方剪贴板的现状，不参与回声判断，也不写剪贴板。
     // 实时记录先记回声再写剪贴板：写回被本机监听到时要能认出来。
-    let write_clipboard = live
-        && lan.write_clipboard
+    crate::clipboard::persist::store_and_emit(core, &item).await?;
+
+    let fresh = live
         && echo
             .lock()
-            .expect("sync echo filter poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .accept_received(&item.content_hash);
 
-    crate::clipboard::persist::store_and_emit(core, &item).await?;
+    let write_clipboard = fresh && options.write_clipboard;
 
     if write_clipboard {
         let core = core.clone();
@@ -287,6 +340,30 @@ pub async fn receive(
     }
 
     Ok(())
+}
+
+/// PNG 保留原始字节；WeType 的 JPEG 受统一解码上限保护后转为本机 PNG 存储。
+fn received_image(bytes: Vec<u8>, allow_jpeg: bool) -> anyhow::Result<ImagePayload> {
+    if let Some((width, height)) = png_dimensions(&bytes) {
+        crate::imaging::check_rgba_size(width, height)?;
+        return Ok(ImagePayload {
+            bytes,
+            width,
+            height,
+        });
+    }
+    if !allow_jpeg || image::guess_format(&bytes)? != image::ImageFormat::Jpeg {
+        return Err(anyhow!("received image must be PNG or JPEG"));
+    }
+    let image = crate::imaging::from_bytes(&bytes)?.decode()?;
+    let (width, height) = (image.width(), image.height());
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png)?;
+    Ok(ImagePayload {
+        bytes: png.into_inner(),
+        width,
+        height,
+    })
 }
 
 /// 文本记录还原成剪贴板文本载荷：富文本带上 OS 同时提供的纯文本表示。

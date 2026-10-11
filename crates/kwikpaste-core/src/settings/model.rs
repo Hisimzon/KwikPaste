@@ -19,6 +19,7 @@ pub struct Settings {
     pub shortcuts: Shortcuts,
     pub clipboard: Clipboard,
     pub sync: SyncSettings,
+    pub extensions: ExtensionSettings,
     pub onboarding: Onboarding,
     pub update: Update,
 }
@@ -209,7 +210,6 @@ impl QuickPasteModifiers {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Clipboard {
-    pub ocr: Ocr,
     pub capture: Capture,
     pub content: Content,
     pub display: Display,
@@ -220,13 +220,6 @@ pub struct Clipboard {
     pub preview: Preview,
     pub feedback: Feedback,
     pub filters: Filters,
-}
-
-/// 图片文字识别设置；旧配置没有该字段时不开启任何后台工作。
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Ocr {
-    pub enabled: bool,
 }
 
 /// 剪贴板内容类型采集开关。关闭后监听与手动读取都不入库对应类型。
@@ -949,4 +942,29 @@ pub enum UpdateFrequency {
     Daily,
     Weekly,
     Monthly,
+}
+
+/// 扩展的宿主设置，不包含身份或远程设备数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ExtensionSettings {
+    pub wetype: WeTypeSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WeTypeSettings {
+    pub send_text: bool,
+    pub send_image: bool,
+    pub write_clipboard: bool,
+}
+
+impl Default for WeTypeSettings {
+    fn default() -> Self {
+        Self {
+            send_text: true,
+            send_image: true,
+            write_clipboard: true,
+        }
+    }
 }

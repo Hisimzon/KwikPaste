@@ -74,16 +74,11 @@ pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
         }),
         group_id: group_id.as_deref().map(str::to_owned),
         favorite: query.filter.favorites().then_some(true),
-        group: Some(if query.filter.favorites() {
-            kwikpaste_core::db::models::ClipboardGroupFilter::Favorite
-        } else if let Some(category) = query.filter.category {
-            match category {
-                ItemKind::Text => kwikpaste_core::db::models::ClipboardGroupFilter::Text,
-                ItemKind::Image => kwikpaste_core::db::models::ClipboardGroupFilter::Image,
-                ItemKind::Files => kwikpaste_core::db::models::ClipboardGroupFilter::Files,
-            }
-        } else {
-            kwikpaste_core::db::models::ClipboardGroupFilter::All
+        group: Some(match category {
+            Some(ItemKind::Text) => kwikpaste_core::db::models::ClipboardGroupFilter::Text,
+            Some(ItemKind::Image) => kwikpaste_core::db::models::ClipboardGroupFilter::Image,
+            Some(ItemKind::Files) => kwikpaste_core::db::models::ClipboardGroupFilter::Files,
+            None => kwikpaste_core::db::models::ClipboardGroupFilter::All,
         }),
         keyword: (!keyword.is_empty()).then(|| keyword.to_string()),
         sort: query.sort,
@@ -209,6 +204,48 @@ impl ClipboardSource for CoreSource {
                 note: result.note.map(shared),
                 auto_favorited: result.auto_favorited,
             })
+        }
+        .boxed()
+    }
+
+    fn text_content(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<String>> {
+        let core = self.core.clone();
+        async move {
+            let item = core
+                .find_item(&id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Text record no longer exists"))?;
+            anyhow::ensure!(
+                item.kind == ClipboardKind::Text,
+                "Only text records can be edited"
+            );
+            Ok(
+                if matches!(
+                    item.sub_kind,
+                    Some(ClipboardSubKind::Html | ClipboardSubKind::Rtf)
+                ) {
+                    item.search_text.unwrap_or(item.content)
+                } else {
+                    item.content
+                },
+            )
+        }
+        .boxed()
+    }
+
+    fn update_text_content(
+        &self,
+        id: Arc<str>,
+        content: String,
+    ) -> BoxFuture<'static, anyhow::Result<ListItem>> {
+        let core = self.core.clone();
+        async move {
+            core.update_text_content(&id, content).await?;
+            let view = core
+                .list_item(&id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Text record no longer exists"))?;
+            Ok(ListItem::from(view))
         }
         .boxed()
     }

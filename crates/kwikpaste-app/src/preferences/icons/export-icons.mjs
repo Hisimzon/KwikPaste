@@ -34,6 +34,7 @@ const ICONS = [
   "lucide:loader-circle",
   "lucide:folder-open",
   "lucide:folder-sync",
+  "lucide:puzzle",
   "lucide:rotate-ccw",
   "lucide:refresh-cw",
   "lucide:grip-vertical",

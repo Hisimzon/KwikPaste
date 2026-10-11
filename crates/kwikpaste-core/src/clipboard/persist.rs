@@ -36,6 +36,7 @@ pub(crate) async fn persist_and_notify(
         }
     };
     crate::sync::on_local_capture(core, &item_to_write, seq);
+    crate::wetype::on_local_capture(core, &item_to_write, seq);
     let feedback = core.settings.snapshot().clipboard.feedback;
     if feedback.copy_sound {
         core.platform()
@@ -62,7 +63,7 @@ pub(crate) async fn store_and_emit(core: &CoreInner, item: &ClipboardItem) -> Re
             crate::db::pinyin::queue_update(&core.db.pool().await, &result.id);
         }
         if item.kind == crate::db::models::ClipboardKind::Image
-            && core.settings.snapshot().clipboard.ocr.enabled
+            && core.extensions.resolve("ocr").is_some()
         {
             core.ocr.nudge();
         }

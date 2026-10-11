@@ -30,6 +30,7 @@ pub(crate) struct ListContext<'a, Tz: TimeZone> {
     pub quick_snippets: bool,
     /// 已配对（含已移除）设备，同步收到的记录据此显示「来自 xxx」。
     pub devices: Option<&'a PeerStore>,
+    pub wetype_devices: Option<&'a crate::wetype::DeviceNames>,
 }
 
 impl<'a, Tz: TimeZone> ListContext<'a, Tz> {
@@ -53,7 +54,13 @@ impl<'a, Tz: TimeZone> ListContext<'a, Tz> {
             redact_sensitive: clipboard.sensitive.redact_secrets,
             quick_snippets: clipboard.display.quick_snippets,
             devices: None,
+            wetype_devices: None,
         }
+    }
+
+    pub fn with_wetype_devices(mut self, devices: &'a crate::wetype::DeviceNames) -> Self {
+        self.wetype_devices = Some(devices);
+        self
     }
 
     pub fn with_devices(mut self, devices: &'a PeerStore) -> Self {
@@ -75,7 +82,7 @@ where
 
     attach_image_thumbnail_path(ctx.images, &mut view);
     attach_source_app_icon_path(ctx.app_icons, &mut view);
-    attach_origin_device_name(ctx.devices, &mut view);
+    attach_origin_device_name(ctx.devices, ctx.wetype_devices, &mut view);
     attach_file_entries(ctx.pool, ctx.file_icons, &mut view, ctx.file_entry_limit).await?;
     attach_color_preview(&mut view);
     attach_display_created_at(&mut view, &ctx.now);
@@ -87,13 +94,19 @@ where
     Ok(view)
 }
 
-/// 局域网同步收到的记录：按来源设备 id 回填设备名（已取消配对的设备也有）。
-fn attach_origin_device_name(devices: Option<&PeerStore>, view: &mut ClipboardItemView) {
-    view.origin_device_name = view
-        .item
-        .origin_device_id
-        .as_deref()
-        .and_then(|id| devices?.display_name(id));
+/// 同步收到的记录：按来源设备 id 回填 LAN 或 WeType 设备名，已取消配对的设备也保留名称。
+fn attach_origin_device_name(
+    devices: Option<&PeerStore>,
+    wetype: Option<&crate::wetype::DeviceNames>,
+    view: &mut ClipboardItemView,
+) {
+    view.origin_device_name = view.item.origin_device_id.as_deref().and_then(|id| {
+        if let Some(uin) = id.strip_prefix("wetype:") {
+            wetype?.display_name(uin)
+        } else {
+            devices?.display_name(id)
+        }
+    });
 }
 
 /// 为 image 条目补齐**已存在**的缩略图绝对路径。

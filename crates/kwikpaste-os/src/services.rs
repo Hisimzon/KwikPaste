@@ -24,6 +24,14 @@ impl PlatformServices for NativeServices {
         native::frontmost_app()
     }
 
+    fn clipboard_owner(&self) -> Option<std::path::PathBuf> {
+        native::clipboard_owner()
+    }
+
+    fn process_running(&self, exe_name: &str) -> bool {
+        native::process_running(exe_name)
+    }
+
     fn running_apps(&self) -> Vec<ScannedApp> {
         native::running_apps()
     }

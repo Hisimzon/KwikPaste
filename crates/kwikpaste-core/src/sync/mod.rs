@@ -14,11 +14,11 @@
 //! [`crate::CorePaths::sync_dir`]，不随数据目录搬走，也不进备份。
 
 mod discovery;
-mod engine;
+pub(crate) mod engine;
 mod identity;
 mod pairing;
 mod peers;
-mod protocol;
+pub(crate) mod protocol;
 mod service;
 mod transport;
 
@@ -156,7 +156,7 @@ pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem, seq: Opti
     });
 }
 
-fn current_platform() -> Platform {
+pub(crate) fn current_platform() -> Platform {
     #[cfg(target_os = "macos")]
     {
         Platform::Macos
@@ -177,7 +177,7 @@ fn effective_device_name(lan: &LanSync) -> String {
     }
 }
 
-fn default_device_name() -> String {
+pub(crate) fn default_device_name() -> String {
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(system_device_name).clone()
 }

@@ -353,6 +353,13 @@ pub struct ImageTarget {
     pub display: ImageBox,
 }
 
+/// 微信输入法扩展收到的记录：来源 id 带 `wetype:` 前缀。
+fn is_wetype_origin(item: &ListItem) -> bool {
+    item.origin_device_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("wetype:"))
+}
+
 fn meta(
     env: &CardEnv<'_>,
     item: &ListItem,
@@ -363,10 +370,15 @@ fn meta(
     marks: Div,
 ) -> Div {
     let tokens = env.tokens;
+    let key = if is_wetype_origin(item) {
+        "clipboard:origin.fromWeType"
+    } else {
+        "clipboard:origin.fromDevice"
+    };
     let origin = item
         .origin_device_name
         .as_deref()
-        .map(|name| t_args("clipboard:origin.fromDevice", &[("name", name)]));
+        .map(|name| t_args(key, &[("name", name)]));
 
     div()
         .flex()
@@ -503,6 +515,7 @@ fn app_icon(env: &CardEnv<'_>, item: &ListItem, state: Option<Visual>) -> AnyEle
 
     if item.origin_device_id.is_some() {
         let icon = match item.platform {
+            _ if is_wetype_origin(item) => IconName::Smartphone,
             Platform::Macos => IconName::Laptop,
             Platform::Windows => IconName::Monitor,
         };

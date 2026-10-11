@@ -51,13 +51,16 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
+mod extensions;
 mod image_text;
 mod overview;
+mod wetype;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(960.), px(600.));
 
 struct PreferencesWindow {
     handle: AnyWindowHandle,
+    view: WeakEntity<Preferences>,
 }
 
 impl Global for PreferencesWindow {}
@@ -91,6 +94,7 @@ fn initial_tab() -> TabId {
             Some("paste") => TabId::Paste,
             Some("items") => TabId::Items,
             Some("sync") => TabId::Sync,
+            Some("extensions") => TabId::Extensions,
             Some("overview") => TabId::Overview,
             Some("data") => TabId::Data,
             Some("about") => TabId::About,
@@ -104,11 +108,19 @@ fn initial_tab() -> TabId {
 static STORAGE_WARNING_SHOWN: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
-    if let Some(handle) = cx
+    if let Some((handle, view)) = cx
         .try_global::<PreferencesWindow>()
-        .map(|window| window.handle)
+        .map(|window| (window.handle, window.view.clone()))
     {
-        let _ = handle.update(cx, |_, window, _| bring_window_to_front(window));
+        let _ = handle.update(cx, |_, window, cx| {
+            let _ = view.update(cx, |this, cx| {
+                if this.tab == TabId::Extensions {
+                    this.refresh_extensions(window, cx);
+                    this.refresh_image_text(cx);
+                }
+            });
+            bring_window_to_front(window);
+        });
         return Ok(());
     }
     let options = WindowOptions {
@@ -121,11 +133,14 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
         focus: false,
         ..Default::default()
     };
-    let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
+    let (handle, view) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
         view.update(cx, |this, cx| {
             this.refresh_storage_overview(cx);
             this.refresh_image_text(cx);
+            if this.tab == TabId::Extensions {
+                this.refresh_extensions(window, cx);
+            }
         });
         if view
             .read(cx)
@@ -145,7 +160,10 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
         });
         view
     })?;
-    cx.set_global(PreferencesWindow { handle });
+    cx.set_global(PreferencesWindow {
+        handle,
+        view: view.downgrade(),
+    });
     let window_id = handle.window_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
@@ -167,11 +185,14 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
         focus: false,
         ..Default::default()
     };
-    let (handle, _) = crate::platform::open_window(options, cx, |window, cx| {
+    let (handle, view) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Preferences::new(window, cx));
         view.update(cx, |this, cx| {
             this.refresh_storage_overview(cx);
             this.refresh_image_text(cx);
+            if this.tab == TabId::Extensions {
+                this.refresh_extensions(window, cx);
+            }
         });
         crate::platform::reveal_after_first_frame(window, cx, |window, _| {
             bring_window_to_front(window);
@@ -179,7 +200,10 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
         Preferences::show_import_confirmation(path.clone(), window, cx);
         view
     })?;
-    cx.set_global(PreferencesWindow { handle });
+    cx.set_global(PreferencesWindow {
+        handle,
+        view: view.downgrade(),
+    });
     let window_id = handle.window_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
@@ -228,8 +252,11 @@ struct Preferences {
     storage_migrating: bool,
     lan_state: Option<LanSyncState>,
     lan_code_hidden: bool,
+    /// 扩展页里展开了详情的扩展 id。
+    extensions_expanded: std::collections::HashSet<String>,
     /// 图片文字识别的计数（采集页状态行），打开窗口和收到 `OcrChanged` 时刷新。
     ocr_status: Option<kwikpaste_core::OcrStatus>,
+    ocr_refresh: u64,
     /// 系统的识别能力；只在开着识别时探测。
     ocr_support: Option<kwikpaste_core::OcrSupport>,
     lan_name: TextInput,
@@ -570,14 +597,17 @@ impl Preferences {
                         this.lan_state = Some(core.lan_sync_state());
                         cx.notify();
                     }
-                    // 识别进度和开关变化：采集页的状态行跟着刷新。
-                    if this.tab == TabId::Capture
-                        && (matches!(event, CoreEvent::OcrChanged)
-                            || matches!(
-                                event,
-                                CoreEvent::SettingsUpdated { delta, .. }
-                                    if delta.touches("clipboard.ocr")
-                            ))
+                    if matches!(event, CoreEvent::WeTypeChanged) && this.tab == TabId::Extensions {
+                        cx.notify();
+                    }
+                    // 扩展生命周期变化会使缓存的能力状态失效，并刷新识别状态。
+                    if matches!(event, CoreEvent::ExtensionsChanged) {
+                        this.ocr_support = None;
+                        this.ocr_refresh = this.ocr_refresh.wrapping_add(1);
+                        cx.notify();
+                    }
+                    if this.tab == TabId::Extensions
+                        && matches!(event, CoreEvent::OcrChanged | CoreEvent::ExtensionsChanged)
                     {
                         this.refresh_image_text(cx);
                     }
@@ -617,6 +647,12 @@ impl Preferences {
             .collect();
         let mut subscriptions = subscriptions;
         subscriptions.push(cx.observe(&icons, |_, _, cx| cx.notify()));
+        if let Some(state) = cx
+            .try_global::<crate::platform::updater::ExtensionStateHost>()
+            .map(|host| host.0.clone())
+        {
+            subscriptions.push(cx.observe(&state, |_, _, cx| cx.notify()));
+        }
         Self {
             tab: initial_tab(),
             settings,
@@ -635,7 +671,9 @@ impl Preferences {
             storage_migrating: false,
             lan_state,
             lan_code_hidden: false,
+            extensions_expanded: Default::default(),
             ocr_status: None,
+            ocr_refresh: 0,
             ocr_support: None,
             lan_name,
             lan_max_image,
@@ -961,6 +999,31 @@ impl Preferences {
                         toast::show(Toast::error(message), window, cx);
                     }
                 });
+            })
+            .detach();
+    }
+
+    /// 确认后打开管理员权限启动：写设置并以管理员身份重启。
+    fn confirm_run_as_admin(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = kwikpaste_ui::confirm(
+            ConfirmSpec::new(i18n::t(
+                "preferences:schema.settings.permissions.adminRestartConfirm.title",
+            ))
+            .content(i18n::t(
+                "preferences:schema.settings.permissions.adminRestartConfirm.content",
+            ))
+            .ok_text(i18n::t(
+                "preferences:schema.settings.permissions.adminRestartConfirm.ok",
+            ))
+            .cancel_text(i18n::t("common:actions.cancel")),
+            window,
+            cx,
+        );
+        window
+            .spawn(cx, async move |cx| {
+                if answer.await.unwrap_or(false) {
+                    let _ = cx.update(|_, cx| crate::platform::autostart::enable_run_as_admin(cx));
+                }
             })
             .detach();
     }
@@ -2643,12 +2706,14 @@ impl Preferences {
                         },
                     ))
                     .child(title)
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let opening = this.tab != id;
                         this.tab = id;
                         if id == TabId::Overview {
                             this.refresh_storage_overview(cx);
                         }
-                        if id == TabId::Capture {
+                        if id == TabId::Extensions && opening {
+                            this.refresh_extensions(window, cx);
                             this.refresh_image_text(cx);
                         }
                         cx.notify();
@@ -2751,7 +2816,9 @@ impl Preferences {
         if setting.is_collapsed(&self.settings) {
             return false;
         }
-        if setting.id == "ocr.status" && !self.image_text_row_visible() {
+        if setting.id == "ocr.status"
+            && (!extensions::ocr_installed(cx) || !self.image_text_row_visible())
+        {
             return false;
         }
         let query = self.search.value(cx);
@@ -2818,7 +2885,24 @@ impl Preferences {
                 )
                 .into_any_element();
         }
-        let description = text::setting_description(setting);
+        let mut description = text::setting_description(setting);
+        if matches!(
+            setting.control,
+            Control::Permission(PermissionKind::RunAsAdministrator)
+        ) {
+            let status = if crate::platform::autostart::running_as_admin() {
+                "statusElevated"
+            } else {
+                "statusNormal"
+            };
+            description = format!(
+                "{description} {}",
+                i18n::t(&format!(
+                    "preferences:schema.settings.permissions.runAsAdministrator.{status}"
+                ))
+            )
+            .into();
+        }
         let path = setting.path;
         let settings_json = values::to_json(&self.settings);
         let value = path.and_then(|path| values::get(&settings_json, path).cloned());
@@ -2910,18 +2994,18 @@ impl Preferences {
                     .into_any_element()
             }
             Control::Permission(PermissionKind::RunAsAdministrator) => {
-                let status = crate::platform::autostart::admin_status(cx);
-                let label = if status.running_as_admin || status.task_ready {
-                    i18n::t("preferences:schema.settings.permissions.runAsAdministrator.title")
-                } else {
-                    i18n::t("common:actions.open")
-                };
-                Button::new("restart-as-admin", label)
+                let entity = cx.entity().downgrade();
+                Switch::new("run-as-admin")
                     .accessibility_label(title.clone())
-                    .on_click(move |_, _, cx| {
-                        if let Err(error) = crate::platform::autostart::restart_as_admin(cx) {
-                            log::warn!("administrator restart was not started: {error:#}");
-                        }
+                    .checked(self.settings.general.run_as_admin)
+                    .on_change(move |checked, window, cx| {
+                        let _ = entity.update(cx, |this, cx| {
+                            if checked {
+                                this.confirm_run_as_admin(window, cx);
+                            } else {
+                                this.update("general.runAsAdmin", json!(false), cx);
+                            }
+                        });
                     })
                     .into_any_element()
             }
@@ -3000,6 +3084,12 @@ impl Preferences {
                 && matches!(setting.control, Control::LanSync)
             {
                 blocks.push(self.render_lan_sync(cx));
+                continue;
+            }
+            if self.tab == TabId::Extensions {
+                if blocks.is_empty() {
+                    blocks.push(self.render_extensions(cx));
+                }
                 continue;
             }
             let mut rows = Vec::with_capacity(visible.len());
@@ -4935,7 +5025,7 @@ pub(crate) fn shortcut_from_keystroke(keystroke: &Keystroke) -> Option<String> {
         #[cfg(target_os = "macos")]
         modifiers.push("Command");
         #[cfg(not(target_os = "macos"))]
-        modifiers.push("Control");
+        modifiers.push("Super");
     }
     if keystroke.modifiers.control {
         modifiers.push("Control");
@@ -5130,6 +5220,23 @@ mod tests {
         assert_eq!(
             shortcut_from_keystroke(&keystroke).as_deref(),
             Some("Alt+Shift+X")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn recorded_win_key_is_super_not_control() {
+        let keystroke = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "c".to_owned(),
+            key_char: None,
+        };
+        assert_eq!(
+            shortcut_from_keystroke(&keystroke).as_deref(),
+            Some("Super+C")
         );
     }
 

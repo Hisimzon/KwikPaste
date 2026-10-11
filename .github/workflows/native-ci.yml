@@ -22,6 +22,7 @@ name: Native CI
       - main
     paths:
       - "crates/**"
+      - "extensions/wetype/**"
       - "third_party/**"
       - "scripts/gpui/**"
       - "scripts/ci/**"
@@ -47,6 +48,7 @@ name: Native CI
       - main
     paths:
       - "crates/**"
+      - "extensions/wetype/**"
       - "third_party/**"
       - "scripts/gpui/**"
       - "scripts/ci/**"
@@ -167,9 +169,10 @@ jobs:
             exit 1
           fi
 
+      # core 的扩展测试要真实启动 OCR 扩展，cargo test 不会编出其它包的二进制。
       - name: Test
         shell: bash
-        run: cargo test --locked --workspace
+        run: cargo build --locked -p kwikpaste-ext-ocr && cargo test --locked --workspace
 
       # e2e-overrides 只在端到端测试的构建里开，发布产物不开；这里确认它编得过、测得过。
       - name: Updater with e2e overrides
@@ -179,6 +182,38 @@ jobs:
 
           cargo clippy --locked -p kwikpaste-updater --all-targets --features e2e-overrides -- -D warnings
           cargo test --locked -p kwikpaste-updater --features e2e-overrides
+
+  wetype:
+    name: WeType (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup NASM and Strawberry Perl
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          'C:\Program Files\NASM' >> $env:GITHUB_PATH
+          'C:\Strawberry\perl\bin' >> $env:GITHUB_PATH
+          # bash 里 Git 自带的 MSYS perl 排在前面，编不了 MSVC 版 OpenSSL。
+          'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe' >> $env:GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: extensions/wetype
+      - name: Format, clippy and tests
+        working-directory: extensions/wetype
+        run: |
+          cargo fmt --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked
+          exit $LASTEXITCODE
 
   core-macos:
     name: Core, OS and updater tests (macOS)
@@ -198,7 +233,7 @@ jobs:
           key: native-core-macos
 
       - name: Test
-        run: cargo test --locked -p kwikpaste-core -p kwikpaste-os -p kwikpaste-updater
+        run: cargo build --locked -p kwikpaste-ext-ocr && cargo test --locked -p kwikpaste-core -p kwikpaste-os -p kwikpaste-updater
 
       - name: Updater clippy
         run: cargo clippy --locked -p kwikpaste-updater --no-deps --all-targets -- -D warnings
