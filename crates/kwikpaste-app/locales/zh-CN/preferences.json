@@ -105,6 +105,7 @@
     "updateAvailable": "有新版本 {{version}}",
     "wetype": {
       "codePlaceholder": "6 位配对码",
+      "coexist": "电脑上的微信输入法正在运行：剪贴板互传由它负责，快贴只把手机发来的内容记进历史。",
       "description": "和手机上的微信输入法互传复制的文字和图片。",
       "deviceSeparator": "、",
       "devices": "同组设备",

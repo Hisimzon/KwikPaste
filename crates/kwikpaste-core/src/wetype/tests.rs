@@ -441,17 +441,76 @@ fn sent_item_written_back_by_the_official_pc_client_is_not_sent_again() -> anyho
 }
 
 #[test]
-fn official_client_clipboard_files_are_recognized_by_path() {
-    assert!(super::is_official_client_path(
-        r"C:\Users\A\AppData\LocalLow\Tencent\WeType\ClipboardTmp\1791654918404_d.png"
-    ));
-    assert!(super::is_official_client_path(
-        "c:/users/a/appdata/locallow/tencent/wetype/clipboardtmp/x.png"
-    ));
-    assert!(!super::is_official_client_path(
-        r"C:\Users\A\Pictures\x.png"
-    ));
-    assert!(!super::is_official_client_path(
-        r"C:\Users\A\AppData\LocalLow\Tencent\WeType\ClipboardTmp"
-    ));
+fn messages_from_this_computers_official_client_are_not_recorded() -> anyhow::Result<()> {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let receiver = fake(&core);
+    event(
+        &core,
+        Event::Received {
+            from_uin: 9,
+            from_name: crate::sync::default_device_name(),
+            content: Content::Text {
+                text: "copied on this computer".into(),
+            },
+        },
+    )?;
+    assert_eq!(receiver.try_recv()?, Command::Acknowledge);
+    assert!(block_on(core.list_items(ClipboardItemQuery::default()))?
+        .list
+        .is_empty());
+    block_on(core.shutdown())?;
+    Ok(())
+}
+
+#[test]
+fn while_the_official_client_runs_the_bridge_only_records() -> anyhow::Result<()> {
+    let fixture = Fixture::new();
+    fixture
+        .platform
+        .processes
+        .lock()
+        .unwrap()
+        .push(OFFICIAL_CLIENT_PROCESS.into());
+    let core = fixture.start();
+    let receiver = fake(&core);
+    let item = text(&core, "copied here")?;
+    on_local_capture(&core.0, &item, Some(1));
+    assert!(receiver.try_recv().is_err());
+    event(
+        &core,
+        Event::Received {
+            from_uin: 7,
+            from_name: "Phone".into(),
+            content: Content::Text {
+                text: "from the phone".into(),
+            },
+        },
+    )?;
+    assert_eq!(receiver.try_recv()?, Command::Acknowledge);
+    let list = block_on(core.list_items(ClipboardItemQuery::default()))?.list;
+    // 列表视图不带正文，按来源确认这条已入库。
+    assert!(list
+        .iter()
+        .any(|view| view.item.origin_device_id.as_deref() == Some("wetype:7")));
+    assert_eq!(fixture.clipboard.snapshot().text, None);
+    block_on(core.shutdown())?;
+    Ok(())
+}
+
+#[test]
+fn official_client_is_recognized_by_its_executable() {
+    use std::path::Path;
+    assert!(super::is_official_client_exe(Path::new(
+        r"C:\Program Files\Tencent\WeType\2.1.4.6\wetype_server.exe"
+    )));
+    assert!(super::is_official_client_exe(Path::new(
+        "c:/program files/tencent/wetype/wetype_server.exe"
+    )));
+    assert!(!super::is_official_client_exe(Path::new(
+        r"C:\Windows\explorer.exe"
+    )));
+    assert!(!super::is_official_client_exe(Path::new(
+        r"C:\Program Files\Tencent\WeChat\WeChat.exe"
+    )));
 }

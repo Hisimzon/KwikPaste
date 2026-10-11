@@ -105,6 +105,7 @@
     "updateAvailable": "New version {{version}} available",
     "wetype": {
       "codePlaceholder": "6-digit code",
+      "coexist": "WeType is running on this computer: it handles clipboard exchange, and KwikPaste only records what your phone sends into history.",
       "description": "Exchange copied text and images with WeType (微信输入法) on your phone.",
       "deviceSeparator": ", ",
       "devices": "Devices in the group",

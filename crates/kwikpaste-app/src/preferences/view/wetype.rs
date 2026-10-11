@@ -88,6 +88,16 @@ impl Preferences {
                 tokens,
             ));
         }
+        if state.paired
+            && core_host::core(cx).is_some_and(|core| core.wetype_official_client_running())
+        {
+            rows.push(note_row(
+                false,
+                i18n::t("preferences:extensions.wetype.coexist"),
+                tokens.text.muted,
+                tokens,
+            ));
+        }
         if let Some(error) = state.error.clone().filter(|_| state.running) {
             rows.push(note_row(
                 false,

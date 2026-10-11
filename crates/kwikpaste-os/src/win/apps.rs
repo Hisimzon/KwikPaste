@@ -10,6 +10,10 @@ use kwikpaste_core::db::models::Platform;
 use kwikpaste_core::platform::{FrontmostApp, ScannedApp};
 use kwikpaste_core::{AppError, Result};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::System::DataExchange::GetClipboardOwner;
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
@@ -42,6 +46,40 @@ pub fn frontmost_app() -> Option<FrontmostApp> {
         name,
         platform: Platform::Windows,
     })
+}
+
+/// 剪贴板当前所有者窗口所属进程的 exe；剪贴板没有所有者或查不到时返回 `None`。
+pub fn clipboard_owner() -> Option<PathBuf> {
+    let window = unsafe { GetClipboardOwner() }.ok()?;
+    let path = process_image_name(window_process(window)?)?;
+    Some(PathBuf::from(OsString::from_wide(&path)))
+}
+
+/// 有没有文件名为 `exe_name`（不区分大小写）的进程在运行；只读进程快照，不打开任何进程。
+pub fn process_running(exe_name: &str) -> bool {
+    let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+        return false;
+    };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut found = false;
+    let mut next = unsafe { Process32FirstW(snapshot, &raw mut entry) }.is_ok();
+    while next {
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(exe_name) {
+            found = true;
+            break;
+        }
+        next = unsafe { Process32NextW(snapshot, &raw mut entry) }.is_ok();
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    found
 }
 
 /// 可见且有标题的顶层窗口所属进程的 exe，按规范化后的路径去重。
