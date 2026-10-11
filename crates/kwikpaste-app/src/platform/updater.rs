@@ -269,12 +269,13 @@ pub fn check_now(cx: &mut App) {
     }
 }
 
-/// 开发自测：不请求网络，直接以一个固定候选版本展示更新窗。
+/// 开发自测：不请求网络，先像手动检查那样开「正在检查」的紧凑窗，再以一个固定候选版本换成带说明的更新窗。
 pub fn selftest_update_window(cx: &mut App) {
     let Some(updater) = updater(cx) else {
         return;
     };
     let mut status = updater.status();
+    open_update_window_with_height(status.clone(), cx, Some(UpdateWindowHeight::Compact));
     status.update = Some(UpdateMetadata {
         current_version: status.current_version.clone(),
         version: "9.9.9-selftest".to_owned(),
@@ -555,8 +556,8 @@ fn open_update_window(status: UpdateStatus, cx: &mut App) {
 
 fn reopen_update_window(status: UpdateStatus, cx: &mut App) {
     if let Some(handle) = cx.try_global::<UpdateWindowHost>().map(|host| host.handle) {
+        // 关窗时 `open_update_window_with_height` 登记的回调已经移除了宿主，这里不能再移除一次。
         let _ = handle.update(cx, |_, window, _| window.remove_window());
-        let _ = cx.remove_global::<UpdateWindowHost>();
     }
     open_update_window_with_height(status, cx, None);
 }
