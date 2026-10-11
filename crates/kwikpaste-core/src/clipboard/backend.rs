@@ -21,6 +21,8 @@ pub enum ClipboardFormat {
     Html,
     Rtf,
     Image,
+    /// 原样存放的 PNG 字节（Windows 的 `PNG`、macOS 的 `public.png`），不含位图等其它图片格式。
+    Png,
     Files,
 }
 
@@ -152,6 +154,7 @@ impl ClipboardBackend for SystemClipboard {
             ClipboardFormat::Html => ContentFormat::Html,
             ClipboardFormat::Rtf => ContentFormat::Rtf,
             ClipboardFormat::Image => ContentFormat::Image,
+            ClipboardFormat::Png => ContentFormat::Other(PNG_FORMAT.to_owned()),
             ClipboardFormat::Files => ContentFormat::Files,
         })
     }
@@ -667,7 +670,7 @@ impl ClipboardBackend for MemoryClipboard {
             ClipboardFormat::Text => state.text.is_some(),
             ClipboardFormat::Html => state.html.is_some(),
             ClipboardFormat::Rtf => state.rtf.is_some(),
-            ClipboardFormat::Image => state.png.is_some(),
+            ClipboardFormat::Image | ClipboardFormat::Png => state.png.is_some(),
             ClipboardFormat::Files => state.files.is_some(),
         }
     }

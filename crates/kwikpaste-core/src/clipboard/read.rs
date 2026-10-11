@@ -161,7 +161,10 @@ impl<B: ClipboardBackend> ClipboardReader<B> {
     /// 慢路径回退：源是 TIFF（macOS 截图/多数 App）/ DIB（Windows）等非 PNG 时，
     /// 交给后端解码再编码为 PNG（存储格式恒为 PNG，这次转码无法避免）。
     fn read_image(&self) -> Result<Option<ImagePayload>> {
-        if let Ok(bytes) = self.backend.get_png() {
+        // 原始 PNG 在时读失败多半是剪贴板正被占用：报错交给外层重试，不退回位图重新编码。
+        // 重新编码出的字节不同，写回守卫和去重都认不出这是同一张图。
+        if self.backend.has(ClipboardFormat::Png) {
+            let bytes = self.backend.get_png()?;
             if let Some((width, height)) = png_dimensions(&bytes) {
                 return Ok(Some(ImagePayload {
                     bytes,
