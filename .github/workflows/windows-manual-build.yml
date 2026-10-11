@@ -1,0 +1,79 @@
+name: Windows Manual Build
+
+# 手动触发：只构建 Windows x64 的 NSIS 安装包。固定从 dev 分支拉取最新代码，
+# 正式身份（覆盖安装本地正式版），
+# --no-sign 跳过更新签名（没有 .sig、不读任何 secrets），
+# 不建 release、不写更新清单，产物只放 artifact 里下载。
+# 与 native-release.yml 的区别仅此而已，构建配置与它逐字一致。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows x64 setup
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # 与 native-release.yml 共用缓存 key，加快构建。
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: native-release-x86_64-pc-windows-msvc
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # tauri bundle 用 lockfile 里精确的 @tauri-apps/cli 2.11.4。
+      - name: Install the pinned Tauri CLI
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      # gpui-pre-windows 的 build.rs 在 release 下用 fxc 编译 HLSL，显式指定 x64 的 fxc.exe。
+      - name: Pin fxc.exe
+        shell: pwsh
+        run: |
+          $sdk = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows\v10.0').InstallationFolder
+          $version = Get-ChildItem "$sdk\bin" -Directory | Where-Object Name -match '^10\.' |
+            Sort-Object { [version]$_.Name } | Select-Object -Last 1
+          $fxc = Join-Path $version.FullName 'x64\fxc.exe'
+          if (-not (Test-Path $fxc)) { throw "fxc.exe not found at $fxc" }
+          "GPUI_FXC_PATH=$fxc" >> $env:GITHUB_ENV
+
+      # 正式身份 + 静态 CRT，与 native-release.yml 的 Build 完全一致。
+      - name: Build
+        shell: bash
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --locked --release -p kwikpaste-app --features production-identity --target x86_64-pc-windows-msvc
+
+      # --no-sign：跳过更新签名；也不做 check-native-artifacts 那套校验。
+      - name: Package the NSIS setup
+        shell: bash
+        run: node scripts/release/package-native.mjs --target x86_64-pc-windows-msvc --out dist --features production-identity --no-sign
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: KwikPaste-windows-x64-setup
+          path: dist/KwikPaste_*_x64-setup.exe
+          if-no-files-found: error
