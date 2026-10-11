@@ -925,6 +925,8 @@
         },
         "runAsAdministrator": {
           "description": "Used to restart KwikPaste with administrator privileges and keep future launches elevated when needed.",
+          "statusElevated": "Currently running as administrator.",
+          "statusNormal": "Currently not running as administrator.",
           "title": "Run as Administrator"
         }
       },

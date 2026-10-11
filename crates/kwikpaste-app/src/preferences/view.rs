@@ -1003,6 +1003,31 @@ impl Preferences {
             .detach();
     }
 
+    /// 确认后打开管理员权限启动：写设置并以管理员身份重启。
+    fn confirm_run_as_admin(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = kwikpaste_ui::confirm(
+            ConfirmSpec::new(i18n::t(
+                "preferences:schema.settings.permissions.adminRestartConfirm.title",
+            ))
+            .content(i18n::t(
+                "preferences:schema.settings.permissions.adminRestartConfirm.content",
+            ))
+            .ok_text(i18n::t(
+                "preferences:schema.settings.permissions.adminRestartConfirm.ok",
+            ))
+            .cancel_text(i18n::t("common:actions.cancel")),
+            window,
+            cx,
+        );
+        window
+            .spawn(cx, async move |cx| {
+                if answer.await.unwrap_or(false) {
+                    let _ = cx.update(|_, cx| crate::platform::autostart::enable_run_as_admin(cx));
+                }
+            })
+            .detach();
+    }
+
     /// 确认后恢复默认偏好（历史记录不动）。各控件的状态只在构造时按设置初始化，
     /// 所以重置后整个视图按新设置重建，只保留当前页和滚动位置。
     fn reset_preferences(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2860,7 +2885,24 @@ impl Preferences {
                 )
                 .into_any_element();
         }
-        let description = text::setting_description(setting);
+        let mut description = text::setting_description(setting);
+        if matches!(
+            setting.control,
+            Control::Permission(PermissionKind::RunAsAdministrator)
+        ) {
+            let status = if crate::platform::autostart::running_as_admin() {
+                "statusElevated"
+            } else {
+                "statusNormal"
+            };
+            description = format!(
+                "{description} {}",
+                i18n::t(&format!(
+                    "preferences:schema.settings.permissions.runAsAdministrator.{status}"
+                ))
+            )
+            .into();
+        }
         let path = setting.path;
         let settings_json = values::to_json(&self.settings);
         let value = path.and_then(|path| values::get(&settings_json, path).cloned());
@@ -2952,18 +2994,18 @@ impl Preferences {
                     .into_any_element()
             }
             Control::Permission(PermissionKind::RunAsAdministrator) => {
-                let status = crate::platform::autostart::admin_status(cx);
-                let label = if status.running_as_admin || status.task_ready {
-                    i18n::t("preferences:schema.settings.permissions.runAsAdministrator.title")
-                } else {
-                    i18n::t("common:actions.open")
-                };
-                Button::new("restart-as-admin", label)
+                let entity = cx.entity().downgrade();
+                Switch::new("run-as-admin")
                     .accessibility_label(title.clone())
-                    .on_click(move |_, _, cx| {
-                        if let Err(error) = crate::platform::autostart::restart_as_admin(cx) {
-                            log::warn!("administrator restart was not started: {error:#}");
-                        }
+                    .checked(self.settings.general.run_as_admin)
+                    .on_change(move |checked, window, cx| {
+                        let _ = entity.update(cx, |this, cx| {
+                            if checked {
+                                this.confirm_run_as_admin(window, cx);
+                            } else {
+                                this.update("general.runAsAdmin", json!(false), cx);
+                            }
+                        });
                     })
                     .into_any_element()
             }

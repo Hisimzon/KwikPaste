@@ -666,11 +666,7 @@ impl Onboarding {
                 .accessibility_label(i18n::t(
                     "preferences:schema.settings.permissions.runAsAdministrator.title",
                 ))
-                .on_click(|_, _, cx| {
-                    if let Err(error) = crate::platform::autostart::restart_as_admin(cx) {
-                        log::warn!("administrator restart was not started: {error:#}");
-                    }
-                });
+                .on_click(|_, _, cx| crate::platform::autostart::enable_run_as_admin(cx));
             rows.push(self.permission_tile(
                 i18n::t("preferences:schema.settings.permissions.runAsAdministrator.title"),
                 i18n::t("preferences:schema.settings.permissions.runAsAdministrator.description"),
