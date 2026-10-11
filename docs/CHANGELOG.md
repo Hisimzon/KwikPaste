@@ -2,6 +2,11 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.3 - 2026-10-11
+
+- Fixed KwikPaste crashing when Check for updates finds a new version.
+- Fixed the update window being too short when an update was already known, which cut off the release notes and put the buttons on top of the text.
+
 ## 2.0.2 - 2026-10-11
 
 - Added Preferences › Extensions, where you can install, enable, update and remove the official extensions. Extensions are downloaded separately, signature-checked and updated in the background; if you do not install one it uses no disk space or memory.
