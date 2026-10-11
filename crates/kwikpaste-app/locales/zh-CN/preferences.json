@@ -915,6 +915,8 @@
         },
         "runAsAdministrator": {
           "description": "用于以管理员权限重启 快贴，并在需要时让后续启动保持提权运行。",
+          "statusElevated": "当前：已以管理员身份运行。",
+          "statusNormal": "当前：未以管理员身份运行。",
           "title": "管理员权限启动"
         }
       },

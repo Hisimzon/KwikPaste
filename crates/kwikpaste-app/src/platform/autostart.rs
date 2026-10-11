@@ -12,8 +12,8 @@
 //!
 //! # UI 怎么接（偏好设置）
 //! 开关直接改设置（`general.autoStart`、`general.runAsAdmin`），这里跟随；失败只记日志。
-//! 需要显示真实状态时用 [`autostart_registered`]、[`admin_status`]；「立即以管理员身份重启」用
-//! [`restart_as_admin`]。
+//! 需要显示真实状态时用 [`autostart_registered`]、[`running_as_admin`]；打开管理员权限启动用
+//! [`enable_run_as_admin`]。
 
 use gpui::App;
 use kwikpaste_core::settings::{Settings, SettingsDelta};
@@ -137,36 +137,14 @@ fn set_autostart(entry: &Autostart, enabled: bool) {
     }
 }
 
-/// 管理员启动的状态（偏好页用）：设置、当前进程是否已提权、计划任务是否可用。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code, reason = "UI 接线用的接口，见本模块文档")]
-pub struct AdminStatus {
-    pub configured: bool,
-    pub running_as_admin: bool,
-    pub task_ready: bool,
-}
-
-#[allow(dead_code, reason = "UI 接线用的接口，见本模块文档")]
-pub fn admin_status(cx: &App) -> AdminStatus {
-    let configured = core_host::core(cx).is_some_and(|core| core.settings().general.run_as_admin);
+/// 当前进程是否已提权（偏好页显示状态用，设置里的 `general.runAsAdmin` 只是意图）。
+pub fn running_as_admin() -> bool {
     #[cfg(target_os = "windows")]
     {
-        use kwikpaste_os::win::admin::{AdminTask, is_running_as_admin};
-
-        let task_ready =
-            std::env::current_exe().is_ok_and(|exe| AdminTask::new(&task_name()).is_ready(&exe));
-        AdminStatus {
-            configured,
-            running_as_admin: is_running_as_admin(),
-            task_ready,
-        }
+        kwikpaste_os::win::admin::is_running_as_admin()
     }
     #[cfg(target_os = "macos")]
-    AdminStatus {
-        configured,
-        running_as_admin: false,
-        task_ready: false,
-    }
+    false
 }
 
 /// 已提权时按设置建或删计划任务（建任务要管理员权限）；便携版不注册（任务里记着 exe 路径，
@@ -262,10 +240,28 @@ fn configured_run_as_admin() -> bool {
         .is_some_and(|early| early.general.run_as_admin)
 }
 
+/// 打开「管理员权限启动」：先把意图写进设置（否则只提权这一次，下次启动又回到普通权限），
+/// 再以管理员身份重启；写设置失败就不重启。
+pub fn enable_run_as_admin(cx: &mut App) {
+    let Some(core) = core_host::core(cx).cloned() else {
+        return;
+    };
+    cx.spawn(async move |cx| {
+        let patch = serde_json::json!({ "general": { "runAsAdmin": true } });
+        if let Err(err) = core.update_settings(patch).await {
+            log::error!("the run-as-admin setting could not be saved: {err}");
+            return;
+        }
+        if let Err(err) = cx.update(restart_as_admin) {
+            log::warn!("administrator restart was not started: {err:#}");
+        }
+    })
+    .detach();
+}
+
 /// 「立即以管理员身份重启」：先放掉单实例（新进程直接成为主实例），拉起提权的进程后退出；
 /// 没拉起来（用户取消 UAC）就重新占回单实例并返回错误。
-#[allow(dead_code, reason = "UI 接线用的接口，见本模块文档")]
-pub fn restart_as_admin(cx: &mut App) -> anyhow::Result<()> {
+fn restart_as_admin(cx: &mut App) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     {
         use kwikpaste_os::win::admin::{AdminTask, launch_elevated};

@@ -2,6 +2,23 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.2 - 2026-10-11
+
+- Added Preferences › Extensions, where you can install, enable, update and remove the official extensions. Extensions are downloaded separately, signature-checked and updated in the background; if you do not install one it uses no disk space or memory.
+- Added the Image text recognition extension: text in copied images is recognized automatically with the system's own recognizer, entirely on your device. You can then find an image by the text in it, use Copy text from image in the context menu, or switch the preview to Text to copy only part of it. Preferences › Image text recognition shows the progress.
+- Added the WeType sync extension: copied text and images are exchanged with WeType (微信输入法) on your phone, paired with a 6-digit code. While the WeType PC client is running it handles the exchange and KwikPaste only records what the phone sends. This is unofficial and may stop working after a WeType update.
+- Text records can be edited: choose Edit content in the context menu. Formatted content becomes plain text when saved.
+- Pinned records now scroll with the list instead of staying fixed above it.
+- The copy sound moved to Preferences › Paste & copy, with a volume slider and a preview, and can be found by searching for sound.
+- Run as administrator now stays on instead of elevating only once, and shows whether KwikPaste is currently running as administrator.
+- Single image files are now listed under the Images group, and Clean cache also removes file records whose files are gone from disk. Favorites and pinned records are kept.
+- Fixed the clipboard window not hiding on Windows when the foreground window changes, for example with Alt+Tab.
+- Fixed the category filter being ignored while viewing favorites.
+- Fixed copying a PNG image sometimes re-encoding it when the clipboard was busy, which made the same image show up twice in the history.
+- Fixed the Windows key being recorded as Ctrl when recording a shortcut on Windows.
+- Fixed jagged diagonal strokes in small Chinese text on Windows.
+- The Hide after copy description now says it applies to copying only; the window always hides after pasting.
+
 ## 2.0.1 - 2026-10-09
 
 - Added Change data directory in Preference › Data. You can move your records, images and settings to another folder, and restore the default location later.
