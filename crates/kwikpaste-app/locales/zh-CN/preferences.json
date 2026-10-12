@@ -102,7 +102,6 @@
     "uninstall": "卸载",
     "uninstallTitle": "卸载扩展",
     "update": "更新",
-    "updateAvailable": "有新版本 {{version}}",
     "wetype": {
       "codePlaceholder": "6 位配对码",
       "coexist": "电脑上的微信输入法正在运行：剪贴板互传由它负责，快贴只把手机发来的内容记进历史。",
@@ -1063,19 +1062,6 @@
             "description": "关闭后，收到的内容只进历史记录。",
             "title": "收到后写入剪贴板"
           }
-        }
-      },
-      "updates": {
-        "autoCheck": {
-          "title": "自动检查更新"
-        },
-        "frequency": {
-          "options": {
-            "daily": "每天",
-            "monthly": "每月",
-            "weekly": "每周"
-          },
-          "title": "自动检查频率"
         }
       },
       "window": {

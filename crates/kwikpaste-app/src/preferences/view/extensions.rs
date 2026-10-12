@@ -252,7 +252,7 @@ impl Preferences {
                     .child(controls.flex_none())
                     .into_any_element(),
             ];
-            if let Some(note) = status_text(&status, self.settings.update.auto_check) {
+            if let Some(note) = status_text(&status) {
                 let action = match status.operation {
                     OperationState::Error { .. } => Some(button("retry", Action::Refresh)),
                     OperationState::Idle if status.update_available => {
@@ -292,8 +292,8 @@ impl Preferences {
     }
 }
 
-/// 操作状态优先于版本信息；自动更新关闭时才显示可手动更新的新版本。
-fn status_text(status: &ExtensionStatus, auto_update: bool) -> Option<SharedString> {
+/// 自动更新始终开启；状态行只展示操作进度、错误或不可用状态。
+fn status_text(status: &ExtensionStatus) -> Option<SharedString> {
     match &status.operation {
         OperationState::Downloading { progress } => {
             let percent = (progress.progress.unwrap_or(0.0).clamp(0.0, 1.0) * 100.0)
@@ -309,15 +309,6 @@ fn status_text(status: &ExtensionStatus, auto_update: bool) -> Option<SharedStri
         OperationState::Idle => {}
     }
     if status.installed.is_some() {
-        if status.update_available
-            && !auto_update
-            && let Some(catalog) = &status.catalog
-        {
-            return Some(i18n::t_args(
-                "preferences:extensions.updateAvailable",
-                &[("version", &catalog.version)],
-            ));
-        }
         return None;
     }
     status
@@ -389,7 +380,7 @@ mod tests {
             update_available: false,
         };
         assert_eq!(
-            status_text(&status, false),
+            status_text(&status),
             Some(i18n::t("preferences:extensions.unavailable"))
         );
         assert_eq!(metadata(&status), None);
@@ -401,7 +392,7 @@ mod tests {
             }))
             .expect("有效目录夹具"),
         );
-        assert_eq!(status_text(&status, false), None);
+        assert_eq!(status_text(&status), None);
         assert_eq!(metadata(&status).as_deref(), Some("1.2 MB"));
         status.installed = Some(InstalledExtension {
             version: "1.0.0".to_owned(),
@@ -409,16 +400,9 @@ mod tests {
             enabled: true,
         });
         assert_eq!(metadata(&status).as_deref(), Some("1.0.0"));
-        assert_eq!(status_text(&status, false), None);
+        assert_eq!(status_text(&status), None);
         status.update_available = true;
-        assert_eq!(
-            status_text(&status, false),
-            Some(i18n::t_args(
-                "preferences:extensions.updateAvailable",
-                &[("version", "1.2.3")],
-            ))
-        );
-        assert_eq!(status_text(&status, true), None);
+        assert_eq!(status_text(&status), None);
         status.operation = OperationState::Downloading {
             progress: DownloadProgress {
                 downloaded: 51,
@@ -427,7 +411,7 @@ mod tests {
             },
         };
         assert_eq!(
-            status_text(&status, false),
+            status_text(&status),
             Some(i18n::t_args(
                 "preferences:extensions.downloading",
                 &[("percent", "51")],
@@ -435,17 +419,17 @@ mod tests {
         );
         status.operation = OperationState::Installing;
         assert_eq!(
-            status_text(&status, false),
+            status_text(&status),
             Some(i18n::t("preferences:extensions.installing"))
         );
         status.operation = OperationState::Error {
             message: "test failure".to_owned(),
         };
-        assert_eq!(status_text(&status, false).as_deref(), Some("test failure"));
+        assert_eq!(status_text(&status).as_deref(), Some("test failure"));
         status.operation = OperationState::Idle;
         status.catalog = None;
         status.update_available = false;
-        assert_eq!(status_text(&status, false), None);
+        assert_eq!(status_text(&status), None);
         assert_eq!(metadata(&status).as_deref(), Some("1.0.0"));
     }
 }

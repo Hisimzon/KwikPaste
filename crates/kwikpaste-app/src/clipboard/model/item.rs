@@ -177,9 +177,26 @@ fn default_true() -> bool {
 }
 
 impl ListItem {
+    /// 链接交互用的子类型：富文本仅采用 core 从完整纯文本摘要判定的可用动作。
+    pub fn link_sub_kind(&self) -> Option<SubKind> {
+        match self.sub_kind {
+            Some(SubKind::Html | SubKind::Rtf) => {
+                if self.available_actions.contains(&ItemAction::OpenLink) {
+                    Some(SubKind::Url)
+                } else if self.available_actions.contains(&ItemAction::SendEmail) {
+                    Some(SubKind::Email)
+                } else {
+                    None
+                }
+            }
+            Some(SubKind::Url | SubKind::Email) => self.sub_kind,
+            _ => None,
+        }
+    }
+
     /// 头部类型标签用的类型：有子类型时取子类型（1.x `types.{subKind ?? kind}`）。
     pub fn type_key(&self) -> TypeKey {
-        match (self.sub_kind, self.kind) {
+        match (self.link_sub_kind().or(self.sub_kind), self.kind) {
             (Some(SubKind::Rtf), _) => TypeKey::Rtf,
             (Some(SubKind::Html), _) => TypeKey::Html,
             (Some(SubKind::Url), _) => TypeKey::Url,
@@ -274,5 +291,31 @@ mod tests {
             ..base
         };
         assert!(text.shows_sensitive_mark());
+    }
+
+    #[test]
+    fn rich_text_link_labels_preserve_the_stored_sub_kind() {
+        let mut item: ListItem = serde_json::from_str(
+            r#"{"id":"x","kind":"text","subKind":"html","isFavorite":false,"isPinned":false,
+                "isSensitive":false,"platform":"windows","createdAt":"2026-01-01T00:00:00Z"}"#,
+        )
+        .expect("parses");
+        for (sub_kind, original_label) in
+            [(SubKind::Html, TypeKey::Html), (SubKind::Rtf, TypeKey::Rtf)]
+        {
+            item.sub_kind = Some(sub_kind);
+            for (action, link_kind, label) in [
+                (ItemAction::OpenLink, SubKind::Url, TypeKey::Url),
+                (ItemAction::SendEmail, SubKind::Email, TypeKey::Email),
+            ] {
+                item.available_actions = vec![action];
+                assert_eq!(item.type_key(), label);
+                assert_eq!(item.link_sub_kind(), Some(link_kind));
+                assert_eq!(item.sub_kind, Some(sub_kind));
+            }
+            item.available_actions.clear();
+            assert_eq!(item.type_key(), original_label);
+            assert_eq!(item.link_sub_kind(), None);
+        }
     }
 }

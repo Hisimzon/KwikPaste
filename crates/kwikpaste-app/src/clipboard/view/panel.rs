@@ -141,6 +141,7 @@ impl ClipboardPanel {
                     .update(cx, |list, cx| list.split_words(id.clone(), cx));
             }
             ListIntent::ShowShortcuts => shortcuts::show(window, cx),
+            ListIntent::OpenPreferences => self.emit_intent(PanelIntent::OpenPreferences, cx),
             ListIntent::Paste { id, plain } => {
                 log::debug!("paste intent handled by panel host: {id} plain={plain}");
             }
@@ -400,7 +401,6 @@ impl ClipboardPanel {
                 editing::begin(EditTarget::Search, *trigger, cx);
             }
             HeaderEvent::TogglePin => self.toggle_pin(cx),
-            HeaderEvent::OpenPreferences => self.emit_intent(PanelIntent::OpenPreferences, cx),
         }
     }
 

@@ -95,6 +95,22 @@ pub struct TagStateTokens {
     pub border: Hsla,
 }
 
+/// 卡片类型标签：识别出的子类型画成淡色底的小胶囊。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KindTag {
+    pub background: Hsla,
+    pub foreground: Hsla,
+}
+
+/// 链接、邮箱、颜色、路径四种类型标签。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KindTagTokens {
+    pub link: KindTag,
+    pub email: KindTag,
+    pub color: KindTag,
+    pub path: KindTag,
+}
+
 /// 菜单项的常态、悬停、按下、危险和禁用文字色。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MenuItemTokens {
@@ -150,6 +166,14 @@ pub struct ScrollbarTokens {
     pub thumb_hover: Hsla,
 }
 
+/// 淡色底跟着文字色走，材质窗口上也不会变成一块实色。
+fn kind_tag(foreground: Hsla) -> KindTag {
+    KindTag {
+        background: foreground.opacity(0.12),
+        foreground,
+    }
+}
+
 /// 由角色语义 token 生成组件状态，避免视图临时拼接透明度。
 pub fn icon_button(tokens: &super::semantic::SemanticTokens) -> IconButtonTokens {
     IconButtonTokens {
@@ -187,6 +211,7 @@ pub struct ComponentTokens {
     pub group_chip: GroupChipTokens,
     pub card_row: CardRowTokens,
     pub tag: TagTokens,
+    pub kind_tag: KindTagTokens,
     pub menu_item: MenuItemTokens,
     pub tooltip: TooltipTokens,
     pub toast: ToastTokens,
@@ -265,6 +290,12 @@ impl ComponentTokens {
                         border: s.status.danger.border,
                     },
                 ],
+            },
+            kind_tag: KindTagTokens {
+                link: kind_tag(s.kinds.link),
+                email: kind_tag(s.kinds.email),
+                color: kind_tag(s.kinds.color),
+                path: kind_tag(s.kinds.path),
             },
             menu_item: MenuItemTokens {
                 foreground: s.text.primary,

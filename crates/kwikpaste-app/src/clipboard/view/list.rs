@@ -104,6 +104,7 @@ pub enum ListIntent {
         id: Arc<str>,
     },
     ShowShortcuts,
+    OpenPreferences,
     /// 已交给宿主拖出（通知，自测据此核对拖的是哪一条）。
     DragOut {
         id: Arc<str>,
@@ -1679,6 +1680,7 @@ impl ClipboardList {
         let layout = self.layout;
         let env = CardEnv {
             tokens,
+            kind_tags: theme::components(cx).kind_tag,
             reorder_source_opacity: theme::components(cx).reorder.source_opacity,
             layout: &layout,
             now: self.now,
@@ -1759,6 +1761,7 @@ impl Render for ClipboardList {
         let layout = self.layout;
         let env = CardEnv {
             tokens,
+            kind_tags: theme::components(cx).kind_tag,
             reorder_source_opacity: theme::components(cx).reorder.source_opacity,
             layout: &layout,
             now: self.now,

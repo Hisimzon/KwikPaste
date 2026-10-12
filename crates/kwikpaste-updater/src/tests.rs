@@ -63,14 +63,16 @@ struct Setup {
     test: TestCore,
     updater: Updater,
     journal: Journal,
+    ui: Arc<NullUi>,
 }
 
 fn setup(kind: InstallKind, endpoint: Url, key: &TestKey, fails: bool) -> Setup {
     let test = TestCore::start("2.0.0");
     let (host, launcher, journal): (RecordingHost, FakeLauncher, Journal) = recorders(fails);
+    let ui = Arc::new(NullUi::default());
     let updater = Updater::with_parts(
         test.core.clone(),
-        Arc::new(NullUi::default()),
+        ui.clone(),
         Arc::new(host),
         Parts {
             kind,
@@ -84,6 +86,7 @@ fn setup(kind: InstallKind, endpoint: Url, key: &TestKey, fails: bool) -> Setup 
         test,
         updater,
         journal,
+        ui,
     }
 }
 
@@ -104,9 +107,10 @@ fn check_download_and_install_through_the_nsis_handoff() {
         test,
         updater,
         journal,
+        ..
     } = setup(InstallKind::Nsis, stable, &key, false);
 
-    let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
+    let status = test.block_on(updater.check()).unwrap();
     let update = status.update.unwrap();
     assert!(status.supported);
     assert_eq!(update.version, "2.0.1");
@@ -184,9 +188,10 @@ fn a_tampered_package_is_never_installed() {
         test,
         updater,
         journal,
+        ..
     } = setup(InstallKind::Nsis, stable, &key, false);
 
-    test.block_on(updater.check(CheckMode::Manual)).unwrap();
+    test.block_on(updater.check()).unwrap();
     assert!(
         test.block_on(updater.download("2.0.1".to_owned(), |_| {}))
             .is_err()
@@ -196,9 +201,9 @@ fn a_tampered_package_is_never_installed() {
     assert!(!updater.status().update.unwrap().downloaded);
 }
 
-/// 测试版与正式版走同一个渠道：发布了测试版就提供，跳过之后不再提供，直到渠道换成更新的版本。
+/// 测试版与正式版走同一个渠道，每次检查都提供当前候选版本。
 #[test]
-fn prereleases_are_offered_and_skipped_versions_stay_hidden() {
+fn prereleases_remain_pending_until_manifest_changes() {
     let key = TestKey::generate();
     let server = Server::start(vec![
         Reply::ok(manifest(
@@ -220,27 +225,19 @@ fn prereleases_are_offered_and_skipped_versions_stay_hidden() {
         false,
     );
 
-    let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
+    let status = test.block_on(updater.check()).unwrap();
     assert_eq!(status.update.unwrap().version, "2.1.0-beta.1");
 
-    let status = test
-        .block_on(updater.skip("2.1.0-beta.1".to_owned()))
-        .unwrap();
-    assert!(status.update.is_none());
-    assert_eq!(
-        test.core.settings().update.skipped_version.as_deref(),
-        Some("2.1.0-beta.1")
-    );
-    let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
-    assert!(status.update.is_none());
+    let status = test.block_on(updater.check()).unwrap();
+    assert_eq!(status.update.unwrap().version, "2.1.0-beta.1");
 
-    let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
+    let status = test.block_on(updater.check()).unwrap();
     assert_eq!(status.update.unwrap().version, "2.1.0");
 }
 
-/// 自动检查没到频率设定的时间就不发请求。
+/// 自动检查不受最近检查时间影响。
 #[test]
-fn automatic_checks_wait_for_the_configured_frequency() {
+fn automatic_checks_ignore_recent_check_timestamp() {
     let key = TestKey::generate();
     let server = Server::start(vec![Reply::ok(manifest(
         "2.0.1",
@@ -253,14 +250,14 @@ fn automatic_checks_wait_for_the_configured_frequency() {
         &key,
         false,
     );
-    let recently =
-        json!({"update": {"lastCheckedAt": Utc::now().to_rfc3339(), "frequency": "daily"}});
+    let recently = json!({"update": {"lastCheckedAt": Utc::now().to_rfc3339()}});
     test.block_on(test.core.update_settings(recently)).unwrap();
 
-    let status = test.block_on(updater.check(CheckMode::Auto)).unwrap();
+    test.block_on(updater.run_auto_check());
+    let status = updater.status();
 
-    assert!(status.update.is_none());
-    assert!(server.requests().is_empty());
+    assert_eq!(status.update.unwrap().version, "2.0.1");
+    assert_eq!(server.requests().len(), 1);
 }
 
 /// 开发构建、手动拷出来的 exe：不检查也不安装，只说明不支持。
@@ -276,6 +273,7 @@ fn unmanaged_builds_never_check_or_install() {
         test,
         updater,
         journal,
+        ..
     } = setup(
         InstallKind::Unmanaged,
         Url::parse(&server.url("/latest.json")).unwrap(),
@@ -283,7 +281,7 @@ fn unmanaged_builds_never_check_or_install() {
         false,
     );
 
-    let status = test.block_on(updater.check(CheckMode::Manual)).unwrap();
+    let status = test.block_on(updater.check()).unwrap();
 
     assert!(!status.supported);
     assert!(status.update.is_none());
@@ -307,4 +305,39 @@ fn the_test_binary_is_detected_as_unmanaged() {
     // 不调用 start()：调度器会清理系统临时目录里一天以前的更新残留，测试不碰本机的这些文件。
     assert_eq!(updater.install_kind(), &InstallKind::Unmanaged);
     assert!(!updater.status().supported);
+}
+
+/// 成功检查（含撤回）都发布 UI 状态；网络失败保留候选，下一轮仍可重试。
+#[test]
+fn background_checks_publish_pending_and_withdrawn_updates_and_keep_failures() {
+    let key = TestKey::generate();
+    let server = Server::start(vec![
+        Reply::ok(manifest("2.0.1", "https://dl.example.com/a.exe", "c2ln")),
+        Reply::status("503 Service Unavailable"),
+        Reply::ok(manifest("2.0.1", "https://dl.example.com/a.exe", "c2ln")),
+        Reply::status("204 No Content"),
+    ]);
+    let Setup {
+        test, updater, ui, ..
+    } = setup(
+        InstallKind::Nsis,
+        Url::parse(&server.url("/latest.json")).unwrap(),
+        &key,
+        false,
+    );
+    test.block_on(updater.run_auto_check());
+    assert_eq!(updater.status().update.unwrap().version, "2.0.1");
+    assert_eq!(ui.available.lock().unwrap().len(), 1);
+    test.block_on(updater.run_auto_check());
+    assert_eq!(updater.status().update.unwrap().version, "2.0.1");
+    assert_eq!(ui.available.lock().unwrap().len(), 1);
+    test.block_on(updater.run_auto_check());
+    assert_eq!(updater.status().update.unwrap().version, "2.0.1");
+    test.block_on(updater.run_auto_check());
+    assert!(updater.status().update.is_none());
+    let snapshots = ui.available.lock().unwrap();
+    assert_eq!(snapshots.len(), 3);
+    assert!(snapshots[0].update.is_some());
+    assert!(snapshots[1].update.is_some());
+    assert!(snapshots[2].update.is_none());
 }

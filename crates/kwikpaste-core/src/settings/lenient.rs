@@ -311,6 +311,39 @@ mod tests {
     }
 
     #[test]
+    fn removed_update_settings_are_ignored_without_degrading_other_values() {
+        for theme in ["dark", "invalid"] {
+            let content = serde_json::json!({
+                "general": {"autoStart": true},
+                "appearance": {"theme": theme},
+                "update": {
+                    "autoCheck": false, "frequency": "monthly", "skippedVersion": "2.1.0",
+                    "lastCheckedAt": "2026-10-01T00:00:00Z"
+                }
+            });
+            let (settings, report) = parse(&content.to_string());
+            assert!(!report.unreadable);
+            assert!(settings.general.auto_start);
+            assert_eq!(
+                settings.update.last_checked_at.as_deref(),
+                Some("2026-10-01T00:00:00Z")
+            );
+            assert_eq!(
+                report.fallbacks,
+                if theme == "dark" {
+                    vec![]
+                } else {
+                    vec!["appearance.theme"]
+                }
+            );
+            let saved = serde_json::to_value(&settings).unwrap();
+            for key in ["autoCheck", "frequency", "skippedVersion"] {
+                assert!(saved["update"].get(key).is_none());
+            }
+        }
+    }
+
+    #[test]
     fn one_bad_value_only_resets_that_field() {
         let (settings, report) = parse(
             r#"{
@@ -365,6 +398,25 @@ mod tests {
                 "clipboard.content.itemActions[1]"
             ]
         );
+    }
+
+    #[test]
+    fn default_link_quick_action_does_not_extend_saved_lists() {
+        let (defaults, _) = parse("{}");
+        assert_eq!(
+            &defaults.clipboard.content.item_actions[..2],
+            &[ItemAction::Copy, ItemAction::OpenLink]
+        );
+        for saved in ["[\"copy\",\"delete\"]", "[]"] {
+            let (settings, report) = parse(&format!(
+                "{{\"clipboard\":{{\"content\":{{\"itemActions\":{saved}}}}}}}"
+            ));
+            assert_eq!(
+                serde_json::to_string(&settings.clipboard.content.item_actions).unwrap(),
+                saved
+            );
+            assert!(report.fallbacks.is_empty());
+        }
     }
 
     #[test]

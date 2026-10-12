@@ -32,6 +32,8 @@
     "searchHistory": "No records found for \"{{keyword}}\""
   },
   "footer": {
+    "position": "{{index}} / {{count}} items",
+    "preferences": "Preferences",
     "select": "Select multiple",
     "shortcuts": "Shortcuts",
     "total": "{{count}} items"
@@ -58,10 +60,11 @@
     "useCustomIcon": "Use custom SVG"
   },
   "header": {
-    "openPreference": "Preferences",
     "pin": "Pin window",
     "searchPlaceholder": "Search clipboard...",
-    "unpin": "Unpin"
+    "unpin": "Unpin",
+    "updateAvailable": "Update available: v{{version}}, click to update",
+    "updateBadge": "NEW"
   },
   "menu": {
     "addNote": "Add Note",

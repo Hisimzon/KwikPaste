@@ -141,7 +141,7 @@ impl ExtensionManager {
             .collect()
     }
 
-    /// 显式刷新立即拉目录；自动检查开启时，将版本不同的已安装扩展排入后台更新。
+    /// 显式刷新立即拉目录，将版本不同的已安装扩展排入后台更新。
     pub async fn refresh(&self) -> Result<Vec<ExtensionStatus>> {
         let manager = self.clone();
         hop(self.0.core.runtime(), async move {
@@ -163,11 +163,8 @@ impl ExtensionManager {
         self.change(id, Change::Enabled(enabled)).await
     }
 
-    /// 沿用更新器的检查循环，但扩展的每日检查不受应用周/月更新频率影响。
+    /// 沿用更新器的检查循环，每日自动刷新扩展目录。
     pub(crate) fn schedule_daily(&self) {
-        if !self.0.core.settings().update.auto_check {
-            return;
-        }
         let mut last = lock(&self.0.last_daily);
         if last.is_some_and(|last| last.elapsed() < DAILY) {
             return;
@@ -205,16 +202,14 @@ impl ExtensionManager {
         self.notify();
         fetched?;
         let status = self.status();
-        if self.0.core.settings().update.auto_check {
-            for card in status.iter().filter(|card| card.update_available) {
-                let manager = self.clone();
-                let id = card.id.clone();
-                self.0.core.runtime().spawn(async move {
-                    if let Err(err) = manager.change_inner(&id, Change::AutoUpdate).await {
-                        log::warn!("extension {id} update failed: {err}");
-                    }
-                });
-            }
+        for card in status.iter().filter(|card| card.update_available) {
+            let manager = self.clone();
+            let id = card.id.clone();
+            self.0.core.runtime().spawn(async move {
+                if let Err(err) = manager.change_inner(&id, Change::AutoUpdate).await {
+                    log::warn!("extension {id} update failed: {err}");
+                }
+            });
         }
         Ok(status)
     }
@@ -253,18 +248,17 @@ impl ExtensionManager {
         .await
     }
 
-    /// 自动更新在取得操作锁后再次检查，防止排队期间的卸载或设置变更被覆盖。
+    /// 自动更新在取得操作锁后再次检查，防止排队期间的卸载被覆盖。
     async fn change_inner(&self, id: &str, change: Change) -> Result<()> {
         let _guard = self.0.operations.lock().await;
         if !KNOWN.iter().any(|(known, _)| *known == id) {
             return Err(other("unknown extension"));
         }
         if matches!(change, Change::AutoUpdate)
-            && (!self.0.core.settings().update.auto_check
-                || !self
-                    .status()
-                    .iter()
-                    .any(|card| card.id == id && card.update_available))
+            && !self
+                .status()
+                .iter()
+                .any(|card| card.id == id && card.update_available)
         {
             return Ok(());
         }

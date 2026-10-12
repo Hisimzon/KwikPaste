@@ -1,25 +1,27 @@
-//! 主窗口头部（1.x `Header.tsx` + `SearchInput.tsx`）：logo、搜索框、固定窗口与偏好设置。
+//! 主窗口头部（1.x `Header.tsx` + `SearchInput.tsx`）：logo、占满剩余宽度的搜索框、固定窗口。
+//! 偏好设置入口在页脚。
 //!
 //! 搜索框走平台层的编辑态：在输入框上按下鼠标请求 `BeginEditing(Mouse)`，`EditingStarted` 之后
 //! 才真正能打字（Windows 上面板此时才是前台窗口）。输入 200 ms 防抖、去掉首尾空白后交给列表；
 //! 输入法组字期间不触发（[`kwikpaste_ui::TextInput::on_event_in`]）。
 
-use std::{sync::Arc, time::Duration};
+use std::{f32::consts::FRAC_PI_4, sync::Arc, time::Duration};
 
 use gpui::{
-    Context, EventEmitter, ImageSource, InteractiveElement as _, IntoElement, MouseButton,
+    App, Context, EventEmitter, ImageSource, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, div, img,
+    Styled as _, Subscription, Task, Window, div, img, prelude::FluentBuilder as _, radians,
 };
 use kwikpaste_ui::{
-    Glyph, IconButtonLook as Look, IconName, Input, TextInput, TextInputEvent, icon_button,
-    theme::space,
+    Glyph, IconButtonLook as Look, IconName, Input, KpStyled as _, TextInput, TextInputEvent,
+    TooltipExt as _, icon_button,
+    theme::{self, TextSize, space},
 };
 
 use super::{SEARCH_CONTEXT, card::logo};
 use crate::{
-    i18n::{self, t},
-    platform::{EditTrigger, window_drag::WindowDragArea as _},
+    i18n::{self, t, t_args},
+    platform::{EditTrigger, updater, window_drag::WindowDragArea as _},
 };
 
 /// 1.x `useDebounceFn(..., { wait: 200 })`。
@@ -33,7 +35,6 @@ pub enum HeaderEvent {
     /// 在输入框上按下了鼠标，要进入编辑态。
     RequestEditing(EditTrigger),
     TogglePin,
-    OpenPreferences,
 }
 
 pub struct Header {
@@ -60,6 +61,14 @@ impl Header {
             }
         });
 
+        let mut subscriptions = vec![changes];
+        if let Some(state) = cx
+            .try_global::<updater::UpdateStateHost>()
+            .map(|host| host.0.clone())
+        {
+            subscriptions.push(cx.observe(&state, |_, _, cx| cx.notify()));
+        }
+
         Self {
             input,
             hints: false,
@@ -67,8 +76,12 @@ impl Header {
             editing: false,
             language: i18n::language(),
             debounce: None,
-            _subscriptions: vec![changes],
+            _subscriptions: subscriptions,
         }
+    }
+
+    pub fn pending_update_version(&self, cx: &App) -> Option<String> {
+        updater::pending_update(cx).map(|update| update.version.clone())
     }
 
     pub fn input(&self) -> &TextInput {
@@ -135,6 +148,8 @@ impl Render for Header {
             self.input
                 .set_placeholder(t("clipboard:header.searchPlaceholder"), window, cx);
         }
+        let pending_version = self.pending_update_version(cx);
+        let tokens = theme::semantic(cx);
         let hint = |key: &str| self.hints.then(|| SharedString::from(key.to_owned()));
         let pin_label = if self.pinned {
             t("clipboard:header.unpin")
@@ -147,71 +162,83 @@ impl Render for Header {
             .flex_none()
             .w_full()
             .items_center()
+            .gap(space(2.))
             .px(space((12.) / 4.))
             .pt(space((12.) / 4.))
             .pb(space((8.) / 4.))
             .child(
-                // logo 到搜索框之间的空白都能拖动窗口。
                 div()
-                    .flex()
-                    .flex_1()
-                    .self_stretch()
-                    .items_center()
+                    .flex_none()
                     .window_drag_area()
-                    .child(img(ImageSource::Image(logo())).size(space((20.) / 4.))),
+                    .child(img(ImageSource::Image(logo())).size(space(5.))),
+            )
+            .when_some(pending_version, |element, version| {
+                let label = t_args("clipboard:header.updateAvailable", &[("version", &version)]);
+                element.child(
+                    div()
+                        .id("clipboard-header-update")
+                        .role(gpui::Role::Button)
+                        .aria_label(label.clone())
+                        .flex_none()
+                        .rounded_full()
+                        .px(space(1.5))
+                        .py(space(0.5))
+                        .kp_text(TextSize::Xs)
+                        .bg(tokens.accent.solid)
+                        .text_color(tokens.text.on_accent)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(tokens.accent.hover))
+                        .kp_tooltip(label)
+                        .child(t("clipboard:header.updateBadge"))
+                        .on_click(|_, _, cx| updater::open_pending_update(cx)),
+                )
+            })
+            // 留一段空白拖动窗口，搜索框左缘大致对齐分组栏第一条分隔线。可点徽标不属于拖动区域，
+            // macOS 的拖动会吞掉子元素点击。
+            .child(
+                div()
+                    .flex_none()
+                    .w(space(14.))
+                    .self_stretch()
+                    .window_drag_area(),
             )
             .child(
                 div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(space(1.))
+                    .id("clipboard-search")
+                    .flex_1()
+                    .min_w_0()
+                    .key_context(SEARCH_CONTEXT)
+                    .capture_any_mouse_down(cx.listener(|header, event: &MouseDownEvent, _, cx| {
+                        if event.button == MouseButton::Left && !header.editing {
+                            cx.emit(HeaderEvent::RequestEditing(EditTrigger::Mouse));
+                        }
+                    }))
                     .child(
-                        div()
-                            .id("clipboard-search")
-                            .flex_none()
-                            .key_context(SEARCH_CONTEXT)
-                            .capture_any_mouse_down(cx.listener(
-                                |header, event: &MouseDownEvent, _, cx| {
-                                    if event.button == MouseButton::Left && !header.editing {
-                                        cx.emit(HeaderEvent::RequestEditing(EditTrigger::Mouse));
-                                    }
-                                },
-                            ))
-                            .child(
-                                Input::search(&self.input)
-                                    .small()
-                                    .width(space((160.) / 4.))
-                                    .hint_key(hint("F"))
-                                    .accessibility_label(t("clipboard:header.searchPlaceholder")),
-                            ),
-                    )
-                    .child(
-                        icon_button(
-                            cx,
-                            "clipboard-header-pin",
-                            Glyph::Icon(IconName::PinWindow),
-                            pin_label,
-                            hint("P"),
-                            if self.pinned {
-                                Look::Selected
-                            } else {
-                                Look::Text
-                            },
-                        )
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(HeaderEvent::TogglePin))),
-                    )
-                    .child(
-                        icon_button(
-                            cx,
-                            "clipboard-header-preferences",
-                            Glyph::Icon(IconName::SettingLine),
-                            t("clipboard:header.openPreference"),
-                            hint(","),
-                            Look::Text,
-                        )
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(HeaderEvent::OpenPreferences))),
+                        Input::search(&self.input)
+                            .small()
+                            .hint_key(hint("F"))
+                            .accessibility_label(t("clipboard:header.searchPlaceholder")),
                     ),
+            )
+            // 固定后图标转正（-45°），和卡片上的置顶图钉一个朝向。
+            .child(
+                icon_button(
+                    cx,
+                    "clipboard-header-pin",
+                    if self.pinned {
+                        Glyph::Rotated(IconName::PinWindow, radians(-FRAC_PI_4))
+                    } else {
+                        Glyph::Icon(IconName::PinWindow)
+                    },
+                    pin_label,
+                    hint("P"),
+                    if self.pinned {
+                        Look::Selected
+                    } else {
+                        Look::Text
+                    },
+                )
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(HeaderEvent::TogglePin))),
             )
     }
 }

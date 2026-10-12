@@ -252,7 +252,6 @@ const OPEN_RANGES: &[&str] = &["preserve", "all", "favorite"];
 const OPEN_CATEGORIES: &[&str] = &["preserve", "all", "text", "image", "files"];
 const HOVER_DELAYS: &[&str] = &["ms300", "ms500", "ms1000"];
 const TEXT_VIEWS: &[&str] = &["plain", "words"];
-const UPDATE_FREQUENCIES: &[&str] = &["daily", "weekly", "monthly"];
 /// 快速粘贴的修饰键：显示顺序与 1.x 相同，快捷键字面量与 `QuickPasteModifiers::accelerator` 一致。
 pub const QUICK_PASTE_MODIFIERS: &[(&str, &str)] = &[
     ("controlShift", "Control+Shift"),
@@ -1036,16 +1035,6 @@ fn about_sections() -> Vec<Section> {
             settings: vec![
                 Setting::new("about.checkUpdates", Control::Action { danger: false })
                     .keywords(&["update", "version"]),
-                Setting::new("updates.autoCheck", Control::Switch)
-                    .path("update.autoCheck")
-                    .keywords(&["update", "version"]),
-                Setting::new(
-                    "updates.frequency",
-                    Control::Select(Options::Values(UPDATE_FREQUENCIES)),
-                )
-                .path("update.frequency")
-                .keywords(&["update", "frequency", "schedule"])
-                .child_of("updates.autoCheck", |settings| !settings.update.auto_check),
             ],
         },
         Section {

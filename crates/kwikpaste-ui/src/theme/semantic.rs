@@ -94,6 +94,14 @@ pub struct HueTokens {
     pub purple_6: Hsla,
     pub gold_3: Hsla,
 }
+/// 识别出的文本子类型（链接、邮箱、颜色、路径）的标识色。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KindTokens {
+    pub link: Hsla,
+    pub email: Hsla,
+    pub color: Hsla,
+    pub path: Hsla,
+}
 /// 成功、警告、危险和信息语义。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StatusGroup {
@@ -119,6 +127,7 @@ pub struct SemanticTokens {
     pub accent: AccentTokens,
     pub status: StatusGroup,
     pub hues: HueTokens,
+    pub kinds: KindTokens,
     pub shadow: ShadowTokens,
     pub materials: palette::Materials,
     pub radii: palette::Radii,
@@ -210,6 +219,12 @@ impl SemanticTokens {
                 orange_6: p.extras.orange_6.hsla(),
                 purple_6: p.extras.purple_6.hsla(),
                 gold_3: p.extras.gold_3.hsla(),
+            },
+            kinds: KindTokens {
+                link: p.kinds.link.hsla(),
+                email: p.kinds.email.hsla(),
+                color: p.kinds.color.hsla(),
+                path: p.kinds.path.hsla(),
             },
             shadow: ShadowTokens {
                 overlay: p.shadows.overlay.map(palette::ShadowSpec::box_shadow),

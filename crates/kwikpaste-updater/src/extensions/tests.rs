@@ -113,21 +113,16 @@ fn invalid_sizes_versions_and_duplicate_picks_are_rejected() {
 }
 
 #[test]
-fn refresh_without_auto_check_reports_update_and_unreachable_preserves_installed() {
+fn unreachable_catalog_preserves_installed_extension() {
     let core = TestCore::start("2.0.0");
-    core.block_on(
-        core.core
-            .update_settings(serde_json::json!({"update":{"autoCheck":false}})),
-    )
-    .unwrap();
     install_baseline(&core, "2.0.0", false);
     let server = Server::start(vec![
-        Reply::ok(catalog(&[entry("1.0.0")])),
+        Reply::ok(catalog(&[entry("2.0.0")])),
         Reply::status("503 Service Unavailable"),
     ]);
     let manager = remote(&core, &server, &TestKey::generate(), Arc::default());
     let status = core.block_on(manager.refresh()).unwrap();
-    assert!(status[0].update_available);
+    assert!(!status[0].update_available);
     assert_eq!(core.core.installed_extensions()["ocr"].version, "2.0.0");
     assert!(!core.core.installed_extensions()["ocr"].enabled);
     assert!(
@@ -147,11 +142,6 @@ fn refresh_without_auto_check_reports_update_and_unreachable_preserves_installed
 fn signature_failure_leaves_nothing_installed_and_size_failure_also_fails_closed() {
     for bad_signature in [true, false] {
         let core = TestCore::start("2.0.0");
-        core.block_on(
-            core.core
-                .update_settings(serde_json::json!({"update":{"autoCheck":false}})),
-        )
-        .unwrap();
         let key = TestKey::generate();
         let wrong_key = TestKey::generate();
         let bytes = b"MZ fake extension".to_vec();

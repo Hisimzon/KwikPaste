@@ -37,11 +37,10 @@ pub(crate) fn endpoints() -> anyhow::Result<Vec<Url>> {
         .collect()
 }
 
-/// 挑选条件：当前版本、跳过的版本、本机系统与平台键。
+/// 挑选条件：当前版本、本机系统与平台键。
 #[derive(Debug, Clone)]
 pub(crate) struct Criteria {
     pub current: semver::Version,
-    pub skipped: Option<String>,
     pub os: Option<OsVersion>,
     pub platform_keys: Vec<String>,
 }
@@ -119,20 +118,12 @@ async fn fetch(client: &reqwest::Client, url: &Url) -> anyhow::Result<Fetched> {
     Ok(Fetched::Release(Box::new(manifest::parse(&body)?)))
 }
 
-/// 清单里的版本能不能装：比当前新、没被跳过、系统满足要求、有本机的安装包。
+/// 清单里的版本能不能装：比当前新、系统满足要求、有本机的安装包。
 fn select(release: Release, criteria: &Criteria) -> Option<Candidate> {
     if release.version <= criteria.current {
         return None;
     }
     let version = release.version.to_string();
-    if criteria
-        .skipped
-        .as_deref()
-        .is_some_and(|skipped| skipped.trim_start_matches('v') == version)
-    {
-        log::info!("update {version} was skipped by the user");
-        return None;
-    }
     if !release.requires.satisfied_by(criteria.os) {
         log::info!(
             "update {version} needs a newer system: {:?}",
@@ -170,7 +161,6 @@ mod tests {
     fn criteria() -> Criteria {
         Criteria {
             current: semver::Version::new(2, 0, 0),
-            skipped: None,
             os: Some(OsVersion::WindowsBuild(26100)),
             platform_keys: vec![
                 "windows-x86_64-nsis".to_owned(),
@@ -312,19 +302,12 @@ mod tests {
         assert!(check_one(&server, &criteria()).is_err());
     }
 
-    /// 测试版和正式版走同一个渠道：发布了测试版就提供测试版，跳过的版本不再提供。
+    /// 测试版和正式版走同一个渠道：发布了测试版就提供测试版。
     #[test]
-    fn prereleases_are_offered_unless_skipped() {
+    fn prereleases_are_offered() {
         let server = Server::start(vec![Reply::ok(manifest("2.1.0-beta.1"))]);
         let found = check_one(&server, &criteria()).unwrap().unwrap();
         assert_eq!(found.version.to_string(), "2.1.0-beta.1");
-
-        let server = Server::start(vec![Reply::ok(manifest("2.1.0-beta.1"))]);
-        let skipped = Criteria {
-            skipped: Some("v2.1.0-beta.1".to_owned()),
-            ..criteria()
-        };
-        assert!(check_one(&server, &skipped).unwrap().is_none());
     }
 
     #[test]
