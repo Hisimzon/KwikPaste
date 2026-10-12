@@ -20,7 +20,9 @@ use crate::db::items::{
     toggle_item_favorite, toggle_item_pinned, touch_item_last_used, update_item_group,
     update_item_note, update_item_text_content, ReorderAnchor, ReorderSection,
 };
-use crate::db::models::{ClipboardItem, ClipboardItemQuery, ClipboardItemRef, ClipboardKind};
+use crate::db::models::{
+    ClipboardItem, ClipboardItemQuery, ClipboardItemRef, ClipboardKind, ClipboardSubKind,
+};
 use crate::db::overview::{clear_scope, ClearScope};
 use crate::error::{AppError, Result};
 use crate::events::CoreEvent;
@@ -149,9 +151,18 @@ pub fn plain_paste_decision(payload: &ClipboardPayload) -> Option<String> {
     }
 }
 
-/// 打开链接的目标：`mailto` 时补 `mailto:`，`www.` 开头补 `https://`；内容为空返回 `None`。
+/// 打开链接的目标：富文本用原始纯文本，`mailto` 时补 `mailto:`，`www.` 开头补 `https://`。
+/// 目标为空返回 `None`，绝不把 HTML/RTF 源交给系统打开。
 fn link_target(item: &ClipboardItem, mailto: bool) -> Option<String> {
-    let value = item.content.trim();
+    let value = if matches!(
+        item.sub_kind,
+        Some(ClipboardSubKind::Html | ClipboardSubKind::Rtf)
+    ) {
+        item.search_text.as_deref().unwrap_or("")
+    } else {
+        &item.content
+    }
+    .trim();
     if value.is_empty() {
         return None;
     }
@@ -944,6 +955,30 @@ mod tests {
         assert_eq!(link_target(&item, false).as_deref(), Some("https://a.b/c"));
         item.content = "   ".to_owned();
         assert_eq!(link_target(&item, false), None);
+    }
+
+    #[test]
+    fn rich_text_link_targets_never_use_the_source() {
+        for sub_kind in [ClipboardSubKind::Html, ClipboardSubKind::Rtf] {
+            let mut item = text_item(Some(sub_kind), false);
+            item.search_text = Some("  https://example.com  ".to_owned());
+            assert_eq!(
+                link_target(&item, false).as_deref(),
+                Some("https://example.com")
+            );
+            item.search_text = Some(" www.example.com ".to_owned());
+            assert_eq!(
+                link_target(&item, false).as_deref(),
+                Some("https://www.example.com")
+            );
+            item.search_text = Some(" user@example.com ".to_owned());
+            assert_eq!(
+                link_target(&item, true).as_deref(),
+                Some("mailto:user@example.com")
+            );
+            item.search_text = None;
+            assert_eq!(link_target(&item, false), None);
+        }
     }
 
     #[test]

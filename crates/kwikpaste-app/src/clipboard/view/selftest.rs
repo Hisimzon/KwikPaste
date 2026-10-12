@@ -358,9 +358,9 @@ impl Driver {
 
         self.panel_intents.borrow_mut().clear();
         cx.update(|cx| {
-            let header = self.panel.read(cx).header().clone();
-            header.update(cx, |_, cx| {
-                cx.emit(super::header::HeaderEvent::OpenPreferences);
+            let list = self.panel.read(cx).list().clone();
+            list.update(cx, |_, cx| {
+                cx.emit(super::list::ListIntent::OpenPreferences);
             });
         });
         let opened = self
@@ -370,7 +370,7 @@ impl Driver {
             .any(|intent| matches!(intent, super::panel::PanelIntent::OpenPreferences));
         let intents = self.panel_intents.borrow().clone();
         self.check(
-            "header settings emits the preferences intent",
+            "footer settings emits the preferences intent",
             opened,
             || format!("intents {intents:?}"),
         );

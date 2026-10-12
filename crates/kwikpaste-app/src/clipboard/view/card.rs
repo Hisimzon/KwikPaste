@@ -15,7 +15,9 @@ use gpui::{
 };
 use kwikpaste_ui::{
     Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _,
-    theme::{TextSize, css_color, radius, semantic::SemanticTokens, space},
+    theme::{
+        TextSize, components::KindTagTokens, css_color, radius, semantic::SemanticTokens, space,
+    },
 };
 
 use crate::{
@@ -37,6 +39,7 @@ const PULSE_PERIOD: Duration = Duration::from_secs(2);
 /// 渲染卡片需要的环境。
 pub struct CardEnv<'a> {
     pub tokens: &'static SemanticTokens,
+    pub kind_tags: KindTagTokens,
     pub reorder_source_opacity: f32,
     pub layout: &'a LayoutSpec,
     pub now: DateTime<Local>,
@@ -422,12 +425,7 @@ fn meta(
                 .gap(space((6.) / 4.))
                 .overflow_hidden()
                 .child(hinted_icon(env, item, hint, app_icon_state))
-                .child(
-                    div()
-                        .truncate()
-                        .text_color(tokens.text.secondary)
-                        .child(type_label(item.type_key())),
-                )
+                .child(type_tag(env, item.type_key()))
                 .children(origin.map(|origin| {
                     div()
                         .truncate()
@@ -480,6 +478,30 @@ fn hinted_icon(
                 .child(KeyHint::new(SharedString::from(key.to_string()))),
         )
         .into_any_element()
+}
+
+/// 类型标签：识别出的子类型（链接、邮箱、颜色、路径）画成淡色底的彩色小胶囊，其余是次级文字。
+fn type_tag(env: &CardEnv<'_>, key: TypeKey) -> Div {
+    let tag = match key {
+        TypeKey::Url => env.kind_tags.link,
+        TypeKey::Email => env.kind_tags.email,
+        TypeKey::Color => env.kind_tags.color,
+        TypeKey::Path => env.kind_tags.path,
+        _ => {
+            return div()
+                .truncate()
+                .text_color(env.tokens.text.secondary)
+                .child(type_label(key));
+        }
+    };
+
+    div()
+        .flex_none()
+        .px(space(1.5))
+        .rounded(radius::SM)
+        .bg(tag.background)
+        .text_color(tag.foreground)
+        .child(type_label(key))
 }
 
 fn type_label(key: TypeKey) -> SharedString {
@@ -645,7 +667,7 @@ fn text_body(env: &CardEnv<'_>, item: &ListItem, on_link: Option<LinkHandler>) -
     }
 
     let summary = item.summary.as_ref().map(shared).unwrap_or_default();
-    let link = on_link.filter(|_| matches!(item.sub_kind, Some(SubKind::Url | SubKind::Email)));
+    let link = on_link.filter(|_| item.link_sub_kind().is_some());
     let Some(on_link) = link else {
         return div()
             .w_full()

@@ -401,6 +401,25 @@ mod tests {
     }
 
     #[test]
+    fn default_link_quick_action_does_not_extend_saved_lists() {
+        let (defaults, _) = parse("{}");
+        assert_eq!(
+            &defaults.clipboard.content.item_actions[..2],
+            &[ItemAction::Copy, ItemAction::OpenLink]
+        );
+        for saved in ["[\"copy\",\"delete\"]", "[]"] {
+            let (settings, report) = parse(&format!(
+                "{{\"clipboard\":{{\"content\":{{\"itemActions\":{saved}}}}}}}"
+            ));
+            assert_eq!(
+                serde_json::to_string(&settings.clipboard.content.item_actions).unwrap(),
+                saved
+            );
+            assert!(report.fallbacks.is_empty());
+        }
+    }
+
+    #[test]
     fn wrong_container_types_fall_back() {
         let (settings, report) = parse(
             r#"{"general": "yes", "shortcuts": {"openClipboard": "Alt+V"}, "update": {"lastCheckedAt": 5}}"#,

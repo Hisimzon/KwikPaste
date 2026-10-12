@@ -112,6 +112,14 @@ pub struct ExtraHues {
     pub purple_6: Color,
     pub gold_3: Color,
 }
+/// 卡片类型标签里识别出的子类型的文字色；底色由组件层取它的淡化。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KindPalette {
+    pub link: Color,
+    pub email: Color,
+    pub color: Color,
+    pub path: Color,
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowSpec {
     pub y: f32,
@@ -164,6 +172,7 @@ pub struct Palette {
     pub danger: StatusPalette,
     pub info: StatusPalette,
     pub extras: ExtraHues,
+    pub kinds: KindPalette,
     pub shadows: ShadowPalette,
     pub radii: Radii,
     pub materials: Materials,
@@ -184,6 +193,18 @@ const LIGHT_EXTRAS: ExtraHues = ExtraHues {
     orange_6: hex(0xfa8c16),
     purple_6: hex(0x722ed1),
     gold_3: hex(0xffe58f),
+};
+const LIGHT_KINDS: KindPalette = KindPalette {
+    link: hex(0x0958d9),
+    email: hex(0x531dab),
+    color: hex(0xd46b08),
+    path: hex(0x389e0d),
+};
+const DARK_KINDS: KindPalette = KindPalette {
+    link: hex(0x3c89e8),
+    email: hex(0x9a6fe0),
+    color: hex(0xe89a3c),
+    path: hex(0x6abe39),
 };
 const DARK_EXTRAS: ExtraHues = ExtraHues {
     blue_1: rgba(0x5b8cf7, 0.14),
@@ -312,6 +333,7 @@ pub const LIGHT: Palette = Palette {
         border: hex(0xb3c6f9),
     },
     extras: LIGHT_EXTRAS,
+    kinds: LIGHT_KINDS,
     shadows: ShadowPalette {
         overlay: [
             shadow(1., 2., 0., rgba(0, 0.06)),
@@ -405,6 +427,7 @@ pub const DARK: Palette = Palette {
         border: rgba(0x5b8cf7, 0.4),
     },
     extras: DARK_EXTRAS,
+    kinds: DARK_KINDS,
     shadows: ShadowPalette {
         overlay: [
             shadow(1., 2., 0., rgba(0, 0.3)),

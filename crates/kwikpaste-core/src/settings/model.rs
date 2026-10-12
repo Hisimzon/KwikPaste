@@ -452,6 +452,7 @@ impl Default for Content {
             sort: ClipboardItemSort::UpdatedAt,
             item_actions: vec![
                 ItemAction::Copy,
+                ItemAction::OpenLink,
                 ItemAction::SplitWords,
                 ItemAction::Star,
                 ItemAction::PinItem,

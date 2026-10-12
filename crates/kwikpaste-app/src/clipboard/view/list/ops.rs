@@ -793,7 +793,7 @@ impl ClipboardList {
     /// 按住修饰键点了链接、邮箱卡片的正文（1.x `openItemLink`）：关掉预览，打开链接或写邮件。
     pub fn open_link(&mut self, item: &ListItem, window: &mut Window, cx: &mut Context<Self>) {
         self.close_preview(cx);
-        let target = if item.sub_kind == Some(SubKind::Email) {
+        let target = if item.link_sub_kind() == Some(SubKind::Email) {
             OpenTarget::Email
         } else {
             OpenTarget::Link

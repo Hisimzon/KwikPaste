@@ -9,8 +9,8 @@ use super::image_display_size;
 use super::text::mask_sensitive_text;
 use super::view::{ClipboardAction, ClipboardItemView, FileEntry, FilesPreviewKind};
 use crate::clipboard::{
-    image_file_dimensions, quick_snippets, sanitize_css_color, validate_image_file_name,
-    AppIconStore, FileIconStore, ImageStore,
+    detect_text_sub_kind, image_file_dimensions, quick_snippets, sanitize_css_color,
+    validate_image_file_name, AppIconStore, FileIconStore, ImageStore, SUMMARY_MAX_CHARS,
 };
 use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind};
 use crate::error::Result;
@@ -277,7 +277,23 @@ pub(crate) fn compute_available_actions(
         actions.push(ClipboardAction::SplitWords);
     }
 
-    match item.sub_kind {
+    let sub_kind = if item.kind == ClipboardKind::Text
+        && matches!(
+            item.sub_kind,
+            Some(ClipboardSubKind::Html | ClipboardSubKind::Rtf)
+        ) {
+        // 截断摘要可能只是段落开头的链接；脱敏摘要也不代表原始纯文本。
+        item.summary
+            .as_deref()
+            .filter(|summary| {
+                !(redact_sensitive && item.is_sensitive)
+                    && summary.chars().count() < SUMMARY_MAX_CHARS
+            })
+            .and_then(detect_text_sub_kind)
+    } else {
+        item.sub_kind
+    };
+    match sub_kind {
         Some(ClipboardSubKind::Url) => actions.push(ClipboardAction::OpenLink),
         Some(ClipboardSubKind::Email) => actions.push(ClipboardAction::SendEmail),
         _ => {}
@@ -384,6 +400,38 @@ mod tests {
         let actions = compute_available_actions(&text_item(None, false), false);
 
         assert!(!actions.contains(&ClipboardAction::SaveImage));
+    }
+
+    #[test]
+    fn rich_text_link_actions_use_only_complete_plain_summaries() {
+        for sub_kind in [ClipboardSubKind::Html, ClipboardSubKind::Rtf] {
+            let mut item = text_item(Some(sub_kind), false);
+            for (plain, action) in [
+                ("  https://example.com  ", ClipboardAction::OpenLink),
+                ("user@example.com", ClipboardAction::SendEmail),
+            ] {
+                item.summary = Some(plain.to_owned());
+                assert!(compute_available_actions(&item, false).contains(&action));
+                assert_eq!(item.sub_kind, Some(sub_kind));
+            }
+            for plain in [
+                "ordinary paragraph".to_owned(),
+                "https://example.com and more text".to_owned(),
+                "#fff".to_owned(),
+                std::env::temp_dir().to_string_lossy().into_owned(),
+                format!("https://example.com/{}", "a".repeat(SUMMARY_MAX_CHARS)),
+            ] {
+                item.summary = Some(plain);
+                let actions = compute_available_actions(&item, false);
+                assert!(!actions.contains(&ClipboardAction::OpenLink));
+                assert!(!actions.contains(&ClipboardAction::SendEmail));
+                assert!(!actions.contains(&ClipboardAction::RevealInExplorer));
+                assert!(!actions.contains(&ClipboardAction::RevealInFinder));
+            }
+            item.summary = Some("https://example.com".to_owned());
+            item.is_sensitive = true;
+            assert!(!compute_available_actions(&item, true).contains(&ClipboardAction::OpenLink));
+        }
     }
 
     // 拆词只对文本开放；脱敏展示的敏感文本不拆，避免面板把凭据逐词摊开。

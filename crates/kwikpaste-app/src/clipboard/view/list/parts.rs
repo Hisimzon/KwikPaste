@@ -234,7 +234,8 @@ impl ClipboardList {
             .into_any_element()
     }
 
-    /// 页脚：左侧当前视图的总条数，右侧多选入口与快捷键列表（1.x `Footer.tsx`）；多选时换成多选栏。
+    /// 页脚：左侧当前项序号与总条数，右侧多选入口、快捷键列表和偏好设置（1.x `Footer.tsx`）；
+    /// 多选时换成多选栏。
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.selection.active() {
             return self.render_selection_bar(cx);
@@ -244,6 +245,12 @@ impl ClipboardList {
         let total = i64::try_from(self.model.total()).unwrap_or(i64::MAX);
         let hint = |key: &str| self.key_hints.then(|| SharedString::from(key.to_owned()));
         let empty = total == 0;
+        let status = if empty {
+            t_count("clipboard:footer.total", total, &[])
+        } else {
+            let index = (self.controller.active_index(&self.model) + 1).to_string();
+            t_count("clipboard:footer.position", total, &[("index", &index)])
+        };
 
         div()
             .flex()
@@ -262,7 +269,7 @@ impl ClipboardList {
                     .window_drag_area()
                     .kp_text(TextSize::Xs)
                     .text_color(tokens.text.muted)
-                    .child(t_count("clipboard:footer.total", total, &[])),
+                    .child(status),
             )
             .child(
                 div()
@@ -301,6 +308,19 @@ impl ClipboardList {
                         )
                         .on_click(cx.listener(|_, _, _, cx| {
                             cx.emit(super::ListIntent::ShowShortcuts);
+                        })),
+                    )
+                    .child(
+                        icon_button(
+                            cx,
+                            "footer-preferences",
+                            Glyph::Icon(IconName::SettingLine),
+                            t("clipboard:footer.preferences"),
+                            hint(","),
+                            Look::Text,
+                        )
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(super::ListIntent::OpenPreferences);
                         })),
                     ),
             )

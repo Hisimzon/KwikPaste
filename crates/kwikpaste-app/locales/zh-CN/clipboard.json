@@ -32,6 +32,8 @@
     "searchHistory": "未找到「{{keyword}}」相关记录"
   },
   "footer": {
+    "position": "第 {{index}} / {{count}} 项",
+    "preferences": "偏好设置",
     "select": "多选",
     "shortcuts": "快捷键",
     "total": "共 {{count}} 项"
@@ -58,7 +60,6 @@
     "useCustomIcon": "使用自定义 SVG"
   },
   "header": {
-    "openPreference": "偏好设置",
     "pin": "固定窗口",
     "searchPlaceholder": "搜索剪贴板...",
     "unpin": "取消固定",
