@@ -57,14 +57,6 @@ pub(crate) struct AnnouncementState {
     shown_this_launch: AtomicBool,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Trigger {
-    /// 应用启动后：只在开着自动检查更新时拉取，关掉自动检查的用户不发起额外的网络请求。
-    Launch,
-    /// 实际执行了一次检查更新（手动或到期的自动检查）。
-    Check,
-}
-
 /// 要显示的一条公告。按钮已按显示顺序排好、文案已按界面语言取好。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnnouncementPrompt {
@@ -122,18 +114,10 @@ pub enum AnnouncementOutcome {
 }
 
 /// 在 core runtime 后台拉取并按需交给宿主显示，不阻塞检查更新；失败只记调试日志。
-pub(crate) fn schedule(
-    core: &Core,
-    state: &Arc<AnnouncementState>,
-    ui: &Arc<dyn UpdaterUi>,
-    trigger: Trigger,
-) {
+pub(crate) fn schedule(core: &Core, state: &Arc<AnnouncementState>, ui: &Arc<dyn UpdaterUi>) {
     let Some(sources) = sources(core.info().env) else {
         return;
     };
-    if matches!(trigger, Trigger::Launch) && !core.settings().update.auto_check {
-        return;
-    }
 
     let core = core.clone();
     let state = state.clone();

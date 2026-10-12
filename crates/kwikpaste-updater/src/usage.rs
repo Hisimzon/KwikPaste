@@ -1,8 +1,8 @@
 //! 最小化使用统计（上报协议 v2），用来统计每日 / 每周 / 每月活跃安装、新增安装、留存、升级路径和版本分布；
 //! 更新本身不依赖它。
 //!
-//! 开着「自动检查更新」时每个 UTC 日上报一次（启动后和运行中每小时看一次当天是否已送达），版本变了也补报一次；
-//! 关掉自动检查后只在手动检查更新时上报。请求带每日随机 ID、上报类型、软件版本、系统、架构、界面语言，
+//! 每个 UTC 日上报一次（启动后和每轮后台检查确认当天是否已送达），版本变了也补报一次。
+//! 请求带每日随机 ID、上报类型、软件版本、系统、架构、界面语言，
 //! 以及距上次送达的天数、新安装所在的 ISO 周和升级前的版本：服务端靠这些在不持有长期 ID 的情况下精确去重。
 //! 每日 ID 按 UTC 日轮换，不从机器指纹、账号或局域网同步身份派生；发送失败静默跳过，不影响检查更新。
 //! 状态文件 `<bootstrap>/update-usage.json` 与 1.x 共用：同一台电脑从 1.x 换到 2.0 不算新增安装。
@@ -34,14 +34,6 @@ const OFFICIAL_BUILD: bool = option_env!("KWIKPASTE_OFFICIAL_BUILD").is_some();
 #[derive(Default)]
 pub(crate) struct UsageState {
     gate: tokio::sync::Mutex<()>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum Trigger {
-    /// 启动后和运行中每小时一次：开着自动检查更新时，当天还没送达或版本变了就上报。
-    Daily,
-    /// 实际执行了一次检查更新（手动或到期的自动检查）。
-    Check,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -106,7 +98,7 @@ fn installed_extensions(core: &Core) -> Vec<ExtensionUsage> {
 }
 
 /// 在 core runtime 后台发送，检查更新不等网络和磁盘；多次触发排队执行，状态读写不会交错。
-pub(crate) fn schedule(core: &Core, state: &Arc<UsageState>, trigger: Trigger) {
+pub(crate) fn schedule(core: &Core, state: &Arc<UsageState>) {
     let Some(endpoint) = endpoint(core.info().env) else {
         return;
     };
@@ -115,7 +107,7 @@ pub(crate) fn schedule(core: &Core, state: &Arc<UsageState>, trigger: Trigger) {
     let state = state.clone();
     core.runtime().clone().spawn(async move {
         let _guard = state.gate.lock().await;
-        if let Err(err) = report(&core, trigger, &endpoint).await {
+        if let Err(err) = report(&core, &endpoint).await {
             log::debug!("update usage report skipped: {err:#}");
         }
     });
@@ -130,19 +122,13 @@ fn endpoint(env: AppEnv) -> Option<String> {
 }
 
 /// 每日 ID 在发送前落盘，重启或发送失败都不会让同一天换出第二个 ID；送达后才记下当天和版本。
-async fn report(core: &Core, trigger: Trigger, endpoint: &str) -> Result<()> {
+async fn report(core: &Core, endpoint: &str) -> Result<()> {
     let settings = core.settings();
     let now = Utc::now();
     let path = core.paths().bootstrap_dir().join(STATE_FILENAME);
     let mut state = load_state(&path, now, || is_fresh_install(&settings))?;
     let version = core.info().version.to_string();
-    let Some(kind) = kind_for(
-        trigger,
-        &state,
-        &version,
-        now.date_naive(),
-        settings.update.auto_check,
-    ) else {
+    let Some(kind) = kind_for(&state, &version, now.date_naive()) else {
         return Ok(());
     };
     if state.first_pending && state.install_week.is_none() {
@@ -173,25 +159,14 @@ async fn report(core: &Core, trigger: Trigger, endpoint: &str) -> Result<()> {
     write_state(&path, &state)
 }
 
-/// 这次要不要发、发哪种：首次上报没送达前总是发；之后当天没送达或版本变了才发，
-/// 每日触发还要求开着自动检查更新。
-fn kind_for(
-    trigger: Trigger,
-    state: &DailyState,
-    version: &str,
-    today: NaiveDate,
-    auto_check: bool,
-) -> Option<Kind> {
+/// 首次上报没送达前总是发；之后当天没送达或版本变了才发。
+fn kind_for(state: &DailyState, version: &str, today: NaiveDate) -> Option<Kind> {
     if state.first_pending {
         return Some(Kind::First);
     }
     let due = state.last_sent_day.as_deref() != Some(today.to_string().as_str())
         || state.last_sent_version.as_deref() != Some(version);
-    let allowed = match trigger {
-        Trigger::Daily => auto_check,
-        Trigger::Check => true,
-    };
-    (due && allowed).then_some(Kind::Active)
+    due.then_some(Kind::Active)
 }
 
 /// 距上次送达的 UTC 天数；没有记录或时钟倒退时为空，服务端按“之前没见过”处理。
@@ -428,34 +403,14 @@ mod tests {
     fn reports_once_a_day_and_again_after_an_upgrade() {
         let today = date("2026-10-07");
         let done = sent("2026-10-07", "2.0.0");
-        assert_eq!(kind_for(Trigger::Daily, &done, "2.0.0", today, true), None);
-        assert_eq!(kind_for(Trigger::Check, &done, "2.0.0", today, true), None);
-        assert_eq!(
-            kind_for(Trigger::Daily, &done, "2.0.1", today, true),
-            Some(Kind::Active)
-        );
+        assert_eq!(kind_for(&done, "2.0.0", today), None);
+        assert_eq!(kind_for(&done, "2.0.1", today), Some(Kind::Active));
 
         let yesterday = sent("2026-10-06", "2.0.0");
-        assert_eq!(
-            kind_for(Trigger::Daily, &yesterday, "2.0.0", today, true),
-            Some(Kind::Active)
-        );
-        // 关掉自动检查后只在检查更新时上报。
-        assert_eq!(
-            kind_for(Trigger::Daily, &yesterday, "2.0.0", today, false),
-            None
-        );
-        assert_eq!(
-            kind_for(Trigger::Check, &yesterday, "2.0.0", today, false),
-            Some(Kind::Active)
-        );
-
+        assert_eq!(kind_for(&yesterday, "2.0.0", today), Some(Kind::Active));
         let mut pending = sent("2026-10-06", "2.0.0");
         pending.first_pending = true;
-        assert_eq!(
-            kind_for(Trigger::Daily, &pending, "2.0.0", today, false),
-            Some(Kind::First)
-        );
+        assert_eq!(kind_for(&pending, "2.0.0", today), Some(Kind::First));
     }
 
     #[test]

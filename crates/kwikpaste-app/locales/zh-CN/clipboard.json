@@ -61,7 +61,9 @@
     "openPreference": "偏好设置",
     "pin": "固定窗口",
     "searchPlaceholder": "搜索剪贴板...",
-    "unpin": "取消固定"
+    "unpin": "取消固定",
+    "updateAvailable": "有新版本 v{{version}}，点击更新",
+    "updateBadge": "新版本"
   },
   "menu": {
     "addNote": "添加备注",

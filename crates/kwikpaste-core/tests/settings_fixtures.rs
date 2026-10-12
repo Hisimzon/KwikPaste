@@ -188,10 +188,17 @@ fn customized_settings_round_trip_exactly() {
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
     expected["extensions"] =
         serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});
-    // 2.x 删掉了 1.x 的更新渠道开关。
+    // 旧文件中的更新选项已移除，读取时忽略，保存时不再写出。
     let update = expected["update"].as_object_mut().unwrap();
-    update.remove("includeBeta");
-    update.remove("includeNightly");
+    for key in [
+        "includeBeta",
+        "includeNightly",
+        "autoCheck",
+        "frequency",
+        "skippedVersion",
+    ] {
+        update.remove(key);
+    }
     assert_eq!(serde_json::to_value(store.snapshot()).unwrap(), expected);
 
     // 夹具的每个叶子都不是默认值，否则它覆盖不到对应字段的取值写法。

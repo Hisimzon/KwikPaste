@@ -61,7 +61,9 @@
     "openPreference": "Preferences",
     "pin": "Pin window",
     "searchPlaceholder": "Search clipboard...",
-    "unpin": "Unpin"
+    "unpin": "Unpin",
+    "updateAvailable": "Update available: v{{version}}, click to update",
+    "updateBadge": "NEW"
   },
   "menu": {
     "addNote": "Add Note",

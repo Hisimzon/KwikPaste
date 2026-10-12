@@ -324,6 +324,7 @@ pub fn start<V: Render>(
     settings::serve(cx, events);
     settings::apply_language(cx);
     let text_scale = system::init(cx);
+    updater::start(cx);
     if let Some(core) = core_host::core(cx) {
         window_state::migrate_legacy(core);
     }
@@ -393,7 +394,6 @@ pub fn start<V: Render>(
     }
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
-    updater::start(cx);
     if selftest::enabled(selftest::UPDATER_UI) {
         updater::selftest_update_window(cx);
     }

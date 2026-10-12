@@ -311,6 +311,39 @@ mod tests {
     }
 
     #[test]
+    fn removed_update_settings_are_ignored_without_degrading_other_values() {
+        for theme in ["dark", "invalid"] {
+            let content = serde_json::json!({
+                "general": {"autoStart": true},
+                "appearance": {"theme": theme},
+                "update": {
+                    "autoCheck": false, "frequency": "monthly", "skippedVersion": "2.1.0",
+                    "lastCheckedAt": "2026-10-01T00:00:00Z"
+                }
+            });
+            let (settings, report) = parse(&content.to_string());
+            assert!(!report.unreadable);
+            assert!(settings.general.auto_start);
+            assert_eq!(
+                settings.update.last_checked_at.as_deref(),
+                Some("2026-10-01T00:00:00Z")
+            );
+            assert_eq!(
+                report.fallbacks,
+                if theme == "dark" {
+                    vec![]
+                } else {
+                    vec!["appearance.theme"]
+                }
+            );
+            let saved = serde_json::to_value(&settings).unwrap();
+            for key in ["autoCheck", "frequency", "skippedVersion"] {
+                assert!(saved["update"].get(key).is_none());
+            }
+        }
+    }
+
+    #[test]
     fn one_bad_value_only_resets_that_field() {
         let (settings, report) = parse(
             r#"{

@@ -496,10 +496,7 @@ mod tests {
             parsed.appearance.material,
             crate::settings::Material::Default
         );
-        assert_eq!(
-            parsed.update.frequency,
-            crate::settings::UpdateFrequency::Daily
-        );
+        assert_eq!(parsed.update.last_checked_at, None);
         assert_eq!(
             parsed.clipboard.content.sort,
             crate::db::models::ClipboardItemSort::UpdatedAt

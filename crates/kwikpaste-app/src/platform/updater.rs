@@ -23,7 +23,7 @@ use kwikpaste_ui::theme::TextSize;
 use kwikpaste_ui::{Button, KpStyled as _, theme};
 use kwikpaste_updater::extensions::{ExtensionManager, ExtensionStatus};
 use kwikpaste_updater::{
-    AnnouncementOutcome, AnnouncementPrompt, CheckMode, DownloadProgress, HandoffHost, HostFuture,
+    AnnouncementOutcome, AnnouncementPrompt, DownloadProgress, HandoffHost, HostFuture,
     UpdateMetadata, UpdateStatus, Updater, UpdaterUi,
 };
 #[cfg(target_os = "windows")]
@@ -191,6 +191,40 @@ pub struct ExtensionStateHost(pub Entity<ExtensionState>);
 
 impl Global for ExtensionStateHost {}
 
+/// 应用更新状态经 UI 队列共享，面板观察此实体以实时显示或移除徽标。
+pub struct UpdateState(pub UpdateStatus);
+
+pub struct UpdateStateHost(pub Entity<UpdateState>);
+
+impl Global for UpdateStateHost {}
+
+impl UpdateState {
+    pub fn pending_update(&self) -> Option<&UpdateMetadata> {
+        self.0
+            .update
+            .as_ref()
+            .filter(|_| self.0.supported && self.0.install_kind.is_managed())
+    }
+}
+
+/// 当前可自更新的候选版本；检查失败或关闭更新窗不会清除它。
+pub fn pending_update(cx: &App) -> Option<&UpdateMetadata> {
+    cx.try_global::<UpdateStateHost>()?
+        .0
+        .read(cx)
+        .pending_update()
+}
+
+/// 面板徽标直接展示待更新状态，不重新发起检查；下载、安装状态仍从更新器取得。
+pub fn open_pending_update(cx: &mut App) {
+    let Some(status) = updater(cx).map(Updater::status) else {
+        return;
+    };
+    if status.supported && status.install_kind.is_managed() && status.update.is_some() {
+        open_update_window(status, cx);
+    }
+}
+
 /// 交接退出时要求的退出码（没有交接时为 0）。
 pub fn exit_code() -> i32 {
     EXIT_CODE.load(Ordering::SeqCst)
@@ -224,6 +258,8 @@ pub fn start(cx: &mut App) {
     };
     let extension_state = cx.new(|_| ExtensionState(created.extensions().status()));
     cx.set_global(ExtensionStateHost(extension_state));
+    let update_state = cx.new(|_| UpdateState(created.status()));
+    cx.set_global(UpdateStateHost(update_state));
     created.start();
     cx.set_global(UpdaterHost(created));
     cx.on_app_quit(|cx| {
@@ -285,13 +321,13 @@ pub fn selftest_update_window(cx: &mut App) {
         downloaded: false,
         release_notes_url: "https://example.invalid/selftest".to_owned(),
     });
-    serve_ui(UiRequest::Update(Box::new(status)), cx);
+    open_update_window(status, cx);
 }
 
 /// 自测更新流程展示真实检查结果；下载与安装仍由调用方驱动，确保 UI 和 updater 共用同一状态。
 #[cfg(feature = "e2e-overrides")]
 pub fn selftest_update_window_status(cx: &mut App, status: UpdateStatus) {
-    serve_ui(UiRequest::Update(Box::new(status)), cx);
+    open_update_window(status, cx);
 }
 
 /// 开发自测：展示公告按钮顺序，不打开真实链接。
@@ -519,7 +555,17 @@ fn serve_ui(request: UiRequest, cx: &mut App) {
                 });
             }
         }
-        UiRequest::Update(status) => open_update_window(*status, cx),
+        UiRequest::Update(status) => {
+            if let Some(state) = cx
+                .try_global::<UpdateStateHost>()
+                .map(|host| host.0.clone())
+            {
+                state.update(cx, |state, cx| {
+                    state.0 = *status;
+                    cx.notify();
+                });
+            }
+        }
         UiRequest::Progress(progress) => {
             if let Some((view, _handle)) = cx
                 .try_global::<UpdateWindowHost>()
@@ -708,7 +754,7 @@ impl UpdateWindow {
         self.check_failed = false;
         cx.notify();
         cx.spawn(async move |view, cx| {
-            let result = updater.check(CheckMode::Manual).await;
+            let result = updater.check().await;
             if let Err(err) = view.update(cx, |view, cx| {
                 view.checking = false;
                 match result {
@@ -793,25 +839,6 @@ impl UpdateWindow {
                 cx.notify();
             }) {
                 log::debug!("the update window closed before installation completed: {err:#}");
-            }
-        })
-        .detach();
-    }
-
-    fn skip(&mut self, cx: &mut Context<Self>) {
-        let Some(update) = self.status.update.clone() else {
-            return;
-        };
-        let updater = self.updater.clone();
-        cx.spawn(async move |view, cx| {
-            let result = updater.skip(update.version).await;
-            if let Err(err) = view.update(cx, |view, cx| {
-                if let Ok(status) = result {
-                    view.status = status;
-                }
-                cx.notify();
-            }) {
-                log::debug!("the update window closed before skip completed: {err:#}");
             }
         })
         .detach();
@@ -1053,15 +1080,6 @@ impl Render for UpdateWindow {
                     .flex()
                     .justify_between()
                     .gap(px(8.))
-                    .child(div().flex().gap(px(8.)).when(
-                        update.is_some_and(|_| !downloaded && !self.downloading),
-                        |element| {
-                            element.child(
-                                Button::new("update-skip", t("common:update.skip"))
-                                    .on_click(cx.listener(|view, _, _, cx| view.skip(cx))),
-                            )
-                        },
-                    ))
                     .child(div().flex_1())
                     .when(
                         update.is_some()

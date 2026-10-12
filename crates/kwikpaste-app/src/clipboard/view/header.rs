@@ -7,19 +7,20 @@
 use std::{sync::Arc, time::Duration};
 
 use gpui::{
-    Context, EventEmitter, ImageSource, InteractiveElement as _, IntoElement, MouseButton,
+    App, Context, EventEmitter, ImageSource, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, div, img,
+    Styled as _, Subscription, Task, Window, div, img, prelude::FluentBuilder as _,
 };
 use kwikpaste_ui::{
-    Glyph, IconButtonLook as Look, IconName, Input, TextInput, TextInputEvent, icon_button,
-    theme::space,
+    Glyph, IconButtonLook as Look, IconName, Input, KpStyled as _, TextInput, TextInputEvent,
+    TooltipExt as _, icon_button,
+    theme::{self, TextSize, space},
 };
 
 use super::{SEARCH_CONTEXT, card::logo};
 use crate::{
-    i18n::{self, t},
-    platform::{EditTrigger, window_drag::WindowDragArea as _},
+    i18n::{self, t, t_args},
+    platform::{EditTrigger, updater, window_drag::WindowDragArea as _},
 };
 
 /// 1.x `useDebounceFn(..., { wait: 200 })`。
@@ -60,6 +61,14 @@ impl Header {
             }
         });
 
+        let mut subscriptions = vec![changes];
+        if let Some(state) = cx
+            .try_global::<updater::UpdateStateHost>()
+            .map(|host| host.0.clone())
+        {
+            subscriptions.push(cx.observe(&state, |_, _, cx| cx.notify()));
+        }
+
         Self {
             input,
             hints: false,
@@ -67,8 +76,12 @@ impl Header {
             editing: false,
             language: i18n::language(),
             debounce: None,
-            _subscriptions: vec![changes],
+            _subscriptions: subscriptions,
         }
+    }
+
+    pub fn pending_update_version(&self, cx: &App) -> Option<String> {
+        updater::pending_update(cx).map(|update| update.version.clone())
     }
 
     pub fn input(&self) -> &TextInput {
@@ -135,6 +148,8 @@ impl Render for Header {
             self.input
                 .set_placeholder(t("clipboard:header.searchPlaceholder"), window, cx);
         }
+        let pending_version = self.pending_update_version(cx);
+        let tokens = theme::semantic(cx);
         let hint = |key: &str| self.hints.then(|| SharedString::from(key.to_owned()));
         let pin_label = if self.pinned {
             t("clipboard:header.unpin")
@@ -151,14 +166,41 @@ impl Render for Header {
             .pt(space((12.) / 4.))
             .pb(space((8.) / 4.))
             .child(
-                // logo 到搜索框之间的空白都能拖动窗口。
                 div()
                     .flex()
                     .flex_1()
                     .self_stretch()
                     .items_center()
-                    .window_drag_area()
-                    .child(img(ImageSource::Image(logo())).size(space((20.) / 4.))),
+                    .gap(space(1.))
+                    .child(
+                        div()
+                            .window_drag_area()
+                            .child(img(ImageSource::Image(logo())).size(space(5.))),
+                    )
+                    .when_some(pending_version, |element, version| {
+                        let label =
+                            t_args("clipboard:header.updateAvailable", &[("version", &version)]);
+                        element.child(
+                            div()
+                                .id("clipboard-header-update")
+                                .role(gpui::Role::Button)
+                                .aria_label(label.clone())
+                                .flex_none()
+                                .rounded_full()
+                                .px(space(1.5))
+                                .py(space(0.5))
+                                .kp_text(TextSize::Xs)
+                                .bg(tokens.accent.solid)
+                                .text_color(tokens.text.on_accent)
+                                .cursor_pointer()
+                                .hover(|style| style.bg(tokens.accent.hover))
+                                .kp_tooltip(label)
+                                .child(t("clipboard:header.updateBadge"))
+                                .on_click(|_, _, cx| updater::open_pending_update(cx)),
+                        )
+                    })
+                    // 可点徽标不属于拖动区域，macOS 的拖动会吞掉子元素点击。
+                    .child(div().flex_1().self_stretch().window_drag_area()),
             )
             .child(
                 div()

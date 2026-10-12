@@ -102,7 +102,6 @@
     "uninstall": "Uninstall",
     "uninstallTitle": "Uninstall extension",
     "update": "Update",
-    "updateAvailable": "New version {{version}} available",
     "wetype": {
       "codePlaceholder": "6-digit code",
       "coexist": "WeType is running on this computer: it handles clipboard exchange, and KwikPaste only records what your phone sends into history.",
@@ -1074,19 +1073,6 @@
             "description": "When off, received items only go to history.",
             "title": "Copy Received Items to Clipboard"
           }
-        }
-      },
-      "updates": {
-        "autoCheck": {
-          "title": "Automatically Check for Updates"
-        },
-        "frequency": {
-          "options": {
-            "daily": "Daily",
-            "monthly": "Monthly",
-            "weekly": "Weekly"
-          },
-          "title": "Update Check Frequency"
         }
       },
       "window": {

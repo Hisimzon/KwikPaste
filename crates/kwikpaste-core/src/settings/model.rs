@@ -908,36 +908,11 @@ impl Default for Feedback {
     }
 }
 
-/// 1.x 的渠道开关 `includeBeta` / `includeNightly` 在 2.x 删掉了（2.x 只有一个更新渠道）：读取时忽略，
-/// 下次写盘不再写出。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// 更新检查时间；旧文件中的自动检查、频率、跳过版本与渠道开关由 serde 忽略，保存时不再写出。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Update {
-    pub auto_check: bool,
-    pub frequency: UpdateFrequency,
     pub last_checked_at: Option<String>,
-    pub skipped_version: Option<String>,
-}
-
-/// 设置文件落盘时写入完整结构，已有安装会保留各自显式保存的值；这里的默认值只作用于全新安装。
-impl Default for Update {
-    fn default() -> Self {
-        Self {
-            auto_check: true,
-            frequency: UpdateFrequency::default(),
-            last_checked_at: None,
-            skipped_version: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum UpdateFrequency {
-    #[default]
-    Daily,
-    Weekly,
-    Monthly,
 }
 
 /// 扩展的宿主设置，不包含身份或远程设备数据。
