@@ -653,6 +653,9 @@ impl Preferences {
         {
             subscriptions.push(cx.observe(&state, |_, _, cx| cx.notify()));
         }
+        // 窗口一打开就有焦点，Esc 不用先点一下界面就能关窗。
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         Self {
             tab: initial_tab(),
             settings,
@@ -664,7 +667,7 @@ impl Preferences {
             number_inputs,
             sliders,
             scroll: ScrollHandle::new(),
-            focus: cx.focus_handle(),
+            focus,
             recording: None,
             storage_overview: None,
             storage_location,
@@ -2458,9 +2461,23 @@ impl Preferences {
     }
 
     fn show_import_confirmation(path: PathBuf, window: &mut Window, cx: &mut App) {
-        let Ok(mode) = backup::inspect_backup_file(&path) else {
-            log::warn!("invalid backup file: {}", path.display());
-            return;
+        let mode = match backup::inspect_backup_file(&path) {
+            Ok(mode) => mode,
+            Err(error) => {
+                log::warn!("invalid backup file: {}: {error:#}", path.display());
+                toast::show(
+                    Toast::error(i18n::t_args(
+                        "commands:error",
+                        &[
+                            ("label", &i18n::t("commands:labels.importBackup")),
+                            ("message", &error.to_string()),
+                        ],
+                    )),
+                    window,
+                    cx,
+                );
+                return;
+            }
         };
         let Some(core) = core_host::core(cx).cloned() else {
             return;
@@ -4941,6 +4958,14 @@ impl Render for Preferences {
             .size_full()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                // 下拉框、弹框自己处理的 Esc 不会传到这里；录制快捷键时 Esc 只取消录制。
+                if this.recording.is_none()
+                    && event.keystroke.key.eq_ignore_ascii_case("escape")
+                    && !event.keystroke.modifiers.modified()
+                {
+                    window.remove_window();
+                    return;
+                }
                 this.capture_shortcut(event, window, cx);
             }))
             .flex()

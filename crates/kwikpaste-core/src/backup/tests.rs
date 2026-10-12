@@ -16,6 +16,182 @@ use crate::testing::{block_on, sample_png, Fixture};
 const PASSWORD: &str = "correct horse battery";
 
 #[test]
+fn ecopaste_old_backup_always_merges_history() {
+    let archive_fixture = Fixture::new();
+    let root = archive_fixture.root();
+    let db_path = root.join("EcoPaste.db");
+    let created = "2020-01-02 12:34:56";
+    archive_fixture.runtime.handle().block_on(async {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(&db_path).create_if_missing(true))
+            .await.unwrap();
+        sqlx::query(
+            "CREATE TABLE history (id TEXT PRIMARY KEY, type TEXT, \"group\" TEXT, value TEXT, \
+             search TEXT, count INTEGER, width INTEGER, height INTEGER, favorite INTEGER, \
+             createTime TEXT, note TEXT, subtype TEXT)",
+        ).execute(&pool).await.unwrap();
+        for (id, kind, value, search, favorite, note) in [
+            ("1", "text", "old favorite", "old favorite", 1, "  old note  "),
+            ("2", "html", "<b>old html</b>", "old html", 0, ""),
+            ("3", "image", r"C:\Users\old\EcoPaste\images\old.png", "", 0, ""),
+            ("4", "files", r#"["C:\\old\\document.txt"]"#, "", 0, ""),
+            ("5", "unknown", "ignored", "", 0, ""),
+        ] {
+            sqlx::query(
+                "INSERT INTO history (id, type, value, search, favorite, createTime, note, width, height) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 4, 6)",
+            ).bind(id).bind(kind).bind(value).bind(search).bind(favorite).bind(created).bind(note)
+                .execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+    });
+    fs::create_dir(root.join("images")).unwrap();
+    let png = sample_png(4, 6);
+    fs::write(root.join("images/old.png"), &png).unwrap();
+    fs::write(root.join(".store-backup.json"), b"not KwikPaste settings").unwrap();
+    let gzip_path = root.join("old.tar.gz");
+    let encoder = flate2::write::GzEncoder::new(
+        File::create(&gzip_path).unwrap(),
+        flate2::Compression::default(),
+    );
+    let mut archive = tar::Builder::new(encoder);
+    archive
+        .append_path_with_name(&db_path, "EcoPaste.db")
+        .unwrap();
+    archive
+        .append_dir_all("images", root.join("images"))
+        .unwrap();
+    archive
+        .append_path_with_name(root.join(".store-backup.json"), ".store-backup.json")
+        .unwrap();
+    archive.into_inner().unwrap().finish().unwrap();
+    let backup = root.join("2020_01_02_12_34_56.EcoPaste-backup");
+    fs::rename(gzip_path, &backup).unwrap();
+    assert_eq!(
+        inspect_backup_file(&backup).unwrap(),
+        BackupContainerMode::Plain
+    );
+
+    for strategy in [BackupImportStrategy::Merge, BackupImportStrategy::Overwrite] {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let local_id = store(&core, text("local history"));
+        let local_before = block_on(core.find_item(&local_id)).unwrap().unwrap();
+        let settings_before = serde_json::to_value(core.settings()).unwrap();
+        let sync_before = sync_state(&core);
+        let sounds_before = fixture.platform.sounds();
+        let result = block_on(core.import_history_backup(input(&backup, None), strategy)).unwrap();
+        assert_eq!((result.imported_items, result.skipped_items), (4, 1));
+        assert_eq!(result.strategy, BackupImportStrategy::Merge);
+        assert!(!result.imported_settings && !result.requires_restart);
+        assert_eq!(
+            serde_json::to_value(core.settings()).unwrap(),
+            settings_before
+        );
+        assert_eq!(
+            serde_json::to_value(block_on(core.find_item(&local_id)).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(&local_before).unwrap()
+        );
+        assert_eq!(sync_state(&core), sync_before);
+        assert_eq!(fixture.platform.sounds(), sounds_before);
+
+        let list = block_on(core.list_items(ClipboardItemQuery::default())).unwrap();
+        assert_eq!(list.total, 5);
+        let items: Vec<_> = list
+            .list
+            .iter()
+            .map(|view| block_on(core.find_item(&view.item.id)).unwrap().unwrap())
+            .collect();
+        let favorite = items
+            .iter()
+            .find(|item| item.content == "old favorite")
+            .unwrap();
+        assert!(favorite.is_favorite);
+        assert_eq!(favorite.note.as_deref(), Some("old note"));
+        let timestamp = Local
+            .from_local_datetime(
+                &NaiveDateTime::parse_from_str(created, "%Y-%m-%d %H:%M:%S").unwrap(),
+            )
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(favorite.created_at, timestamp);
+        assert_eq!(favorite.updated_at, timestamp);
+        assert!(!favorite.is_pinned && favorite.source_app_id.is_none());
+        let html = items
+            .iter()
+            .find(|item| item.search_text.as_deref() == Some("old html"))
+            .unwrap();
+        assert_eq!(html.content, "<b>old html</b>");
+        assert_eq!(
+            html.sub_kind,
+            Some(crate::db::models::ClipboardSubKind::Html)
+        );
+        let image = items
+            .iter()
+            .find(|item| item.kind == ClipboardKind::Image)
+            .unwrap();
+        assert_eq!(
+            fs::read(core.image_origin_path(&image.content).unwrap()).unwrap(),
+            png
+        );
+        assert_eq!((image.width, image.height), (Some(4), Some(6)));
+        let files = items
+            .iter()
+            .find(|item| item.kind == ClipboardKind::Files)
+            .unwrap();
+        assert_eq!(files.content, r"C:\old\document.txt");
+
+        // 重复内容不能覆盖用户后来修改的元数据。
+        block_on(core.toggle_favorite(&favorite.id)).unwrap();
+        let result = block_on(core.import_history_backup(input(&backup, None), strategy)).unwrap();
+        assert_eq!((result.imported_items, result.skipped_items), (0, 5));
+        assert!(
+            !block_on(core.find_item(&favorite.id))
+                .unwrap()
+                .unwrap()
+                .is_favorite
+        );
+        assert_eq!(
+            block_on(core.list_items(ClipboardItemQuery::default()))
+                .unwrap()
+                .total,
+            5
+        );
+        block_on(core.shutdown()).unwrap();
+    }
+}
+
+#[test]
+fn ecopaste_encrypted_magic_imports_with_password() {
+    let source = source();
+    let backup = export(&source, BackupExportMode::Encrypted, Some(PASSWORD));
+    let mut bytes = fs::read(&backup).unwrap();
+    bytes[..MAGIC.len()].copy_from_slice(ECOPASTE_MAGIC);
+    let backup = backup.with_extension("ecopastebak");
+    fs::write(&backup, bytes).unwrap();
+    assert_eq!(
+        inspect_backup_file(&backup).unwrap(),
+        BackupContainerMode::Encrypted
+    );
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let result = block_on(
+        core.import_history_backup(input(&backup, Some(PASSWORD)), BackupImportStrategy::Merge),
+    )
+    .unwrap();
+    assert_eq!((result.imported_items, result.skipped_items), (3, 0));
+    assert_eq!(contents(&core), contents(&source.core));
+    assert!(core
+        .image_origin_path(&source.image_file)
+        .unwrap()
+        .is_file());
+    block_on(core.shutdown()).unwrap();
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[test]
 fn backup_extension_validation_accepts_expected_suffix() {
     let path = normalize_backup_path(PathBuf::from("demo.kwikpastebak")).unwrap();
     assert_eq!(path, PathBuf::from("demo.kwikpastebak"));

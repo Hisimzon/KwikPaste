@@ -25,7 +25,8 @@ use anyhow::{anyhow, Context};
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
+use flate2::read::GzDecoder;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -49,7 +50,9 @@ use crate::settings::SettingsDelta;
 pub const BACKUP_EXTENSION: &str = "kwikpastebak";
 
 const MAGIC: &[u8; 12] = b"KWIKPASTEBAK";
+const ECOPASTE_MAGIC: &[u8; 12] = b"ECOPASTEBAK1";
 const ZIP_MAGIC: &[u8; 2] = b"PK";
+const GZIP_MAGIC: &[u8; 2] = b"\x1f\x8b";
 const HEADER_LEN_BYTES: usize = 4;
 const FORMAT_VERSION: u16 = 1;
 const ARGON2_MEMORY_KIB: u32 = 64 * 1024;
@@ -350,14 +353,20 @@ async fn import_history_backup(
         import_settings,
     } = input;
     let password = password.map(Zeroizing::new);
-    let temp = blocking(move || {
-        ensure_backup_extension(&path)?;
+    let (temp, legacy) = blocking(move || {
         let payload = read_backup_payload(&path, password.as_ref().map(|value| value.as_str()))?;
+        if payload.starts_with(GZIP_MAGIC) {
+            return Ok((extract_payload_tar_gz(&payload)?, true));
+        }
         let temp = extract_payload_zip(&payload)?;
         validate_extracted_payload(temp.path())?;
-        Ok(temp)
+        Ok((temp, false))
     })
     .await?;
+
+    if legacy {
+        return import_ecopaste_history(core, temp.path()).await;
+    }
 
     match strategy {
         BackupImportStrategy::Merge => merge_import(core, temp.path(), import_settings).await,
@@ -376,10 +385,8 @@ fn is_partial_backup(root: &Path) -> Result<bool> {
     Ok(manifest.get("scope").is_some_and(|scope| !scope.is_null()))
 }
 
-/// 识别 `.kwikpastebak` 文件头并返回容器模式；不解密、不导入。
+/// 按文件头识别 KwikPaste 或 EcoPaste 备份的容器模式；不解密、不导入。
 pub fn inspect_backup_file(path: &Path) -> Result<BackupContainerMode> {
-    ensure_backup_extension(path)?;
-
     let mut file = File::open(path).with_context(|| format!("failed to open backup {path:?}"))?;
     inspect_backup_reader(&mut file)
 }
@@ -468,14 +475,6 @@ fn normalize_backup_path(path: PathBuf) -> Result<PathBuf> {
         Some(_) => app_error(format!("备份文件后缀必须是 .{BACKUP_EXTENSION}")),
         None => Ok(path.with_extension(BACKUP_EXTENSION)),
     }
-}
-
-fn ensure_backup_extension(path: &Path) -> Result<()> {
-    if is_backup_path(path) {
-        return Ok(());
-    }
-
-    app_error(format!("请选择 .{BACKUP_EXTENSION} 备份文件"))
 }
 
 async fn checkpoint_database(pool: &SqlitePool) -> Result<()> {
@@ -1009,10 +1008,10 @@ fn read_backup_payload(path: &Path, password: Option<&str>) -> Result<Vec<u8>> {
     file.read_to_end(&mut bytes)
         .with_context(|| format!("failed to read backup {path:?}"))?;
 
-    if bytes.starts_with(ZIP_MAGIC) {
+    if bytes.starts_with(ZIP_MAGIC) || bytes.starts_with(GZIP_MAGIC) {
         return Ok(bytes);
     }
-    if !bytes.starts_with(MAGIC) {
+    if !bytes.starts_with(MAGIC) && !bytes.starts_with(ECOPASTE_MAGIC) {
         return app_error("不是有效的 KwikPaste 备份文件");
     }
 
@@ -1110,6 +1109,213 @@ fn extract_payload_zip(payload: &[u8]) -> Result<TempDir> {
     Ok(temp)
 }
 
+/// EcoPaste 0.x 的 tar.gz 只接受临时目录内的普通相对路径、文件和目录。
+fn extract_payload_tar_gz(payload: &[u8]) -> Result<TempDir> {
+    let temp = tempfile::tempdir().context("failed to create temporary import directory")?;
+    let mut archive = tar::Archive::new(GzDecoder::new(payload));
+    for entry in archive
+        .entries()
+        .context("failed to read EcoPaste archive")?
+    {
+        let mut entry = entry.context("failed to read EcoPaste archive entry")?;
+        let relative = entry.path().context("failed to read EcoPaste entry path")?;
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return app_error("备份文件里有无效的路径");
+        }
+        let target = temp.path().join(relative);
+        let kind = entry.header().entry_type();
+        if kind.is_dir() {
+            fs::create_dir_all(&target).with_context(|| format!("failed to create {target:?}"))?;
+            continue;
+        }
+        if !kind.is_file() {
+            return app_error("备份文件里有不支持的条目");
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("failed to create {parent:?}"))?;
+        }
+        let mut file =
+            File::create(&target).with_context(|| format!("failed to create {target:?}"))?;
+        std::io::copy(&mut entry, &mut file).context("failed to extract EcoPaste payload")?;
+    }
+
+    Ok(temp)
+}
+
+#[derive(sqlx::FromRow)]
+struct EcoPasteRow {
+    #[sqlx(rename = "type")]
+    kind: String,
+    value: String,
+    search: Option<String>,
+    favorite: Option<i64>,
+    #[sqlx(rename = "createTime")]
+    create_time: Option<String>,
+    note: Option<String>,
+    width: Option<i32>,
+    height: Option<i32>,
+}
+
+impl EcoPasteRow {
+    /// 旧图片路径只取文件名；设置、分组与使用次数不属于历史内容载荷。
+    fn payload(&self, root: &Path) -> Result<Option<clipboard::ClipboardPayload>> {
+        use clipboard::{ClipboardPayload, ImagePayload, TextPayload};
+
+        let payload = match self.kind.as_str() {
+            "text" => ClipboardPayload::Text(TextPayload {
+                text: self.value.clone(),
+                html: None,
+                rtf: None,
+            }),
+            "html" | "rtf" => ClipboardPayload::Text(TextPayload {
+                text: self.search.clone().unwrap_or_default(),
+                html: (self.kind == "html").then(|| self.value.clone()),
+                rtf: (self.kind == "rtf").then(|| self.value.clone()),
+            }),
+            "image" => {
+                let name = self.value.rsplit(['/', '\\']).next().unwrap_or_default();
+                let mut parts = Path::new(name).components();
+                if !matches!(parts.next(), Some(std::path::Component::Normal(_)))
+                    || parts.next().is_some()
+                {
+                    return Ok(None);
+                }
+                let path = root.join("images").join(name);
+                if !path.is_file() {
+                    return Ok(None);
+                }
+                ClipboardPayload::Image(ImagePayload {
+                    bytes: fs::read(&path)
+                        .with_context(|| format!("failed to read EcoPaste image {path:?}"))?,
+                    width: self.width.unwrap_or(1).max(1) as u32,
+                    height: self.height.unwrap_or(1).max(1) as u32,
+                })
+            }
+            "files" => {
+                let Ok(paths) = serde_json::from_str::<Vec<String>>(&self.value) else {
+                    return Ok(None);
+                };
+                if paths.is_empty() {
+                    return Ok(None);
+                }
+                ClipboardPayload::Files(paths)
+            }
+            _ => return Ok(None),
+        };
+
+        Ok(Some(payload))
+    }
+}
+
+/// EcoPaste 0.x 始终合并旧历史：保留当前设置与重复记录，不产生本机采集的同步序号或提示音。
+async fn import_ecopaste_history(
+    core: &CoreInner,
+    root: &Path,
+) -> Result<ImportHistoryBackupResult> {
+    let mut db_path = None;
+    for entry in fs::read_dir(root).context("failed to list EcoPaste backup")? {
+        let entry = entry.context("failed to read EcoPaste backup directory entry")?;
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "db") && path.is_file() {
+            db_path = Some(path);
+            break;
+        }
+    }
+    let Some(db_path) = db_path else {
+        return app_error("备份文件里没有 EcoPaste 的历史数据库");
+    };
+    let backup = open_backup_db(&db_path).await?;
+    let rows = async {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'history'",
+        )
+        .fetch_one(&backup)
+        .await
+        .context("failed to inspect EcoPaste history database")?;
+        if exists == 0 {
+            return app_error("备份文件里没有 EcoPaste 的历史数据库");
+        }
+        Ok(sqlx::query_as::<_, EcoPasteRow>(
+            "SELECT type, value, search, favorite, createTime, note, width, height \
+             FROM history ORDER BY createTime ASC, id ASC",
+        )
+        .fetch_all(&backup)
+        .await
+        .context("failed to read EcoPaste history")?)
+    }
+    .await;
+    backup.close().await;
+    let rows = rows?;
+
+    let mut imported_items = 0;
+    let mut skipped_items = 0;
+    {
+        let _upsert = core.upsert_lock.lock().await;
+        let pool = core.db.pool().await;
+        for row in rows {
+            let Some(payload) = row.payload(root)? else {
+                skipped_items += 1;
+                continue;
+            };
+            let settings = core.settings.snapshot();
+            let Some(mut item) = clipboard::build_item_with_settings(
+                &core.images,
+                &payload,
+                &settings.clipboard.capture,
+                &settings.clipboard.sensitive,
+                settings.clipboard.content.copy_plain,
+            )?
+            else {
+                skipped_items += 1;
+                continue;
+            };
+            item.note = row
+                .note
+                .map(|note| note.trim().to_owned())
+                .filter(|note| !note.is_empty());
+            item.is_favorite = row.favorite == Some(1);
+            let timestamp = row
+                .create_time
+                .as_deref()
+                .and_then(|value| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S").ok())
+                .and_then(|value| Local.from_local_datetime(&value).single())
+                .map(|value| value.with_timezone(&Utc))
+                .unwrap_or_else(Utc::now);
+            item.created_at = timestamp;
+            item.updated_at = timestamp;
+
+            let exists: Option<i64> =
+                sqlx::query_scalar("SELECT 1 FROM clipboard_items WHERE content_hash = ? LIMIT 1")
+                    .bind(&item.content_hash)
+                    .fetch_optional(&pool)
+                    .await
+                    .context("failed to check duplicate EcoPaste item")?;
+            if exists.is_some() {
+                skipped_items += 1;
+                continue;
+            }
+            crate::db::items::insert_item(&pool, &item).await?;
+            imported_items += 1;
+        }
+    }
+    refresh_apps_registry(core).await;
+    core.events.emit(CoreEvent::ClipboardReloaded);
+    core.ocr.nudge();
+
+    Ok(ImportHistoryBackupResult {
+        strategy: BackupImportStrategy::Merge,
+        imported_items,
+        skipped_items,
+        imported_resources: 0,
+        imported_settings: false,
+        requires_restart: false,
+    })
+}
+
 fn validate_extracted_payload(root: &Path) -> Result<()> {
     if !root.join(MANIFEST_FILENAME).exists() {
         return app_error("备份文件缺少 manifest.json");
@@ -1133,11 +1339,13 @@ fn inspect_backup_reader<R: Read>(reader: &mut R) -> Result<BackupContainerMode>
     let read = reader
         .read(&mut magic)
         .context("failed to read backup magic")?;
-    if read >= MAGIC.len() && &magic == MAGIC {
+    if read >= MAGIC.len() && (&magic == MAGIC || &magic == ECOPASTE_MAGIC) {
         let header = read_container_header_after_magic(reader)?;
         return Ok(header.mode);
     }
-    if read >= ZIP_MAGIC.len() && &magic[..ZIP_MAGIC.len()] == ZIP_MAGIC {
+    if read >= ZIP_MAGIC.len()
+        && (&magic[..ZIP_MAGIC.len()] == ZIP_MAGIC || &magic[..GZIP_MAGIC.len()] == GZIP_MAGIC)
+    {
         return Ok(BackupContainerMode::Plain);
     }
 
@@ -1404,10 +1612,10 @@ struct MergeOutcome {
 }
 
 async fn open_backup_db(path: &Path) -> Result<SqlitePool> {
+    // 只读连接保留备份原有的日志模式；强制切换到 WAL 会尝试写入旧数据库。
     let options = SqliteConnectOptions::new()
         .filename(path)
         .read_only(true)
-        .journal_mode(SqliteJournalMode::Wal)
         .foreign_keys(true);
 
     Ok(SqlitePoolOptions::new()
