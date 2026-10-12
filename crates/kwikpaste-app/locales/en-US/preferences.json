@@ -694,7 +694,7 @@
         },
         "importHistory": {
           "controlLabel": "Import",
-          "description": "Import a .kwikpastebak backup, with merge or overwrite recovery.",
+          "description": "Import a .kwikpastebak backup, with merge or overwrite recovery; EcoPaste backups are also accepted.",
           "title": "Import Backup"
         }
       },

@@ -684,7 +684,7 @@
         },
         "importHistory": {
           "controlLabel": "导入",
-          "description": "导入 .kwikpastebak 备份包，支持合并或覆盖恢复。",
+          "description": "导入 .kwikpastebak 备份包，支持合并或覆盖恢复，也支持 EcoPaste 备份。",
           "title": "导入备份"
         }
       },

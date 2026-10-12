@@ -2458,9 +2458,23 @@ impl Preferences {
     }
 
     fn show_import_confirmation(path: PathBuf, window: &mut Window, cx: &mut App) {
-        let Ok(mode) = backup::inspect_backup_file(&path) else {
-            log::warn!("invalid backup file: {}", path.display());
-            return;
+        let mode = match backup::inspect_backup_file(&path) {
+            Ok(mode) => mode,
+            Err(error) => {
+                log::warn!("invalid backup file: {}: {error:#}", path.display());
+                toast::show(
+                    Toast::error(i18n::t_args(
+                        "commands:error",
+                        &[
+                            ("label", &i18n::t("commands:labels.importBackup")),
+                            ("message", &error.to_string()),
+                        ],
+                    )),
+                    window,
+                    cx,
+                );
+                return;
+            }
         };
         let Some(core) = core_host::core(cx).cloned() else {
             return;
