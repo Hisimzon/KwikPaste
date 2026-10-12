@@ -221,6 +221,11 @@ pub fn open_pending_update(cx: &mut App) {
         return;
     };
     if status.supported && status.install_kind.is_managed() && status.update.is_some() {
+        // 面板置顶，不收起会压在更新窗上；与打开偏好设置时一样按点击外部处理。
+        super::request(
+            cx,
+            PanelCommand::Hide(Trigger::now(TriggerSource::OutsideClick)),
+        );
         open_update_window(status, cx);
     }
 }
