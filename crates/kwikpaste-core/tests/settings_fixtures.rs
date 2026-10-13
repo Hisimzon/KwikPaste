@@ -224,6 +224,7 @@ fn customized_settings_round_trip_exactly() {
     ] {
         update.remove(key);
     }
+    update.insert("promptedVersion".to_owned(), Value::Null);
     assert_eq!(serde_json::to_value(store.snapshot()).unwrap(), expected);
 
     // 夹具的每个叶子都不是默认值，否则它覆盖不到对应字段的取值写法。

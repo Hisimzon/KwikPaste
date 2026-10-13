@@ -924,11 +924,13 @@ impl Default for Feedback {
     }
 }
 
-/// 更新检查时间；旧文件中的自动检查、频率、跳过版本与渠道开关由 serde 忽略，保存时不再写出。
+/// 更新检查状态；旧文件中的自动检查、频率、跳过版本与渠道开关由 serde 忽略，保存时不再写出。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Update {
     pub last_checked_at: Option<String>,
+    /// 已经弹过更新窗的版本：自动检查只在第一次发现某个版本时弹窗，之后只留面板徽标。
+    pub prompted_version: Option<String>,
 }
 
 /// 扩展的宿主设置，不包含身份或远程设备数据。

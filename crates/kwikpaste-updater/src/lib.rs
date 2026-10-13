@@ -5,7 +5,7 @@
 //! core 的 tokio runtime 上执行，宿主（GPUI）在任何执行器里都可以直接 await 公开的 async 方法。
 //!
 //! 宿主要接的两个接口：
-//! - [`UpdaterUi`]（UI 线）：自动检查后记录更新状态，显示公告对话框并返回用户的选择，打开链接；
+//! - [`UpdaterUi`]（UI 线）：检查后记录更新状态，自动检查第一次发现某个版本时弹更新窗，显示公告对话框并返回用户的选择，打开链接；
 //! - [`HandoffHost`]（平台线）：安装交接时停输入、删托盘、释放单实例、退出进程。
 //!
 //! 与附录 E §5 相比按 v2 路线精简：没有分桶 / 灰度、闸门、canary 与演练渠道，没有自动降级、
@@ -61,6 +61,9 @@ pub trait UpdaterUi: Send + Sync + 'static {
 
     /// 检查成功后发布当前更新状态（含没有更新），由宿主刷新持久提示，不自动打开更新窗。
     fn update_available(&self, status: UpdateStatus);
+
+    /// 自动检查第一次发现这个版本：弹出更新窗。关掉后只留面板徽标，同一版本不再弹。
+    fn prompt_update(&self, _status: UpdateStatus) {}
 
     /// 显示一条公告并等用户响应。按 [`AnnouncementPrompt::buttons`] 的顺序摆按钮，点哪个按钮就返回
     /// [`ButtonRole::outcome`]；按 Esc、点标题栏关闭都返回 [`AnnouncementOutcome::Closed`]。
@@ -195,8 +198,8 @@ impl Updater {
         &self.0.extensions
     }
 
-    /// 开始后台调度（重复调用无效）：清理上次更新留下的临时文件，8 秒后拉公告，
-    /// 之后每 6 小时检查并发布状态，同轮检查扩展与当天使用统计。
+    /// 开始后台调度（重复调用无效）：清理上次更新留下的临时文件，8 秒后检查并发布状态（顺带拉公告），
+    /// 之后每小时看一次扩展、当天使用统计和是否到了下次检查（见 [`scheduler`]）。
     pub fn start(&self) {
         let mut scheduler = lock(&self.0.scheduler);
         if scheduler.is_some() {
@@ -207,10 +210,17 @@ impl Updater {
         *scheduler = Some(self.0.core.runtime().spawn(async move {
             updater.clean_leftovers();
             tokio::time::sleep(scheduler::INITIAL_DELAY).await;
+            let mut last_success = None;
             loop {
                 updater.0.extensions.schedule_daily();
-                updater.run_auto_check().await;
-                tokio::time::sleep(scheduler::CHECK_INTERVAL).await;
+                if scheduler::check_due(last_success, Utc::now()) {
+                    if updater.run_auto_check().await {
+                        last_success = Some(Utc::now());
+                    }
+                } else {
+                    usage::schedule(&updater.0.core, &updater.0.usage);
+                }
+                tokio::time::sleep(scheduler::TICK).await;
             }
         }));
     }
@@ -353,10 +363,27 @@ impl Updater {
         installed.map_err(AppError::Other)
     }
 
-    async fn run_auto_check(&self) {
-        if let Err(err) = self.check_inner().await {
-            log::warn!("automatic update check failed: {err}");
+    /// 自动检查，成功返回 true；第一次发现某个版本时记下它并弹更新窗。
+    async fn run_auto_check(&self) -> bool {
+        let status = match self.check_inner().await {
+            Ok(status) => status,
+            Err(err) => {
+                log::warn!("automatic update check failed: {err}");
+                return false;
+            }
+        };
+        let inner = &self.0;
+        if let Some(update) = &status.update
+            && inner.core.settings().update.prompted_version.as_deref()
+                != Some(update.version.as_str())
+        {
+            let prompted = serde_json::json!({ "update": { "promptedVersion": update.version } });
+            if let Err(err) = inner.core.update_settings(prompted).await {
+                log::warn!("persist prompted update version failed: {err}");
+            }
+            inner.ui.prompt_update(status);
         }
+        true
     }
 
     /// 上次更新留下的临时目录（一天以前的）和便携版的 `.old` / `.new`。

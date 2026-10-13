@@ -488,6 +488,7 @@ struct Ui {
 enum UiRequest {
     Extensions(Vec<ExtensionStatus>),
     Update(Box<UpdateStatus>),
+    Prompt(Box<UpdateStatus>),
     Progress(DownloadProgress),
 }
 
@@ -506,6 +507,16 @@ impl UpdaterUi for Ui {
         if self
             .requests
             .try_send(UiRequest::Update(Box::new(status)))
+            .is_err()
+        {
+            log::debug!("the updater window is no longer available");
+        }
+    }
+
+    fn prompt_update(&self, status: UpdateStatus) {
+        if self
+            .requests
+            .try_send(UiRequest::Prompt(Box::new(status)))
             .is_err()
         {
             log::debug!("the updater window is no longer available");
@@ -569,6 +580,11 @@ fn serve_ui(request: UiRequest, cx: &mut App) {
                     state.0 = *status;
                     cx.notify();
                 });
+            }
+        }
+        UiRequest::Prompt(status) => {
+            if status.supported && status.install_kind.is_managed() && status.update.is_some() {
+                open_update_window(*status, cx);
             }
         }
         UiRequest::Progress(progress) => {

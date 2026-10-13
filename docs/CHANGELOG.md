@@ -9,7 +9,7 @@ All notable changes to KwikPaste are documented here.
 - The search box is wider and fills the rest of the header; the Preferences button moved to the footer, which also shows the position of the selected item.
 - Link, email, color and path labels are now colored tags that are easier to tell apart, and rich-text (HTML, RTF) records that contain a link can open it directly. New installs include Open link in the quick actions by default.
 - Import backup accepts EcoPaste backups and tells you when a backup file is not recognized.
-- Updates are now checked every six hours. A new version shows a NEW badge at the top of the clipboard window instead of a popup; the Check for updates automatically and frequency settings were removed.
+- Updates are now checked every six hours, and a failed check is retried after an hour. A new version opens the update window once; after you close it, a NEW badge stays at the top of the clipboard window and the same version does not pop up again. The Check for updates automatically, frequency and Skip this version options were removed.
 - The Preferences window can be made smaller, its sidebar can be collapsed and stays collapsed after a restart, and Esc closes the window. The storage card at the bottom of the sidebar was removed.
 - A single Esc in the search box now closes the clipboard window instead of needing two.
 - Fixed Excel reporting a clipboard problem when dragging cells on Windows.
