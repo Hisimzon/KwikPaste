@@ -18,7 +18,7 @@ use kwikpaste_core::{
 use kwikpaste_ui::{
     Button, Checkbox, ConfirmSpec, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
     NumberInputState, ScrollArea, Select, SelectOption, SelectState, Slider, SliderState, Switch,
-    TextInput, form_dialog,
+    TextInput, TooltipExt as _, form_dialog,
     theme::{self, SemanticTokens, TextSize, px_rems, space},
     toast::{self, Toast},
 };
@@ -31,6 +31,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use super::{
@@ -56,7 +57,13 @@ mod image_text;
 mod overview;
 mod wetype;
 
-const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(960.), px(600.));
+const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(640.), px(480.));
+/// 侧栏收起后只剩图标；窗口关掉再打开沿用本次运行里最后的状态。
+static SIDEBAR_COLLAPSED: AtomicBool = AtomicBool::new(false);
+/// 侧栏展开、收起时的宽度（rem）和过渡时长。
+const SIDEBAR_WIDTH: f32 = 14.;
+const SIDEBAR_COLLAPSED_WIDTH: f32 = 4.25;
+const SIDEBAR_TRANSITION: Duration = Duration::from_millis(200);
 
 struct PreferencesWindow {
     handle: AnyWindowHandle,
@@ -236,6 +243,9 @@ pub(super) fn bring_window_to_front(_: &Window) {
 
 struct Preferences {
     tab: TabId,
+    sidebar_collapsed: bool,
+    /// 侧栏宽度过渡的开始时间；过渡结束后清掉。
+    sidebar_transition: Option<Instant>,
     settings: Settings,
     search: TextInput,
     _subscriptions: Vec<Subscription>,
@@ -658,6 +668,8 @@ impl Preferences {
         window.focus(&focus, cx);
         Self {
             tab: initial_tab(),
+            sidebar_collapsed: SIDEBAR_COLLAPSED.load(Ordering::Relaxed),
+            sidebar_transition: None,
             settings,
             search,
             _subscriptions: subscriptions,
@@ -2676,11 +2688,42 @@ impl Preferences {
             .detach();
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// 侧栏宽度过渡的进度（0–1，已缓动）；没有过渡时为 `None`。
+    fn sidebar_progress(&mut self, window: &mut Window) -> Option<f32> {
+        let start = self.sidebar_transition?;
+        let linear = start.elapsed().as_secs_f32() / SIDEBAR_TRANSITION.as_secs_f32();
+        if linear >= 1. {
+            self.sidebar_transition = None;
+            return None;
+        }
+
+        window.request_animation_frame();
+        // 缓出（三次）：开头快、收尾慢。
+        Some(1. - (1. - linear).powi(3))
+    }
+
+    fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
         let tokens = theme::semantic(cx);
         let component_tokens = theme::components(cx).preferences;
+        let collapsed = self.sidebar_collapsed;
+        let progress = self.sidebar_progress(window);
+        let (from, to) = if collapsed {
+            (SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH)
+        } else {
+            (SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH)
+        };
+        let width = progress.map_or(to, |progress| from + (to - from) * progress);
+        // 过渡中文字仍在：收起时前半程淡出，展开时后半程淡入；侧栏裁掉放不下的部分。
+        let show_labels = !collapsed || progress.is_some();
+        let label_opacity = progress.map_or(1., |progress| {
+            if collapsed {
+                (1. - progress * 2.).max(0.)
+            } else {
+                (progress * 2. - 1.).max(0.)
+            }
+        });
         let mut nav = div().flex().flex_col().gap(space(0.5));
         let mut group = None;
         for tab in tabs {
@@ -2722,7 +2765,18 @@ impl Preferences {
                             tokens.text.secondary
                         },
                     ))
-                    .child(title)
+                    // 收起时只留图标，名称放进提示。
+                    .when(collapsed && progress.is_none(), |item| {
+                        item.kp_tooltip(title.clone())
+                    })
+                    .when(show_labels, |item| {
+                        item.child(
+                            div()
+                                .whitespace_nowrap()
+                                .opacity(label_opacity)
+                                .child(title),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let opening = this.tab != id;
                         this.tab = id;
@@ -2737,95 +2791,79 @@ impl Preferences {
                     })),
             );
         }
-        let usage = self
-            .storage_overview
-            .as_ref()
-            .map(|overview| overview.usage.total_bytes)
-            .unwrap_or(0);
-        let limit = self.settings.clipboard.history.storage_limit_mb as u64 * 1024 * 1024;
-        let ratio = if limit == 0 {
-            0.0
+        let (toggle_icon, toggle_label) = if collapsed {
+            (
+                PrefIcon::PanelLeftOpen,
+                i18n::t("preferences:sidebar.expand"),
+            )
         } else {
-            (usage as f32 / limit as f32).clamp(0.0, 1.0)
+            (
+                PrefIcon::PanelLeftClose,
+                i18n::t("preferences:sidebar.collapse"),
+            )
         };
-        let storage_card = div()
+        let toggle = kwikpaste_ui::icon_button(
+            cx,
+            "preferences-sidebar-toggle",
+            kwikpaste_ui::Glyph::Path(toggle_icon.path()),
+            toggle_label,
+            None,
+            kwikpaste_ui::IconButtonLook::Text,
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.sidebar_collapsed = !this.sidebar_collapsed;
+            SIDEBAR_COLLAPSED.store(this.sidebar_collapsed, Ordering::Relaxed);
+            this.sidebar_transition = (!cx.reduce_motion()).then(Instant::now);
+            cx.notify();
+        }));
+        let brand = div()
             .flex()
-            .flex_col()
-            .gap(space(1.5))
-            .rounded(theme::radius::LG)
-            .bg(tokens.fill.subtle)
-            .p(space(3.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(space(1.))
-                    .kp_text(TextSize::Sm)
-                    .child(PrefIcon::HardDrive.view(rems(1.), tokens.status.success.solid))
-                    .child(i18n::t("preferences:storage.title")),
-            )
-            .child(
-                div()
-                    .kp_text(TextSize::Xs)
-                    .text_color(tokens.text.muted)
-                    .child(format!(
-                        "{} / {}",
-                        text::format_bytes(usage),
-                        text::format_bytes(limit)
-                    )),
-            )
-            .child(
-                div()
-                    .h(px(4.))
-                    .w_full()
-                    .rounded(theme::radius::SM)
-                    .bg(tokens.fill.default)
-                    .child(
-                        div()
-                            .h_full()
-                            .rounded(theme::radius::SM)
-                            .w(rems(10. * ratio.max(0.12)))
-                            .bg(tokens.status.success.solid),
-                    ),
-            );
+            .items_center()
+            .gap(space(2.))
+            .px(space(1.))
+            .child(img(ImageSource::Image(logo())).size(rems(2.5)).flex_none())
+            .when(show_labels, |brand| {
+                brand.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .whitespace_nowrap()
+                        .opacity(label_opacity)
+                        .child(div().kp_text(TextSize::Base).child("KwikPaste"))
+                        .child(
+                            div()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.text.secondary)
+                                .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                        ),
+                )
+            });
+
         div()
             .flex()
             .flex_col()
+            .flex_none()
             .justify_between()
             .h_full()
-            .w(rems(14.))
+            .w(rems(width))
+            .overflow_hidden()
             .p(space(3.))
             .border_r_1()
             .border_color(tokens.border.divider)
             .bg(crate::platform::material::chrome_surface(cx))
             .child(
                 div()
+                    .id("preferences-sidebar-nav")
                     .flex()
                     .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .gap(space(3.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(space(2.))
-                            .px(space(1.))
-                            .child(img(ImageSource::Image(logo())).size(rems(2.5)))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .child(div().kp_text(TextSize::Base).child("KwikPaste"))
-                                    .child(
-                                        div()
-                                            .kp_text(TextSize::Xs)
-                                            .text_color(tokens.text.secondary)
-                                            .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                                    ),
-                            ),
-                    )
+                    .child(brand)
                     .child(nav),
             )
-            .child(storage_card)
+            .child(div().flex().pt(space(2.)).child(toggle))
     }
 
     /// 这一项现在要不要显示：折叠的子项不显示；搜索时只显示匹配的。
@@ -4975,7 +5013,7 @@ impl Render for Preferences {
                 |root| root.bg(theme::semantic(cx).surface.window),
             )
             .text_color(theme::semantic(cx).text.primary)
-            .child(self.render_sidebar(cx))
+            .child(self.render_sidebar(window, cx))
             .child(self.render_page(window, cx))
     }
 }

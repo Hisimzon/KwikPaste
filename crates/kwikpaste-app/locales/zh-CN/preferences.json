@@ -1163,6 +1163,10 @@
     "empty": "没有找到相关设置",
     "placeholder": "搜索配置项"
   },
+  "sidebar": {
+    "collapse": "收起侧栏",
+    "expand": "展开侧栏"
+  },
   "status": {
     "alwaysOn": "默认能力",
     "comingSoon": "未来能力",
@@ -1172,7 +1176,6 @@
   "storage": {
     "error": "统计失败",
     "loading": "统计中",
-    "title": "本地存储",
     "usage": "{{total}} / {{target}}"
   },
   "storageLocation": {

@@ -1174,6 +1174,10 @@
     "empty": "No matching settings",
     "placeholder": "Search settings"
   },
+  "sidebar": {
+    "collapse": "Collapse Sidebar",
+    "expand": "Expand Sidebar"
+  },
   "status": {
     "alwaysOn": "Default",
     "comingSoon": "Coming soon",
@@ -1183,7 +1187,6 @@
   "storage": {
     "error": "Calculation failed",
     "loading": "Calculating",
-    "title": "Local Storage",
     "usage": "{{total}} / {{target}}"
   },
   "storageLocation": {
