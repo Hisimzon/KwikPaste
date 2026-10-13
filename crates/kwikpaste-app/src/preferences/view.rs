@@ -58,8 +58,6 @@ mod overview;
 mod wetype;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(640.), px(480.));
-/// 侧栏收起后只剩图标；窗口关掉再打开沿用本次运行里最后的状态。
-static SIDEBAR_COLLAPSED: AtomicBool = AtomicBool::new(false);
 /// 侧栏展开、收起时的宽度（rem）和过渡时长。
 const SIDEBAR_WIDTH: f32 = 14.;
 const SIDEBAR_COLLAPSED_WIDTH: f32 = 4.25;
@@ -668,7 +666,7 @@ impl Preferences {
         window.focus(&focus, cx);
         Self {
             tab: initial_tab(),
-            sidebar_collapsed: SIDEBAR_COLLAPSED.load(Ordering::Relaxed),
+            sidebar_collapsed: settings.appearance.preferences_sidebar_collapsed,
             sidebar_transition: None,
             settings,
             search,
@@ -2812,7 +2810,12 @@ impl Preferences {
         )
         .on_click(cx.listener(|this, _, _, cx| {
             this.sidebar_collapsed = !this.sidebar_collapsed;
-            SIDEBAR_COLLAPSED.store(this.sidebar_collapsed, Ordering::Relaxed);
+            this.apply_patch(
+                serde_json::json!({
+                    "appearance": { "preferencesSidebarCollapsed": this.sidebar_collapsed }
+                }),
+                cx,
+            );
             this.sidebar_transition = (!cx.reduce_motion()).then(Instant::now);
             cx.notify();
         }));

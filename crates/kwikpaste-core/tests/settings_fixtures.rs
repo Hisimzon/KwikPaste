@@ -210,6 +210,7 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
     expected["clipboard"]["display"]["layout"] = Value::from("single");
+    expected["appearance"]["preferencesSidebarCollapsed"] = Value::from(false);
     expected["extensions"] =
         serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});
     // 旧文件中的更新选项已移除，读取时忽略，保存时不再写出。

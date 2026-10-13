@@ -72,6 +72,8 @@ pub struct Appearance {
     pub theme: Theme,
     pub material: Material,
     pub language: Language,
+    /// 偏好设置窗口的侧栏收起成只有图标；旧配置没有这个字段，按展开读取。
+    pub preferences_sidebar_collapsed: bool,
 }
 
 impl Default for Appearance {
@@ -80,6 +82,7 @@ impl Default for Appearance {
             theme: Theme::Auto,
             material: Material::Default,
             language: Language::ZhCN,
+            preferences_sidebar_collapsed: false,
         }
     }
 }
