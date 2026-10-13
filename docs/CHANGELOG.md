@@ -2,6 +2,19 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.4 - 2026-10-14
+
+- Added Window layout: switch to two columns to keep favorites and custom groups beside the clipboard history, so you don't have to switch back and forth.
+- The clipboard window can be made smaller, down to 280×400 per column.
+- The search box is wider and fills the rest of the header; the Preferences button moved to the footer, which also shows the position of the selected item.
+- Link, email, color and path labels are now colored tags that are easier to tell apart, and rich-text (HTML, RTF) records that contain a link can open it directly. New installs include Open link in the quick actions by default.
+- Import backup accepts EcoPaste backups and tells you when a backup file is not recognized.
+- Updates are now checked every six hours. A new version shows a NEW badge at the top of the clipboard window instead of a popup; the Check for updates automatically and frequency settings were removed.
+- The Preferences window can be made smaller, its sidebar can be collapsed and stays collapsed after a restart, and Esc closes the window. The storage card at the bottom of the sidebar was removed.
+- A single Esc in the search box now closes the clipboard window instead of needing two.
+- Fixed Excel reporting a clipboard problem when dragging cells on Windows.
+- Fixed the clipboard window covering Preferences or the update window when they were opened from it.
+
 ## 2.0.3 - 2026-10-11
 
 - Fixed KwikPaste crashing when Check for updates finds a new version.
