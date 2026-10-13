@@ -188,6 +188,7 @@ impl ClipboardList {
                     } else {
                         list.patch_item(&id, |item| item.group_id = group_id, cx);
                     }
+                    cx.emit(super::ListIntent::Changed);
                 }
                 Err(err) => Self::toast_error("commands:labels.moveToGroup", &err, window, cx),
             })

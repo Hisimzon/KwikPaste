@@ -377,6 +377,7 @@ impl ClipboardList {
                     } else {
                         list.patch_item(&id, |item| item.is_favorite = favorite, cx);
                     }
+                    cx.emit(ListIntent::Changed);
                 }
                 Err(err) => {
                     let label = if current {
@@ -412,6 +413,7 @@ impl ClipboardList {
                     if let Some(request) = list.model.reload_current_range() {
                         list.fetch(request, cx);
                     }
+                    cx.emit(ListIntent::Changed);
                 }
                 Err(err) => {
                     let label = if current {
@@ -506,6 +508,7 @@ impl ClipboardList {
                         },
                         cx,
                     );
+                    cx.emit(ListIntent::Changed);
                 }
                 Err(err) => Self::toast_error("commands:labels.saveNote", &err, window, cx),
             })
@@ -620,6 +623,7 @@ impl ClipboardList {
             list.update_in(cx, |list, window, cx| match result {
                 Ok(saved) => {
                     list.patch_item(&id, |item| *item = saved, cx);
+                    cx.emit(ListIntent::Changed);
                     Self::toast_success("commands:messages.noteSaved", window, cx);
                 }
                 Err(err) => Self::toast_error("clipboard:menu.editContent", &err, window, cx),
@@ -680,6 +684,7 @@ impl ClipboardList {
                 Ok(()) => {
                     Self::toast_success("commands:messages.deleted", window, cx);
                     list.remove_item(&id, cx);
+                    cx.emit(ListIntent::Changed);
                 }
                 Err(err) => Self::toast_error("commands:labels.delete", &err, window, cx),
             })

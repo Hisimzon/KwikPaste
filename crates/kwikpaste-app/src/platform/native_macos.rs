@@ -6,28 +6,29 @@ use std::time::Instant;
 use anyhow::{Context as _, anyhow, bail};
 use async_channel::Sender;
 use gpui::Window;
-use kwikpaste_core::settings::Material;
-use kwikpaste_core::settings::WindowPosition;
+use kwikpaste_core::settings::{ListLayout, Material, WindowPosition};
 use kwikpaste_core::window_state::WindowGeometry;
 use kwikpaste_os::geometry::Size;
 use kwikpaste_os::mac::panel as mac_panel;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::editing::{EditReport, EditTrigger};
-use super::panel::{PanelCommand, Trigger, TriggerSource};
-use super::window_state::PanelLayout;
+use super::panel::{PanelCommand, Trigger, TriggerSource, panel_min_size};
+use super::window_state::{PanelLayout, shift_layout_width};
 
 /// macOS 上原生定位已经直接写入 NSWindow，供 GPUI 层记录一次放置结果。
 pub struct Placement;
 
 pub struct NativePanel {
     panel: mac_panel::Panel,
+    last: Cell<Option<WindowGeometry>>,
+    layout: Cell<ListLayout>,
     editing: Cell<bool>,
     commands: RefCell<Option<Sender<PanelCommand>>>,
 }
 
 impl NativePanel {
-    pub fn attach(window: &Window, _text_scale: f64) -> anyhow::Result<Self> {
+    pub fn attach(window: &Window, _text_scale: f64, layout: ListLayout) -> anyhow::Result<Self> {
         let handle = HasWindowHandle::window_handle(window)
             .map_err(|err| anyhow!("panel window handle: {err:?}"))?;
         let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
@@ -37,6 +38,8 @@ impl NativePanel {
         Ok(Self {
             // GPUI 在主线程创建窗口，面板永久不销毁。
             panel: unsafe { mac_panel::Panel::from_raw(handle.ns_view) },
+            last: Cell::new(None),
+            layout: Cell::new(layout),
             editing: Cell::new(false),
             commands: RefCell::new(None),
         })
@@ -47,10 +50,11 @@ impl NativePanel {
     }
 
     pub fn install(&self) -> anyhow::Result<()> {
+        let min = panel_min_size(self.layout.get());
         self.panel
             .install(Size {
-                width: super::panel::PANEL_SIZE.0 as i32,
-                height: super::panel::PANEL_SIZE.1 as i32,
+                width: min.0 as i32,
+                height: min.1 as i32,
             })
             .context("macOS panel setup")?;
         Ok(())
@@ -73,13 +77,55 @@ impl NativePanel {
 
     pub fn set_text_scale(&self, _text_scale: f64) {}
 
+    /// 切换布局：立即更新内容区最小尺寸与记住的宽度，可见时通过 AppKit 就地调整外框。
+    pub fn set_layout(
+        &self,
+        layout: ListLayout,
+        saved: Option<WindowGeometry>,
+    ) -> Option<WindowGeometry> {
+        let old = self.layout.replace(layout);
+        if old == layout {
+            return None;
+        }
+        let min = panel_min_size(layout);
+        if let Err(err) = self.panel.set_min_content_size((min.0, min.1)) {
+            log::warn!("macOS panel minimum size could not be updated: {err}");
+        }
+        let visible = self.is_visible();
+        let geometry = if visible {
+            self.panel.geometry()
+        } else {
+            self.last.get().or(saved)
+        }?;
+        let mut geometry = shift_layout_width(geometry, old, layout, 1.);
+        self.last.set(Some(geometry));
+        if visible {
+            match self.panel.resize_content((geometry.width, geometry.height)) {
+                Ok(()) => {
+                    geometry = self.panel.geometry().unwrap_or(geometry);
+                    self.last.set(Some(geometry));
+                }
+                Err(err) => log::warn!("macOS panel layout size could not be applied: {err}"),
+            }
+        }
+        Some(geometry)
+    }
+
     /// 按设置的 FollowCursor、Center 或 Remember 规则定位面板。
     pub fn place(&self, layout: &PanelLayout) -> anyhow::Result<Placement> {
+        let min = panel_min_size(self.layout.get());
+        let saved = self.last.get().or(layout.saved).map(|mut geometry| {
+            geometry.width = geometry.width.max(min.0);
+            geometry.height = geometry.height.max(min.1);
+            geometry
+        });
+        let size = saved.map_or(min, |geometry| (geometry.width, geometry.height));
+        self.panel.set_content_size(size)?;
         match layout.position {
             WindowPosition::FollowCursor => self.panel.place_near_cursor()?,
             WindowPosition::Center => self.panel.place_center()?,
             WindowPosition::Remember => {
-                if let Some(saved) = layout.saved {
+                if let Some(saved) = saved {
                     if self.panel.place_saved(saved).is_err() {
                         self.panel.place_center()?;
                     }
@@ -128,6 +174,9 @@ impl NativePanel {
 
     pub fn hide(&self) -> Option<WindowGeometry> {
         let geometry = self.panel.geometry();
+        if geometry.is_some() {
+            self.last.set(geometry);
+        }
         self.panel.hide();
         geometry
     }

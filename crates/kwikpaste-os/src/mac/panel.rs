@@ -83,7 +83,61 @@ impl Panel {
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
         window.setContentSize(NSSize::new(min_size.width as f64, min_size.height as f64));
+        self.set_min_content_size((min_size.width as f64, min_size.height as f64))?;
         self.schedule_unregister_dragged_types();
+        Ok(())
+    }
+
+    /// 更新内容区最小尺寸；屏幕较小时，扣除标题栏后限制到可见工作区。
+    pub fn set_min_content_size(&self, size: (f64, f64)) -> io::Result<()> {
+        let window = self
+            .window()
+            .ok_or_else(|| io::Error::other("the panel view has no window"))?;
+        let screen = window
+            .screen()
+            .ok_or_else(|| io::Error::other("the panel has no screen"))?;
+        let available = window.contentRectForFrameRect(screen.visibleFrame()).size;
+        window.setContentMinSize(NSSize::new(
+            size.0.min(available.width).max(1.),
+            size.1.min(available.height).max(1.),
+        ));
+        Ok(())
+    }
+
+    /// 显示前按存档恢复内容区尺寸，位置随后由摆放规则决定。
+    pub fn set_content_size(&self, size: (f64, f64)) -> io::Result<()> {
+        let window = self
+            .window()
+            .ok_or_else(|| io::Error::other("the panel view has no window"))?;
+        window.setContentSize(NSSize::new(size.0.max(1.), size.1.max(1.)));
+        Ok(())
+    }
+
+    /// 保留外框左上角调整内容区大小，必要时夹回当前屏幕工作区；不激活窗口。
+    pub fn resize_content(&self, size: (f64, f64)) -> io::Result<()> {
+        let window = self
+            .window()
+            .ok_or_else(|| io::Error::other("the panel view has no window"))?;
+        let screen = window
+            .screen()
+            .ok_or_else(|| io::Error::other("the panel has no screen"))?;
+        let work = screen.visibleFrame();
+        let old = window.frame();
+        let mut frame = window.frameRectForContentRect(NSRect::new(
+            NSPoint::new(0., 0.),
+            NSSize::new(size.0.max(1.), size.1.max(1.)),
+        ));
+        frame.size.width = frame.size.width.min(work.size.width).max(1.);
+        frame.size.height = frame.size.height.min(work.size.height).max(1.);
+        frame.origin.x = old
+            .origin
+            .x
+            .min(work.origin.x + work.size.width - frame.size.width)
+            .max(work.origin.x);
+        frame.origin.y = (old.origin.y + old.size.height - frame.size.height)
+            .min(work.origin.y + work.size.height - frame.size.height)
+            .max(work.origin.y);
+        window.setFrame_display(frame, true);
         Ok(())
     }
 
@@ -235,6 +289,7 @@ impl Panel {
         let window = self
             .window()
             .ok_or_else(|| io::Error::other("the panel view has no window"))?;
+        window.setContentSize(NSSize::new(geometry.width.max(1.), geometry.height.max(1.)));
         let target_y = -geometry.y - window.frame().size.height;
         let on_screen = NSScreen::screens(main_thread)
             .iter()
@@ -244,7 +299,6 @@ impl Panel {
                 "saved panel position is no longer on a screen",
             ));
         }
-        window.setContentSize(NSSize::new(geometry.width.max(1.), geometry.height.max(1.)));
         window.setFrameOrigin(NSPoint::new(geometry.x, target_y));
         Ok(())
     }
@@ -276,11 +330,12 @@ impl Panel {
     pub fn geometry(&self) -> Option<WindowGeometry> {
         let window = self.window()?;
         let frame = window.frame();
+        let content = window.contentRectForFrameRect(frame);
         Some(WindowGeometry {
             x: frame.origin.x,
             y: -(frame.origin.y + frame.size.height),
-            width: frame.size.width,
-            height: frame.size.height,
+            width: content.size.width,
+            height: content.size.height,
             scale: window
                 .screen()
                 .map_or(1., |screen| screen.backingScaleFactor()),

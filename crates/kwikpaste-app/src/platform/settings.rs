@@ -8,6 +8,7 @@ use gpui::{App, AppContext as _, Entity, EventEmitter, Global};
 use kwikpaste_core::CoreEvent;
 use kwikpaste_core::settings::{Language, Theme};
 
+use super::panel::{Panel, PanelCommand};
 use super::{autostart, hotkey, material, mouse, tray, trigger_pause};
 use crate::core_host;
 
@@ -63,6 +64,11 @@ pub fn follow(cx: &mut App) {
         let CoreEvent::SettingsUpdated { settings, delta } = event else {
             return;
         };
+        if delta.touches(kwikpaste_core::settings::paths::LAYOUT)
+            && let Some(panel) = cx.try_global::<Panel>()
+        {
+            panel.request(PanelCommand::SetLayout(settings.clipboard.display.layout));
+        }
         if delta.touches("shortcuts.openClipboard")
             || delta.touches("shortcuts.openPreference")
             || delta.touches("shortcuts.pastePlain")

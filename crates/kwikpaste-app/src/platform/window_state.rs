@@ -9,7 +9,7 @@
 
 use gpui::App;
 use kwikpaste_core::Core;
-use kwikpaste_core::settings::WindowPosition;
+use kwikpaste_core::settings::{ListLayout, WindowPosition};
 use kwikpaste_core::window_state::{LegacyMonitor, WindowGeometry, legacy_to_logical};
 
 use crate::core_host;
@@ -43,6 +43,20 @@ pub fn layout(cx: &App) -> PanelLayout {
         position: core.settings().clipboard.window.position,
         saved: core.window_state().get(PANEL_LABEL),
     }
+}
+
+/// 切换布局时增减一栏的宽度（乘文本缩放），保留位置与高度，并夹到新布局的最小宽度。
+pub fn shift_layout_width(
+    mut geometry: WindowGeometry,
+    old: ListLayout,
+    new: ListLayout,
+    text_scale: f64,
+) -> WindowGeometry {
+    let old_min = super::panel::panel_min_size(old);
+    let new_min = super::panel::panel_min_size(new);
+    geometry.width =
+        (geometry.width + (new_min.0 - old_min.0) * text_scale).max(new_min.0 * text_scale);
+    geometry
 }
 
 /// 在后台保存面板的几何，失败只记日志。

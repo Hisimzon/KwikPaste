@@ -6,15 +6,15 @@
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-    AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _,
+    App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _,
     IntoElement, ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription,
     Window, div,
 };
 use kwikpaste_core::{
     CoreEvent,
     settings::{
-        WINDOW_OPEN_GROUP_PREFIX, WINDOW_OPEN_SELECTION_ALL, WindowOpenCategorySelection,
-        WindowOpenRangeSelection,
+        ListLayout, WINDOW_OPEN_GROUP_PREFIX, WINDOW_OPEN_SELECTION_ALL,
+        WindowOpenCategorySelection, WindowOpenRangeSelection,
     },
 };
 use kwikpaste_ui::{
@@ -28,7 +28,7 @@ use super::{
     PinWindow, PreviousCategory, PreviousGroup, QuickPaste, SelectAll, SelectNext, SelectPrevious,
     ShowShortcuts, SplitSelected, ToggleFavorite, TogglePinned, ToggleRange,
     editing::{self, EditTarget},
-    group_bar::{GroupBar, GroupBarEvent},
+    group_bar::{BarMode, GroupBar, GroupBarEvent},
     group_dialogs,
     header::{Header, HeaderEvent},
     host::ItemHost,
@@ -68,11 +68,26 @@ pub enum PanelIntent {
 
 pub struct ClipboardPanel {
     source: Arc<dyn ClipboardSource>,
+    host: Rc<dyn ItemHost>,
     list: Entity<ClipboardList>,
     header: Entity<Header>,
     groups: Entity<GroupBar>,
     group_list: Vec<Group>,
     key_hints: bool,
+    /// 双栏布局的右栏；单栏时为 `None`。
+    side: Option<SidePane>,
+    /// 焦点在右栏：按键作用于右栏的列表。
+    side_active: bool,
+    /// 已经排了一次切换布局，等它执行。
+    layout_pending: bool,
+    core_events: Option<Entity<CoreEvents>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+/// 双栏的右栏：收藏与自定义分组的页签和列表，随布局切回单栏一起释放。
+struct SidePane {
+    list: Entity<ClipboardList>,
+    bar: Entity<GroupBar>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -87,14 +102,18 @@ impl ClipboardPanel {
     ) -> Self {
         // 列表先建：面板事件按订阅顺序送达，列表先处理 Shown（回到顶部、拿焦点），主窗口再按设置
         // 调整筛选条件。
-        let list = cx.new(|cx| ClipboardList::new(source.clone(), host, window, cx));
+        let list = cx.new(|cx| ClipboardList::new(source.clone(), host.clone(), window, cx));
         let header = cx.new(|cx| Header::new(window, cx));
-        let groups = cx.new(|_| GroupBar::new());
+        let groups = cx.new(|_| GroupBar::new(BarMode::Full));
+        let list_focus = list.read(cx).focus_handle(cx);
 
         let mut subscriptions = vec![
             cx.subscribe_in(&header, window, Self::on_header_event),
             cx.subscribe_in(&groups, window, Self::on_group_event),
             cx.subscribe_in(&list, window, Self::on_list_intent),
+            cx.on_focus_in(&list_focus, window, |panel, _, cx| {
+                panel.set_side_active(false, cx);
+            }),
         ];
         if let Some(panel) = cx.try_global::<Panel>() {
             let events = panel.events().clone();
@@ -109,11 +128,16 @@ impl ClipboardPanel {
 
         let mut panel = Self {
             source,
+            host,
             list,
             header,
             groups,
             group_list: Vec::new(),
             key_hints: false,
+            side: None,
+            side_active: false,
+            layout_pending: false,
+            core_events: None,
             _subscriptions: subscriptions,
         };
         panel.reload_groups(cx);
@@ -130,15 +154,25 @@ impl ClipboardPanel {
 
     fn on_list_intent(
         &mut self,
-        _: &Entity<ClipboardList>,
+        list: &Entity<ClipboardList>,
         intent: &ListIntent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match intent {
             ListIntent::SplitWords { id } => {
-                self.list
-                    .update(cx, |list, cx| list.split_words(id.clone(), cx));
+                list.update(cx, |list, cx| list.split_words(id.clone(), cx));
+            }
+            ListIntent::Changed => {
+                let Some(side) = &self.side else {
+                    return;
+                };
+                let other = if *list == self.list {
+                    &side.list
+                } else {
+                    &self.list
+                };
+                other.update(cx, |list, cx| list.refresh(cx));
             }
             ListIntent::ShowShortcuts => shortcuts::show(window, cx),
             ListIntent::OpenPreferences => self.emit_intent(PanelIntent::OpenPreferences, cx),
@@ -163,12 +197,236 @@ impl ClipboardPanel {
     pub fn follow_core_events(&mut self, events: &Entity<CoreEvents>, cx: &mut Context<Self>) {
         self.list
             .update(cx, |list, cx| list.follow_core_events(events, cx));
-        self._subscriptions
-            .push(cx.subscribe(events, |panel, _, event: &CoreEvent, cx| {
-                if matches!(event, CoreEvent::GroupsUpdated) {
-                    panel.reload_groups(cx);
+        if let Some(side) = &self.side {
+            side.list
+                .update(cx, |list, cx| list.follow_core_events(events, cx));
+        }
+        self.core_events = Some(events.clone());
+        self._subscriptions.push(cx.subscribe(
+            events,
+            |panel, _, event: &CoreEvent, cx| match event {
+                CoreEvent::GroupsUpdated => panel.reload_groups(cx),
+                // 布局在渲染时对齐（见 `sync_layout`），这里只要求重画。
+                CoreEvent::SettingsUpdated { settings, .. }
+                    if (settings.clipboard.display.layout == ListLayout::Split)
+                        != panel.side.is_some() =>
+                {
+                    cx.notify();
                 }
-            }));
+                _ => {}
+            },
+        ));
+    }
+
+    // ------------------------------------------------------------ 双栏
+
+    fn split(&self, cx: &App) -> bool {
+        self.list.read(cx).settings().clipboard.display.layout == ListLayout::Split
+    }
+
+    /// 按键作用的列表：焦点在右栏时是右栏，否则是左栏（单栏时就是唯一的列表）。
+    fn current(&self) -> Entity<ClipboardList> {
+        match &self.side {
+            Some(side) if self.side_active => side.list.clone(),
+            _ => self.list.clone(),
+        }
+    }
+
+    fn set_side_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.side_active == active {
+            return;
+        }
+
+        self.side_active = active;
+        // 数字角标只标在按键作用的那一栏上。
+        if self.key_hints {
+            self.list
+                .update(cx, |list, cx| list.set_key_hints(!active, cx));
+            if let Some(side) = &self.side {
+                side.list
+                    .update(cx, |list, cx| list.set_key_hints(active, cx));
+            }
+        }
+    }
+
+    /// 布局与设置不一致时，在渲染之外切换一次。
+    fn sync_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.layout_pending || self.split(cx) == self.side.is_some() {
+            return;
+        }
+
+        self.layout_pending = true;
+        cx.defer_in(window, |panel, window, cx| {
+            panel.layout_pending = false;
+            panel.apply_layout(window, cx);
+        });
+    }
+
+    /// 切到双栏：左栏固定看全部、不分组，右栏新建（默认看收藏）；切回单栏：释放右栏。
+    fn apply_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let split = self.split(cx);
+        if split == self.side.is_some() {
+            return;
+        }
+
+        let mode = if split {
+            BarMode::Categories
+        } else {
+            BarMode::Full
+        };
+        self.groups.update(cx, |bar, cx| bar.set_mode(mode, cx));
+        if !split {
+            if self.side_active {
+                self.focus_list(window, cx);
+            }
+            self.side = None;
+            self.side_active = false;
+            cx.notify();
+            return;
+        }
+
+        self.update_filter(
+            |filter| {
+                filter.range = Range::All;
+                filter.group_id = None;
+            },
+            cx,
+        );
+        self.side = Some(self.open_side(window, cx));
+        cx.notify();
+    }
+
+    fn open_side(&mut self, window: &mut Window, cx: &mut Context<Self>) -> SidePane {
+        let source = self.source.clone();
+        let host = self.host.clone();
+        let shown = self.list.read(cx).visible();
+        let list = cx.new(|cx| {
+            let mut list = ClipboardList::new(source, host, window, cx);
+            list.set_side(cx);
+            if shown {
+                list.mark_shown(window, cx);
+            }
+            list
+        });
+        let bar = cx.new(|_| GroupBar::new(BarMode::Side));
+        let keyword = self.list.read(cx).filter().keyword.clone();
+        let filter = ListFilter {
+            range: Range::Favorite,
+            keyword,
+            ..ListFilter::default()
+        };
+        let groups = self.group_list.clone();
+        bar.update(cx, |bar, cx| {
+            bar.set_groups(groups.clone(), cx);
+            bar.set_filter(&filter, cx);
+        });
+        list.update(cx, |list, cx| {
+            list.set_groups(groups, cx);
+            list.set_filter(filter, cx);
+            if let Some(events) = &self.core_events {
+                list.follow_core_events(events, cx);
+            }
+        });
+        let focus = list.read(cx).focus_handle(cx);
+
+        SidePane {
+            _subscriptions: vec![
+                cx.subscribe_in(&list, window, Self::on_list_intent),
+                cx.subscribe_in(&bar, window, Self::on_side_group_event),
+                cx.on_focus_in(&focus, window, |panel, _, cx| {
+                    panel.set_side_active(true, cx);
+                }),
+            ],
+            list,
+            bar,
+        }
+    }
+
+    /// 改右栏的筛选条件：列表重载，页签跟着高亮。
+    fn update_side_filter(&mut self, change: impl FnOnce(&mut ListFilter), cx: &mut Context<Self>) {
+        let Some(side) = &self.side else {
+            return;
+        };
+
+        let mut filter = side.list.read(cx).filter().clone();
+        change(&mut filter);
+        side.bar.update(cx, |bar, cx| bar.set_filter(&filter, cx));
+        side.list.update(cx, |list, cx| list.set_filter(filter, cx));
+    }
+
+    /// 右栏的页签：`None` 是收藏，否则是这个自定义分组。
+    fn select_side_tab(&mut self, group: Option<Arc<str>>, cx: &mut Context<Self>) {
+        self.update_side_filter(
+            |filter| {
+                filter.range = if group.is_some() {
+                    Range::All
+                } else {
+                    Range::Favorite
+                };
+                filter.group_id = group;
+            },
+            cx,
+        );
+    }
+
+    fn side_tab(&self, cx: &App) -> Option<Arc<str>> {
+        self.side
+            .as_ref()
+            .and_then(|side| side.list.read(cx).filter().group_id.clone())
+    }
+
+    /// 右栏页签按「收藏、各个可见的自定义分组」循环。
+    fn cycle_side_tab(&mut self, reverse: bool, cx: &mut Context<Self>) {
+        let Some(side) = &self.side else {
+            return;
+        };
+
+        let mut tabs: Vec<Option<Arc<str>>> = vec![None];
+        tabs.extend(side.bar.read(cx).visible_ids().into_iter().map(Some));
+        let current = self.side_tab(cx);
+        let index = tabs.iter().position(|tab| *tab == current).unwrap_or(0);
+        let next = if reverse {
+            (index + tabs.len() - 1) % tabs.len()
+        } else {
+            (index + 1) % tabs.len()
+        };
+        let tab = tabs.get(next).cloned().flatten();
+        self.select_side_tab(tab, cx);
+    }
+
+    fn on_side_group_event(
+        &mut self,
+        _: &Entity<GroupBar>,
+        event: &GroupBarEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            GroupBarEvent::SelectRange(_) => self.select_side_tab(None, cx),
+            // 页签始终有一个选中：再点当前分组不取消。
+            GroupBarEvent::ToggleGroup(id) => self.select_side_tab(Some(id.clone()), cx),
+            GroupBarEvent::ToggleCategory(_) => {}
+            GroupBarEvent::EditGroup(group) => self.edit_group(Some(group.clone()), window, cx),
+            GroupBarEvent::HideGroup(group) => self.hide_group(group.clone(), window, cx),
+            GroupBarEvent::DeleteGroup(group) => self.delete_group(group.clone(), window, cx),
+            GroupBarEvent::NewGroup => self.edit_group(None, window, cx),
+            GroupBarEvent::ManageGroups => self.manage_groups(window, cx),
+        }
+    }
+
+    /// 焦点换到另一栏（双栏的 Mod+Q）。
+    fn switch_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(side) = &self.side else {
+            return;
+        };
+
+        let target = if self.side_active {
+            self.list.read(cx).focus_handle(cx)
+        } else {
+            side.list.read(cx).focus_handle(cx)
+        };
+        window.focus(&target, cx);
+        self.set_side_active(!self.side_active, cx);
     }
 
     // ------------------------------------------------------------ 分组
@@ -196,10 +454,21 @@ impl ClipboardPanel {
         {
             self.update_filter(|filter| filter.group_id = None, cx);
         }
+        if let Some(tab) = self.side_tab(cx)
+            && !groups.iter().any(|group| group.id == tab)
+        {
+            self.select_side_tab(None, cx);
+        }
 
         self.group_list = groups.clone();
         self.groups
             .update(cx, |bar, cx| bar.set_groups(groups.clone(), cx));
+        if let Some(side) = &self.side {
+            side.bar
+                .update(cx, |bar, cx| bar.set_groups(groups.clone(), cx));
+            side.list
+                .update(cx, |list, cx| list.set_groups(groups.clone(), cx));
+        }
         self.list.update(cx, |list, cx| list.set_groups(groups, cx));
     }
 
@@ -354,6 +623,9 @@ impl ClipboardPanel {
                             if panel.list.read(cx).filter().group_id.as_ref() == Some(&group.id) {
                                 panel.update_filter(|filter| filter.group_id = None, cx);
                             }
+                            if panel.side_tab(cx).as_ref() == Some(&group.id) {
+                                panel.select_side_tab(None, cx);
+                            }
                         }
                         Err(err) => Self::toast_error(
                             "commands:labels.deleteClipboardGroup",
@@ -394,8 +666,10 @@ impl ClipboardPanel {
     ) {
         match event {
             HeaderEvent::Keyword(keyword) => {
+                let side_keyword = keyword.clone();
                 let keyword = keyword.clone();
                 self.update_filter(|filter| filter.keyword = keyword, cx);
+                self.update_side_filter(|filter| filter.keyword = side_keyword, cx);
             }
             HeaderEvent::RequestEditing(trigger) => {
                 editing::begin(EditTarget::Search, *trigger, cx);
@@ -466,6 +740,11 @@ impl ClipboardPanel {
                 self.header
                     .update(cx, |header, cx| header.set_editing(false, cx));
                 editing::clear(cx);
+                // 左栏的列表退出编辑态时会收回焦点；编辑前焦点在右栏就还给右栏。
+                if let Some(side) = self.side.as_ref().filter(|_| self.side_active) {
+                    let focus = side.list.read(cx).focus_handle(cx);
+                    window.focus(&focus, cx);
+                }
             }
             PanelEvent::PopupDismissed => {}
         }
@@ -474,13 +753,34 @@ impl ClipboardPanel {
     /// 显示时（1.x `handleWindowVisibility`）：清空搜索词，按“打开窗口时选中”的设置切换范围、
     /// 分类、分组；设置了默认聚焦搜索框时请求编辑态。
     fn on_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_layout(window, cx);
         let settings = self.list.read(cx).settings().clipboard.clone();
         let window_settings = settings.window;
         let clear = settings.search.clear_on_hide;
+        let split = self.side.is_some();
 
         if clear {
             self.header
                 .update(cx, |header, cx| header.clear(window, cx));
+        }
+        // 双栏时「打开时选中的分组」作用于右栏的页签，左栏始终是全部。
+        if split {
+            let group = window_settings
+                .select_group_on_open
+                .strip_prefix(WINDOW_OPEN_GROUP_PREFIX)
+                .map(Arc::from);
+            self.update_side_filter(
+                |filter| {
+                    if clear {
+                        filter.keyword = Arc::from("");
+                    }
+                    if let Some(group) = group {
+                        filter.range = Range::All;
+                        filter.group_id = Some(group);
+                    }
+                },
+                cx,
+            );
         }
         self.update_filter(
             |filter| {
@@ -500,7 +800,10 @@ impl ClipboardPanel {
                     WindowOpenCategorySelection::Files => filter.category = Some(ItemKind::Files),
                 }
                 let group = window_settings.select_group_on_open.as_str();
-                if group == WINDOW_OPEN_SELECTION_ALL {
+                if split {
+                    filter.range = Range::All;
+                    filter.group_id = None;
+                } else if group == WINDOW_OPEN_SELECTION_ALL {
                     filter.group_id = None;
                 } else if let Some(id) = group.strip_prefix(WINDOW_OPEN_GROUP_PREFIX) {
                     filter.group_id = Some(Arc::from(id));
@@ -518,6 +821,7 @@ impl ClipboardPanel {
         self.header
             .update(cx, |header, cx| header.clear(window, cx));
         self.update_filter(|filter| filter.keyword = Arc::from(""), cx);
+        self.update_side_filter(|filter| filter.keyword = Arc::from(""), cx);
     }
 
     fn set_key_hints(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -529,21 +833,31 @@ impl ClipboardPanel {
         self.header
             .update(cx, |header, cx| header.set_hints(on, cx));
         self.groups.update(cx, |bar, cx| bar.set_hints(on, cx));
-        self.list.update(cx, |list, cx| list.set_key_hints(on, cx));
+        if let Some(side) = &self.side {
+            side.bar.update(cx, |bar, cx| bar.set_hints(on, cx));
+        }
+        self.current()
+            .update(cx, |list, cx| list.set_key_hints(on, cx));
     }
 
     // ------------------------------------------------------------ 按键
 
-    /// Esc 按预览、多选、分组、分类、窗口的顺序逐层退出（1.x `closeTopEscapeLayer`）。
-    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        if self.list.update(cx, |list, cx| list.dismiss_reorder(cx)) {
+    /// Esc 按预览、多选、分组、分类、窗口的顺序逐层退出（1.x `closeTopEscapeLayer`）；双栏时焦点在右栏
+    /// 先回到左栏。
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.current();
+        if current.update(cx, |list, cx| list.dismiss_reorder(cx)) {
             return;
         }
-        if self.list.update(cx, |list, cx| list.close_preview(cx)) {
+        if current.update(cx, |list, cx| list.close_preview(cx)) {
             return;
         }
-        if self.list.read(cx).selecting() {
-            self.list.update(cx, |list, cx| list.exit_selection(cx));
+        if current.read(cx).selecting() {
+            current.update(cx, |list, cx| list.exit_selection(cx));
+            return;
+        }
+        if self.side_active {
+            self.switch_pane(window, cx);
             return;
         }
 
@@ -564,7 +878,8 @@ impl ClipboardPanel {
         if editing::target(cx) == Some(EditTarget::Search) {
             editing::end(cx);
         } else {
-            self.focus_list(window, cx);
+            let focus = self.current().read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
         }
     }
 
@@ -584,7 +899,7 @@ impl ClipboardPanel {
         cx: &mut Context<Self>,
         act: impl FnOnce(&mut ClipboardList, Arc<ListItem>, &mut Context<ClipboardList>),
     ) {
-        self.list.update(cx, |list, cx| {
+        self.current().update(cx, |list, cx| {
             if list.selecting() {
                 return;
             }
@@ -596,11 +911,12 @@ impl ClipboardPanel {
 }
 
 impl Render for ClipboardPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_layout(window, cx);
         let tokens = theme::semantic(cx);
         let surface = crate::platform::material::panel_surface(cx);
 
-        div()
+        let root = div()
             .id("clipboard-panel")
             .key_context(KEY_CONTEXT)
             .size_full()
@@ -612,14 +928,16 @@ impl Render for ClipboardPanel {
                 panel.set_key_hints(event.modifiers.secondary(), cx);
             }))
             .on_action(cx.listener(unless_menu(|panel, _: &SelectPrevious, _, cx| {
-                panel.list.update(cx, |list, cx| list.select_previous(cx));
+                panel
+                    .current()
+                    .update(cx, |list, cx| list.select_previous(cx));
             })))
             .on_action(cx.listener(unless_menu(|panel, _: &SelectNext, _, cx| {
-                panel.list.update(cx, |list, cx| list.select_next(cx));
+                panel.current().update(cx, |list, cx| list.select_next(cx));
             })))
             .on_action(
                 cx.listener(unless_menu(|panel, _: &PasteSelected, window, cx| {
-                    panel.list.update(cx, |list, cx| {
+                    panel.current().update(cx, |list, cx| {
                         if list.preview_words(cx).is_some() {
                             // 预览里选了词：Enter 粘贴选中的词（1.x `enterPastePreviewWords`）。
                             list.use_preview_words(true, cx);
@@ -634,7 +952,7 @@ impl Render for ClipboardPanel {
             )
             .on_action(
                 cx.listener(unless_menu(|panel, _: &PasteSelectedPlain, _, cx| {
-                    panel.list.update(cx, |list, cx| {
+                    panel.current().update(cx, |list, cx| {
                         if !list.selecting() {
                             list.paste_active(true, cx);
                         }
@@ -644,16 +962,31 @@ impl Render for ClipboardPanel {
             .on_action(cx.listener(unless_menu(Self::dismiss)))
             .on_action(cx.listener(unless_menu(Self::end_search)))
             .on_action(cx.listener(unless_menu(Self::focus_search)))
-            .on_action(cx.listener(unless_menu(|panel, _: &ToggleRange, _, cx| {
-                panel.update_filter(|filter| filter.range = filter.range.toggled(), cx);
-            })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &ToggleRange, window, cx| {
+                    // 双栏时收藏常驻右栏：Mod+Q 在两栏之间换焦点。
+                    if panel.side.is_some() {
+                        panel.switch_pane(window, cx);
+                        return;
+                    }
+                    panel.update_filter(|filter| filter.range = filter.range.toggled(), cx);
+                })),
+            )
             .on_action(
                 cx.listener(unless_menu(|panel, _: &PreviousCategory, _, cx| {
+                    if panel.side_active {
+                        panel.cycle_side_tab(true, cx);
+                        return;
+                    }
                     let kind = panel.list.read(cx).filter().adjacent_category(false);
                     panel.update_filter(|filter| filter.category = Some(kind), cx);
                 })),
             )
             .on_action(cx.listener(unless_menu(|panel, _: &NextCategory, _, cx| {
+                if panel.side_active {
+                    panel.cycle_side_tab(false, cx);
+                    return;
+                }
                 let kind = panel.list.read(cx).filter().adjacent_category(true);
                 panel.update_filter(|filter| filter.category = Some(kind), cx);
             })))
@@ -665,9 +998,9 @@ impl Render for ClipboardPanel {
             })))
             .on_action(
                 cx.listener(unless_menu(|panel, _: &CopySelected, window, cx| {
-                    if panel.list.read(cx).preview_words(cx).is_some() {
+                    if panel.current().read(cx).preview_words(cx).is_some() {
                         panel
-                            .list
+                            .current()
                             .update(cx, |list, cx| list.use_preview_words(false, cx));
                         return;
                     }
@@ -705,7 +1038,7 @@ impl Render for ClipboardPanel {
             })))
             .on_action(
                 cx.listener(unless_menu(|panel, _: &DeleteSelected, window, cx| {
-                    panel.list.update(cx, |list, cx| {
+                    panel.current().update(cx, |list, cx| {
                         if list.selecting() {
                             list.delete_checked(window, cx);
                         } else if let Some(item) = list.active_item() {
@@ -715,7 +1048,7 @@ impl Render for ClipboardPanel {
                 })),
             )
             .on_action(cx.listener(unless_menu(|panel, _: &SelectAll, window, cx| {
-                panel.list.update(cx, |list, cx| {
+                panel.current().update(cx, |list, cx| {
                     if list.total() > 0 {
                         list.toggle_all(window, cx);
                     }
@@ -724,7 +1057,9 @@ impl Render for ClipboardPanel {
             .on_action(
                 cx.listener(unless_menu(|panel, action: &QuickPaste, _, cx| {
                     let key = action.key;
-                    panel.list.update(cx, |list, cx| list.quick_paste(key, cx));
+                    panel
+                        .current()
+                        .update(cx, |list, cx| list.quick_paste(key, cx));
                 })),
             )
             .on_action(cx.listener(unless_menu(|panel, _: &PinWindow, _, cx| {
@@ -743,22 +1078,43 @@ impl Render for ClipboardPanel {
             .on_action(cx.listener(unless_menu(|panel, _: &NewGroup, window, cx| {
                 panel.edit_group(None, window, cx);
             })))
-            .child(self.header.clone())
-            .child(self.groups.clone())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.list.clone()),
-            )
+            .child(self.header.clone());
+
+        let column = |bar: Entity<GroupBar>, list: Entity<ClipboardList>| {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .child(bar)
+                .child(div().flex().flex_col().flex_1().min_h_0().child(list))
+        };
+        let left = column(self.groups.clone(), self.list.clone());
+        let Some(side) = &self.side else {
+            return root.child(left);
+        };
+
+        // 双栏：两列等宽，中间一条分隔线。
+        root.child(
+            div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(left)
+                .child(div().flex_none().w(gpui::px(1.)).bg(tokens.border.divider))
+                .child(column(side.bar.clone(), side.list.clone())),
+        )
     }
 }
 
 impl ClipboardPanel {
     /// Tab / Shift+Tab：在可见的自定义分组间循环，落到当前分组上时取消（1.x `toggleCustomGroup`）。
     fn cycle_group(&mut self, reverse: bool, cx: &mut Context<Self>) {
+        if self.side.is_some() {
+            self.cycle_side_tab(reverse, cx);
+            return;
+        }
         let visible = self.groups.read(cx).visible_ids();
         let current = self.list.read(cx).filter().group_id.clone();
         if let Some(next) = adjacent_group(&visible, current.as_deref(), reverse) {

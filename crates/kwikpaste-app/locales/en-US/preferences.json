@@ -669,6 +669,14 @@
           "title": "Window Material",
           "unsupported": "Not supported on this system; a solid background is used."
         },
+        "panelLayout": {
+          "description": "Two columns keeps favorites and custom groups beside the history, so you don't have to switch back and forth.",
+          "options": {
+            "single": "Single column",
+            "split": "Two columns"
+          },
+          "title": "Window Layout"
+        },
         "showOriginalPreview": {
           "description": "Records with notes show the note by default, then temporarily reveal original content when hovering over the card.",
           "title": "Show Original on Hover"

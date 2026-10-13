@@ -659,6 +659,14 @@
           "title": "窗口材质",
           "unsupported": "当前系统不支持，将使用纯色背景。"
         },
+        "panelLayout": {
+          "description": "双栏：左边是剪贴板历史，右边常驻收藏和自定义分组，不用来回切换。",
+          "options": {
+            "single": "单栏",
+            "split": "双栏"
+          },
+          "title": "窗口布局"
+        },
         "showOriginalPreview": {
           "description": "有备注的记录默认显示备注，鼠标移入卡片时临时显示原始内容。",
           "title": "悬停显示原始内容"

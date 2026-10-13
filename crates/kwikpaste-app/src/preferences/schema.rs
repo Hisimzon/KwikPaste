@@ -243,6 +243,7 @@ const SORTS: &[&str] = &["createdAtDesc", "updatedAtDesc", "useCountDesc"];
 const STORAGE_LIMIT_ACTIONS: &[&str] = &["remind", "cleanup"];
 const LANGUAGES: &[&str] = &["zh-CN", "en-US"];
 const LIST_STYLES: &[&str] = &["card", "seamless"];
+const PANEL_LAYOUTS: &[&str] = &["single", "split"];
 const LIST_DENSITIES: &[&str] = &["comfortable", "standard", "compact", "custom"];
 /// 自定义密度可选的条目间距与上下内边距（px），与列表的映射一一对应。
 const LIST_ITEM_GAPS: &[u64] = &[0, 2, 4, 6, 8, 12];
@@ -596,6 +597,12 @@ fn appearance_sections() -> Vec<Section> {
         Section {
             id: "cards",
             settings: vec![
+                Setting::new(
+                    "appearance.panelLayout",
+                    Control::Select(Options::Values(PANEL_LAYOUTS)),
+                )
+                .path("clipboard.display.layout")
+                .keywords(&["layout", "split", "column", "favorite", "group", "sidebar"]),
                 Setting::new(
                     "appearance.listStyle",
                     Control::Select(Options::Values(LIST_STYLES)),

@@ -481,6 +481,8 @@ impl Default for Content {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Display {
+    /// 面板使用单栏，或历史与收藏分组并排的双栏。
+    pub layout: ListLayout,
     /// 文本摘要最多显示行数。
     pub text_max_lines: u8,
     /// 图片缩略图显示高度，单位 px。
@@ -501,6 +503,7 @@ pub struct Display {
 impl Default for Display {
     fn default() -> Self {
         Self {
+            layout: ListLayout::Single,
             text_max_lines: 3,
             image_max_height: 64,
             file_max_count: 3,
@@ -510,6 +513,15 @@ impl Default for Display {
             custom_layout: CustomListLayout::default(),
         }
     }
+}
+
+/// 剪贴板窗口的布局：单栏，或左边历史、右边收藏与自定义分组的双栏。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ListLayout {
+    #[default]
+    Single,
+    Split,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

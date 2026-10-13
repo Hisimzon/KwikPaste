@@ -15,6 +15,7 @@ use gpui::{
     ModifiersChangedEvent, ParentElement as _, PlatformInput, Render, Styled as _, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, px, size,
 };
+use kwikpaste_core::settings::ListLayout;
 use kwikpaste_os::clock;
 
 use super::editing::EditTrigger;
@@ -24,6 +25,14 @@ use super::{probe, window_state};
 
 /// 面板的默认、最小内容区尺寸（逻辑像素），与 1.x 相同；Windows 上再乘系统「文本大小」。
 pub const PANEL_SIZE: (f64, f64) = (360.0, 600.0);
+
+/// 当前布局的默认、最小内容区尺寸（逻辑像素，未乘 Windows 文本缩放）。
+pub fn panel_min_size(layout: ListLayout) -> (f64, f64) {
+    match layout {
+        ListLayout::Single => PANEL_SIZE,
+        ListLayout::Split => (PANEL_SIZE.0 * 2.0, PANEL_SIZE.1),
+    }
+}
 
 /// 显示 / 隐藏请求的来源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +104,8 @@ pub enum PanelCommand {
         expect(dead_code, reason = "macOS 没有单独的文本大小设置")
     )]
     SetTextScale(f64),
+    /// 切换单栏或双栏，立即更新原生最小尺寸与记住的宽度。
+    SetLayout(ListLayout),
     /// 应用当前窗口材质；macOS 需要由持有原生面板的命令循环更新 NSVisualEffectView。
     SetMaterial(WindowMaterial),
     /// 粘贴前让出前台：编辑态先把前台还给进入前的窗口，`keep_visible` 为假时再隐藏面板。
@@ -219,8 +230,9 @@ fn arm_first_frame() -> Receiver<i64> {
     receiver
 }
 
-fn window_options() -> WindowOptions {
-    let panel_size = size(px(PANEL_SIZE.0 as f32), px(PANEL_SIZE.1 as f32));
+fn window_options(layout: ListLayout) -> WindowOptions {
+    let min = panel_min_size(layout);
+    let panel_size = size(px(min.0 as f32), px(min.1 as f32));
 
     WindowOptions {
         // 隐藏建窗时 GPUI 不应用这里的位置；每次显示都由原生代码重设几何。
@@ -252,6 +264,9 @@ pub fn open<V: Render>(
     text_scale: f64,
     build: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
 ) -> anyhow::Result<Entity<V>> {
+    let layout = crate::core_host::core(cx)
+        .map(|core| core.settings().clipboard.display.layout)
+        .unwrap_or_default();
     let events = cx.new(|_| PanelEvents);
     let (commands, receiver) = async_channel::unbounded();
     cx.set_global(Panel {
@@ -262,8 +277,8 @@ pub fn open<V: Render>(
 
     let mut native = None;
     let mut content = None;
-    let (window, root) = crate::platform::open_window(window_options(), cx, |window, cx| {
-        native = Some(NativePanel::attach(window, text_scale));
+    let (window, root) = crate::platform::open_window(window_options(layout), cx, |window, cx| {
+        native = Some(NativePanel::attach(window, text_scale, layout));
         let view = build(window, cx);
         content = Some(view.clone());
         let focus = cx.focus_handle();
@@ -360,6 +375,13 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
             }
             PanelCommand::SetTextScale(text_scale) => {
                 parts.native.set_text_scale(text_scale);
+                continue;
+            }
+            PanelCommand::SetLayout(layout) => {
+                let saved = cx.update(|cx| window_state::layout(cx).saved);
+                if let Some(geometry) = parts.native.set_layout(layout, saved) {
+                    cx.update(|cx| window_state::save(cx, geometry));
+                }
                 continue;
             }
             PanelCommand::SetMaterial(material) => {
