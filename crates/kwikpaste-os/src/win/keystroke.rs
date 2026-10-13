@@ -25,14 +25,23 @@ pub fn simulate_paste() -> io::Result<()> {
 }
 
 pub fn mask_modifier_release() -> io::Result<()> {
-    if ![VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(is_key_down) {
+    if !alt_or_win_pressed() {
         return Ok(());
     }
 
-    send_keys(&[
-        (VK_UNASSIGNED, KEYBD_EVENT_FLAGS(0)),
-        (VK_UNASSIGNED, KEYEVENTF_KEYUP),
-    ])
+    let key = if is_key_down(VK_MENU) && !is_key_down(VK_CONTROL) {
+        VK_CONTROL
+    } else if is_key_down(VK_MENU) && is_key_down(VK_CONTROL) && !is_key_down(VK_SHIFT) {
+        VK_SHIFT
+    } else {
+        VK_UNASSIGNED
+    };
+
+    send_keys(&[(key, KEYBD_EVENT_FLAGS(0)), (key, KEYEVENTF_KEYUP)])
+}
+
+fn alt_or_win_pressed() -> bool {
+    [VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(is_key_down)
 }
 
 pub fn modifiers_pressed() -> bool {

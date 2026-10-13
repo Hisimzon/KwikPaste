@@ -30,14 +30,29 @@ pub fn simulate_paste() -> Result<()> {
 }
 
 /// 全局快捷键命中时用户还按着修饰键；Alt / Win 在没有其它按键参与时松开，
-/// 会激活目标窗口的菜单栏或弹出开始菜单。趁它们仍按着时注入一次无意义按键，
+/// 会激活目标窗口的菜单栏或弹出开始菜单。趁它们仍按着时注入一次按键，
 /// 让这次松开不再被当作单独按下。
+///
+/// Alt 组合优先补一个尚未按下的普通修饰键：Windows 会把热键视为完整组合，
+/// 记事本等应用也不会显示 Alt 菜单提示。只有 Ctrl+Alt+Shift 都按着时才用无意义键。
 pub fn mask_modifier_release() -> Result<()> {
-    if ![VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(is_key_down) {
+    if !alt_or_win_pressed() {
         return Ok(());
     }
 
-    send_keys(&[(VK_UNASSIGNED, 0), (VK_UNASSIGNED, KEYEVENTF_KEYUP)])
+    let key = if is_key_down(VK_MENU) && !is_key_down(VK_CONTROL) {
+        VK_CONTROL as u16
+    } else if is_key_down(VK_MENU) && is_key_down(VK_CONTROL) && !is_key_down(VK_SHIFT) {
+        VK_SHIFT as u16
+    } else {
+        VK_UNASSIGNED
+    };
+
+    send_keys(&[(key, 0), (key, KEYEVENTF_KEYUP)])
+}
+
+fn alt_or_win_pressed() -> bool {
+    [VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(is_key_down)
 }
 
 /// 判断用户是否仍按着 Ctrl / Shift / Alt / Win 中的任意一个。

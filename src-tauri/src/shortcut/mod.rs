@@ -314,6 +314,11 @@ fn handle_window_event(app: &AppHandle, action: &'static str, event: ShortcutEve
     if !matches!(event.state(), ShortcutState::Pressed) {
         return;
     }
+
+    if let Err(err) = crate::keystroke::mask_modifier_release() {
+        log::warn!("mask modifier release before window shortcut failed: {err}");
+    }
+
     let label = match action {
         "open_clipboard" => CLIPBOARD_WINDOW_LABEL,
         "open_preference" => PREFERENCE_WINDOW_LABEL,

@@ -101,6 +101,9 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
                 let action = lock(&bridge_actions).get(&event.id).copied();
                 let delivered = match action {
                     Some(Action::TogglePanel) => {
+                        if let Err(err) = kwikpaste_os::keystroke::mask_modifier_release() {
+                            log::warn!("modifier release could not be masked: {err}");
+                        }
                         let trigger = Trigger::now(TriggerSource::Hotkey);
                         commands
                             .send_blocking(PanelCommand::Toggle(trigger))
@@ -112,7 +115,12 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
                         }
                         quick_sender.send_blocking(offset).is_ok()
                     }
-                    Some(Action::OpenPreference) => preference_sender.send_blocking(()).is_ok(),
+                    Some(Action::OpenPreference) => {
+                        if let Err(err) = kwikpaste_os::keystroke::mask_modifier_release() {
+                            log::warn!("modifier release could not be masked: {err}");
+                        }
+                        preference_sender.send_blocking(()).is_ok()
+                    }
                     Some(Action::PastePlain) => {
                         if let Err(err) = kwikpaste_os::keystroke::mask_modifier_release() {
                             log::warn!("modifier release could not be masked: {err}");
