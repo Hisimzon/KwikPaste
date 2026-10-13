@@ -23,14 +23,25 @@ use super::material::WindowMaterial;
 use super::native::NativePanel;
 use super::{probe, window_state};
 
-/// 面板的默认、最小内容区尺寸（逻辑像素），与 1.x 相同；Windows 上再乘系统「文本大小」。
+/// 单栏面板的默认内容区尺寸（逻辑像素），与 1.x 相同；Windows 上再乘系统「文本大小」。
 pub const PANEL_SIZE: (f64, f64) = (360.0, 600.0);
+/// 单栏面板能缩到的最小内容区尺寸（逻辑像素）。
+const PANEL_MIN_SIZE: (f64, f64) = (280.0, 400.0);
 
-/// 当前布局的默认、最小内容区尺寸（逻辑像素，未乘 Windows 文本缩放）。
+/// 当前布局的默认内容区尺寸（逻辑像素，未乘 Windows 文本缩放）：双栏是两个单栏宽。
+pub fn panel_default_size(layout: ListLayout) -> (f64, f64) {
+    columns(PANEL_SIZE, layout)
+}
+
+/// 当前布局的最小内容区尺寸（逻辑像素，未乘 Windows 文本缩放）。
 pub fn panel_min_size(layout: ListLayout) -> (f64, f64) {
+    columns(PANEL_MIN_SIZE, layout)
+}
+
+fn columns(single: (f64, f64), layout: ListLayout) -> (f64, f64) {
     match layout {
-        ListLayout::Single => PANEL_SIZE,
-        ListLayout::Split => (PANEL_SIZE.0 * 2.0, PANEL_SIZE.1),
+        ListLayout::Single => single,
+        ListLayout::Split => (single.0 * 2.0, single.1),
     }
 }
 
@@ -231,8 +242,9 @@ fn arm_first_frame() -> Receiver<i64> {
 }
 
 fn window_options(layout: ListLayout) -> WindowOptions {
+    let default = panel_default_size(layout);
     let min = panel_min_size(layout);
-    let panel_size = size(px(min.0 as f32), px(min.1 as f32));
+    let panel_size = size(px(default.0 as f32), px(default.1 as f32));
 
     WindowOptions {
         // 隐藏建窗时 GPUI 不应用这里的位置；每次显示都由原生代码重设几何。
@@ -252,7 +264,7 @@ fn window_options(layout: ListLayout) -> WindowOptions {
         is_minimizable: false,
         // 面板从不激活；默认值会把非活动窗口的动画压到 30 fps。面板因此不能放常驻动画。
         inactive_frame_interval: None,
-        window_min_size: Some(panel_size),
+        window_min_size: Some(size(px(min.0 as f32), px(min.1 as f32))),
         window_background: WindowBackgroundAppearance::Opaque,
         ..Default::default()
     }

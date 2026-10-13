@@ -52,10 +52,9 @@ pub fn shift_layout_width(
     new: ListLayout,
     text_scale: f64,
 ) -> WindowGeometry {
-    let old_min = super::panel::panel_min_size(old);
-    let new_min = super::panel::panel_min_size(new);
-    geometry.width =
-        (geometry.width + (new_min.0 - old_min.0) * text_scale).max(new_min.0 * text_scale);
+    let column = super::panel::panel_default_size(new).0 - super::panel::panel_default_size(old).0;
+    let min = super::panel::panel_min_size(new).0;
+    geometry.width = (geometry.width + column * text_scale).max(min * text_scale);
     geometry
 }
 

@@ -13,7 +13,7 @@ use kwikpaste_os::mac::panel as mac_panel;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::editing::{EditReport, EditTrigger};
-use super::panel::{PanelCommand, Trigger, TriggerSource, panel_min_size};
+use super::panel::{PanelCommand, Trigger, TriggerSource, panel_default_size, panel_min_size};
 use super::window_state::{PanelLayout, shift_layout_width};
 
 /// macOS 上原生定位已经直接写入 NSWindow，供 GPUI 层记录一次放置结果。
@@ -119,7 +119,9 @@ impl NativePanel {
             geometry.height = geometry.height.max(min.1);
             geometry
         });
-        let size = saved.map_or(min, |geometry| (geometry.width, geometry.height));
+        let size = saved.map_or(panel_default_size(self.layout.get()), |geometry| {
+            (geometry.width, geometry.height)
+        });
         self.panel.set_content_size(size)?;
         match layout.position {
             WindowPosition::FollowCursor => self.panel.place_near_cursor()?,

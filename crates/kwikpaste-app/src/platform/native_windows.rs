@@ -14,7 +14,7 @@ use kwikpaste_os::win::{self as os, keyboard, mouse};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::editing::{EditReport, EditTrigger};
-use super::panel::{PanelCommand, panel_min_size};
+use super::panel::{PanelCommand, panel_default_size, panel_min_size};
 use super::window_state::{PanelLayout, shift_layout_width};
 
 /// 钩子确认吞掉带标记的 Alt 的最长等待（实测约 1.5 ms）。
@@ -160,17 +160,21 @@ impl NativePanel {
         })
     }
 
-    /// 内容区尺寸：布局的默认尺寸乘文本缩放；存档里更大就沿用。
+    /// 内容区尺寸：没有存档用布局的默认尺寸，有存档就沿用，但不小于最小尺寸（都乘文本缩放）。
     fn target_size(&self, saved: Option<WindowGeometry>, monitor: &MonitorInfo) -> Size {
         let text_scale = self.text_scale.get();
-        let min = panel_min_size(self.layout.get());
-        let default = (min.0 * text_scale, min.1 * text_scale);
-        let logical = saved.map_or(default, |geometry| {
-            (
-                geometry.width.max(default.0),
-                geometry.height.max(default.1),
-            )
-        });
+        let layout = self.layout.get();
+        let default = panel_default_size(layout);
+        let min = panel_min_size(layout);
+        let logical = saved.map_or(
+            (default.0 * text_scale, default.1 * text_scale),
+            |geometry| {
+                (
+                    geometry.width.max(min.0 * text_scale),
+                    geometry.height.max(min.1 * text_scale),
+                )
+            },
+        );
 
         scale_size(logical, monitor.scale())
     }
