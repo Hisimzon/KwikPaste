@@ -48,8 +48,6 @@ actions!(
         PasteSelectedPlain,
         /// Esc：按多选、分组、分类、窗口的顺序逐层退出。
         Dismiss,
-        /// 搜索框里的 Esc：退出编辑态，焦点回到列表。
-        EndSearch,
         /// Mod+F：聚焦搜索框（进入编辑态）。
         FocusSearch,
         /// Mod+Q：切换全部 / 收藏。
@@ -134,7 +132,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("down", SelectNext, search),
         KeyBinding::new("enter", PasteSelected, search),
         KeyBinding::new("secondary-enter", PasteSelectedPlain, search),
-        KeyBinding::new("escape", EndSearch, search),
+        KeyBinding::new("escape", Dismiss, search),
         KeyBinding::new("tab", NextGroup, search),
         KeyBinding::new("shift-tab", PreviousGroup, search),
         KeyBinding::new("secondary-f", FocusSearch, search),

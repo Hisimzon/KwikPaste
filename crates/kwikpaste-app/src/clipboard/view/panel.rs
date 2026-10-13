@@ -23,7 +23,7 @@ use kwikpaste_ui::{
 };
 
 use super::{
-    CopySelected, DeleteSelected, Dismiss, EditNote, EndSearch, FocusSearch, KEY_CONTEXT, NewGroup,
+    CopySelected, DeleteSelected, Dismiss, EditNote, FocusSearch, KEY_CONTEXT, NewGroup,
     NextCategory, NextGroup, OpenPreferences, OpenSelected, PasteSelected, PasteSelectedPlain,
     PinWindow, PreviousCategory, PreviousGroup, QuickPaste, SelectAll, SelectNext, SelectPrevious,
     ShowShortcuts, SplitSelected, ToggleFavorite, TogglePinned, ToggleRange,
@@ -874,15 +874,6 @@ impl ClipboardPanel {
         request_panel(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Ui)));
     }
 
-    fn end_search(&mut self, _: &EndSearch, window: &mut Window, cx: &mut Context<Self>) {
-        if editing::target(cx) == Some(EditTarget::Search) {
-            editing::end(cx);
-        } else {
-            let focus = self.current().read(cx).focus_handle(cx);
-            window.focus(&focus, cx);
-        }
-    }
-
     fn focus_search(&mut self, _: &FocusSearch, window: &mut Window, cx: &mut Context<Self>) {
         if self.header.read(cx).editing() {
             self.header
@@ -960,7 +951,6 @@ impl Render for ClipboardPanel {
                 })),
             )
             .on_action(cx.listener(unless_menu(Self::dismiss)))
-            .on_action(cx.listener(unless_menu(Self::end_search)))
             .on_action(cx.listener(unless_menu(Self::focus_search)))
             .on_action(
                 cx.listener(unless_menu(|panel, _: &ToggleRange, window, cx| {
