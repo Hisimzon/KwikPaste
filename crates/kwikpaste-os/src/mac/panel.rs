@@ -409,6 +409,14 @@ impl Panel {
         }
     }
 
+    /// 保持可见但放弃 key window：固定面板粘贴时 panel 仍是 key 会吞掉 ⌘V，让出后键焦点回到前台应用
+    /// （1.x `resign_clipboard_panel_key`）。之后点一下面板就重新成为 key。
+    pub fn resign_key(&self) {
+        if let Some(window) = self.window() {
+            window.resignKeyWindow();
+        }
+    }
+
     pub fn begin_editing(&self) {
         if let Some(window) = self.window() {
             window.makeKeyWindow();

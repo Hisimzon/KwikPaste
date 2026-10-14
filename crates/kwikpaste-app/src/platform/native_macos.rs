@@ -166,7 +166,12 @@ impl NativePanel {
         false
     }
 
-    pub fn set_input_capture(&self, _captured: bool) {}
+    /// 只处理释放：固定面板粘贴、复制后把按键还给目标应用。重新捕获靠点面板时 NSPanel 自己成为 key。
+    pub fn set_input_capture(&self, captured: bool) {
+        if !captured {
+            self.panel.resign_key();
+        }
+    }
 
     pub fn verify(&self, _: &Placement) {}
 
