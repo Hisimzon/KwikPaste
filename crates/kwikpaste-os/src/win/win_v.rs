@@ -17,7 +17,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_LWIN, VK_RWIN,
+    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, PM_NOREMOVE, PeekMessageW,
@@ -131,6 +131,10 @@ fn handle(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
 
     if matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN) {
         if !key_down(VK_LWIN) && !key_down(VK_RWIN) {
+            return false;
+        }
+        // 只接管单纯的 Win+V：Win+Shift+V 等组合属于系统或其它应用。
+        if key_down(VK_SHIFT) || key_down(VK_CONTROL) || key_down(VK_MENU) {
             return false;
         }
         // 按住 V 会重复触发按下：只在第一次开合，重复期间仍然吞掉。
