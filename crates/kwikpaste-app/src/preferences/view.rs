@@ -238,9 +238,35 @@ pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn bring_window_to_front(_: &Window, _: &App) {
-    // TODO: bridge to NSWindow makeKeyAndOrderFront without activating the panel.
-    log::debug!("macOS preferences foreground handoff is not implemented yet");
+pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
+    use kwikpaste_os::mac::window::OrdinaryWindow;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: 正在借用的 GPUI 窗口，NSView 此刻有效；之后由 OrdinaryWindow 持有 NSWindow。
+    let native = match unsafe { OrdinaryWindow::from_raw(handle.ns_view) } {
+        Ok(native) => native,
+        Err(err) => {
+            log::warn!("could not get the native preferences window: {err}");
+            return;
+        }
+    };
+    let handle = window.window_handle();
+    cx.spawn(async move |cx| {
+        // 窗口在这之前关掉了就不再显示它。
+        if handle.update(cx, |_, _, _| ()).is_err() {
+            return;
+        }
+        if let Err(err) = native.bring_to_front() {
+            log::warn!("could not bring the preferences window to front: {err}");
+        }
+    })
+    .detach();
 }
 
 struct Preferences {

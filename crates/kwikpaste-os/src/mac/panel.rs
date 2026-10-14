@@ -372,7 +372,21 @@ impl Panel {
     }
 
     pub fn restore_previous_foreground(&self) {
-        if let Some(previous) = self.previous_foreground.borrow_mut().take() {
+        let previous = self.previous_foreground.borrow_mut().take();
+        // 刚打开的偏好设置 / 引导窗已经是 key window：随后才处理的面板隐藏不能把前台还给外部应用。
+        let own_window_key = MainThreadMarker::new().is_some_and(|marker| {
+            NSApplication::sharedApplication(marker)
+                .keyWindow()
+                .is_some_and(|window| {
+                    !window
+                        .styleMask()
+                        .contains(NSWindowStyleMask::NonactivatingPanel)
+                })
+        });
+        if own_window_key {
+            return;
+        }
+        if let Some(previous) = previous {
             #[allow(deprecated)]
             let _ = previous
                 .activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
