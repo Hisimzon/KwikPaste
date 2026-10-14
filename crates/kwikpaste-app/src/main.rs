@@ -49,6 +49,13 @@ fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     application.on_reopen(platform::reopen_from_dock);
     application.run(move |cx: &mut App| {
+        // macOS 的退出走 `[NSApp terminate:]` 直接结束进程，`run` 不会返回，下面那次 `clean_exit`
+        // 到不了；不在这里清掉运行标记，外部看门狗会把每次正常退出（含 Homebrew 升级前的退出）当成崩溃重启。
+        cx.on_app_quit(|_| {
+            health::clean_exit();
+            async {}
+        })
+        .detach();
         kwikpaste_ui::init(cx);
         i18n::init(cx);
         clipboard::init(cx);
