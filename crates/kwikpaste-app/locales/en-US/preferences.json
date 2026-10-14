@@ -1197,8 +1197,9 @@
     "reset": "Reset to default directory",
     "resetConfirmContent": "KwikPaste will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
     "resetConfirmTitle": "Reset Data Directory",
+    "resetUnavailableConfirmContent": "KwikPaste will keep using the default data directory and stop using {{path}}. Data in that directory is not deleted, but it won't be restored when it reconnects.",
     "restored": "Data directory restored",
-    "unavailable": "Custom data directory {{path}} is unavailable. This run uses the default directory. Reconnect it and restart KwikPaste to restore it.",
+    "unavailable": "Custom data directory {{path}} is unavailable. This run uses the default directory. Reconnect it and restart KwikPaste to restore it, or reset to the default directory to stop using it.",
     "unavailableToast": "The custom data directory is unavailable; using the default directory for now"
   },
   "title": "KwikPaste Preferences",

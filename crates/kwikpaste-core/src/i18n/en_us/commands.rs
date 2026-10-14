@@ -29,6 +29,7 @@ pub fn label(key: Key) -> &'static str {
         Key::StorageInsufficientSpace => "There is not enough free space on the target disk to move your data",
         Key::StorageSpaceUnavailable => "Cannot read the target disk’s free space. Check folder permissions and connectivity",
         Key::StorageTargetHasData => "The target directory already contains KwikPaste data",
+        Key::StorageInsideInstallDir => "The data directory can't be inside the KwikPaste install folder; it may be deleted on uninstall or reinstall",
         Key::StorageCustomUnavailable => "The custom data directory is unavailable. Reconnect it and restart KwikPaste before changing directories",
         Key::SyncNotRunning => "Turn on LAN sync first",
         Key::SyncInvalidCode => "The pairing code is 6 digits",

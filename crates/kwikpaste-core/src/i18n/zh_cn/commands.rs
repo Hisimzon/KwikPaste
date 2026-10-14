@@ -23,6 +23,9 @@ pub fn label(key: Key) -> &'static str {
         Key::StorageInsufficientSpace => "目标磁盘的可用空间不足，无法迁移数据",
         Key::StorageSpaceUnavailable => "无法读取目标磁盘的可用空间，请检查目录权限或连接状态",
         Key::StorageTargetHasData => "目标目录里已有快贴数据",
+        Key::StorageInsideInstallDir => {
+            "数据目录不能放在快贴的安装目录里，卸载或重装时可能被一并删除"
+        }
         Key::StorageCustomUnavailable => "自定义数据目录当前不可用，请重新连接后重启快贴再更改目录",
         Key::SyncNotRunning => "请先开启局域网同步",
         Key::SyncInvalidCode => "配对码是 6 位数字",

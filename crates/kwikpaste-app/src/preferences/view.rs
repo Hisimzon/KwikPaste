@@ -1150,7 +1150,7 @@ impl Preferences {
             .detach();
     }
 
-    /// 数据目录行右侧的打开 / 更改 / 还原；迁移中或自定义目录不可用时只能打开。
+    /// 数据目录行右侧的打开 / 更改 / 还原；迁移中只能打开，自定义目录不可用时不能更改。
     fn render_storage_actions(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let location = self.storage_location.as_ref();
         let fallback = location.and_then(|location| location.unavailable_custom_path.as_deref());
@@ -1172,7 +1172,10 @@ impl Preferences {
             "storage-reset",
             i18n::t("preferences:storageLocation.reset"),
         )
-        .disabled(disabled || !location.is_some_and(|location| location.is_custom))
+        .disabled(
+            self.storage_migrating
+                || (fallback.is_none() && !location.is_some_and(|location| location.is_custom)),
+        )
         .on_click(cx.listener(|this, _, window, cx| this.reset_storage_directory(window, cx)));
         let mut actions = div().flex().items_center().gap(space(2.)).child(open);
         if !portable {
@@ -1291,9 +1294,20 @@ impl Preferences {
         if self.storage_migrating {
             return;
         }
+        let content = match self
+            .storage_location
+            .as_ref()
+            .and_then(|location| location.unavailable_custom_path.as_deref())
+        {
+            Some(path) => i18n::t_args(
+                "preferences:storageLocation.resetUnavailableConfirmContent",
+                &[("path", path)],
+            ),
+            None => i18n::t("preferences:storageLocation.resetConfirmContent"),
+        };
         let answer = kwikpaste_ui::confirm(
             ConfirmSpec::new(i18n::t("preferences:storageLocation.resetConfirmTitle"))
-                .content(i18n::t("preferences:storageLocation.resetConfirmContent"))
+                .content(content)
                 .ok_text(i18n::t("preferences:storageLocation.reset"))
                 .cancel_text(i18n::t("common:actions.cancel")),
             window,
