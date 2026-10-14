@@ -22,7 +22,10 @@ use kwikpaste_ui::theme;
 use super::{ClipboardList, Pointer, ops::error_toast};
 use crate::{
     clipboard::{
-        model::preview::{self, HEADER_HEIGHT, RectF},
+        model::{
+            actions::OpenTarget,
+            preview::{self, HEADER_HEIGHT, RectF},
+        },
         source::{Preview, PreviewContentMetrics, PreviewTextView},
         view::preview::{
             ImageTextView, PreviewEvent, PreviewWindow,
@@ -196,7 +199,24 @@ impl ClipboardList {
             PreviewEvent::Words { paste } => self.use_preview_words(*paste, cx),
             PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
             PreviewEvent::Snippet(text) => self.copy_preview_snippet(text.clone(), cx),
+            PreviewEvent::Open(target) => self.open_preview_target(*target, cx),
         }
+    }
+
+    /// 点了预览里的链接 / 邮箱：关掉预览，交给浏览器或邮件客户端。
+    fn open_preview_target(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.previewing.session.clone() else {
+            return;
+        };
+        let window = self.window;
+        cx.spawn(async move |list, cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    list.update(cx, |list, cx| list.open(id, target, window, cx))
+                })
+                .ok();
+        })
+        .detach();
     }
 
     /// 指针进出卡片（悬停预览）。

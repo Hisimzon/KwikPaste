@@ -9,7 +9,7 @@ use kwikpaste_core::{clipboard::WordSpan, presenter::PreviewContentMetrics};
 use kwikpaste_ui::theme::{TextSize, fonts};
 
 /// 面板与卡片之间的距离。
-const GAP: f64 = 40.;
+const GAP: f64 = 28.;
 /// 面板离显示器边缘至少这么远。
 const MARGIN: f64 = 32.;
 const MIN_WIDTH: f64 = 288.;
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(geometry.placement, Placement::Right);
         assert_eq!(geometry.panel.width, 480.);
         assert_eq!(geometry.panel.height, 48. + 3. * 22. + 32.);
-        assert_eq!(geometry.panel.left, 800. + 340. + 40.);
+        assert_eq!(geometry.panel.left, 800. + 340. + GAP);
         assert_eq!(geometry.panel.top, 340. - geometry.panel.height / 2.);
 
         let chips = [200., 200., 120.];

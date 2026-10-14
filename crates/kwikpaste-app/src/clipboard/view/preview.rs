@@ -30,11 +30,14 @@ use super::{
 };
 use crate::{
     clipboard::{
-        model::preview::{
-            FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, SNIPPET_CHIP_HEIGHT, SNIPPET_CHIP_PADDING_X,
-            SNIPPET_PART_GAP, SNIPPETS_PADDING_Y, SNIPPETS_TITLE_GAP, SNIPPETS_TITLE_HEIGHT,
-            TEXT_PADDING_X, TEXT_ROW_HEIGHT, WORDS_BAR_HEIGHT, WordSelection, format_bytes,
-            utf16_range,
+        model::{
+            actions::OpenTarget,
+            preview::{
+                FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, SNIPPET_CHIP_HEIGHT, SNIPPET_CHIP_PADDING_X,
+                SNIPPET_PART_GAP, SNIPPETS_PADDING_Y, SNIPPETS_TITLE_GAP, SNIPPETS_TITLE_HEIGHT,
+                TEXT_PADDING_X, TEXT_ROW_HEIGHT, WORDS_BAR_HEIGHT, WordSelection, format_bytes,
+                utf16_range,
+            },
         },
         source::{Preview, PreviewTextView},
     },
@@ -55,6 +58,8 @@ pub enum PreviewEvent {
     ImageText(ImageTextView),
     /// 点了快捷信息区的一块：只复制这一段。
     Snippet(Arc<str>),
+    /// 点了链接、邮箱记录的正文：打开链接或写邮件。
+    Open(OpenTarget),
 }
 
 /// 有识别文字的图片记录正在看的那一面。
@@ -521,6 +526,25 @@ impl PreviewPanel {
         .flex_1()
         .min_h_0()
         .py(space((16.) / 4.));
+
+        let link = match preview.payload.sub_kind {
+            _ if self.image_text.is_some() => None,
+            Some(ClipboardSubKind::Url) => Some(OpenTarget::Link),
+            Some(ClipboardSubKind::Email) => Some(OpenTarget::Email),
+            _ => None,
+        };
+        let list = div()
+            .id("preview-text-body")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(list)
+            .when_some(link, |body, target| {
+                body.cursor_pointer()
+                    .text_color(theme::semantic(cx).text.link)
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::Open(target))))
+            });
 
         div()
             .size_full()
