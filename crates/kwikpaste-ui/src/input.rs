@@ -311,11 +311,13 @@ impl TextAreaInput {
         self.state.read(cx).value()
     }
 
-    /// 改写内容，不触发变化回调。
+    /// 改写内容，不触发变化回调；光标放到末尾（多行框默认会落在开头）。
     pub fn set_value(&self, value: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
         let value: SharedString = value.into();
         self.state.update(cx, |state, cx| {
-            state.set_value(value.to_string(), window, cx)
+            state.set_value(value.to_string(), window, cx);
+            let end = state.value().len();
+            state.set_selected_range(end..end, cx);
         });
     }
 

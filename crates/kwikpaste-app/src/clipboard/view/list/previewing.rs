@@ -45,6 +45,8 @@ pub enum PreviewTrigger {
     Keyboard,
     /// 松开空格时指针在预览窗里：之后与悬停一样，离开预览窗再关。
     Held,
+    /// “拆词”：不跟随悬停（菜单关上时指针下的是别的卡片），只随键盘换当前项。
+    Words,
 }
 
 impl PreviewTrigger {
@@ -116,7 +118,7 @@ impl ClipboardList {
     /// 直接打开现有预览，并切到可选择词语的模式。
     pub fn split_words(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
         self.settings.clipboard.preview.text_view = PreviewTextView::Words;
-        self.open_preview(id, PreviewTrigger::Keyboard, cx);
+        self.open_preview(id, PreviewTrigger::Words, cx);
     }
 
     /// 正在预览的记录与打开方式。
@@ -208,6 +210,7 @@ impl ClipboardList {
         let preview = &self.settings.clipboard.preview;
         self.previewing.hide_timer = None;
         match self.previewing.session.clone() {
+            Some((_, PreviewTrigger::Words)) => return,
             Some((session, PreviewTrigger::Keyboard)) => {
                 if session != *id {
                     self.open_preview(id.clone(), PreviewTrigger::Keyboard, cx);
@@ -299,9 +302,12 @@ impl ClipboardList {
         }
     }
 
-    /// 键盘预览时换了当前项：等卡片布局稳定后换内容。
+    /// 键盘预览或拆词时换了当前项：等卡片布局稳定后换内容。
     pub(super) fn preview_follow_active(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.previewing.session, Some((_, PreviewTrigger::Keyboard))) {
+        if !matches!(
+            self.previewing.session,
+            Some((_, PreviewTrigger::Keyboard | PreviewTrigger::Words))
+        ) {
             return;
         }
 
@@ -309,10 +315,14 @@ impl ClipboardList {
             cx.background_executor().timer(FOLLOW_DELAY).await;
             list.update(cx, |list, cx| {
                 list.previewing.follow_timer = None;
-                let keyboard =
-                    matches!(list.previewing.session, Some((_, PreviewTrigger::Keyboard)));
-                if let (true, Some(item)) = (keyboard, list.active_item()) {
-                    list.open_preview(item.id.clone(), PreviewTrigger::Keyboard, cx);
+                let trigger = match list.previewing.session {
+                    Some((_, trigger @ (PreviewTrigger::Keyboard | PreviewTrigger::Words))) => {
+                        trigger
+                    }
+                    _ => return,
+                };
+                if let Some(item) = list.active_item() {
+                    list.open_preview(item.id.clone(), trigger, cx);
                 }
             })
             .ok();

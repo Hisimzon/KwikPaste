@@ -7,7 +7,10 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{App, Context, IntoElement as _, ParentElement as _, Styled as _, Task, Window, div};
+use gpui::{
+    App, Context, Div, InteractiveElement as _, IntoElement as _, MouseButton, MouseDownEvent,
+    ParentElement as _, Styled as _, Task, Window, div,
+};
 use kwikpaste_core::{
     clipboard::ClipboardFragment,
     settings::{AutoPaste, Settings},
@@ -33,6 +36,17 @@ use crate::{
     i18n::{t, t_args},
     platform::EditTrigger,
 };
+
+/// 弹框里的多行输入框。打开时没拿到编辑态（面板仍不可激活，没有光标）的话，点它再按鼠标触发请求一次。
+fn editable_area(input: &TextAreaInput, target: EditTarget) -> Div {
+    div()
+        .capture_any_mouse_down(move |event: &MouseDownEvent, _, cx| {
+            if event.button == MouseButton::Left {
+                editing::begin(target, EditTrigger::Mouse, cx);
+            }
+        })
+        .child(TextArea::new(input))
+}
 
 /// 1.x 备注框 `maxLength={256}`。
 const NOTE_MAX_CHARS: usize = 256;
@@ -453,7 +467,7 @@ impl ClipboardList {
             DialogSpec::new(t("clipboard:note.title"))
                 .ok_text(t("common:actions.save"))
                 .cancel_text(t("common:actions.cancel")),
-            move |_, _| TextArea::new(&content).into_any_element(),
+            move |_, _| editable_area(&content, EditTarget::Note).into_any_element(),
             window,
             cx,
         );
@@ -550,7 +564,7 @@ impl ClipboardList {
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .child(TextArea::new(&content))
+                                    .child(editable_area(&content, EditTarget::Content))
                                     .when(rich, |el| {
                                         el.child(
                                             div()
