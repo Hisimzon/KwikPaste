@@ -193,7 +193,7 @@ impl ClipboardList {
         }
 
         // 图标放在浅灰圆底里；整组略高于正中（底部留白），视觉上才显得居中。
-        let icon = if text.searching {
+        let icon = if text.searching || text.filtered {
             IconName::Search
         } else {
             IconName::Inbox

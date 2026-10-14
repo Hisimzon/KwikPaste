@@ -59,6 +59,21 @@ pub async fn list_all_apps(pool: &SqlitePool) -> Result<Vec<ClipboardApp>> {
     Ok(rows)
 }
 
+/// 历史记录里出现过的来源应用，最近复制过的在前（搜索框的应用筛选）。
+pub async fn list_history_apps(pool: &SqlitePool) -> Result<Vec<ClipboardApp>> {
+    let rows = sqlx::query_as::<_, ClipboardApp>(
+        "SELECT clipboard_apps.id, clipboard_apps.name, clipboard_apps.icon_file, \
+         clipboard_apps.platform, clipboard_apps.created_at, clipboard_apps.updated_at \
+         FROM clipboard_apps JOIN (SELECT source_app_id, MAX(created_at) AS last_copied \
+         FROM clipboard_items WHERE source_app_id IS NOT NULL GROUP BY source_app_id) AS used \
+         ON used.source_app_id = clipboard_apps.id ORDER BY used.last_copied DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list clipboard apps used in history")?;
+    Ok(rows)
+}
+
 /// 删除未被历史记录引用的来源应用，返回实际删除的应用 id。
 pub async fn delete_unreferenced_apps(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
     let mut deleted = Vec::new();

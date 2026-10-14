@@ -40,6 +40,14 @@ const ICONS = [
   "lucide:trash-2",
   "lucide:triangle-alert",
   "ph:push-pin-bold",
+  // 搜索框筛选。
+  "lucide:list-filter",
+  "lucide:filter-x",
+  "lucide:clock",
+  "lucide:app-window",
+  "lucide:shapes",
+  "lucide:link",
+  "lucide:type",
   // 主窗口头部与分组栏。
   "lets-icons:file-dock",
   "lets-icons:folder-file-alt",

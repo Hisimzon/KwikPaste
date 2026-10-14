@@ -24,7 +24,7 @@ use super::{
 };
 use crate::clipboard::model::{
     actions::OpenTarget,
-    filter::ListFilter,
+    filter::{ListFilter, SourceApp},
     item::{
         FileRow, FilesPreview, ItemAction, ItemKind, ItemRef, ListItem, Platform, SubKind,
         TextSnippet,
@@ -64,6 +64,7 @@ pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
         category,
         group_id,
         keyword,
+        search,
     } = &query.filter;
 
     ClipboardItemQuery {
@@ -81,10 +82,32 @@ pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
             None => kwikpaste_core::db::models::ClipboardGroupFilter::All,
         }),
         keyword: (!keyword.is_empty()).then(|| keyword.to_string()),
+        source_app_ids: search
+            .apps
+            .iter()
+            .flat_map(|app| app.ids.iter().map(|id| id.to_string()))
+            .collect(),
+        sub_kinds: search
+            .kinds
+            .iter()
+            .flat_map(|kind| kind.sub_kinds().iter().map(|sub| core_sub_kind(*sub)))
+            .collect(),
+        created_since: search.since.map(|since| since.start(chrono::Local::now())),
         sort: query.sort,
         limit: i64::try_from(query.limit).unwrap_or(i64::MAX),
         offset: i64::try_from(query.offset).unwrap_or(i64::MAX),
         ..ClipboardItemQuery::default()
+    }
+}
+
+fn core_sub_kind(sub: SubKind) -> ClipboardSubKind {
+    match sub {
+        SubKind::Rtf => ClipboardSubKind::Rtf,
+        SubKind::Html => ClipboardSubKind::Html,
+        SubKind::Url => ClipboardSubKind::Url,
+        SubKind::Email => ClipboardSubKind::Email,
+        SubKind::Color => ClipboardSubKind::Color,
+        SubKind::Path => ClipboardSubKind::Path,
     }
 }
 
@@ -138,6 +161,24 @@ impl ClipboardSource for CoreSource {
         let core = self.core.clone();
 
         async move { Ok(core.list_groups().await?.into_iter().map(group).collect()) }.boxed()
+    }
+
+    fn history_apps(&self) -> BoxFuture<'static, anyhow::Result<Vec<SourceApp>>> {
+        let core = self.core.clone();
+
+        async move {
+            Ok(core
+                .list_history_apps()
+                .await?
+                .into_iter()
+                .map(|app| SourceApp {
+                    ids: app.ids.into_iter().map(shared).collect(),
+                    name: shared(app.name),
+                    icon_path: app.icon_path.map(shared),
+                })
+                .collect())
+        }
+        .boxed()
     }
 
     fn item_refs(&self, query: ListQuery) -> BoxFuture<'static, anyhow::Result<Vec<ItemRef>>> {

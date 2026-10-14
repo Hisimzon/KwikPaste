@@ -16,6 +16,7 @@
     "category": "No {{category}} records yet",
     "favoriteCategory": "No favorite {{category}} records yet",
     "favorites": "No favorites yet",
+    "filtered": "No records match the filters",
     "group": "No matching records in \"{{group}}\"",
     "groupCategory": "No {{category}} records in \"{{group}}\"",
     "groupFallback": "this group",
@@ -30,6 +31,27 @@
     "searchGroupFavoriteCategory": "No favorite {{category}} records in \"{{group}}\" match \"{{keyword}}\"",
     "searchGroupFavorites": "No favorites in \"{{group}}\" match \"{{keyword}}\"",
     "searchHistory": "No records found for \"{{keyword}}\""
+  },
+  "filter": {
+    "apps": "Source app",
+    "clear": "Clear filters",
+    "kinds": {
+      "color": "Color",
+      "email": "Email",
+      "link": "Link",
+      "path": "Path",
+      "rich": "Rich text"
+    },
+    "noApps": "No source apps recorded yet",
+    "remove": "Remove filter \"{{name}}\"",
+    "since": {
+      "month": "Last 30 days",
+      "today": "Today",
+      "week": "Last 7 days"
+    },
+    "time": "Time",
+    "title": "Filter",
+    "type": "Type"
   },
   "footer": {
     "position": "{{index}} / {{count}} items",

@@ -25,7 +25,7 @@ use super::{
 };
 use crate::clipboard::model::{
     actions::OpenTarget,
-    filter::ListFilter,
+    filter::{ListFilter, SourceApp},
     item::{ItemRef, ListItem},
     list_model::Page,
 };
@@ -121,6 +121,25 @@ impl FixtureStore {
 
     pub fn groups(&self) -> Vec<Group> {
         self.groups.clone()
+    }
+
+    /// 记录里出现过的来源应用，按记录顺序（新的在前）去重。
+    pub fn apps(&self) -> Vec<SourceApp> {
+        let mut apps: Vec<SourceApp> = Vec::new();
+        for item in &self.items {
+            let Some(id) = &item.source_app_id else {
+                continue;
+            };
+            if apps.iter().any(|app| app.ids.contains(id)) {
+                continue;
+            }
+            apps.push(SourceApp {
+                ids: Arc::from([id.clone()]),
+                name: item.source_app_name.clone().unwrap_or_else(|| id.clone()),
+                icon_path: item.source_app_icon_path.clone(),
+            });
+        }
+        apps
     }
 
     #[cfg(test)]
@@ -486,6 +505,10 @@ impl ClipboardSource for FixtureSource {
 
     fn groups(&self) -> BoxFuture<'static, anyhow::Result<Vec<Group>>> {
         self.with_store(|store| Ok(store.groups()))
+    }
+
+    fn history_apps(&self) -> BoxFuture<'static, anyhow::Result<Vec<SourceApp>>> {
+        self.with_store(|store| Ok(store.apps()))
     }
 
     fn item_refs(&self, query: ListQuery) -> BoxFuture<'static, anyhow::Result<Vec<ItemRef>>> {

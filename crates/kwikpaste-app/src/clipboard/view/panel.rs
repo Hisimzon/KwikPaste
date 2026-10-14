@@ -38,7 +38,7 @@ use super::{
 use crate::{
     clipboard::{
         model::{
-            filter::{ListFilter, Range, adjacent_group},
+            filter::{ListFilter, Range, SearchFilters, adjacent_group},
             item::{ItemKind, ListItem},
         },
         source::{ClipboardSource, Group},
@@ -141,6 +141,7 @@ impl ClipboardPanel {
             _subscriptions: subscriptions,
         };
         panel.reload_groups(cx);
+        panel.reload_filter_apps(cx);
         panel
     }
 
@@ -309,10 +310,11 @@ impl ClipboardPanel {
             list
         });
         let bar = cx.new(|_| GroupBar::new(BarMode::Side));
-        let keyword = self.list.read(cx).filter().keyword.clone();
+        let main = self.list.read(cx).filter();
         let filter = ListFilter {
             range: Range::Favorite,
-            keyword,
+            keyword: main.keyword.clone(),
+            search: main.search.clone(),
             ..ListFilter::default()
         };
         let groups = self.group_list.clone();
@@ -675,7 +677,31 @@ impl ClipboardPanel {
                 editing::begin(EditTarget::Search, *trigger, cx);
             }
             HeaderEvent::TogglePin => self.toggle_pin(cx),
+            HeaderEvent::Filters(search) => {
+                let side_search = search.clone();
+                let search = search.clone();
+                self.update_filter(|filter| filter.search = search, cx);
+                self.update_side_filter(|filter| filter.search = side_search, cx);
+            }
         }
+    }
+
+    /// 重读筛选菜单里可选的来源应用。
+    fn reload_filter_apps(&mut self, cx: &mut Context<Self>) {
+        let future = self.source.history_apps();
+
+        cx.spawn(async move |panel, cx| {
+            let result = future.await;
+            panel
+                .update(cx, |panel, cx| match result {
+                    Ok(apps) => panel
+                        .header
+                        .update(cx, |header, cx| header.set_apps(apps, cx)),
+                    Err(err) => log::warn!("filter apps could not be loaded: {err:#}"),
+                })
+                .ok();
+        })
+        .detach();
     }
 
     fn focus_list(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -703,8 +729,10 @@ impl ClipboardPanel {
         match event {
             PanelEvent::Shown => self.on_shown(window, cx),
             PanelEvent::Hidden => {
-                self.header
-                    .update(cx, |header, cx| header.set_editing(false, cx));
+                self.header.update(cx, |header, cx| {
+                    header.set_editing(false, cx);
+                    header.release_icons(window, cx);
+                });
                 if self.list.read(cx).settings().clipboard.search.clear_on_hide {
                     self.clear_search(window, cx);
                 }
@@ -754,6 +782,7 @@ impl ClipboardPanel {
     /// 分类、分组；设置了默认聚焦搜索框时请求编辑态。
     fn on_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_layout(window, cx);
+        self.reload_filter_apps(cx);
         let settings = self.list.read(cx).settings().clipboard.clone();
         let window_settings = settings.window;
         let clear = settings.search.clear_on_hide;
@@ -773,6 +802,7 @@ impl ClipboardPanel {
                 |filter| {
                     if clear {
                         filter.keyword = Arc::from("");
+                        filter.search = SearchFilters::default();
                     }
                     if let Some(group) = group {
                         filter.range = Range::All;
@@ -786,6 +816,7 @@ impl ClipboardPanel {
             |filter| {
                 if clear {
                     filter.keyword = Arc::from("");
+                    filter.search = SearchFilters::default();
                 }
                 match window_settings.select_range_on_open {
                     WindowOpenRangeSelection::Preserve => {}
@@ -820,8 +851,12 @@ impl ClipboardPanel {
     fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.header
             .update(cx, |header, cx| header.clear(window, cx));
-        self.update_filter(|filter| filter.keyword = Arc::from(""), cx);
-        self.update_side_filter(|filter| filter.keyword = Arc::from(""), cx);
+        let clear = |filter: &mut ListFilter| {
+            filter.keyword = Arc::from("");
+            filter.search = SearchFilters::default();
+        };
+        self.update_filter(clear, cx);
+        self.update_side_filter(clear, cx);
     }
 
     fn set_key_hints(&mut self, on: bool, cx: &mut Context<Self>) {
