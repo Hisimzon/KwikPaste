@@ -604,7 +604,7 @@ impl From<ClipboardItemView> for ListItem {
                 .map(ItemAction::from)
                 .collect(),
             color_preview: view.color_preview.map(shared),
-            quick_snippets: view.quick_snippets.into_iter().map(shared).collect(),
+            quick_snippets: view.quick_snippets,
             image_display: view.image_display_size.map(|size| ImageBox {
                 width: size.width as f32,
                 height: size.height as f32,

@@ -495,6 +495,8 @@ pub struct Display {
     /// 文本记录下方列出识别到的编号、数字、链接等快捷信息，点击单独粘贴。
     /// 旧配置没有这个字段，按默认开启读取。
     pub quick_snippets: bool,
+    /// 按类型给快捷信息和预览中的对应文字着色；旧配置缺失时默认开启。
+    pub quick_snippet_colors: bool,
     /// 列表条目画成独立卡片，还是贴边排列、用分隔线隔开。
     pub list_style: ListStyle,
     /// 列表疏密。旧配置没有这个字段，存量用户升级后同样按「标准」读取，比旧版的「舒适」紧一档。
@@ -511,6 +513,7 @@ impl Default for Display {
             image_max_height: 64,
             file_max_count: 3,
             quick_snippets: true,
+            quick_snippet_colors: true,
             list_style: ListStyle::Card,
             density: ListDensity::Standard,
             custom_layout: CustomListLayout::default(),

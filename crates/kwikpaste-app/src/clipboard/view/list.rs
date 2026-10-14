@@ -1712,6 +1712,12 @@ impl ClipboardList {
         let env = CardEnv {
             tokens,
             kind_tags: theme::components(cx).kind_tag,
+            snippet_colors: self
+                .settings
+                .clipboard
+                .display
+                .quick_snippet_colors
+                .then(|| theme::components(cx).snippet),
             reorder_source_opacity: theme::components(cx).reorder.source_opacity,
             layout: &layout,
             now: self.now,
@@ -1793,6 +1799,12 @@ impl Render for ClipboardList {
         let env = CardEnv {
             tokens,
             kind_tags: theme::components(cx).kind_tag,
+            snippet_colors: self
+                .settings
+                .clipboard
+                .display
+                .quick_snippet_colors
+                .then(|| theme::components(cx).snippet),
             reorder_source_opacity: theme::components(cx).reorder.source_opacity,
             layout: &layout,
             now: self.now,

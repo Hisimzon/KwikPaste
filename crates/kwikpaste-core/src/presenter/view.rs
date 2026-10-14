@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::ImageDisplaySize;
+use crate::clipboard::QuickSnippet;
 use crate::db::models::ClipboardItem;
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,7 +49,7 @@ pub struct ClipboardItemView {
     pub display_created_at: String,
     /// 卡片下方可单独粘贴的快捷信息（编号、数字、链接等）。
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub quick_snippets: Vec<String>,
+    pub quick_snippets: Vec<QuickSnippet>,
     /// 图片卡片的显示尺寸，缩略图到达前后布局一致。1.x 由前端计算，不在 JSON 里。
     #[serde(skip)]
     pub image_display_size: Option<ImageDisplaySize>,

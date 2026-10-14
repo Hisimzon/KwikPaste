@@ -906,6 +906,10 @@
           "description": "Strip HTML and RTF formatting.",
           "title": "Paste as Plain Text by Default"
         },
+        "quickSnippetColors": {
+          "description": "Color quick info and the matching text in the preview by type.",
+          "title": "Quick info colors"
+        },
         "quickSnippets": {
           "description": "List codes, numbers, and links found in text records below each item. Click one to paste or copy just that part.",
           "title": "Extract Quick Info"

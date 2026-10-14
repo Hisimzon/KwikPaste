@@ -14,7 +14,8 @@ use super::text::{
     count_preview_text_rows, preview_sub_kind, preview_text, preview_text_rows, preview_text_source,
 };
 use crate::clipboard::{
-    split_words, validate_image_file_name, word_spans, FileIconStore, ImageStore, WordSpan,
+    preview_quick_snippets, split_words, validate_image_file_name, word_spans, FileIconStore,
+    ImageStore, PreviewSnippet, WordSpan,
 };
 use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind};
 use crate::error::Result;
@@ -51,6 +52,9 @@ pub struct ClipboardPreviewPayload {
     /// 文本里可点选的词（UTF-16 区间，序号即拆词序号）；脱敏展示的敏感内容为空。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub words: Vec<WordSpan>,
+    /// 完整纯文本中的快捷信息；区间是 `text` 的 UTF-8 字节偏移，脱敏展示时为空。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub snippets: Vec<PreviewSnippet>,
     /// 原文过长、词区间只覆盖开头：选词视图在词块末尾提示只拆了开头。
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub words_truncated: bool,
@@ -221,6 +225,7 @@ pub(crate) fn build_image_text_preview(
         files: Vec::new(),
         total_files: 0,
         words,
+        snippets: Vec::new(),
         words_truncated,
     };
 
@@ -233,14 +238,16 @@ pub(crate) async fn build_preview_payload(
     image_store: &ImageStore,
     file_icon_store: &FileIconStore,
     item: ClipboardItem,
-    redact_sensitive: bool,
+    clipboard: &Clipboard,
 ) -> Result<ClipboardPreviewPayload> {
+    let redact_sensitive = clipboard.sensitive.redact_secrets;
     let mut text = None;
     let mut image_path = None;
     let mut image_exists = false;
     let mut files = Vec::new();
     let mut total_files = 0;
     let mut words = Vec::new();
+    let mut snippets = Vec::new();
     let mut words_truncated = false;
 
     match item.kind {
@@ -248,6 +255,9 @@ pub(crate) async fn build_preview_payload(
             text = Some(preview_text(&item, redact_sensitive));
             if !(redact_sensitive && item.is_sensitive) {
                 (words, words_truncated) = word_spans(preview_text_source(&item));
+                if clipboard.display.quick_snippets {
+                    snippets = preview_quick_snippets(&item);
+                }
             }
         }
         ClipboardKind::Image => {
@@ -278,6 +288,7 @@ pub(crate) async fn build_preview_payload(
         files,
         total_files,
         words,
+        snippets,
         words_truncated,
     })
 }
@@ -326,7 +337,85 @@ async fn build_preview_file_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clipboard::SnippetKind;
+    use crate::db::test_support::memory_pool;
     use crate::presenter::tests::text_item;
+
+    #[tokio::test]
+    async fn issue_preview_snippets_index_the_rendered_text_and_respect_settings() {
+        let pool = memory_pool().await;
+        let temp = tempfile::tempdir().unwrap();
+        let images = ImageStore::for_test(temp.path().join("images"));
+        let icons = FileIconStore::for_test(temp.path().join("icons"));
+        let text = "王工，快递单号 SF1234567890123 明天到，收货电话 138 0013 8000；发票抬头发到你邮箱 wang@example.com 了。周四 14:00 前确认一下，新版在 https://paste.fastthree.com 。";
+        let mut item = text_item(Some(ClipboardSubKind::Html), false);
+        item.content = format!("<p>{text}</p>");
+        item.search_text = Some(text.to_owned());
+        let mut clipboard = Clipboard::default();
+        let payload = build_preview_payload(&pool, &images, &icons, item.clone(), &clipboard)
+            .await
+            .unwrap();
+
+        assert_eq!(payload.text.as_deref(), Some(text));
+        assert_eq!(
+            payload
+                .snippets
+                .iter()
+                .map(|snippet| snippet.kind)
+                .collect::<Vec<_>>(),
+            [
+                SnippetKind::Number,
+                SnippetKind::Phone,
+                SnippetKind::Email,
+                SnippetKind::Time,
+                SnippetKind::Link
+            ]
+        );
+        for snippet in &payload.snippets {
+            assert_eq!(
+                payload.text.as_ref().unwrap().get(snippet.range.clone()),
+                Some(snippet.text.as_str())
+            );
+        }
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            json["snippets"][0]["range"]["start"],
+            text.find("SF1234567890123").unwrap()
+        );
+        assert_eq!(
+            json["snippets"][0]["range"]["end"],
+            text.find("SF1234567890123").unwrap() + "SF1234567890123".len()
+        );
+
+        clipboard.display.quick_snippets = false;
+        let payload = build_preview_payload(&pool, &images, &icons, item.clone(), &clipboard)
+            .await
+            .unwrap();
+        assert!(payload.snippets.is_empty());
+        assert!(!payload.words.is_empty());
+        assert!(serde_json::to_value(payload)
+            .unwrap()
+            .get("snippets")
+            .is_none());
+
+        clipboard.display.quick_snippets = true;
+        item.is_sensitive = true;
+        let payload = build_preview_payload(&pool, &images, &icons, item.clone(), &clipboard)
+            .await
+            .unwrap();
+        assert_ne!(payload.text.as_deref(), Some(text));
+        assert!(payload.words.is_empty());
+        assert!(payload.snippets.is_empty());
+
+        clipboard.sensitive.redact_secrets = false;
+        let payload = build_preview_payload(&pool, &images, &icons, item.clone(), &clipboard)
+            .await
+            .unwrap();
+        assert_eq!(payload.snippets.len(), 5);
+        let (image_text, _) =
+            build_image_text_preview(&item, text.to_owned(), PreviewTextView::Plain);
+        assert!(image_text.snippets.is_empty());
+    }
 
     // 面板按预览方式开窗：原文方式按文本行，选词方式按词块；脱敏展示的敏感内容没有词可选，始终按文本行。
     #[test]

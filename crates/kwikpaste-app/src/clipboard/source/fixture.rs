@@ -301,7 +301,7 @@ impl FixtureStore {
 /// “原图”用缩略图，文件没有大小）。
 fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextView) -> Preview {
     use kwikpaste_core::{
-        clipboard::{split_words, word_spans},
+        clipboard::{PreviewSnippet, split_words, word_spans},
         db::models::{ClipboardKind, ClipboardSubKind},
         presenter::{ClipboardPreviewFileEntry, PreviewWordChip},
     };
@@ -314,6 +314,23 @@ fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextVie
         Some(text) if !item.is_sensitive => word_spans(text),
         _ => (Vec::new(), false),
     };
+    let snippets = text
+        .as_deref()
+        .filter(|_| !item.is_sensitive)
+        .map(|text| {
+            item.quick_snippets
+                .iter()
+                .filter_map(|snippet| {
+                    let start = text.find(&snippet.text)?;
+                    Some(PreviewSnippet {
+                        text: snippet.text.clone(),
+                        kind: snippet.kind,
+                        range: start..start + snippet.text.len(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let files: Vec<ClipboardPreviewFileEntry> = item
         .file_rows()
         .iter()
@@ -387,6 +404,7 @@ fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextVie
             total_files: files.len(),
             files,
             words,
+            snippets,
             words_truncated,
         },
         metrics,

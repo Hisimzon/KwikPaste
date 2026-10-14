@@ -1794,7 +1794,7 @@ impl Driver {
                 .find_map(|item| {
                     item.quick_snippets
                         .first()
-                        .map(|text| (item.clone(), text.clone()))
+                        .map(|snippet| (item.clone(), Arc::<str>::from(snippet.text.as_str())))
                 })
         });
         let Some((item, text)) = target else {

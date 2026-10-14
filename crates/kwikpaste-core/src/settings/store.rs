@@ -666,6 +666,20 @@ mod tests {
     }
 
     #[test]
+    fn released_display_settings_enable_quick_snippet_colors() {
+        let released = r#"{"clipboard":{"display":{"quickSnippets":false}}}"#;
+        let parsed: Settings = serde_json::from_str(released).unwrap();
+        assert!(parsed.clipboard.display.quick_snippet_colors);
+        assert!(!parsed.clipboard.display.quick_snippets);
+
+        let explicit = r#"{"clipboard":{"display":{"quickSnippetColors":false}}}"#;
+        let parsed: Settings = serde_json::from_str(explicit).unwrap();
+        assert!(!parsed.clipboard.display.quick_snippet_colors);
+        let json = serde_json::to_value(parsed).unwrap();
+        assert_eq!(json["clipboard"]["display"]["quickSnippetColors"], false);
+    }
+
+    #[test]
     fn released_display_settings_enable_quick_snippets() {
         let released = r#"{
             "clipboard": {

@@ -27,6 +27,7 @@ use crate::{
         view::preview::{
             ImageTextView, PreviewEvent, PreviewWindow,
             native::{self, NativePreview},
+            snippet_label,
         },
     },
     i18n::t,
@@ -194,6 +195,7 @@ impl ClipboardList {
             PreviewEvent::TextView(view) => self.switch_preview_text_view(*view, cx),
             PreviewEvent::Words { paste } => self.use_preview_words(*paste, cx),
             PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
+            PreviewEvent::Snippet(text) => self.copy_preview_snippet(text.clone(), cx),
         }
     }
 
@@ -482,6 +484,32 @@ impl ClipboardList {
         (!words.is_empty()).then(|| (id.clone(), words))
     }
 
+    /// 复制预览快捷信息区点中的一段，预览保持打开。
+    fn copy_preview_snippet(&mut self, text: Arc<str>, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.previewing.session.clone() else {
+            return;
+        };
+        let fragment = ClipboardFragment::Snippet {
+            text: text.to_string(),
+        };
+        let task = self.host.copy_fragment(id, fragment, cx);
+        let window = self.window;
+        cx.spawn(async move |_, cx| {
+            let result = task.await;
+            window
+                .update(cx, |_, window, cx| match result {
+                    Ok(()) => kwikpaste_ui::toast::show(
+                        kwikpaste_ui::toast::Toast::success(t("commands:messages.copied")),
+                        window,
+                        cx,
+                    ),
+                    Err(err) => error_toast("commands:labels.copy", &err, window, cx),
+                })
+                .ok();
+        })
+        .detach();
+    }
+
     /// 粘贴或复制预览里选中的词，然后关掉预览（1.x `pasteSelection` / `copySelection`）。
     pub fn use_preview_words(&mut self, paste: bool, cx: &mut Context<Self>) {
         let Some((id, indices)) = self.preview_words(cx) else {
@@ -601,10 +629,35 @@ impl ClipboardList {
                 window,
             ),
         });
+        let snippet_colors = self.settings.clipboard.display.quick_snippet_colors;
+        let snippets_height = match &preview {
+            Some(preview) if matches!(preview.metrics, PreviewContentMetrics::Text { .. }) => {
+                let chips: Vec<f64> = preview
+                    .payload
+                    .snippets
+                    .iter()
+                    .map(|snippet| {
+                        preview::snippet_chip_width(
+                            &t(snippet_label(snippet.kind)),
+                            &snippet.text,
+                            snippet_colors,
+                            text_scale,
+                            window,
+                        )
+                    })
+                    .collect();
+                preview::snippets_height(
+                    &chips,
+                    preview::snippets_content_width(&place.monitor, text_scale),
+                )
+            }
+            _ => 0.,
+        };
         let geometry = preview::geometry(
             place.card,
             place.monitor,
             measured_metrics.as_ref(),
+            snippets_height,
             prefer_left,
             text_scale,
         );
@@ -614,6 +667,7 @@ impl ClipboardList {
         let text_view = self.settings.clipboard.preview.text_view;
         let preview_window = self.previewing.window.as_ref()?;
         preview_window.panel.update(cx, |panel, cx| {
+            panel.snippet_colors = snippet_colors;
             panel.set(preview, rows, text_view, image_box, image_text, cx)
         });
 

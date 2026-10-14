@@ -607,6 +607,13 @@ fn appearance_sections() -> Vec<Section> {
                     .path("clipboard.display.quickSnippets")
                     .keywords(&["quick", "snippet", "extract", "number", "code"])
                     .advanced(),
+                Setting::new("paste.quickSnippetColors", Control::Switch)
+                    .path("clipboard.display.quickSnippetColors")
+                    .keywords(&["quick", "snippet", "color", "highlight"])
+                    .advanced()
+                    .child_of("paste.quickSnippets", |settings| {
+                        !settings.clipboard.display.quick_snippets
+                    }),
                 Setting::new(
                     "appearance.textMaxLines",
                     Control::Number {

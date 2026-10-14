@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use kwikpaste_core::clipboard::QuickSnippet;
 use serde::Deserialize;
 
 use super::layout::ImageBox;
@@ -152,7 +153,7 @@ pub struct ListItem {
     #[serde(default)]
     pub color_preview: Option<Arc<str>>,
     #[serde(default)]
-    pub quick_snippets: Vec<Arc<str>>,
+    pub quick_snippets: Vec<QuickSnippet>,
     /// core 展示层算好的图片显示尺寸（`ClipboardItemView::image_display_size`，不在 JSON 里）。
     /// 夹具没有它，视图按同一公式自己预测（[`super::layout::predict_image_box`]）。
     #[serde(skip)]
@@ -262,7 +263,7 @@ mod tests {
             "summary": "https://example.com", "useCount": 3, "isFavorite": false, "isPinned": true,
             "isSensitive": false, "platform": "windows", "createdAt": "2026-10-02T01:02:03.456Z",
             "updatedAt": "2026-10-02T01:02:03.456Z", "availableActions": ["paste", "openLink", "futureThing"],
-            "quickSnippets": ["example.com"], "displayCreatedAt": "09:02"
+            "quickSnippets": [{"text": "example.com", "kind": "link"}], "displayCreatedAt": "09:02"
         }"#;
         let item: ListItem = serde_json::from_str(json).expect("parses");
 
@@ -274,6 +275,11 @@ mod tests {
             vec![ItemAction::Paste, ItemAction::OpenLink, ItemAction::Unknown]
         );
         assert_eq!(item.summary.as_deref(), Some("https://example.com"));
+        assert_eq!(item.quick_snippets[0].text, "example.com");
+        assert_eq!(
+            item.quick_snippets[0].kind,
+            kwikpaste_core::clipboard::SnippetKind::Link
+        );
         assert!(item.file_rows().is_empty());
     }
 

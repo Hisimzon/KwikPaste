@@ -194,6 +194,18 @@
     "isSensitive": false,
     "kind": "text",
     "size": 48,
+    "snippets": [
+      {
+        "kind": "number",
+        "range": { "end": 15, "start": 7 },
+        "text": "20260924"
+      },
+      {
+        "kind": "phone",
+        "range": { "end": 48, "start": 35 },
+        "text": "138 1234 5678"
+      }
+    ],
     "subKind": null,
     "text": "订单 20260924 已发货，联系 138 1234 5678",
     "totalFiles": 0,
@@ -223,6 +235,13 @@
     "isSensitive": false,
     "kind": "text",
     "size": 24,
+    "snippets": [
+      {
+        "kind": "number",
+        "range": { "end": 16, "start": 10 },
+        "text": "v1.3.0"
+      }
+    ],
     "subKind": "rtf",
     "text": "Plain RTF v1.3.0",
     "totalFiles": 0,
@@ -239,6 +258,13 @@
     "isSensitive": true,
     "kind": "text",
     "size": 62,
+    "snippets": [
+      {
+        "kind": "number",
+        "range": { "end": 50, "start": 6 },
+        "text": "sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890"
+      }
+    ],
     "subKind": null,
     "text": "token sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890\nsecond line",
     "totalFiles": 0,

@@ -896,6 +896,10 @@
           "description": "去掉 HTML、RTF 等格式。",
           "title": "默认纯文本粘贴"
         },
+        "quickSnippetColors": {
+          "description": "按类型给快捷信息和预览里的对应文字加上颜色。",
+          "title": "快捷信息颜色"
+        },
         "quickSnippets": {
           "description": "在文本记录下方列出编号、数字、链接等，点击即可单独粘贴或复制。",
           "title": "提取快捷信息"

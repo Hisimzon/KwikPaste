@@ -461,7 +461,12 @@ mod tests {
         assert!(item.quick_snippets.is_empty());
 
         attach_quick_snippets(&mut item, true, false);
-        assert_eq!(item.quick_snippets, ["20260924"]);
+        assert_eq!(item.quick_snippets.len(), 1);
+        assert_eq!(item.quick_snippets[0].text, "20260924");
+        assert_eq!(
+            item.quick_snippets[0].kind,
+            crate::clipboard::SnippetKind::Number
+        );
     }
 
     #[test]

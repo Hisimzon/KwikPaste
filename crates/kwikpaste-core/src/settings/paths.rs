@@ -19,6 +19,8 @@ pub const CUSTOM_LAYOUT: &str = "clipboard.display.customLayout";
 pub const FILE_MAX_COUNT: &str = "clipboard.display.fileMaxCount";
 /// 文本记录下方的快捷信息（`Display::quick_snippets`）。
 pub const QUICK_SNIPPETS: &str = "clipboard.display.quickSnippets";
+/// 快捷信息及预览文字按类型着色（`Display::quick_snippet_colors`）。
+pub const QUICK_SNIPPET_COLORS: &str = "clipboard.display.quickSnippetColors";
 /// 打开剪贴板窗口时回到列表顶部（`Window::scroll_to_top_on_open`）。
 pub const SCROLL_TO_TOP_ON_OPEN: &str = "clipboard.window.scrollToTopOnOpen";
 /// 点击列表项时的自动粘贴行为（`Content::auto_paste`）。

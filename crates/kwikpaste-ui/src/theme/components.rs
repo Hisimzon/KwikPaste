@@ -111,6 +111,16 @@ pub struct KindTagTokens {
     pub path: KindTag,
 }
 
+/// 快捷信息按类型的颜色：卡片和预览里的圆点、预览正文里的淡色底。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnippetTokens {
+    pub number: KindTag,
+    pub phone: KindTag,
+    pub email: KindTag,
+    pub time: KindTag,
+    pub link: KindTag,
+}
+
 /// 菜单项的常态、悬停、按下、危险和禁用文字色。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MenuItemTokens {
@@ -212,6 +222,7 @@ pub struct ComponentTokens {
     pub card_row: CardRowTokens,
     pub tag: TagTokens,
     pub kind_tag: KindTagTokens,
+    pub snippet: SnippetTokens,
     pub menu_item: MenuItemTokens,
     pub tooltip: TooltipTokens,
     pub toast: ToastTokens,
@@ -296,6 +307,14 @@ impl ComponentTokens {
                 email: kind_tag(s.kinds.email),
                 color: kind_tag(s.kinds.color),
                 path: kind_tag(s.kinds.path),
+            },
+            // 链接、邮箱与类型标签同色；手机号、时间借用路径的绿和颜色的橙，与官网一致。
+            snippet: SnippetTokens {
+                number: kind_tag(s.hues.magenta_6),
+                phone: kind_tag(s.kinds.path),
+                email: kind_tag(s.kinds.email),
+                time: kind_tag(s.kinds.color),
+                link: kind_tag(s.kinds.link),
             },
             menu_item: MenuItemTokens {
                 foreground: s.text.primary,

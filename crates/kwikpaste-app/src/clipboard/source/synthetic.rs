@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::Context as _;
 use chrono::{DateTime, Duration, TimeZone as _, Utc};
+use kwikpaste_core::clipboard::{QuickSnippet, SnippetKind};
 
 use crate::clipboard::model::item::{
     FileRow, FilesPreview, ItemAction, ItemKind, ListItem, Platform, SubKind,
@@ -366,9 +367,18 @@ pub fn item(assets: &AssetSet, index: usize, options: GenerateOptions) -> ListIt
     let quick_snippets =
         if kind == ItemKind::Text && sub_kind.is_none() && !is_sensitive && (r3 >> 8) % 100 < 30 {
             vec![
-                Arc::from(format!("{}", 100_000 + mix(r3) % 900_000)),
-                Arc::from("1Z999AA10123456784"),
-                Arc::from("example.com/abc"),
+                QuickSnippet {
+                    text: format!("{}", 100_000 + mix(r3) % 900_000),
+                    kind: SnippetKind::Number,
+                },
+                QuickSnippet {
+                    text: "1Z999AA10123456784".to_owned(),
+                    kind: SnippetKind::Number,
+                },
+                QuickSnippet {
+                    text: "example.com/abc".to_owned(),
+                    kind: SnippetKind::Link,
+                },
             ]
         } else {
             Vec::new()

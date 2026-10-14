@@ -1,7 +1,7 @@
 //! 文本片段：列表卡片上的快捷信息提取，以及拆词面板的分词与选区拼接（纯逻辑，便于单测）。
 //!
-//! 快捷信息只从列表摘要（正文开头 [`SUMMARY_MAX_CHARS`] 个字符）里提取，列表查询不必读取
-//! 完整正文；拆词与最终写回都按完整纯文本计算，前端只传「选了哪一段」，文本由这里从原文取出。
+//! 卡片快捷信息只从列表摘要（正文开头 [`SUMMARY_MAX_CHARS`] 个字符）里提取，列表查询不必读取
+//! 完整正文；预览快捷信息、拆词与最终写回都按完整纯文本计算，前端只传「选了哪一段」。
 
 use std::ops::Range;
 use std::sync::LazyLock;
@@ -15,6 +15,9 @@ use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind};
 
 /// 列表卡片最多给出的快捷信息数量。
 const MAX_QUICK_SNIPPETS: usize = 8;
+
+/// 完整文本预览的快捷信息上限，不受卡片一行的展示数量限制。
+const MAX_PREVIEW_SNIPPETS: usize = 32;
 
 /// 拆词面板只处理正文开头这么多字符；再长的文本逐词点选没有意义，还会拖慢渲染。
 pub const MAX_SPLIT_CHARS: usize = 2000;
@@ -39,11 +42,11 @@ static EMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// 以及用连字符连接的编号（座机、订单号、序列号）。按词切分会把它们拆成几段。
 static JOINED_NUMBER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"(?:\+?86[\s-]?)?1[3-9][0-9](?:[\s-]?[0-9]{4}){2}",
-        r"|[0-9]{2,4}年[0-9]{1,2}月(?:[0-9]{1,2}[日号])?",
+        r"(?P<phone>(?:\+?86[\s-]?)?1[3-9][0-9](?:[\s-]?[0-9]{4}){2})",
+        r"|(?P<time>[0-9]{2,4}年[0-9]{1,2}月(?:[0-9]{1,2}[日号])?",
         r"|[0-9]{1,2}月[0-9]{1,2}[日号]",
         r"|[0-9]{4}[/.][0-9]{1,2}[/.][0-9]{1,2}",
-        r"|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?",
+        r"|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)",
         r"|[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)+",
     ))
     .expect("invalid snippet number regex")
@@ -56,6 +59,32 @@ static SPACED_DIGITS_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// 空格分组的数字至少要这么多位才当成一个号码，否则 `100 200 300` 这类并列数字会被连成一个。
 const MIN_SPACED_DIGITS: usize = 10;
+
+/// 快捷信息所属的识别规则，不按片段内容二次猜测类型。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum SnippetKind {
+    Link,
+    Email,
+    Phone,
+    Time,
+    Number,
+}
+
+/// 列表卡片可单独使用的快捷信息，包含片段原文及其识别类型。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct QuickSnippet {
+    pub text: String,
+    pub kind: SnippetKind,
+}
+
+/// 完整文本预览的快捷信息，区间是原始纯文本中的 UTF-8 字节偏移。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PreviewSnippet {
+    pub text: String,
+    pub kind: SnippetKind,
+    pub range: Range<usize>,
+}
 
 /// 前端点选后要写回剪贴板的一段文本；只描述取原文的哪一段，文本本身由 Rust 从原文取出。
 #[derive(Debug, Clone, Deserialize)]
@@ -105,9 +134,38 @@ pub fn fragment_source(item: &ClipboardItem) -> &str {
 }
 
 /// 列表卡片展示的快捷信息。整条记录本身就是链接 / 邮箱 / 颜色 / 路径时不再拆出片段。
-pub fn quick_snippets(item: &ClipboardItem) -> Vec<String> {
-    if item.kind != ClipboardKind::Text {
+pub fn quick_snippets(item: &ClipboardItem) -> Vec<QuickSnippet> {
+    if !can_extract_snippets(item) {
         return Vec::new();
+    }
+
+    let Some(summary) = item.summary.as_deref() else {
+        return Vec::new();
+    };
+    let may_be_cut = summary.chars().count() >= SUMMARY_MAX_CHARS;
+
+    extract_snippets(summary, may_be_cut, MAX_QUICK_SNIPPETS)
+        .into_iter()
+        .map(|snippet| QuickSnippet {
+            text: snippet.text,
+            kind: snippet.kind,
+        })
+        .collect()
+}
+
+/// 从完整纯文本的开头提取预览快捷信息，区间与 [`fragment_source`] 的字节偏移一致。
+pub fn preview_quick_snippets(item: &ClipboardItem) -> Vec<PreviewSnippet> {
+    if !can_extract_snippets(item) {
+        return Vec::new();
+    }
+    let (text, truncated) = take_chars(fragment_source(item), MAX_SPLIT_CHARS);
+    extract_snippets(text, truncated, MAX_PREVIEW_SNIPPETS)
+}
+
+/// 独立链接、邮箱、颜色和路径卡片不再重复拆出快捷信息。
+fn can_extract_snippets(item: &ClipboardItem) -> bool {
+    if item.kind != ClipboardKind::Text {
+        return false;
     }
 
     if matches!(
@@ -119,68 +177,77 @@ pub fn quick_snippets(item: &ClipboardItem) -> Vec<String> {
                 | ClipboardSubKind::Path
         )
     ) {
-        return Vec::new();
+        return false;
     }
 
-    let Some(summary) = item.summary.as_deref() else {
-        return Vec::new();
-    };
-    let may_be_cut = summary.chars().count() >= SUMMARY_MAX_CHARS;
-
-    extract_snippets(summary, may_be_cut)
+    true
 }
 
 /// 从文本里按出现顺序提取可单独粘贴的信息：链接、邮箱、手机号、日期时间、编号与带数字的词。
 ///
 /// `may_be_cut` 表示文本可能在末尾被截断，贴着末尾的片段可能只是半截，这种片段不给出。
 /// 与整段文本相同的片段也不给出，那样直接粘贴整条记录就行。
-fn extract_snippets(text: &str, may_be_cut: bool) -> Vec<String> {
-    let mut spans: Vec<Range<usize>> = Vec::new();
+fn extract_snippets(text: &str, may_be_cut: bool, limit: usize) -> Vec<PreviewSnippet> {
+    let mut spans: Vec<(Range<usize>, SnippetKind)> = Vec::new();
 
     for found in URL_RE.find_iter(text) {
         let end = found.start() + trim_url_tail(found.as_str()).len();
-        push_span(&mut spans, found.start()..end);
+        push_span(&mut spans, found.start()..end, SnippetKind::Link);
     }
     for found in EMAIL_RE.find_iter(text) {
         let local = found.as_str();
         let start = found.start() + (local.len() - local.trim_start_matches('.').len());
-        push_span(&mut spans, start..found.end());
+        push_span(&mut spans, start..found.end(), SnippetKind::Email);
     }
-    for found in JOINED_NUMBER_RE.find_iter(text) {
+    for captures in JOINED_NUMBER_RE.captures_iter(text) {
+        let Some(found) = captures.get(0) else {
+            continue;
+        };
         if is_embedded_in_word(text, found.range()) || !has_ascii_digit(found.as_str()) {
             continue;
         }
-        push_span(&mut spans, found.range());
+        let kind = if captures.name("phone").is_some() {
+            SnippetKind::Phone
+        } else if captures.name("time").is_some() {
+            SnippetKind::Time
+        } else {
+            SnippetKind::Number
+        };
+        push_span(&mut spans, found.range(), kind);
     }
     for found in SPACED_DIGITS_RE.find_iter(text) {
         let digits = found.as_str().bytes().filter(u8::is_ascii_digit).count();
         if digits < MIN_SPACED_DIGITS || is_embedded_in_word(text, found.range()) {
             continue;
         }
-        push_span(&mut spans, found.range());
+        push_span(&mut spans, found.range(), SnippetKind::Number);
     }
     for (start, word) in word_segments(text) {
         if is_info_word(word) {
-            push_span(&mut spans, start..start + word.len());
+            push_span(&mut spans, start..start + word.len(), SnippetKind::Number);
         }
     }
 
-    spans.sort_by_key(|span| span.start);
+    spans.sort_by_key(|(span, _)| span.start);
 
     let whole = text.trim();
-    let mut snippets: Vec<String> = Vec::new();
-    for span in spans {
+    let mut snippets: Vec<PreviewSnippet> = Vec::new();
+    for (span, kind) in spans {
         if may_be_cut && span.end == text.len() {
             continue;
         }
 
-        let snippet = &text[span];
-        if snippet == whole || snippets.iter().any(|existing| existing == snippet) {
+        let snippet = &text[span.clone()];
+        if snippet == whole || snippets.iter().any(|existing| existing.text == snippet) {
             continue;
         }
 
-        snippets.push(snippet.to_owned());
-        if snippets.len() == MAX_QUICK_SNIPPETS {
+        snippets.push(PreviewSnippet {
+            text: snippet.to_owned(),
+            kind,
+            range: span,
+        });
+        if snippets.len() == limit {
             break;
         }
     }
@@ -189,16 +256,16 @@ fn extract_snippets(text: &str, may_be_cut: bool) -> Vec<String> {
 }
 
 /// 记录一段候选区间；与已记录区间重叠时丢弃（先识别的规则优先）。
-fn push_span(spans: &mut Vec<Range<usize>>, span: Range<usize>) {
+fn push_span(spans: &mut Vec<(Range<usize>, SnippetKind)>, span: Range<usize>, kind: SnippetKind) {
     if span.is_empty() {
         return;
     }
 
     let overlaps = spans
         .iter()
-        .any(|existing| span.start < existing.end && existing.start < span.end);
+        .any(|(existing, _)| span.start < existing.end && existing.start < span.end);
     if !overlaps {
-        spans.push(span);
+        spans.push((span, kind));
     }
 }
 
@@ -410,6 +477,115 @@ fn take_chars(text: &str, max: usize) -> (&str, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presenter::tests::text_item;
+
+    #[test]
+    fn issue_snippets_keep_their_kinds_and_source_byte_ranges() {
+        let text = "王工，快递单号 SF1234567890123 明天到，收货电话 138 0013 8000；发票抬头发到你邮箱 wang@example.com 了。周四 14:00 前确认一下，新版在 https://paste.fastthree.com 。";
+        let mut item = text_item(None, false);
+        item.content = text.to_owned();
+        item.summary = Some(text.to_owned());
+        let snippets = preview_quick_snippets(&item);
+        let expected = [
+            ("SF1234567890123", SnippetKind::Number),
+            ("138 0013 8000", SnippetKind::Phone),
+            ("wang@example.com", SnippetKind::Email),
+            ("14:00", SnippetKind::Time),
+            ("https://paste.fastthree.com", SnippetKind::Link),
+        ];
+
+        assert_eq!(snippets.len(), expected.len());
+        for (snippet, (value, kind)) in snippets.iter().zip(expected) {
+            let start = text.find(value).unwrap();
+            assert_eq!(snippet.text, value);
+            assert_eq!(snippet.kind, kind);
+            assert_eq!(snippet.range, start..start + value.len());
+            assert_eq!(text.get(snippet.range.clone()), Some(value));
+        }
+        let card = quick_snippets(&item);
+        assert_eq!(card.len(), snippets.len());
+        for (card, preview) in card.iter().zip(&snippets) {
+            assert_eq!((&card.text, card.kind), (&preview.text, preview.kind));
+        }
+    }
+
+    #[test]
+    fn kinds_follow_the_matching_number_alternative() {
+        let text = "电话 +86-138-1234-5678 日期 2026年9月24日 9月24号 2026/9/24 2026.9.24 时间 14:30:05 编号 010-12345678 SF-2026-0924；会议号 881 234 5678；型号 9140BT";
+        let snippets = extract_snippets(text, false, MAX_PREVIEW_SNIPPETS);
+        assert_eq!(
+            snippets
+                .iter()
+                .map(|snippet| snippet.kind)
+                .collect::<Vec<_>>(),
+            [
+                SnippetKind::Phone,
+                SnippetKind::Time,
+                SnippetKind::Time,
+                SnippetKind::Time,
+                SnippetKind::Time,
+                SnippetKind::Time,
+                SnippetKind::Number,
+                SnippetKind::Number,
+                SnippetKind::Number,
+                SnippetKind::Number
+            ]
+        );
+        for snippet in snippets {
+            assert_eq!(text.get(snippet.range), Some(snippet.text.as_str()));
+        }
+    }
+
+    #[test]
+    fn preview_uses_full_plain_text_with_a_separate_snippet_cap() {
+        let mut item = text_item(Some(ClipboardSubKind::Html), false);
+        item.content = "<b>not the rendered text</b>".to_owned();
+        item.summary = Some("摘要里没有编号".to_owned());
+        let plain = (10..50)
+            .map(|n| format!("编号 {n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        item.search_text = Some(plain.clone());
+
+        assert!(quick_snippets(&item).is_empty());
+        let snippets = preview_quick_snippets(&item);
+        assert_eq!(snippets.len(), MAX_PREVIEW_SNIPPETS);
+        assert!(snippets.len() > MAX_QUICK_SNIPPETS);
+        for snippet in snippets {
+            assert_eq!(plain.get(snippet.range), Some(snippet.text.as_str()));
+        }
+    }
+
+    #[test]
+    fn preview_caps_chars_and_drops_a_cut_snippet() {
+        let mut item = text_item(None, false);
+        let prefix = format!("编号 12345 {}", "字".repeat(MAX_SPLIT_CHARS - 12));
+        item.content = format!("{prefix} 6789012345 末尾 99999");
+        let snippets = preview_quick_snippets(&item);
+
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].text, "12345");
+        assert_eq!(snippets[0].range, 7..12);
+        for sub_kind in [
+            ClipboardSubKind::Url,
+            ClipboardSubKind::Email,
+            ClipboardSubKind::Color,
+            ClipboardSubKind::Path,
+        ] {
+            item.sub_kind = Some(sub_kind);
+            assert!(preview_quick_snippets(&item).is_empty());
+        }
+        item.kind = ClipboardKind::Image;
+        item.sub_kind = None;
+        assert!(preview_quick_snippets(&item).is_empty());
+    }
+
+    fn snippet_texts(text: &str, may_be_cut: bool) -> Vec<String> {
+        extract_snippets(text, may_be_cut, MAX_QUICK_SNIPPETS)
+            .into_iter()
+            .map(|snippet| snippet.text)
+            .collect()
+    }
 
     fn token_texts(text: &str) -> Vec<String> {
         split_words(text)
@@ -424,11 +600,11 @@ mod tests {
         let text = "桌子上的玻璃是：9140BT  诺莫斯餐桌   19mm钢化玻璃桌面尺寸W2000*D800";
 
         assert_eq!(
-            extract_snippets(text, false),
+            snippet_texts(text, false),
             ["9140BT", "19mm", "W2000", "D800"]
         );
         assert_eq!(
-            extract_snippets("是个设计师大品牌的，原价一万五左右，我9000收的", false),
+            snippet_texts("是个设计师大品牌的，原价一万五左右，我9000收的", false),
             ["9000"]
         );
     }
@@ -438,11 +614,11 @@ mod tests {
         let text = "文档见https://example.com/a/b?id=42。有问题发 first.last@example.com，谢谢";
 
         assert_eq!(
-            extract_snippets(text, false),
+            snippet_texts(text, false),
             ["https://example.com/a/b?id=42", "first.last@example.com"]
         );
         assert_eq!(
-            extract_snippets(
+            snippet_texts(
                 "see (https://en.wikipedia.org/wiki/Rust_(language)).",
                 false
             ),
@@ -456,7 +632,7 @@ mod tests {
             "电话 138 1234 5678，座机 010-12345678，2026年9月24日 14:30 取件，单号 SF-2026-0924";
 
         assert_eq!(
-            extract_snippets(text, false),
+            snippet_texts(text, false),
             [
                 "138 1234 5678",
                 "010-12345678",
@@ -470,11 +646,11 @@ mod tests {
     #[test]
     fn joins_long_space_grouped_numbers_only() {
         assert_eq!(
-            extract_snippets("会议号 881 234 5678，卡号 6222 0212 3456 7890", false),
+            snippet_texts("会议号 881 234 5678，卡号 6222 0212 3456 7890", false),
             ["881 234 5678", "6222 0212 3456 7890"]
         );
         assert_eq!(
-            extract_snippets("单价 100 200 300 元", false),
+            snippet_texts("单价 100 200 300 元", false),
             ["100", "200", "300"]
         );
     }
@@ -482,7 +658,7 @@ mod tests {
     #[test]
     fn keeps_dotted_parts_of_hyphenated_codes() {
         assert_eq!(
-            extract_snippets(
+            snippet_texts(
                 "基于 EcoPaste（Apache-2.0）二次开发，测试版 v1.3.0-beta.1。",
                 false
             ),
@@ -493,26 +669,26 @@ mod tests {
     #[test]
     fn keeps_decimal_numbers_and_versions_whole() {
         assert_eq!(
-            extract_snippets("总价 ¥1,299.00，版本 v1.3.0，服务器 192.168.1.10", false),
+            snippet_texts("总价 ¥1,299.00，版本 v1.3.0，服务器 192.168.1.10", false),
             ["1,299.00", "v1.3.0", "192.168.1.10"]
         );
     }
 
     #[test]
     fn skips_noise_duplicates_and_the_whole_text() {
-        assert!(extract_snippets("我有3个苹果和4K显示器", false).is_empty());
-        assert!(extract_snippets("9000", false).is_empty());
+        assert!(snippet_texts("我有3个苹果和4K显示器", false).is_empty());
+        assert!(snippet_texts("9000", false).is_empty());
         assert_eq!(
-            extract_snippets("验证码 384756，384756 五分钟内有效", false),
+            snippet_texts("验证码 384756，384756 五分钟内有效", false),
             ["384756"]
         );
     }
 
     #[test]
     fn drops_the_snippet_at_a_possible_cut() {
-        assert_eq!(extract_snippets("订单 12345 运单 67890", true), ["12345"]);
+        assert_eq!(snippet_texts("订单 12345 运单 67890", true), ["12345"]);
         assert_eq!(
-            extract_snippets("订单 12345 运单 67890", false),
+            snippet_texts("订单 12345 运单 67890", false),
             ["12345", "67890"]
         );
     }
@@ -524,7 +700,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert_eq!(extract_snippets(&text, false).len(), MAX_QUICK_SNIPPETS);
+        assert_eq!(snippet_texts(&text, false).len(), MAX_QUICK_SNIPPETS);
     }
 
     #[test]
@@ -545,7 +721,7 @@ mod tests {
             token_texts("型号SKU：AB123;tel:10086，1，2"),
             ["型", "号", "SKU", "：", "AB123", ";", "tel", ":", "10086", "，", "1", "，", "2"]
         );
-        assert_eq!(extract_snippets("SKU:AB123 规格", false), ["AB123"]);
+        assert_eq!(snippet_texts("SKU:AB123 规格", false), ["AB123"]);
     }
 
     #[test]

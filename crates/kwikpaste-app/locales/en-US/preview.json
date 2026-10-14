@@ -20,6 +20,16 @@
     "filesLoaded": "{{count}} items loaded",
     "unknownSize": "Unknown size"
   },
+  "snippets": {
+    "kinds": {
+      "email": "Email",
+      "link": "Link",
+      "number": "Number",
+      "phone": "Phone",
+      "time": "Time"
+    },
+    "title": "Quick info · click to copy just this part"
+  },
   "title": {
     "files": "{{count}} items",
     "image": "Image preview",
