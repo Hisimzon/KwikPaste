@@ -12,13 +12,11 @@ pub enum TabId {
     General,
     Shortcuts,
     Appearance,
-    Capture,
     Window,
     Paste,
-    Items,
+    Capture,
     Sync,
     Extensions,
-    Overview,
     Data,
     About,
 }
@@ -32,10 +30,8 @@ impl TabId {
             Self::Capture => "capture",
             Self::Window => "window",
             Self::Paste => "paste",
-            Self::Items => "items",
             Self::Sync => "sync",
             Self::Extensions => "extensions",
-            Self::Overview => "overview",
             Self::Data => "data",
             Self::About => "about",
         }
@@ -163,6 +159,8 @@ impl Control {
 
 pub struct Setting {
     pub id: &'static str,
+    /// 仅在偏好页的更多选项中显示；首次引导忽略此标记。
+    pub advanced: bool,
     pub keywords: &'static [&'static str],
     pub control: Control,
     /// `settings.json` 里的点分路径；按钮、概览这类没有设置值的行为 `None`。
@@ -176,12 +174,23 @@ impl Setting {
     const fn new(id: &'static str, control: Control) -> Self {
         Self {
             id,
+            advanced: false,
             keywords: &[],
             control,
             path: None,
             parent: None,
             disabled_when: None,
         }
+    }
+
+    const fn advanced(mut self) -> Self {
+        self.advanced = true;
+        self
+    }
+
+    /// 已有自定义清理规则始终显示，避免隐藏正在生效的规则。
+    pub fn is_advanced(&self, settings: &Settings) -> bool {
+        self.advanced && (self.id != "history.rules" || settings.clipboard.history.rules.is_empty())
     }
 
     const fn path(mut self, path: &'static str) -> Self {
@@ -294,12 +303,6 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
             sections: appearance_sections(),
         },
         Tab {
-            id: TabId::Capture,
-            group: Group::Clipboard,
-            icon: PrefIcon::ClipboardPlus,
-            sections: capture_sections(),
-        },
-        Tab {
             id: TabId::Window,
             group: Group::Clipboard,
             icon: PrefIcon::PanelTop,
@@ -312,10 +315,10 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
             sections: paste_sections(),
         },
         Tab {
-            id: TabId::Items,
+            id: TabId::Capture,
             group: Group::Clipboard,
-            icon: PrefIcon::Layers,
-            sections: item_sections(),
+            icon: PrefIcon::ClipboardPlus,
+            sections: capture_sections(),
         },
         Tab {
             id: TabId::Sync,
@@ -336,26 +339,6 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
             sections: extensions_sections(),
         },
         Tab {
-            id: TabId::Overview,
-            group: Group::Data,
-            icon: PrefIcon::ChartPie,
-            sections: vec![Section {
-                id: "overview",
-                settings: vec![
-                    Setting::new("overview.dashboard", Control::StorageOverview).keywords(&[
-                        "overview",
-                        "statistics",
-                        "storage",
-                        "usage",
-                        "count",
-                        "category",
-                        "trend",
-                        "source",
-                    ]),
-                ],
-            }],
-        },
-        Tab {
             id: TabId::Data,
             group: Group::Data,
             icon: PrefIcon::Database,
@@ -370,7 +353,6 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
     ]
 }
 
-/// 扩展卡片下保留原有识别状态行，设置项标识不随页面迁移改变。
 fn extensions_sections() -> Vec<Section> {
     vec![
         Section {
@@ -404,63 +386,58 @@ fn extensions_sections() -> Vec<Section> {
 }
 
 fn general_sections(portable: bool) -> Vec<Section> {
-    let mut startup = vec![
-        Setting::new("control.autoStart", Control::Switch)
-            .path("general.autoStart")
-            .keywords(&["startup", "login", "autostart"]),
-        Setting::new("control.trayIcon", Control::Switch)
-            .path("general.trayIcon")
-            .keywords(&["tray", "menu bar", "system"]),
-    ];
-    // macOS 单击菜单栏图标弹出菜单，没有可选的单击行为。
-    #[cfg(target_os = "windows")]
-    startup.push(
-        Setting::new(
-            "control.trayClick",
-            Control::Select(Options::Values(TRAY_CLICK)),
-        )
-        .path("general.trayClick")
-        .keywords(&["tray", "click", "preferences", "clipboard"])
-        .child_of("control.trayIcon", |settings| !settings.general.tray_icon),
-    );
-    #[cfg(target_os = "macos")]
-    startup.push(
-        Setting::new("control.dockIcon", Control::Switch)
-            .path("general.dockIcon")
-            .keywords(&["dock", "taskbar", "icon"]),
-    );
-    startup.extend([Setting::new(
-        "control.reopenOnboarding",
-        Control::Action { danger: false },
-    )
-    .keywords(&["onboarding", "guide", "welcome", "help"])]);
-
     let mut sections = vec![Section {
         id: "startup",
-        settings: startup,
+        settings: vec![
+            Setting::new("control.autoStart", Control::Switch)
+                .path("general.autoStart")
+                .keywords(&["startup", "login", "autostart"]),
+            Setting::new("control.trayIcon", Control::Switch)
+                .path("general.trayIcon")
+                .keywords(&["tray", "menu bar", "system"]),
+            // macOS 单击菜单栏图标弹出菜单，没有可选的单击行为。
+            #[cfg(target_os = "windows")]
+            Setting::new(
+                "control.trayClick",
+                Control::Select(Options::Values(TRAY_CLICK)),
+            )
+            .path("general.trayClick")
+            .keywords(&["tray", "click", "preferences", "clipboard"])
+            .child_of("control.trayIcon", |settings| !settings.general.tray_icon),
+            #[cfg(target_os = "macos")]
+            Setting::new("control.dockIcon", Control::Switch)
+                .path("general.dockIcon")
+                .keywords(&["dock", "taskbar", "icon"]),
+            Setting::new(
+                "appearance.language",
+                Control::Select(Options::Values(LANGUAGES)),
+            )
+            .path("appearance.language")
+            .keywords(&["language", "locale", "english"]),
+        ],
     }];
-
-    let mut permissions = Vec::new();
-    #[cfg(target_os = "macos")]
-    permissions.extend([
+    let mut permissions = vec![
+        #[cfg(target_os = "macos")]
         Setting::new(
             "permissions.accessibility",
             Control::Permission(PermissionKind::Accessibility),
         )
         .keywords(&["accessibility", "permission", "paste", "macos"]),
+        #[cfg(target_os = "macos")]
         Setting::new(
             "permissions.fullDiskAccess",
             Control::Permission(PermissionKind::FullDiskAccess),
         )
         .keywords(&["full disk", "permission", "privacy", "macos"]),
-    ]);
+    ];
     if cfg!(target_os = "windows") && !portable {
         permissions.push(
             Setting::new(
                 "permissions.runAsAdministrator",
                 Control::Permission(PermissionKind::RunAsAdministrator),
             )
-            .keywords(&["administrator", "admin", "permission", "windows", "uac"]),
+            .keywords(&["administrator", "admin", "permission", "windows", "uac"])
+            .advanced(),
         );
     }
     if !permissions.is_empty() {
@@ -469,13 +446,13 @@ fn general_sections(portable: bool) -> Vec<Section> {
             settings: permissions,
         });
     }
-
     sections.push(Section {
         id: "performance",
         settings: vec![
             Setting::new("window.lightweightMode", Control::Switch)
                 .path("clipboard.window.lightweightMode")
-                .keywords(&["system", "performance", "memory", "idle"]),
+                .keywords(&["system", "performance", "memory", "idle"])
+                .advanced(),
             Setting::new(
                 "window.idleDestroySeconds",
                 Control::Number {
@@ -488,10 +465,10 @@ fn general_sections(portable: bool) -> Vec<Section> {
             .keywords(&["system", "idle", "destroy", "seconds"])
             .child_of("window.lightweightMode", |settings| {
                 !settings.clipboard.window.lightweight_mode
-            }),
+            })
+            .advanced(),
         ],
     });
-
     sections
 }
 
@@ -505,14 +482,12 @@ const PAUSE_KEYWORDS: &[&str] = &[
     "pause",
 ];
 
+/// 首次引导使用完整列表，不按 advanced 标记折叠。
 pub(super) fn shortcut_settings() -> Vec<Setting> {
-    let mut settings = vec![
+    vec![
         Setting::new("shortcuts.openClipboard", Control::ShortcutRecorder)
             .path("shortcuts.openClipboard")
             .keywords(&["shortcut", "hotkey", "open"]),
-        Setting::new("shortcuts.openPreference", Control::ShortcutRecorder)
-            .path("shortcuts.openPreference")
-            .keywords(&["shortcut", "hotkey", "preference"]),
         Setting::new("shortcuts.pastePlain", Control::ShortcutRecorder)
             .path("shortcuts.pastePlain")
             .keywords(&[
@@ -524,12 +499,27 @@ pub(super) fn shortcut_settings() -> Vec<Setting> {
                 "format",
                 "纯文本",
             ]),
-    ];
-    #[cfg(target_os = "windows")]
-    settings.extend([
+        #[cfg(target_os = "windows")]
         Setting::new("shortcuts.winV", Control::Switch)
             .path("shortcuts.winV")
             .keywords(&["win", "winv", "windows", "clipboard history", "super"]),
+        Setting::new("shortcuts.quickPaste", Control::Switch)
+            .path("shortcuts.quickPaste.enabled")
+            .keywords(&["quick paste", "number", "digit", "paste", "hotkey"]),
+        Setting::new(
+            "shortcuts.quickPasteModifiers",
+            Control::Select(Options::Shortcuts(QUICK_PASTE_MODIFIERS)),
+        )
+        .path("shortcuts.quickPaste.modifiers")
+        .keywords(&["quick paste", "modifier", "ctrl", "alt", "shift"])
+        .child_of("shortcuts.quickPaste", |settings| {
+            !settings.shortcuts.quick_paste.enabled
+        }),
+        Setting::new("shortcuts.openPreference", Control::ShortcutRecorder)
+            .path("shortcuts.openPreference")
+            .keywords(&["shortcut", "hotkey", "preference"])
+            .advanced(),
+        #[cfg(target_os = "windows")]
         Setting::new(
             "shortcuts.mouseTrigger",
             Control::Select(Options::Values(MOUSE_TRIGGERS)),
@@ -544,35 +534,19 @@ pub(super) fn shortcut_settings() -> Vec<Setting> {
             "forward",
             "xbutton",
             "wheel",
-        ]),
-    ]);
-    settings.extend([
-        Setting::new("shortcuts.quickPaste", Control::Switch)
-            .path("shortcuts.quickPaste.enabled")
-            .keywords(&["quick paste", "number", "digit", "paste", "hotkey"]),
-        Setting::new(
-            "shortcuts.quickPasteModifiers",
-            Control::Select(Options::Shortcuts(QUICK_PASTE_MODIFIERS)),
-        )
-        .path("shortcuts.quickPaste.modifiers")
-        .keywords(&["quick paste", "modifier", "ctrl", "alt", "shift"])
-        .child_of("shortcuts.quickPaste", |settings| {
-            !settings.shortcuts.quick_paste.enabled
-        }),
-    ]);
-    // TODO: macOS 还没有全屏判断（见 `kwikpaste_os::mac::trigger_pause`），先只在 Windows 显示。
-    #[cfg(target_os = "windows")]
-    settings.push(
+        ])
+        .advanced(),
+        // TODO: macOS 还没有全屏判断（见 `kwikpaste_os::mac::trigger_pause`），先只在 Windows 显示。
+        #[cfg(target_os = "windows")]
         Setting::new("shortcuts.pauseInFullscreen", Control::Switch)
             .path("shortcuts.pauseInFullscreen")
-            .keywords(PAUSE_KEYWORDS),
-    );
-    settings.push(
+            .keywords(PAUSE_KEYWORDS)
+            .advanced(),
         Setting::new("shortcuts.pauseApps", Control::AppExclusion)
             .path("shortcuts.pauseAppIds")
-            .keywords(PAUSE_KEYWORDS),
-    );
-    settings
+            .keywords(PAUSE_KEYWORDS)
+            .advanced(),
+    ]
 }
 
 fn appearance_sections() -> Vec<Section> {
@@ -586,23 +560,6 @@ fn appearance_sections() -> Vec<Section> {
                 Setting::new("appearance.material", Control::Tiles(TilesKind::Material))
                     .path("appearance.material")
                     .keywords(&["material", "mica", "acrylic", "transparency"]),
-                Setting::new(
-                    "appearance.language",
-                    Control::Select(Options::Values(LANGUAGES)),
-                )
-                .path("appearance.language")
-                .keywords(&["language", "locale", "english"]),
-            ],
-        },
-        Section {
-            id: "cards",
-            settings: vec![
-                Setting::new(
-                    "appearance.panelLayout",
-                    Control::Select(Options::Values(PANEL_LAYOUTS)),
-                )
-                .path("clipboard.display.layout")
-                .keywords(&["layout", "split", "column", "favorite", "group", "sidebar"]),
                 Setting::new(
                     "appearance.listStyle",
                     Control::Select(Options::Values(LIST_STYLES)),
@@ -637,6 +594,19 @@ fn appearance_sections() -> Vec<Section> {
                 .path("clipboard.display.customLayout.paddingY")
                 .keywords(&["density", "padding", "height"])
                 .child_of("appearance.listDensity", not_custom_density),
+            ],
+        },
+        Section {
+            id: "cards",
+            settings: vec![
+                Setting::new("actions.visible", Control::ActionVisibility)
+                    .path("clipboard.content.itemActions")
+                    .keywords(&["action", "hover", "buttons"])
+                    .advanced(),
+                Setting::new("paste.quickSnippets", Control::Switch)
+                    .path("clipboard.display.quickSnippets")
+                    .keywords(&["quick", "snippet", "extract", "number", "code"])
+                    .advanced(),
                 Setting::new(
                     "appearance.textMaxLines",
                     Control::Number {
@@ -646,7 +616,8 @@ fn appearance_sections() -> Vec<Section> {
                     },
                 )
                 .path("clipboard.display.textMaxLines")
-                .keywords(&["density", "text", "line", "compact"]),
+                .keywords(&["density", "text", "line", "compact"])
+                .advanced(),
                 Setting::new(
                     "appearance.imageMaxHeight",
                     Control::Number {
@@ -656,7 +627,8 @@ fn appearance_sections() -> Vec<Section> {
                     },
                 )
                 .path("clipboard.display.imageMaxHeight")
-                .keywords(&["density", "image", "height", "thumbnail"]),
+                .keywords(&["density", "image", "height", "thumbnail"])
+                .advanced(),
                 Setting::new(
                     "appearance.fileMaxCount",
                     Control::Number {
@@ -666,79 +638,8 @@ fn appearance_sections() -> Vec<Section> {
                     },
                 )
                 .path("clipboard.display.fileMaxCount")
-                .keywords(&["density", "file", "count", "array"]),
-                Setting::new("paste.quickSnippets", Control::Switch)
-                    .path("clipboard.display.quickSnippets")
-                    .keywords(&["quick", "snippet", "extract", "number", "code"]),
-                Setting::new("appearance.showOriginalPreview", Control::Switch)
-                    .path("clipboard.content.showOriginalPreview")
-                    .keywords(&["note", "hover", "original", "preview"]),
-            ],
-        },
-    ]
-}
-
-fn capture_sections() -> Vec<Section> {
-    vec![
-        Section {
-            id: "capture",
-            settings: vec![
-                Setting::new("capture.kinds", Control::CaptureKinds)
-                    .path("clipboard.capture")
-                    .keywords(&[
-                        "text",
-                        "plain",
-                        "html",
-                        "rtf",
-                        "rich text",
-                        "image",
-                        "picture",
-                        "file",
-                        "folder",
-                        "record",
-                    ]),
-                Setting::new("capture.order", Control::CaptureOrder)
-                    .path("clipboard.capture.order")
-                    .keywords(&["priority", "order", "format", "rich text"]),
-            ],
-        },
-        Section {
-            id: "captureRules",
-            settings: vec![
-                Setting::new(
-                    "capture.maxTextMb",
-                    Control::Number {
-                        min: 0,
-                        max: u64::from(u32::MAX),
-                        suffix: Some("mb"),
-                    },
-                )
-                .path("clipboard.capture.maxTextMb")
-                .keywords(&["text", "size", "limit", "mb"]),
-                Setting::new(
-                    "capture.maxImageMb",
-                    Control::Number {
-                        min: 0,
-                        max: u64::from(u32::MAX),
-                        suffix: Some("mb"),
-                    },
-                )
-                .path("clipboard.capture.maxImageMb")
-                .keywords(&["image", "picture", "size", "limit", "mb"]),
-            ],
-        },
-        Section {
-            id: "sensitive",
-            settings: vec![
-                Setting::new("sensitive.collectSecrets", Control::Switch)
-                    .path("clipboard.sensitive.collectSecrets")
-                    .keywords(&["token", "key", "secret", "code"]),
-                Setting::new("sensitive.redactSecrets", Control::Switch)
-                    .path("clipboard.sensitive.redactSecrets")
-                    .keywords(&["token", "key", "secret", "redact", "mask"]),
-                Setting::new("source.excludedApps", Control::AppExclusion)
-                    .path("clipboard.filters.excludedAppIds")
-                    .keywords(&["exclude", "ignore", "app", "source"]),
+                .keywords(&["density", "file", "count", "array"])
+                .advanced(),
             ],
         },
     ]
@@ -750,35 +651,46 @@ fn window_sections() -> Vec<Section> {
             id: "window",
             settings: vec![
                 Setting::new(
+                    "appearance.panelLayout",
+                    Control::Select(Options::Values(PANEL_LAYOUTS)),
+                )
+                .path("clipboard.display.layout")
+                .keywords(&["layout", "split", "column", "favorite", "group", "sidebar"]),
+                Setting::new(
                     "window.position",
                     Control::Select(Options::Values(WINDOW_POSITIONS)),
                 )
                 .path("clipboard.window.position")
                 .keywords(&["window", "position", "cursor"]),
+                Setting::new("search.defaultFocus", Control::Switch)
+                    .path("clipboard.search.defaultFocus")
+                    .keywords(&["search", "focus", "open"]),
                 Setting::new("window.scrollToTopOnOpen", Control::Switch)
                     .path("clipboard.window.scrollToTopOnOpen")
-                    .keywords(&["window", "scroll", "top", "open"]),
+                    .keywords(&["window", "scroll", "top", "open"])
+                    .advanced(),
                 Setting::new(
                     "window.selectRangeOnOpen",
                     Control::Select(Options::Values(OPEN_RANGES)),
                 )
                 .path("clipboard.window.selectRangeOnOpen")
-                .keywords(&["window", "range", "all", "favorite", "open"]),
+                .keywords(&["window", "range", "all", "favorite", "open"])
+                .advanced(),
                 Setting::new(
                     "window.selectCategoryOnOpen",
                     Control::Select(Options::Values(OPEN_CATEGORIES)),
                 )
                 .path("clipboard.window.selectCategoryOnOpen")
-                .keywords(&["window", "category", "kind", "all", "open"]),
+                .keywords(&["window", "category", "kind", "all", "open"])
+                .advanced(),
                 Setting::new("window.selectGroupOnOpen", Control::GroupSelect)
                     .path("clipboard.window.selectGroupOnOpen")
-                    .keywords(&["window", "group", "folder", "all", "open"]),
-                Setting::new("search.defaultFocus", Control::Switch)
-                    .path("clipboard.search.defaultFocus")
-                    .keywords(&["search", "focus", "open"]),
+                    .keywords(&["window", "group", "folder", "all", "open"])
+                    .advanced(),
                 Setting::new("search.clearOnHide", Control::Switch)
                     .path("clipboard.search.clearOnHide")
-                    .keywords(&["search", "clear", "hide"]),
+                    .keywords(&["search", "clear", "hide"])
+                    .advanced(),
             ],
         },
         Section {
@@ -789,7 +701,8 @@ fn window_sections() -> Vec<Section> {
                     .keywords(&["sort", "frequency", "usage", "created", "updated"]),
                 Setting::new("copy.updateOnReuse", Control::Switch)
                     .path("clipboard.content.updateOnReuse")
-                    .keywords(&["copy", "paste", "reuse", "sort", "frequency"]),
+                    .keywords(&["copy", "paste", "reuse", "sort", "frequency"])
+                    .advanced(),
             ],
         },
         Section {
@@ -815,7 +728,63 @@ fn window_sections() -> Vec<Section> {
                     Control::Select(Options::Values(TEXT_VIEWS)),
                 )
                 .path("clipboard.preview.textView")
-                .keywords(&["preview", "text", "words", "split"]),
+                .keywords(&["preview", "text", "words", "split"])
+                .advanced(),
+                Setting::new("appearance.showOriginalPreview", Control::Switch)
+                    .path("clipboard.content.showOriginalPreview")
+                    .keywords(&["note", "hover", "original", "preview"])
+                    .advanced(),
+            ],
+        },
+        Section {
+            id: "organizing",
+            settings: vec![
+                Setting::new("organizing.customGroups", Control::Action { danger: false })
+                    .keywords(&["group", "folder", "organize"]),
+                Setting::new("organizing.autoFavorite", Control::Switch)
+                    .path("clipboard.content.autoFavorite")
+                    .keywords(&["note", "favorite", "auto"])
+                    .advanced(),
+            ],
+        },
+        Section {
+            id: "deleteProtection",
+            settings: vec![
+                Setting::new("actions.deleteConfirm", Control::Switch)
+                    .path("clipboard.content.deleteConfirm")
+                    .keywords(&["delete", "confirm"]),
+                Setting::new("actions.deleteFavoriteItems", Control::Switch)
+                    .path("clipboard.content.deleteFavoriteItems")
+                    .keywords(&["delete", "favorite", "allow"])
+                    .advanced(),
+                Setting::new("actions.deleteFavoriteConfirm", Control::Switch)
+                    .path("clipboard.content.deleteFavoriteConfirm")
+                    .keywords(&["delete", "favorite", "confirm"])
+                    .child_of("actions.deleteFavoriteItems", |settings| {
+                        !settings.clipboard.content.delete_favorite_items
+                    })
+                    .advanced(),
+                Setting::new(
+                    "actions.deleteFavoriteItemsOnlyInFavoriteGroup",
+                    Control::Switch,
+                )
+                .path("clipboard.content.deleteFavoriteItemsOnlyInFavoriteGroup")
+                .keywords(&["delete", "favorite", "group"])
+                .child_of("actions.deleteFavoriteItems", |settings| {
+                    !settings.clipboard.content.delete_favorite_items
+                })
+                .advanced(),
+                Setting::new("actions.deletePinnedItems", Control::Switch)
+                    .path("clipboard.content.deletePinnedItems")
+                    .keywords(&["delete", "pinned", "pin", "allow"])
+                    .advanced(),
+                Setting::new("actions.deletePinnedConfirm", Control::Switch)
+                    .path("clipboard.content.deletePinnedConfirm")
+                    .keywords(&["delete", "pinned", "pin", "confirm"])
+                    .child_of("actions.deletePinnedItems", |settings| {
+                        !settings.clipboard.content.delete_pinned_items
+                    })
+                    .advanced(),
             ],
         },
     ]
@@ -851,10 +820,12 @@ fn paste_sections() -> Vec<Section> {
                     .keywords(&["plain", "paste", "format"]),
                 Setting::new("paste.fileMode", Control::Switch)
                     .path("clipboard.content.pasteFilesAsPath")
-                    .keywords(&["file", "path", "paste"]),
+                    .keywords(&["file", "path", "paste"])
+                    .advanced(),
                 Setting::new("copy.plainDefault", Control::Switch)
                     .path("clipboard.content.copyPlain")
-                    .keywords(&["copy", "plain", "format"]),
+                    .keywords(&["copy", "plain", "format"])
+                    .advanced(),
             ],
         },
         Section {
@@ -862,89 +833,99 @@ fn paste_sections() -> Vec<Section> {
             settings: vec![
                 Setting::new("copy.sound", Control::Switch)
                     .path("clipboard.feedback.copySound")
-                    .keywords(&["sound", "feedback", "copy", "音效", "提示音", "声音"]),
+                    .keywords(&["sound", "feedback", "copy", "音效", "提示音", "声音"])
+                    .advanced(),
                 Setting::new("copy.sound.volume", Control::Slider { min: 0, max: 100 })
                     .path("clipboard.feedback.copySoundVolume")
                     .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
                     .child_of("copy.sound", |settings| {
                         !settings.clipboard.feedback.copy_sound
-                    }),
+                    })
+                    .advanced(),
                 Setting::new("copy.sound.preview", Control::Action { danger: false })
                     .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
                     .child_of("copy.sound", |settings| {
                         !settings.clipboard.feedback.copy_sound
-                    }),
+                    })
+                    .advanced(),
             ],
         },
     ]
 }
 
-fn item_sections() -> Vec<Section> {
+fn capture_sections() -> Vec<Section> {
     vec![
         Section {
-            id: "actions",
+            id: "capture",
             settings: vec![
-                Setting::new("actions.visible", Control::ActionVisibility)
-                    .path("clipboard.content.itemActions")
-                    .keywords(&["action", "hover", "buttons"]),
-            ],
-        },
-        Section {
-            id: "deleteProtection",
-            settings: vec![
-                Setting::new("actions.deleteConfirm", Control::Switch)
-                    .path("clipboard.content.deleteConfirm")
-                    .keywords(&["delete", "confirm"]),
-                Setting::new("actions.deleteFavoriteItems", Control::Switch)
-                    .path("clipboard.content.deleteFavoriteItems")
-                    .keywords(&["delete", "favorite", "allow"]),
-                Setting::new("actions.deleteFavoriteConfirm", Control::Switch)
-                    .path("clipboard.content.deleteFavoriteConfirm")
-                    .keywords(&["delete", "favorite", "confirm"])
-                    .child_of("actions.deleteFavoriteItems", |settings| {
-                        !settings.clipboard.content.delete_favorite_items
-                    }),
+                Setting::new("capture.kinds", Control::CaptureKinds)
+                    .path("clipboard.capture")
+                    .keywords(&[
+                        "text",
+                        "plain",
+                        "html",
+                        "rtf",
+                        "rich text",
+                        "image",
+                        "picture",
+                        "file",
+                        "folder",
+                        "record",
+                    ]),
+                Setting::new("capture.order", Control::CaptureOrder)
+                    .path("clipboard.capture.order")
+                    .keywords(&["priority", "order", "format", "rich text"])
+                    .advanced(),
                 Setting::new(
-                    "actions.deleteFavoriteItemsOnlyInFavoriteGroup",
-                    Control::Switch,
+                    "capture.maxTextMb",
+                    Control::Number {
+                        min: 0,
+                        max: u64::from(u32::MAX),
+                        suffix: Some("mb"),
+                    },
                 )
-                .path("clipboard.content.deleteFavoriteItemsOnlyInFavoriteGroup")
-                .keywords(&["delete", "favorite", "group"])
-                .child_of("actions.deleteFavoriteItems", |settings| {
-                    !settings.clipboard.content.delete_favorite_items
-                }),
-                Setting::new("actions.deletePinnedItems", Control::Switch)
-                    .path("clipboard.content.deletePinnedItems")
-                    .keywords(&["delete", "pinned", "pin", "allow"]),
-                Setting::new("actions.deletePinnedConfirm", Control::Switch)
-                    .path("clipboard.content.deletePinnedConfirm")
-                    .keywords(&["delete", "pinned", "pin", "confirm"])
-                    .child_of("actions.deletePinnedItems", |settings| {
-                        !settings.clipboard.content.delete_pinned_items
-                    }),
+                .path("clipboard.capture.maxTextMb")
+                .keywords(&["text", "size", "limit", "mb"])
+                .advanced(),
+                Setting::new(
+                    "capture.maxImageMb",
+                    Control::Number {
+                        min: 0,
+                        max: u64::from(u32::MAX),
+                        suffix: Some("mb"),
+                    },
+                )
+                .path("clipboard.capture.maxImageMb")
+                .keywords(&["image", "picture", "size", "limit", "mb"])
+                .advanced(),
             ],
         },
         Section {
-            id: "organizing",
+            id: "sensitive",
             settings: vec![
-                Setting::new("organizing.customGroups", Control::Action { danger: false })
-                    .keywords(&["group", "folder", "organize"]),
-                Setting::new("organizing.autoFavorite", Control::Switch)
-                    .path("clipboard.content.autoFavorite")
-                    .keywords(&["note", "favorite", "auto"]),
+                Setting::new("sensitive.collectSecrets", Control::Switch)
+                    .path("clipboard.sensitive.collectSecrets")
+                    .keywords(&["token", "key", "secret", "code"]),
+                Setting::new("sensitive.redactSecrets", Control::Switch)
+                    .path("clipboard.sensitive.redactSecrets")
+                    .keywords(&["token", "key", "secret", "redact", "mask"]),
+                Setting::new("source.excludedApps", Control::AppExclusion)
+                    .path("clipboard.filters.excludedAppIds")
+                    .keywords(&["exclude", "ignore", "app", "source"]),
             ],
         },
-    ]
-}
-
-fn data_sections() -> Vec<Section> {
-    vec![
         Section {
             id: "cleanup",
             settings: vec![
                 Setting::new("history.retention", Control::Retention)
                     .path("clipboard.history.retention")
                     .keywords(&["retention", "cleanup", "history", "expire"]),
+                Setting::new("history.cleanupStatus", Control::CleanupStatus).keywords(&[
+                    "cleanup",
+                    "status",
+                    "protected",
+                    "now",
+                ]),
                 Setting::new("history.rules", Control::RetentionRules)
                     .path("clipboard.history.rules")
                     .keywords(&[
@@ -956,7 +937,8 @@ fn data_sections() -> Vec<Section> {
                         "text",
                         "size",
                         "sensitive",
-                    ]),
+                    ])
+                    .advanced(),
                 Setting::new(
                     "history.maxCount",
                     Control::Number {
@@ -966,7 +948,8 @@ fn data_sections() -> Vec<Section> {
                     },
                 )
                 .path("clipboard.history.maxCount")
-                .keywords(&["max", "count", "limit"]),
+                .keywords(&["max", "count", "limit"])
+                .advanced(),
                 Setting::new(
                     "localData.storageLimit",
                     Control::Number {
@@ -976,18 +959,34 @@ fn data_sections() -> Vec<Section> {
                     },
                 )
                 .path("clipboard.history.storageLimitMb")
-                .keywords(&["storage", "limit", "size", "quota", "disk"]),
+                .keywords(&["storage", "limit", "size", "quota", "disk"])
+                .advanced(),
                 Setting::new(
                     "localData.storageLimitAction",
                     Control::Select(Options::Values(STORAGE_LIMIT_ACTIONS)),
                 )
                 .path("clipboard.history.storageLimitAction")
-                .keywords(&["storage", "limit", "cleanup", "remind"]),
-                Setting::new("history.cleanupStatus", Control::CleanupStatus).keywords(&[
-                    "cleanup",
-                    "status",
-                    "protected",
-                    "now",
+                .keywords(&["storage", "limit", "cleanup", "remind"])
+                .advanced(),
+            ],
+        },
+    ]
+}
+
+fn data_sections() -> Vec<Section> {
+    vec![
+        Section {
+            id: "overview",
+            settings: vec![
+                Setting::new("overview.dashboard", Control::StorageOverview).keywords(&[
+                    "overview",
+                    "statistics",
+                    "storage",
+                    "usage",
+                    "count",
+                    "category",
+                    "trend",
+                    "source",
                 ]),
             ],
         },
@@ -1035,6 +1034,11 @@ fn about_sections() -> Vec<Section> {
                     "repository",
                     "open source",
                 ]),
+                Setting::new(
+                    "control.reopenOnboarding",
+                    Control::Action { danger: false },
+                )
+                .keywords(&["onboarding", "guide", "welcome", "help"]),
             ],
         },
         Section {
@@ -1048,12 +1052,14 @@ fn about_sections() -> Vec<Section> {
             id: "diagnostics",
             settings: vec![
                 Setting::new("localData.logDirectory", Control::Action { danger: false })
-                    .keywords(&["log", "diagnostic"]),
+                    .keywords(&["log", "diagnostic"])
+                    .advanced(),
                 Setting::new(
                     "diagnostics.resetPreferences",
                     Control::Action { danger: true },
                 )
-                .keywords(&["reset", "preferences"]),
+                .keywords(&["reset", "preferences"])
+                .advanced(),
             ],
         },
     ]
@@ -1069,6 +1075,89 @@ mod tests {
 
     fn pointer(path: &str) -> String {
         format!("/{}", path.replace('.', "/"))
+    }
+
+    #[test]
+    fn sidebar_order_and_moved_settings_keep_their_new_home() {
+        let tabs = tabs(false);
+        assert_eq!(
+            tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            [
+                TabId::General,
+                TabId::Shortcuts,
+                TabId::Appearance,
+                TabId::Window,
+                TabId::Paste,
+                TabId::Capture,
+                TabId::Sync,
+                TabId::Extensions,
+                TabId::Data,
+                TabId::About,
+            ]
+        );
+        assert!(tabs[..3].iter().all(|tab| tab.group == Group::App));
+        assert!(tabs[3..6].iter().all(|tab| tab.group == Group::Clipboard));
+        assert!(tabs[6..].iter().all(|tab| tab.group == Group::Data));
+        let find = |id| {
+            tabs.iter()
+                .find_map(|tab| {
+                    tab.sections.iter().find_map(|section| {
+                        section
+                            .settings
+                            .iter()
+                            .find(|setting| setting.id == id)
+                            .map(|setting| (tab.id, section.id, setting.advanced))
+                    })
+                })
+                .unwrap()
+        };
+        assert_eq!(
+            find("appearance.language"),
+            (TabId::General, "startup", false)
+        );
+        assert_eq!(find("actions.visible"), (TabId::Appearance, "cards", true));
+        assert_eq!(
+            find("appearance.panelLayout"),
+            (TabId::Window, "window", false)
+        );
+        assert_eq!(
+            find("localData.storageLimit"),
+            (TabId::Capture, "cleanup", true)
+        );
+        assert_eq!(
+            find("control.reopenOnboarding"),
+            (TabId::About, "about", false)
+        );
+        assert_eq!(tabs[8].sections[0].settings[0].id, "overview.dashboard");
+        // Onboarding consumes this entire list, including advanced shortcuts.
+        assert!(
+            shortcut_settings()
+                .iter()
+                .any(|setting| setting.id == "shortcuts.openPreference" && setting.advanced)
+        );
+    }
+
+    #[test]
+    fn custom_cleanup_rules_stay_visible_even_when_disabled() {
+        let sections = capture_sections();
+        let rule = sections
+            .iter()
+            .flat_map(|section| &section.settings)
+            .find(|setting| setting.id == "history.rules")
+            .unwrap();
+        let mut settings = Settings::default();
+        assert!(rule.is_advanced(&settings));
+        settings
+            .clipboard
+            .history
+            .rules
+            .push(kwikpaste_core::settings::RetentionRule {
+                enabled: false,
+                ..Default::default()
+            });
+        assert!(!rule.is_advanced(&settings));
+        settings.clipboard.history.rules.clear();
+        assert!(rule.is_advanced(&settings));
     }
 
     #[test]
@@ -1100,6 +1189,10 @@ mod tests {
                         continue;
                     };
                     let parent_index = section.settings.iter().position(|item| item.id == parent);
+                    assert_eq!(
+                        setting.advanced,
+                        section.settings[parent_index.unwrap()].advanced
+                    );
                     assert!(
                         parent_index.is_some_and(|parent_index| parent_index < index),
                         "{} must come after {parent}",

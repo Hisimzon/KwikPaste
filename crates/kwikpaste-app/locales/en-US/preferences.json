@@ -73,6 +73,7 @@
     "today": "Today {{time}}"
   },
   "controls": {
+    "moreOptions": "More options",
     "recordShortcut": "Record shortcut",
     "saving": "Saving…",
     "shortcutConflict": "This shortcut conflicts with another global shortcut",
@@ -471,24 +472,18 @@
       "about": {
         "title": "App Info"
       },
-      "actions": {
-        "title": "Quick Actions"
-      },
       "appearance": {
-        "title": "Theme & Language"
+        "title": "Appearance"
       },
       "backup": {
         "description": "Export or import KwikPaste backup packages.",
         "title": "Backup & Migration"
       },
       "capture": {
-        "title": "Content Types"
-      },
-      "captureRules": {
-        "title": "Capture Rules"
+        "title": "Capture"
       },
       "cards": {
-        "title": "List Display"
+        "title": "Card Content"
       },
       "cleanup": {
         "title": "Auto Cleanup"
@@ -557,7 +552,7 @@
         "title": "Updates"
       },
       "window": {
-        "title": "When Opening"
+        "title": "Window Behavior"
       }
     },
     "settings": {
@@ -1139,7 +1134,7 @@
         "title": "Appearance"
       },
       "capture": {
-        "title": "Capture"
+        "title": "Capture & Cleanup"
       },
       "data": {
         "title": "Data"
@@ -1149,12 +1144,6 @@
       },
       "general": {
         "title": "General"
-      },
-      "items": {
-        "title": "Items"
-      },
-      "overview": {
-        "title": "Overview"
       },
       "paste": {
         "title": "Paste & Copy"
@@ -1172,7 +1161,10 @@
   },
   "search": {
     "empty": "No matching settings",
-    "placeholder": "Search settings"
+    "group": "{{tab}} · {{section}}",
+    "openTab": "Open {{tab}}",
+    "placeholder": "Search settings",
+    "title": "Search Results"
   },
   "sidebar": {
     "collapse": "Collapse Sidebar",

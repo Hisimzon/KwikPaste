@@ -73,6 +73,7 @@
     "today": "今天 {{time}}"
   },
   "controls": {
+    "moreOptions": "更多选项",
     "recordShortcut": "录制快捷键",
     "saving": "保存中…",
     "shortcutConflict": "此快捷键与另一个全局快捷键冲突",
@@ -461,24 +462,18 @@
       "about": {
         "title": "应用信息"
       },
-      "actions": {
-        "title": "快捷动作"
-      },
       "appearance": {
-        "title": "主题与语言"
+        "title": "外观"
       },
       "backup": {
         "description": "导出或导入 快贴 备份包。",
         "title": "备份迁移"
       },
       "capture": {
-        "title": "内容类型"
-      },
-      "captureRules": {
-        "title": "收录规则"
+        "title": "收录"
       },
       "cards": {
-        "title": "列表显示"
+        "title": "卡片内容"
       },
       "cleanup": {
         "title": "自动清理"
@@ -547,7 +542,7 @@
         "title": "更新"
       },
       "window": {
-        "title": "打开窗口时"
+        "title": "窗口行为"
       }
     },
     "settings": {
@@ -1128,7 +1123,7 @@
         "title": "外观"
       },
       "capture": {
-        "title": "采集"
+        "title": "收录与清理"
       },
       "data": {
         "title": "数据"
@@ -1138,12 +1133,6 @@
       },
       "general": {
         "title": "通用"
-      },
-      "items": {
-        "title": "记录管理"
-      },
-      "overview": {
-        "title": "数据概览"
       },
       "paste": {
         "title": "粘贴与复制"
@@ -1161,7 +1150,10 @@
   },
   "search": {
     "empty": "没有找到相关设置",
-    "placeholder": "搜索配置项"
+    "group": "{{tab}} · {{section}}",
+    "openTab": "打开{{tab}}",
+    "placeholder": "搜索配置项",
+    "title": "搜索结果"
   },
   "sidebar": {
     "collapse": "收起侧栏",
