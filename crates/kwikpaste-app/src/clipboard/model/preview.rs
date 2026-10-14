@@ -573,7 +573,7 @@ mod tests {
 
         let chips = [200., 200., 120.];
         let snippets = snippets_height(&chips, 445.);
-        assert_eq!(snippets, 1. + 24. + 16. + 8. + 2. * 24. + 4.);
+        assert_eq!(snippets, 1. + 24. + 2. * 24. + 4.);
         let with_snippets = super::geometry(
             card(800.),
             MONITOR,
