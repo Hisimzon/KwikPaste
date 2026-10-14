@@ -34,15 +34,23 @@ fn main() -> anyhow::Result<()> {
     }
     // 第一步：日志与 panic hook（崩溃记录、崩溃重启），见 `health`。
     health::install();
+    log::info!(
+        "launched with {:?}",
+        std::env::args_os().skip(1).collect::<Vec<_>>()
+    );
     #[cfg(target_os = "windows")]
     match std::env::current_exe() {
         Ok(path) => kwikpaste_core::clipboard::set_helper_exe(path),
         Err(err) => log::warn!("icon helper executable path is unavailable: {err}"),
     }
-    let Some(launch) = platform::launch()? else {
+    // 这里返回的错误只到 stderr（Windows 上没有控制台），先写进日志。
+    let Some(launch) =
+        platform::launch().inspect_err(|err| log::error!("startup failed: {err:#}"))?
+    else {
         return Ok(());
     };
-    let platform = platform::create()?;
+    let platform =
+        platform::create().inspect_err(|err| log::error!("platform init failed: {err:#}"))?;
     health::start_watchdog();
 
     let application = Application::with_platform(platform).with_assets(kwikpaste_ui::Assets);
