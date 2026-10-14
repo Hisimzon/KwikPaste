@@ -2,6 +2,21 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.5 - 2026-10-15
+
+- Added Double-tap to open: quickly press Ctrl, Alt or Shift twice (and Command on macOS) to show or hide the clipboard window. It can be limited to the left or right key, and is turned on in Preferences under shortcuts.
+- A shortcut conflict now names the feature it clashes with right under the setting, and a shortcut already taken by another app is reported too.
+- The search box can filter records by time, source app and type.
+- Preferences are regrouped into 10 tabs, rarely used options are folded under More options, and search finds settings across tabs.
+- The text preview lists the links, emails, phone numbers, times and codes found in the text; click one to copy only that part. They are colored by type (can be turned off in Preferences), links in the preview open directly, and the gap between the preview and the clipboard window is tighter.
+- Fixed Win+Shift+V and other combinations being taken over as Win+V on Windows; only a plain Win+V is taken over now.
+- Fixed being unable to reset to the default data folder when a custom one is unavailable (for example an unplugged drive), and the install folder can no longer be chosen as the data folder.
+- Fixed the first launch removing a startup entry left by 1.x.
+- Fixed KwikPaste's hidden window being flagged by some games' anti-cheat on Windows.
+- Fixed rough rounded borders on translucent windows.
+- Fixed on macOS: the target app not receiving keys when pasting from a pinned clipboard window, the app being restarted again and again after waking from sleep, and Preferences and the welcome window not coming to the front.
+- Fixed Split words selecting a record other than the one clicked, the note caret not being at the end, and a click not entering edit mode again.
+
 ## 2.0.4 - 2026-10-14
 
 - Added Window layout: switch to two columns to keep favorites and custom groups beside the clipboard history, so you don't have to switch back and forth.
