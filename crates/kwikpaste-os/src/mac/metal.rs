@@ -65,12 +65,7 @@ pub fn device_removed() -> bool {
     DEVICE_REMOVED.load(Ordering::Acquire)
 }
 
-/// Request the next health tick to recheck the current Metal renderer/device.
-pub fn request_device_recheck() {
-    DEVICE_REMOVED.store(true, Ordering::Release);
-}
-
 /// 自测状态注入；宿主仍必须同时检查自测参数与环境变量。
 pub fn simulate_device_removed() {
-    request_device_recheck();
+    DEVICE_REMOVED.store(true, Ordering::Release);
 }
