@@ -140,6 +140,8 @@ pub struct Shortcuts {
     pub win_v: bool,
     /// 仅 Windows：单击这个鼠标按键打开或隐藏剪贴板窗口，按键原有的单击功能随之停用。默认关闭。
     pub mouse_trigger: MouseTrigger,
+    /// 双击修饰键开合剪贴板窗口。默认关闭。
+    pub double_tap: DoubleTap,
     /// 仅 Windows（macOS 待实现）：前台应用全屏时（如游戏），全局快捷键、鼠标按键唤起和 Win+V
     /// 都交还给它。默认开启。
     pub pause_in_fullscreen: bool,
@@ -158,6 +160,7 @@ impl Default for Shortcuts {
             paste_plain: String::new(),
             win_v: false,
             mouse_trigger: MouseTrigger::Disabled,
+            double_tap: DoubleTap::default(),
             pause_in_fullscreen: true,
             pause_app_ids: Vec::new(),
             quick_paste: QuickPaste::default(),
@@ -174,6 +177,36 @@ pub enum MouseTrigger {
     Middle,
     Back,
     Forward,
+}
+
+/// 双击修饰键触发配置；旧文件缺字段时默认关闭。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DoubleTap {
+    pub key: DoubleTapKey,
+    pub side: KeySide,
+}
+
+/// Alt 在 macOS 上是 Option；Command 仅 macOS 支持，Windows 按禁用处理。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DoubleTapKey {
+    #[default]
+    Disabled,
+    Control,
+    Shift,
+    Alt,
+    Command,
+}
+
+/// 修饰键的物理位置；Any 仍要求连续两次按同一侧。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum KeySide {
+    #[default]
+    Any,
+    Left,
+    Right,
 }
 
 /// 全局快速粘贴：修饰键 + 1–9 粘贴第 1–9 条，修饰键 + 0 粘贴第 10 条。

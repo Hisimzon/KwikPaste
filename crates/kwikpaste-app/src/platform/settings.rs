@@ -97,7 +97,10 @@ pub fn follow(cx: &mut App) {
         {
             log::warn!("could not update Dock icon visibility: {err}");
         }
-        if delta.touches("shortcuts.winV") || delta.touches("shortcuts.mouseTrigger") {
+        if delta.touches("shortcuts.winV")
+            || delta.touches("shortcuts.mouseTrigger")
+            || delta.touches("shortcuts.doubleTap")
+        {
             mouse::apply(&settings.shortcuts);
         }
         if delta.touches("appearance.material") || delta.touches("appearance.theme") {

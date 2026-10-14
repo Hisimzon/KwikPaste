@@ -58,6 +58,7 @@ pub enum TriggerSource {
     )]
     WinV,
     MouseButton,
+    DoubleTap,
     Ui,
     /// 粘贴前让出前台。
     Paste,
@@ -75,6 +76,7 @@ impl TriggerSource {
             Self::OutsideClick => "outside-click",
             Self::WinV => "win-v",
             Self::MouseButton => "mouse-button",
+            Self::DoubleTap => "double-tap",
             Self::Ui => "ui",
             Self::Paste => "paste",
             Self::Copy => "copy",
@@ -346,7 +348,10 @@ async fn run(parts: Parts, commands: Receiver<PanelCommand>, cx: &mut AsyncApp) 
             PanelCommand::Toggle(trigger) => {
                 let summon = matches!(
                     trigger.source,
-                    TriggerSource::Hotkey | TriggerSource::WinV | TriggerSource::MouseButton
+                    TriggerSource::Hotkey
+                        | TriggerSource::WinV
+                        | TriggerSource::MouseButton
+                        | TriggerSource::DoubleTap
                 );
                 if parts.native.should_recapture_on_toggle(visible, summon) {
                     parts.native.raise();

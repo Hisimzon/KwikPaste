@@ -74,9 +74,10 @@
   },
   "controls": {
     "moreOptions": "More options",
+    "quickPasteInUse": "{{keys}} in use by another app",
     "recordShortcut": "Record shortcut",
     "saving": "Saving…",
-    "shortcutConflict": "This shortcut conflicts with another global shortcut",
+    "shortcutConflict": "Conflicts with “{{name}}”",
     "shortcutInUse": "In use by another app",
     "shortcutNotSet": "Not set"
   },
@@ -988,6 +989,33 @@
         }
       },
       "shortcuts": {
+        "doubleTap": {
+          "description": "Quickly tap the selected key twice to open or hide the clipboard window. Shift may also switch your input language.",
+          "options": {
+            "macos": {
+              "alt": "⌥ Option",
+              "command": "⌘ Command",
+              "control": "⌃ Control",
+              "disabled": "Off",
+              "shift": "⇧ Shift"
+            },
+            "windows": {
+              "alt": "Alt",
+              "control": "Ctrl",
+              "disabled": "Off",
+              "shift": "Shift"
+            }
+          },
+          "title": "Double-tap to toggle"
+        },
+        "doubleTapSide": {
+          "options": {
+            "any": "Either side",
+            "left": "Left only",
+            "right": "Right only"
+          },
+          "title": "Key side"
+        },
         "mouseTrigger": {
           "description": "Click the chosen button to open or hide the clipboard window. Its usual click action, like opening a new tab or going back, is turned off.",
           "options": {

@@ -262,6 +262,22 @@ const OPEN_RANGES: &[&str] = &["preserve", "all", "favorite"];
 const OPEN_CATEGORIES: &[&str] = &["preserve", "all", "text", "image", "files"];
 const HOVER_DELAYS: &[&str] = &["ms300", "ms500", "ms1000"];
 const TEXT_VIEWS: &[&str] = &["plain", "words"];
+#[cfg(target_os = "windows")]
+const DOUBLE_TAP_KEYS: &[&str] = &["disabled", "control", "shift", "alt"];
+#[cfg(target_os = "macos")]
+const DOUBLE_TAP_KEYS: &[&str] = &["disabled", "control", "shift", "alt", "command"];
+const KEY_SIDES: &[&str] = &["any", "left", "right"];
+const DOUBLE_TAP_KEYWORDS: &[&str] = &[
+    "double tap",
+    "double press",
+    "双击",
+    "ctrl",
+    "shift",
+    "alt",
+    "option",
+    "command",
+    "modifier",
+];
 /// 快速粘贴的修饰键：显示顺序与 1.x 相同，快捷键字面量与 `QuickPasteModifiers::accelerator` 一致。
 pub const QUICK_PASTE_MODIFIERS: &[(&str, &str)] = &[
     ("controlShift", "Control+Shift"),
@@ -503,6 +519,21 @@ pub(super) fn shortcut_settings() -> Vec<Setting> {
         Setting::new("shortcuts.winV", Control::Switch)
             .path("shortcuts.winV")
             .keywords(&["win", "winv", "windows", "clipboard history", "super"]),
+        Setting::new(
+            "shortcuts.doubleTap",
+            Control::Select(Options::Values(DOUBLE_TAP_KEYS)),
+        )
+        .path("shortcuts.doubleTap.key")
+        .keywords(DOUBLE_TAP_KEYWORDS),
+        Setting::new(
+            "shortcuts.doubleTapSide",
+            Control::Select(Options::Values(KEY_SIDES)),
+        )
+        .path("shortcuts.doubleTap.side")
+        .keywords(DOUBLE_TAP_KEYWORDS)
+        .child_of("shortcuts.doubleTap", |settings| {
+            settings.shortcuts.double_tap.key == kwikpaste_core::settings::DoubleTapKey::Disabled
+        }),
         Setting::new("shortcuts.quickPaste", Control::Switch)
             .path("shortcuts.quickPaste.enabled")
             .keywords(&["quick paste", "number", "digit", "paste", "hotkey"]),
@@ -1082,6 +1113,36 @@ mod tests {
 
     fn pointer(path: &str) -> String {
         format!("/{}", path.replace('.', "/"))
+    }
+
+    #[test]
+    fn double_tap_rows_are_primary_and_side_collapses_only_when_disabled() {
+        use kwikpaste_core::settings::DoubleTapKey;
+
+        let rows = shortcut_settings();
+        let key = rows
+            .iter()
+            .find(|row| row.id == "shortcuts.doubleTap")
+            .unwrap();
+        let side = rows
+            .iter()
+            .find(|row| row.id == "shortcuts.doubleTapSide")
+            .unwrap();
+        assert!(!key.advanced && !side.advanced);
+        assert_eq!(key.path, Some("shortcuts.doubleTap.key"));
+        assert_eq!(side.path, Some("shortcuts.doubleTap.side"));
+        assert_eq!(side.parent, Some(key.id));
+        let mut settings = Settings::default();
+        assert!(side.is_collapsed(&settings));
+        settings.shortcuts.double_tap.key = DoubleTapKey::Control;
+        assert!(!side.is_collapsed(&settings));
+        #[cfg(target_os = "windows")]
+        assert!(!DOUBLE_TAP_KEYS.contains(&"command"));
+        #[cfg(target_os = "macos")]
+        assert!(DOUBLE_TAP_KEYS.contains(&"command"));
+        for keyword in DOUBLE_TAP_KEYWORDS {
+            assert!(key.keywords.contains(keyword));
+        }
     }
 
     #[test]

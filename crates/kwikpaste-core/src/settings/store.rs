@@ -866,6 +866,27 @@ mod tests {
     }
 
     #[test]
+    fn double_tap_round_trips_keys_and_sides() {
+        use crate::settings::{DoubleTap, DoubleTapKey, KeySide};
+
+        let old: Settings = serde_json::from_str(r#"{"shortcuts": {}}"#).unwrap();
+        assert_eq!(old.shortcuts.double_tap, DoubleTap::default());
+        for key in ["disabled", "control", "shift", "alt", "command"] {
+            for side in ["any", "left", "right"] {
+                let value =
+                    serde_json::json!({"shortcuts": {"doubleTap": {"key": key, "side": side}}});
+                let parsed: Settings = serde_json::from_value(value).unwrap();
+                let json = serde_json::to_value(&parsed).unwrap();
+                assert_eq!(json["shortcuts"]["doubleTap"]["key"], key);
+                assert_eq!(json["shortcuts"]["doubleTap"]["side"], side);
+                assert_eq!(serde_json::from_value::<Settings>(json).unwrap(), parsed);
+            }
+        }
+        assert_eq!(old.shortcuts.double_tap.key, DoubleTapKey::Disabled);
+        assert_eq!(old.shortcuts.double_tap.side, KeySide::Any);
+    }
+
+    #[test]
     fn storage_limit_bytes_never_drops_below_minimum() {
         let mut history = crate::settings::History::default();
         assert_eq!(history.storage_limit_bytes(), 1024 * 1024 * 1024);

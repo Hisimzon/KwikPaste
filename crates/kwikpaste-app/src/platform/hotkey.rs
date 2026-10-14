@@ -70,11 +70,13 @@ struct Hotkeys {
     paused: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RegistrationStatus {
     pub open_clipboard_failed: bool,
     pub open_preference_failed: bool,
     pub paste_plain_failed: bool,
+    /// 未注册成功的快速粘贴组合，始终按 1–9、0 排序；暂停或录制时清空。
+    pub quick_paste_failed: Vec<HotKey>,
 }
 
 impl Global for RegistrationStatus {}
@@ -234,7 +236,8 @@ pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
                 hotkeys.unregister(previous);
             }
             hotkeys.quick_paste = quick_paste
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|&(hotkey, offset)| hotkeys.register(hotkey, Action::QuickPaste(offset)))
                 .map(|(hotkey, _)| hotkey)
                 .collect();
@@ -249,6 +252,7 @@ pub fn apply(shortcuts: &Shortcuts, cx: &mut App) {
             open_clipboard_failed: toggle.is_some() && hotkeys.toggle != toggle,
             open_preference_failed: preference.is_some() && hotkeys.preference != preference,
             paste_plain_failed: paste_plain.is_some() && hotkeys.paste_plain != paste_plain,
+            quick_paste_failed: quick_paste_failures(&quick_paste, &hotkeys.quick_paste),
         }
     };
     publish_registration_status(cx, status);
@@ -272,6 +276,7 @@ pub fn unregister_all(cx: &mut App) {
 
 /// 暂停全局热键，给偏好设置里的物理按键录制让出输入。
 pub fn suspend(cx: &mut App) {
+    super::mouse::suspend_double_tap(true);
     if !cx.has_global::<Hotkeys>() {
         return;
     }
@@ -281,6 +286,7 @@ pub fn suspend(cx: &mut App) {
 
 /// 恢复全局热键，并按最新设置重新注册。
 pub fn resume(cx: &mut App) {
+    super::mouse::suspend_double_tap(false);
     if !cx.has_global::<Hotkeys>() {
         return;
     }
@@ -409,7 +415,7 @@ fn wanted_paste_plain(shortcuts: &Shortcuts) -> Option<HotKey> {
 /// 查询热键注册失败状态；禁用、录制或主动暂停不算注册失败。
 pub fn registration_status(cx: &App) -> RegistrationStatus {
     cx.try_global::<RegistrationStatus>()
-        .copied()
+        .cloned()
         .unwrap_or_default()
 }
 
@@ -424,7 +430,7 @@ pub fn registration_failed(id: &str, cx: &App) -> bool {
 }
 
 /// 快速粘贴打开时的十个热键与对应序号；关掉时为空。
-fn wanted_quick_paste(shortcuts: &Shortcuts) -> Vec<(HotKey, i64)> {
+pub(crate) fn wanted_quick_paste(shortcuts: &Shortcuts) -> Vec<(HotKey, i64)> {
     if !shortcuts.quick_paste.enabled {
         return Vec::new();
     }
@@ -442,6 +448,15 @@ fn wanted_quick_paste(shortcuts: &Shortcuts) -> Vec<(HotKey, i64)> {
                 }
             }
         })
+        .collect()
+}
+
+/// 从期望列表减去成功注册的组合，保持原来的 1–9、0 顺序。
+fn quick_paste_failures(wanted: &[(HotKey, i64)], registered: &[HotKey]) -> Vec<HotKey> {
+    wanted
+        .iter()
+        .map(|(hotkey, _)| *hotkey)
+        .filter(|hotkey| !registered.contains(hotkey))
         .collect()
 }
 
@@ -542,6 +557,30 @@ mod tests {
                 9
             )
         );
+    }
+
+    #[test]
+    fn quick_paste_failures_preserve_digit_order_and_clear_after_success_or_disable() {
+        let mut shortcuts = Shortcuts::default();
+        shortcuts.quick_paste.enabled = true;
+        let wanted = wanted_quick_paste(&shortcuts);
+        let all: Vec<_> = wanted.iter().map(|(hotkey, _)| *hotkey).collect();
+        assert_eq!(quick_paste_failures(&wanted, &[]), all);
+        assert!(quick_paste_failures(&wanted, &all).is_empty());
+        let registered: Vec<_> = all
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(index, _)| ![2, 4, 9].contains(index))
+            .map(|(_, hotkey)| *hotkey)
+            .collect();
+        assert_eq!(
+            quick_paste_failures(&wanted, &registered),
+            vec![all[2], all[4], all[9]]
+        );
+        shortcuts.quick_paste.enabled = false;
+        assert!(quick_paste_failures(&wanted_quick_paste(&shortcuts), &registered).is_empty());
+        assert!(RegistrationStatus::default().quick_paste_failed.is_empty());
     }
 
     #[test]

@@ -208,6 +208,7 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pauseInFullscreen"] = Value::Bool(true);
     expected["shortcuts"]["pauseAppIds"] = Value::Array(Vec::new());
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
+    expected["shortcuts"]["doubleTap"] = serde_json::json!({"key": "disabled", "side": "any"});
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
     expected["clipboard"]["display"]["layout"] = Value::from("single");
     expected["clipboard"]["display"]["quickSnippetColors"] = Value::Bool(true);

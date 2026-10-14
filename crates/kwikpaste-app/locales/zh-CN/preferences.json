@@ -74,9 +74,10 @@
   },
   "controls": {
     "moreOptions": "更多选项",
+    "quickPasteInUse": "{{keys}} 已被其他程序占用",
     "recordShortcut": "录制快捷键",
     "saving": "保存中…",
-    "shortcutConflict": "此快捷键与另一个全局快捷键冲突",
+    "shortcutConflict": "与「{{name}}」冲突",
     "shortcutInUse": "已被其他程序占用",
     "shortcutNotSet": "未设置"
   },
@@ -978,6 +979,33 @@
         }
       },
       "shortcuts": {
+        "doubleTap": {
+          "description": "快速连按两次所选按键，打开或隐藏剪贴板窗口。Shift 可能同时切换输入法中英文。",
+          "options": {
+            "macos": {
+              "alt": "⌥ Option",
+              "command": "⌘ Command",
+              "control": "⌃ Control",
+              "disabled": "关闭",
+              "shift": "⇧ Shift"
+            },
+            "windows": {
+              "alt": "Alt",
+              "control": "Ctrl",
+              "disabled": "关闭",
+              "shift": "Shift"
+            }
+          },
+          "title": "双击按键唤起"
+        },
+        "doubleTapSide": {
+          "options": {
+            "any": "任一侧",
+            "left": "仅左侧",
+            "right": "仅右侧"
+          },
+          "title": "按键位置"
+        },
         "mouseTrigger": {
           "description": "单击该按键打开或隐藏剪贴板窗口；它原来的单击功能（如中键开新标签页、侧键后退）会停用。",
           "options": {

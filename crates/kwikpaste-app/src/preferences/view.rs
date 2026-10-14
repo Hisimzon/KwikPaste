@@ -816,13 +816,9 @@ impl Preferences {
         let Some(shortcut) = shortcut_from_keystroke(&event.keystroke) else {
             return;
         };
-        if shortcut_conflicts_with_settings(id, &shortcut, &self.settings) {
+        if let Some(other) = shortcut_conflicts_with_settings(id, &shortcut, &self.settings) {
             log::warn!("shortcut {shortcut:?} conflicts with an existing preference shortcut");
-            toast::show(
-                Toast::error(i18n::t("preferences:controls.shortcutConflict")),
-                window,
-                cx,
-            );
+            toast::show(Toast::error(shortcut_conflict_message(other)), window, cx);
             self.finish_recording(cx);
             return;
         }
@@ -3186,7 +3182,7 @@ impl Preferences {
         };
         let tokens = theme::semantic(cx);
         let full_width = setting.control.full_width();
-        row_frame(first, tokens)
+        let row = row_frame(first, tokens)
             .when(full_width, |row| {
                 row.flex_col().items_start().gap(space(3.))
             })
@@ -3201,7 +3197,8 @@ impl Preferences {
                     .when(full_width, |wrapper| wrapper.w_full().justify_start())
                     .child(control),
             )
-            .into_any_element()
+            .into_any_element();
+        row_with_shortcut_feedback(row, setting, &self.settings, self.recording, cx)
     }
 
     fn render_page(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -5121,6 +5118,35 @@ pub(super) fn row_label(
         })
 }
 
+/// 在完整设置行下面展示同一条错误提示；引导窗的可滚动设置列表也复用它。
+pub(super) fn row_with_shortcut_feedback(
+    row: gpui::AnyElement,
+    setting: &Setting,
+    settings: &Settings,
+    recording: Option<&'static str>,
+    cx: &App,
+) -> gpui::AnyElement {
+    let Some(problem) = shortcut_setting_problem(setting.id, settings, recording, cx) else {
+        return row;
+    };
+    let tokens = theme::semantic(cx);
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .child(row)
+        .child(
+            div()
+                .kp_text(TextSize::Xs)
+                .text_color(tokens.status.danger.solid)
+                .px(space(1.))
+                .pb(space(2.5))
+                .when(setting.parent.is_some(), |note| note.pl(space(5.)))
+                .child(problem),
+        )
+        .into_any_element()
+}
+
 /// 一整行设置：标题、说明和右侧控件。
 fn setting_row(
     first: bool,
@@ -5267,49 +5293,70 @@ pub(crate) fn shortcut_conflicts(left: &str, right: &str) -> bool {
     !left.trim().is_empty() && normalized(left) == normalized(right)
 }
 
+/// 找出冲突的另一项设置；快速粘贴按一个设置处理，不与自己的数字组合比较。
 pub(crate) fn shortcut_conflicts_with_settings(
     setting_id: &str,
     candidate: &str,
     settings: &Settings,
-) -> bool {
-    if candidate.trim().is_empty() {
-        return false;
+) -> Option<&'static str> {
+    if candidate.trim().is_empty()
+        || !matches!(
+            setting_id,
+            "shortcuts.openClipboard"
+                | "shortcuts.openPreference"
+                | "shortcuts.pastePlain"
+                | "shortcuts.quickPaste"
+                | "shortcuts.quickPasteModifiers"
+        )
+    {
+        return None;
     }
-    let other = match setting_id {
-        "shortcuts.openClipboard" => Some([
-            settings.shortcuts.open_preference.as_str(),
-            settings.shortcuts.paste_plain.as_str(),
-        ]),
-        "shortcuts.openPreference" => Some([
+    for (id, shortcut) in [
+        (
+            "shortcuts.openClipboard",
             settings.shortcuts.open_clipboard.as_str(),
-            settings.shortcuts.paste_plain.as_str(),
-        ]),
-        "shortcuts.pastePlain" => Some([
-            settings.shortcuts.open_clipboard.as_str(),
+        ),
+        (
+            "shortcuts.openPreference",
             settings.shortcuts.open_preference.as_str(),
-        ]),
-        _ => None,
-    };
-    if other.is_some_and(|others| {
-        others
-            .iter()
-            .any(|other| shortcut_conflicts(candidate, other))
-    }) {
-        return true;
+        ),
+        (
+            "shortcuts.pastePlain",
+            settings.shortcuts.paste_plain.as_str(),
+        ),
+    ] {
+        if id != setting_id && shortcut_conflicts(candidate, shortcut) {
+            return Some(id);
+        }
     }
-    settings.shortcuts.quick_paste.enabled
-        && (0..10).any(|index| {
-            let key = if index == 9 {
-                "0".to_owned()
-            } else {
-                (index + 1).to_string()
-            };
-            let quick = format!(
-                "{}+{key}",
-                settings.shortcuts.quick_paste.modifiers.accelerator()
-            );
-            shortcut_conflicts(candidate, &quick)
+    if !matches!(
+        setting_id,
+        "shortcuts.quickPaste" | "shortcuts.quickPasteModifiers"
+    ) && hotkey::wanted_quick_paste(&settings.shortcuts)
+        .iter()
+        .any(|(_, offset)| {
+            let shortcut = quick_paste_accelerator(settings, *offset);
+            shortcut_conflicts(candidate, &shortcut)
         })
+    {
+        return Some("shortcuts.quickPaste");
+    }
+    None
+}
+
+/// 快速粘贴的序号顺序为 1–9、0，保持设置中的修饰键顺序供显示和冲突比对。
+fn quick_paste_accelerator(settings: &Settings, offset: i64) -> String {
+    format!(
+        "{}+{}",
+        settings.shortcuts.quick_paste.modifiers.accelerator(),
+        (offset + 1) % 10
+    )
+}
+
+/// 这些快捷键设置的标题不分平台，与设置行显示的 i18n 标题相同。
+fn shortcut_conflict_message(other: &str) -> gpui::SharedString {
+    let title = i18n::t(&format!("preferences:schema.settings.{other}.title"));
+    i18n::t_args("preferences:controls.shortcutConflict", &[("name", &title)])
 }
 
 pub(crate) fn backup_confirmation_required(_: BackupContainerMode) -> bool {
@@ -5393,6 +5440,70 @@ fn normalize_recorded_key(key: &str) -> Option<String> {
     Some(name.to_owned())
 }
 
+/// 录制按钮的提示和行内提示共用原因；自身冲突优先于系统注册失败。
+fn shortcut_recorder_problem(
+    id: &str,
+    current: &str,
+    settings: &Settings,
+    recording: bool,
+    cx: &App,
+) -> Option<gpui::SharedString> {
+    if recording || current.trim().is_empty() {
+        return None;
+    }
+    if let Some(other) = shortcut_conflicts_with_settings(id, current, settings) {
+        return Some(shortcut_conflict_message(other));
+    }
+    hotkey::registration_failed(id, cx).then(|| i18n::t("preferences:controls.shortcutInUse"))
+}
+
+/// 仅修饰键子行显示快速粘贴的问题；双击修饰键只观察事件，没有可检测的冲突。
+fn shortcut_setting_problem(
+    id: &str,
+    settings: &Settings,
+    recording: Option<&'static str>,
+    cx: &App,
+) -> Option<gpui::SharedString> {
+    let current = match id {
+        "shortcuts.openClipboard" => &settings.shortcuts.open_clipboard,
+        "shortcuts.openPreference" => &settings.shortcuts.open_preference,
+        "shortcuts.pastePlain" => &settings.shortcuts.paste_plain,
+        "shortcuts.quickPasteModifiers" => {
+            let status = hotkey::registration_status(cx);
+            let mut reasons = Vec::new();
+            let mut occupied = Vec::new();
+            for (hotkey, offset) in hotkey::wanted_quick_paste(&settings.shortcuts) {
+                let shortcut = quick_paste_accelerator(settings, offset);
+                let formatted = text::format_shortcut(&shortcut);
+                if let Some(other) = shortcut_conflicts_with_settings(id, &shortcut, settings) {
+                    reasons.push(format!(
+                        "{formatted} — {}",
+                        shortcut_conflict_message(other)
+                    ));
+                } else if status.quick_paste_failed.contains(&hotkey) {
+                    occupied.push(formatted);
+                }
+            }
+            let (key_separator, reason_separator) = match i18n::language() {
+                i18n::Language::ZhCn => ("、", "；"),
+                i18n::Language::EnUs => (", ", "; "),
+            };
+            if !occupied.is_empty() {
+                reasons.push(
+                    i18n::t_args(
+                        "preferences:controls.quickPasteInUse",
+                        &[("keys", &occupied.join(key_separator))],
+                    )
+                    .to_string(),
+                );
+            }
+            return (!reasons.is_empty()).then(|| reasons.join(reason_separator).into());
+        }
+        _ => return None,
+    };
+    shortcut_recorder_problem(id, current, settings, recording == Some(id), cx)
+}
+
 /// 偏好设置与首次引导共用的快捷键录制控件外观。
 pub(crate) fn shortcut_recorder_button(
     id: &'static str,
@@ -5401,11 +5512,10 @@ pub(crate) fn shortcut_recorder_button(
     recording: bool,
     cx: &App,
 ) -> Button {
-    let conflict = shortcut_conflicts_with_settings(id, current, settings);
-    let occupied = !conflict && !current.trim().is_empty() && hotkey::registration_failed(id, cx);
+    let problem = shortcut_recorder_problem(id, current, settings, recording, cx);
     let label: gpui::SharedString = if recording {
         i18n::t("preferences:controls.recordShortcut")
-    } else if conflict || occupied {
+    } else if problem.is_some() {
         format!("{} ⚠", text::format_shortcut(current)).into()
     } else if current.trim().is_empty() {
         i18n::t("preferences:controls.shortcutNotSet")
@@ -5413,18 +5523,8 @@ pub(crate) fn shortcut_recorder_button(
         text::format_shortcut(current).into()
     };
     Button::new(format!("shortcut-{id}"), label)
-        .when((conflict || occupied) && !recording, |button| {
-            button.danger()
-        })
-        .tooltip(if recording {
-            i18n::t("preferences:controls.recordShortcut")
-        } else if conflict {
-            i18n::t("preferences:controls.shortcutConflict")
-        } else if occupied {
-            i18n::t("preferences:controls.shortcutInUse")
-        } else {
-            i18n::t("preferences:controls.recordShortcut")
-        })
+        .when(problem.is_some(), |button| button.danger())
+        .tooltip(problem.unwrap_or_else(|| i18n::t("preferences:controls.recordShortcut")))
 }
 
 /// 搜索非空时包含所有页面，清空后恢复当前页面。
@@ -5480,23 +5580,76 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_conflicts_include_plain_paste_and_quick_paste() {
+    fn shortcut_conflicts_name_the_other_setting_including_quick_paste() {
         let mut settings = Settings::default();
         settings.shortcuts.paste_plain = "Alt+P".to_owned();
-        assert!(shortcut_conflicts_with_settings(
-            "shortcuts.openClipboard",
-            "P+Alt",
-            &settings
-        ));
+        for (id, candidate, expected) in [
+            (
+                "shortcuts.openClipboard",
+                "P+Alt",
+                Some("shortcuts.pastePlain"),
+            ),
+            (
+                "shortcuts.openClipboard",
+                "X+Alt",
+                Some("shortcuts.openPreference"),
+            ),
+            (
+                "shortcuts.openPreference",
+                "C+Alt",
+                Some("shortcuts.openClipboard"),
+            ),
+            (
+                "shortcuts.pastePlain",
+                "X+Alt",
+                Some("shortcuts.openPreference"),
+            ),
+            ("shortcuts.openClipboard", "Alt+C", None),
+            ("shortcuts.openClipboard", "", None),
+            ("shortcuts.pastePlain", "Alt+Control+1", None),
+        ] {
+            assert_eq!(
+                shortcut_conflicts_with_settings(id, candidate, &settings),
+                expected
+            );
+        }
 
         settings.shortcuts.quick_paste.enabled = true;
         settings.shortcuts.quick_paste.modifiers =
             kwikpaste_core::settings::QuickPasteModifiers::ControlAlt;
-        assert!(shortcut_conflicts_with_settings(
-            "shortcuts.pastePlain",
-            "Alt+Control+1",
-            &settings
-        ));
+        for digit in ["1", "3", "9", "0"] {
+            assert_eq!(
+                shortcut_conflicts_with_settings(
+                    "shortcuts.pastePlain",
+                    &format!("Alt+Control+{digit}"),
+                    &settings
+                ),
+                Some("shortcuts.quickPaste")
+            );
+        }
+        assert_eq!(
+            shortcut_conflicts_with_settings(
+                "shortcuts.quickPasteModifiers",
+                "Alt+Control+3",
+                &settings
+            ),
+            None
+        );
+        settings.shortcuts.paste_plain = "Control+Alt+3".to_owned();
+        for id in ["shortcuts.quickPaste", "shortcuts.quickPasteModifiers"] {
+            assert_eq!(
+                shortcut_conflicts_with_settings(id, "Alt+3+Control", &settings),
+                Some("shortcuts.pastePlain")
+            );
+        }
+        assert_eq!(
+            shortcut_conflicts_with_settings("shortcuts.doubleTap", "Alt+3+Control", &settings),
+            None
+        );
+        assert_eq!(
+            shortcut_conflicts_with_settings("shortcuts.doubleTapSide", "Alt+3+Control", &settings),
+            None
+        );
     }
 
     #[test]
