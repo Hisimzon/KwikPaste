@@ -124,7 +124,7 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
                     this.refresh_image_text(cx);
                 }
             });
-            bring_window_to_front(window);
+            bring_window_to_front(window, cx);
         });
         return Ok(());
     }
@@ -160,8 +160,8 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
                 cx,
             );
         }
-        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
-            bring_window_to_front(window);
+        crate::platform::reveal_after_first_frame(window, cx, |window, cx| {
+            bring_window_to_front(window, cx);
         });
         view
     })?;
@@ -199,8 +199,8 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
                 this.refresh_extensions(window, cx);
             }
         });
-        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
-            bring_window_to_front(window);
+        crate::platform::reveal_after_first_frame(window, cx, |window, cx| {
+            bring_window_to_front(window, cx);
         });
         Preferences::show_import_confirmation(path.clone(), window, cx);
         view
@@ -219,8 +219,10 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 取前台会同步收到窗口消息；放到任务里，等调用方的 GPUI 借用（窗口 update、托盘 dispatch）结束后再做，
+/// 否则这些消息回调拿不到 App / 窗口，日志里会是 `RefCell already borrowed` / `window not found`。
 #[cfg(target_os = "windows")]
-pub(super) fn bring_window_to_front(window: &Window) {
+pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
     use kwikpaste_os::win::foreground::bring_to_front;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -230,11 +232,15 @@ pub(super) fn bring_window_to_front(window: &Window) {
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return;
     };
-    let _ = bring_to_front(handle.hwnd.get());
+    let hwnd = handle.hwnd.get();
+    cx.spawn(async move |_| {
+        let _ = bring_to_front(hwnd);
+    })
+    .detach();
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn bring_window_to_front(_: &Window) {
+pub(super) fn bring_window_to_front(_: &Window, _: &App) {
     // TODO: bridge to NSWindow makeKeyAndOrderFront without activating the panel.
     log::debug!("macOS preferences foreground handoff is not implemented yet");
 }
