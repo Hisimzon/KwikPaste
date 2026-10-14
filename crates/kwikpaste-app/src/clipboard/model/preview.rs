@@ -42,10 +42,8 @@ pub const WORDS_BAR_HEIGHT: f64 = 41.;
 /// 词块实际会比测得的略宽；宁可多留一行空白也不能裁掉最后一行）。
 const WORDS_EDGE: f64 = 3.;
 const FALLBACK_SIZE: (f64, f64) = (320., 240.);
-/// 预览快捷信息区的上下内边距、标题行高和标题下的间距。
+/// 预览快捷信息区的上下内边距。
 pub const SNIPPETS_PADDING_Y: f64 = 12.;
-pub const SNIPPETS_TITLE_HEIGHT: f64 = 16.;
-pub const SNIPPETS_TITLE_GAP: f64 = 8.;
 /// 快捷信息小块的高度、左右内边距、圆点直径，以及圆点、类型名、内容之间的间距。
 pub const SNIPPET_CHIP_HEIGHT: f64 = 24.;
 pub const SNIPPET_CHIP_PADDING_X: f64 = 8.;
@@ -290,8 +288,6 @@ pub fn snippets_height(chips: &[f64], content_width: f64) -> f64 {
     }
 
     1. + SNIPPETS_PADDING_Y * 2.
-        + SNIPPETS_TITLE_HEIGHT
-        + SNIPPETS_TITLE_GAP
         + f64::from(rows) * SNIPPET_CHIP_HEIGHT
         + f64::from(rows - 1) * WORD_GAP
 }

@@ -34,9 +34,8 @@ use crate::{
             actions::OpenTarget,
             preview::{
                 FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, SNIPPET_CHIP_HEIGHT, SNIPPET_CHIP_PADDING_X,
-                SNIPPET_PART_GAP, SNIPPETS_PADDING_Y, SNIPPETS_TITLE_GAP, SNIPPETS_TITLE_HEIGHT,
-                TEXT_PADDING_X, TEXT_ROW_HEIGHT, WORDS_BAR_HEIGHT, WordSelection, format_bytes,
-                utf16_range,
+                SNIPPET_PART_GAP, SNIPPETS_PADDING_Y, TEXT_PADDING_X, TEXT_ROW_HEIGHT,
+                WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
             },
         },
         source::{Preview, PreviewTextView},
@@ -566,23 +565,11 @@ impl PreviewPanel {
 
         Some(
             div()
-                .flex()
-                .flex_col()
                 .flex_none()
-                .gap(space((SNIPPETS_TITLE_GAP as f32) / 4.))
                 .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
                 .px(space((TEXT_PADDING_X as f32) / 4.))
                 .border_t_1()
                 .border_color(tokens.border.divider)
-                .child(
-                    div()
-                        .h(space((SNIPPETS_TITLE_HEIGHT as f32) / 4.))
-                        .kp_text(TextSize::Xs)
-                        .line_height(space((SNIPPETS_TITLE_HEIGHT as f32) / 4.))
-                        .text_color(tokens.text.secondary)
-                        .truncate()
-                        .child(t("preview:snippets.title")),
-                )
                 .child(div().flex().flex_wrap().gap(space(1.)).children(
                     snippets.iter().enumerate().map(|(index, snippet)| {
                         let text: Arc<str> = Arc::from(snippet.text.as_str());
