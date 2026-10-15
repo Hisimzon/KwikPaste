@@ -170,6 +170,8 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     let window_id = handle.window_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
+            // 录制中直接关窗不会走 finish_recording，热键会一直停在注销状态。
+            hotkey::resume(cx);
             let _ = cx.remove_global::<PreferencesWindow>();
         }
     })
@@ -210,6 +212,8 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     let window_id = handle.window_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
+            // 同上：录制中直接关窗时补一次 resume。
+            hotkey::resume(cx);
             let _ = cx.remove_global::<PreferencesWindow>();
         }
     })
