@@ -172,6 +172,13 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             ensure_storage_relocatable(&core.0)?;
+            if inside_install_dir(&target_parent_dir) {
+                return Err(anyhow::anyhow!(label(
+                    core.0.language(),
+                    Key::StorageInsideInstallDir
+                ))
+                .into());
+            }
             let target = core.0.paths.custom_data_dir(&target_parent_dir);
             switch_storage_location(&core.0, target).await
         })
@@ -179,9 +186,16 @@ impl Core {
     }
 
     /// 把数据目录迁回默认位置，并热切换各存储。
+    ///
+    /// 自定义目录启动时不可用、本次已在用默认目录时，只把 manifest 指回默认目录，不迁移也不碰原目录。
     pub async fn reset_storage_location(&self) -> Result<ChangeStorageLocationResult> {
         let core = self.clone();
         self.hop(async move {
+            let paths = &core.0.paths;
+            if paths.storage_location()?.unavailable_custom_path.is_some() {
+                paths.set_app_data_dir(paths.default_data_dir())?;
+                return location_result(&core.0).await;
+            }
             ensure_storage_relocatable(&core.0)?;
             let target = core.0.paths.default_data_dir();
             switch_storage_location(&core.0, target).await
@@ -252,6 +266,17 @@ fn ensure_storage_relocatable(core: &CoreInner) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 目录是否在程序所在目录里：卸载工具清理残留或手动重装时会把整个安装目录连同数据一起删掉。
+fn inside_install_dir(dir: &Path) -> bool {
+    let Ok(exe) = std::env::current_exe().and_then(fs::canonicalize) else {
+        return false;
+    };
+    let Some(install_dir) = exe.parent() else {
+        return false;
+    };
+    fs::canonicalize(dir).is_ok_and(|dir| dir.starts_with(install_dir))
 }
 
 async fn switch_storage_location(

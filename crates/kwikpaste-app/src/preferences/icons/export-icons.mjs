@@ -70,6 +70,9 @@ const ICONS = [
   "lucide:notebook-pen",
   "lucide:shield-alert",
   "lucide:inbox",
+  // 侧栏收起、展开。
+  "lucide:panel-left-close",
+  "lucide:panel-left-open",
 ];
 
 /** 取图标数据；别名取它指向的图标，带变换的别名不支持。 */

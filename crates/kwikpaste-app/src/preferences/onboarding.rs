@@ -46,9 +46,9 @@ impl Global for OnboardingWindow {}
 /// 打开首次引导窗。窗口不抢焦点，但按偏好窗相同的方式带到前台。
 pub fn open(cx: &mut App) -> anyhow::Result<()> {
     if let Some(handle) = cx.try_global::<OnboardingWindow>().map(|host| host.handle) {
-        return handle.update(cx, |_, window, _| {
+        return handle.update(cx, |_, window, cx| {
             #[cfg(any(target_os = "windows", target_os = "macos"))]
-            view::bring_window_to_front(window);
+            view::bring_window_to_front(window, cx);
         });
     }
     let options = WindowOptions {
@@ -63,8 +63,8 @@ pub fn open(cx: &mut App) -> anyhow::Result<()> {
     };
     let (handle, view) = crate::platform::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| Onboarding::new(window, cx));
-        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
-            view::bring_window_to_front(window);
+        crate::platform::reveal_after_first_frame(window, cx, |window, cx| {
+            view::bring_window_to_front(window, cx);
         });
         view
     })?;
@@ -171,7 +171,9 @@ impl Onboarding {
                 this.update_settings(json!({ "appearance": { "language": value.as_ref() } }), cx);
             }
         });
-        let mut subscriptions = vec![language_subscription];
+        let hotkey_status_subscription =
+            cx.observe_global::<hotkey::RegistrationStatus>(|_, cx| cx.notify());
+        let mut subscriptions = vec![language_subscription, hotkey_status_subscription];
         let mut selects = HashMap::new();
         let settings_json = values::to_json(&settings);
         for setting in schema::shortcut_settings() {
@@ -345,7 +347,7 @@ impl Onboarding {
         let Some(shortcut) = view::shortcut_from_keystroke(&event.keystroke) else {
             return;
         };
-        if view::shortcut_conflicts_with_settings(id, &shortcut, &self.settings) {
+        if view::shortcut_conflicts_with_settings(id, &shortcut, &self.settings).is_some() {
             log::warn!(
                 "onboarding shortcut {shortcut:?} conflicts with an existing preference shortcut"
             );
@@ -739,16 +741,22 @@ impl Onboarding {
                 };
             // 与偏好窗的设置行同一个样子：只在行与行之间画细分隔线。
             let tokens = theme::semantic(cx);
-            rows.push(
-                view::row_frame(rows.is_empty(), tokens)
-                    .child(view::row_label(
-                        text::setting_title(&setting),
-                        text::setting_description(&setting),
-                        tokens,
-                    ))
-                    .child(div().flex().flex_none().child(control))
-                    .into_any_element(),
-            );
+            let row = view::row_frame(rows.is_empty(), tokens)
+                .when(setting.parent.is_some(), |row| row.pl(space(5.)))
+                .child(view::row_label(
+                    text::setting_title(&setting),
+                    text::setting_description(&setting),
+                    tokens,
+                ))
+                .child(div().flex().flex_none().child(control))
+                .into_any_element();
+            rows.push(view::row_with_shortcut_feedback(
+                row,
+                &setting,
+                &self.settings,
+                self.recording,
+                cx,
+            ));
         }
         div()
             .flex()

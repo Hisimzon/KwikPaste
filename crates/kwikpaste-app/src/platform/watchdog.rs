@@ -104,12 +104,9 @@ fn recheck_device() {
     gpui_windows::request_device_recheck();
 }
 
+/// macOS 睡眠唤醒不会丢 Metal 设备，真正的移除由 Metal 通知置位；这里不能主动置位，否则每次唤醒都重启。
 #[cfg(target_os = "macos")]
-fn recheck_device() {
-    // GPUI's Metal display link rebuilds on the next run-loop turn. The latch remains set until
-    // the health gate observes it, so an unrecoverable removal takes the orderly restart path.
-    kwikpaste_os::mac::metal::request_device_recheck();
-}
+fn recheck_device() {}
 
 /// 自测：让看门狗认为渲染线程已死。
 pub fn simulate_dead_render_thread() {

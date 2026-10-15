@@ -193,7 +193,7 @@ impl ClipboardList {
         }
 
         // 图标放在浅灰圆底里；整组略高于正中（底部留白），视觉上才显得居中。
-        let icon = if text.searching {
+        let icon = if text.searching || text.filtered {
             IconName::Search
         } else {
             IconName::Inbox
@@ -297,32 +297,40 @@ impl ClipboardList {
                             }
                         })),
                     )
-                    .child(
-                        icon_button(
-                            cx,
-                            "footer-shortcuts",
-                            Glyph::Icon(IconName::Keyboard),
-                            t("clipboard:footer.shortcuts"),
-                            hint("K"),
-                            Look::Text,
-                        )
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            cx.emit(super::ListIntent::ShowShortcuts);
-                        })),
-                    )
-                    .child(
-                        icon_button(
-                            cx,
-                            "footer-preferences",
-                            Glyph::Icon(IconName::SettingLine),
-                            t("clipboard:footer.preferences"),
-                            hint(","),
-                            Look::Text,
-                        )
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            cx.emit(super::ListIntent::OpenPreferences);
-                        })),
-                    ),
+                    // 双栏的右栏只留位置和多选，快捷键、偏好设置按钮在左栏的页脚上。
+                    .when(!self.side, |tools| {
+                        tools
+                            .child(
+                                icon_button(
+                                    cx,
+                                    "footer-shortcuts",
+                                    Glyph::Icon(IconName::Keyboard),
+                                    t("clipboard:footer.shortcuts"),
+                                    hint("K"),
+                                    Look::Text,
+                                )
+                                .on_click(cx.listener(
+                                    |_, _, _, cx| {
+                                        cx.emit(super::ListIntent::ShowShortcuts);
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    cx,
+                                    "footer-preferences",
+                                    Glyph::Icon(IconName::SettingLine),
+                                    t("clipboard:footer.preferences"),
+                                    hint(","),
+                                    Look::Text,
+                                )
+                                .on_click(cx.listener(
+                                    |_, _, _, cx| {
+                                        cx.emit(super::ListIntent::OpenPreferences);
+                                    },
+                                )),
+                            )
+                    }),
             )
             .into_any_element()
     }

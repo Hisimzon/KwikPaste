@@ -1,5 +1,6 @@
 //! 设置 `shortcuts.winV`（接管 Win+V，见 `kwikpaste_os::win::win_v`）也在这里跟随：它和鼠标按键唤起
 //! 一样是「开启期间常驻的钩子，开合面板」，设置一变立刻生效，关掉即恢复系统行为。
+//! `shortcuts.doubleTap` 同样在这里跟随，Windows 与 Win+V 共用钩子，macOS 只观察 NSEvent。
 //!
 //! Windows 鼠标钩子的两项功能：点击面板外部时隐藏（面板从不激活，收不到失焦通知，只能全局监听
 //! 按下），以及鼠标按键唤起（设置 `shortcuts.mouseTrigger`，与 1.x 相同，见
@@ -22,6 +23,7 @@ pub fn serve(cx: &mut App, commands: Sender<PanelCommand>) {
     use super::panel::{Trigger, TriggerSource};
 
     let win_v_commands = commands.clone();
+    let double_tap_commands = commands.clone();
     let installed = mouse::set_sink(move |event| match event {
         MouseEvent::OutsideClick(_) | MouseEvent::ForegroundChanged => {
             let trigger = Trigger::now(TriggerSource::OutsideClick);
@@ -46,6 +48,12 @@ pub fn serve(cx: &mut App, commands: Sender<PanelCommand>) {
     if let Err(err) = win_v {
         log::error!("Win+V cannot open the panel: {err}");
     }
+    if let Err(err) = kwikpaste_os::win::win_v::set_double_tap_sink(move || {
+        let trigger = Trigger::now(TriggerSource::DoubleTap);
+        let _ = double_tap_commands.try_send(PanelCommand::Toggle(trigger));
+    }) {
+        log::error!("double-tap cannot toggle the panel: {err}");
+    }
     if crate::selftest::enabled(crate::selftest::PLATFORM) {
         kwikpaste_os::win::win_v::accept_probe_input(true);
     }
@@ -54,7 +62,7 @@ pub fn serve(cx: &mut App, commands: Sender<PanelCommand>) {
     }
 }
 
-/// 跟随设置：`shortcuts.winV` 起停 Win+V 钩子，`shortcuts.mouseTrigger` 切换唤起按键。
+/// 跟随设置：Win+V 和双击修饰键共用常驻键盘钩子，鼠标按键单独配置。
 #[cfg(target_os = "windows")]
 pub fn apply(shortcuts: &Shortcuts) {
     use kwikpaste_core::settings::MouseTrigger;
@@ -66,6 +74,9 @@ pub fn apply(shortcuts: &Shortcuts) {
             if shortcuts.win_v { "on" } else { "off" }
         ),
         Err(err) => log::error!("Win+V takeover could not be switched: {err}"),
+    }
+    if let Err(err) = kwikpaste_os::win::win_v::set_double_tap(shortcuts.double_tap) {
+        log::error!("double-tap could not be configured: {err}");
     }
     let button = match shortcuts.mouse_trigger {
         MouseTrigger::Disabled => None,
@@ -85,6 +96,9 @@ pub fn apply(shortcuts: &Shortcuts) {
     use kwikpaste_core::settings::MouseTrigger;
     use kwikpaste_os::mac::mouse::{self, TriggerButton};
 
+    if let Err(err) = kwikpaste_os::mac::double_tap::set_double_tap(shortcuts.double_tap) {
+        log::error!("double-tap could not be configured: {err}");
+    }
     let button = match shortcuts.mouse_trigger {
         MouseTrigger::Disabled => None,
         MouseTrigger::Middle => Some(TriggerButton::Middle),
@@ -97,6 +111,13 @@ pub fn apply(shortcuts: &Shortcuts) {
 
 #[cfg(target_os = "macos")]
 pub fn serve(cx: &mut App, commands: Sender<PanelCommand>) {
+    let double_tap_commands = commands.clone();
+    if let Err(err) = kwikpaste_os::mac::double_tap::set_sink(move || {
+        let trigger = super::panel::Trigger::now(super::panel::TriggerSource::DoubleTap);
+        let _ = double_tap_commands.try_send(PanelCommand::Toggle(trigger));
+    }) {
+        log::error!("macOS double-tap sink could not be installed: {err}");
+    }
     let installed = kwikpaste_os::mac::mouse::set_sink(move |event| {
         if matches!(event, kwikpaste_os::mac::mouse::MouseEvent::Trigger) {
             let trigger = super::panel::Trigger::now(super::panel::TriggerSource::MouseButton);
@@ -109,4 +130,12 @@ pub fn serve(cx: &mut App, commands: Sender<PanelCommand>) {
     if let Some(core) = crate::core_host::core(cx) {
         apply(&core.settings().shortcuts);
     }
+}
+
+/// 快捷键录制单独暂停双击观察器，保留配置与其它暂停原因。
+pub fn suspend_double_tap(suspended: bool) {
+    #[cfg(target_os = "windows")]
+    kwikpaste_os::win::win_v::suspend_double_tap(suspended);
+    #[cfg(target_os = "macos")]
+    kwikpaste_os::mac::double_tap::suspend_double_tap(suspended);
 }

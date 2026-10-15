@@ -8,25 +8,35 @@
 use std::{ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Div, Entity, EventEmitter,
-    FontWeight, ImageSource, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ParentElement as _, Render, ScrollHandle, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, Window, WindowBounds,
-    WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
-    uniform_list,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Div, ElementId, Entity,
+    EventEmitter, FontWeight, HighlightStyle, ImageSource, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Render, ScrollHandle,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledText,
+    UnderlineStyle, UniformListScrollHandle, Window, WindowBounds, WindowKind, WindowOptions, div,
+    img, point, prelude::FluentBuilder as _, px, size, uniform_list,
 };
-use kwikpaste_core::db::models::{ClipboardKind, ClipboardSubKind};
+use kwikpaste_core::{
+    clipboard::SnippetKind,
+    db::models::{ClipboardKind, ClipboardSubKind},
+};
 use kwikpaste_ui::{
     Button, Icon, IconName, KpStyled as _,
     theme::{self, TextSize, px_rems, radius, space},
 };
 
-use super::image_cache::{ImageKey, ImageState, KpImageCache, ResizeMode, path_of};
+use super::{
+    card,
+    image_cache::{ImageKey, ImageState, KpImageCache, ResizeMode, path_of},
+};
 use crate::{
     clipboard::{
-        model::preview::{
-            FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, TEXT_PADDING_X, TEXT_ROW_HEIGHT,
-            WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
+        model::{
+            actions::OpenTarget,
+            preview::{
+                FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, SNIPPET_CHIP_HEIGHT, SNIPPET_CHIP_PADDING_X,
+                SNIPPET_PART_GAP, SNIPPETS_PADDING_Y, TEXT_PADDING_X, TEXT_ROW_HEIGHT,
+                WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
+            },
         },
         source::{Preview, PreviewTextView},
     },
@@ -45,6 +55,10 @@ pub enum PreviewEvent {
     Words { paste: bool },
     /// 图片记录在「图片」和「图中文字」之间切换。
     ImageText(ImageTextView),
+    /// 点了快捷信息区的一块：只复制这一段。
+    Snippet(Arc<str>),
+    /// 点了链接、邮箱记录的正文：打开链接或写邮件。
+    Open(OpenTarget),
 }
 
 /// 有识别文字的图片记录正在看的那一面。
@@ -66,6 +80,8 @@ pub struct PreviewPanel {
     image_box: Option<(f32, f32)>,
     /// 图片有识别文字时的「图片 / 文字」切换；`Text` 时 `preview` 是识别文字的文本预览。
     image_text: Option<ImageTextView>,
+    /// 快捷信息按类型着色（「快捷信息颜色」设置），列表在 [Self::set] 前更新。
+    pub snippet_colors: bool,
     images: Entity<KpImageCache>,
     /// 预览文件图标的独立有界缓存；关闭预览时不清空，避免再次打开时闪烁。
     icons: Entity<KpImageCache>,
@@ -90,6 +106,7 @@ impl PreviewPanel {
             selection: WordSelection::default(),
             image_box: None,
             image_text: None,
+            snippet_colors: true,
             images,
             icons,
             text_scroll: UniformListScrollHandle::new(),
@@ -445,33 +462,158 @@ impl PreviewPanel {
     fn plain_text(&self, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {
         let text: Arc<str> = Arc::from(preview.payload.text.as_deref().unwrap_or_default());
         let rows = self.rows.clone();
+        let colors = theme::components(cx).snippet;
+        let marks: Rc<Vec<(Range<usize>, HighlightStyle)>> = Rc::new(if self.snippet_colors {
+            preview
+                .payload
+                .snippets
+                .iter()
+                .map(|snippet| {
+                    let color = card::snippet_color(&colors, snippet.kind);
+                    let style = HighlightStyle {
+                        background_color: Some(color.background),
+                        underline: Some(UnderlineStyle {
+                            thickness: px(1.),
+                            color: Some(color.foreground),
+                            wavy: false,
+                        }),
+                        ..HighlightStyle::default()
+                    };
+                    (snippet.range.clone(), style)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        });
 
-        uniform_list(
+        let list = uniform_list(
             "preview-text",
             rows.len(),
             cx.processor(move |_, range: Range<usize>, _, _| {
                 range
                     .map(|index| {
-                        let line = rows
-                            .get(index)
-                            .and_then(|row| text.get(row.clone()))
+                        let row = rows.get(index).cloned().unwrap_or_default();
+                        let line = text
+                            .get(row.clone())
                             .filter(|line| !line.is_empty())
                             .unwrap_or(" ");
+                        // 高亮按行切开；区间越出这一行实际渲染的文字时不画，免得 StyledText 越界。
+                        let highlights: Vec<_> = marks
+                            .iter()
+                            .filter_map(|(mark, style)| {
+                                let start = mark.start.max(row.start);
+                                let end = mark.end.min(row.end);
+                                (start < end && end - row.start <= line.len())
+                                    .then(|| (start - row.start..end - row.start, *style))
+                            })
+                            .collect();
                         div()
                             .h(space((TEXT_ROW_HEIGHT as f32) / 4.))
                             .px(space((TEXT_PADDING_X as f32) / 4.))
                             .kp_text(TextSize::Sm)
                             .line_height(space((TEXT_ROW_HEIGHT as f32) / 4.))
                             .whitespace_nowrap()
-                            .child(SharedString::from(line.to_owned()))
+                            .child(
+                                StyledText::new(SharedString::from(line.to_owned()))
+                                    .with_highlights(highlights),
+                            )
                     })
                     .collect()
             }),
         )
         .track_scroll(&self.text_scroll)
-        .size_full()
-        .py(space((16.) / 4.))
-        .into_any_element()
+        .flex_1()
+        .min_h_0()
+        .py(space((16.) / 4.));
+
+        let link = match preview.payload.sub_kind {
+            _ if self.image_text.is_some() => None,
+            Some(ClipboardSubKind::Url) => Some(OpenTarget::Link),
+            Some(ClipboardSubKind::Email) => Some(OpenTarget::Email),
+            _ => None,
+        };
+        let list = div()
+            .id("preview-text-body")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(list)
+            .when_some(link, |body, target| {
+                body.cursor_pointer()
+                    .text_color(theme::semantic(cx).text.link)
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::Open(target))))
+            });
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(list)
+            .children(self.snippets(preview, cx))
+            .into_any_element()
+    }
+
+    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段。
+    fn snippets(&self, preview: &Preview, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let snippets = &preview.payload.snippets;
+        if snippets.is_empty() {
+            return None;
+        }
+        let tokens = theme::semantic(cx);
+        let colors = self.snippet_colors.then(|| theme::components(cx).snippet);
+
+        Some(
+            div()
+                .flex_none()
+                .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
+                .px(space((TEXT_PADDING_X as f32) / 4.))
+                .border_t_1()
+                .border_color(tokens.border.divider)
+                .child(div().flex().flex_wrap().gap(space(1.)).children(
+                    snippets.iter().enumerate().map(|(index, snippet)| {
+                        let text: Arc<str> = Arc::from(snippet.text.as_str());
+                        div()
+                            .id(ElementId::NamedInteger(
+                                "preview-snippet".into(),
+                                index as u64,
+                            ))
+                            .flex()
+                            .items_center()
+                            .gap(space((SNIPPET_PART_GAP as f32) / 4.))
+                            .max_w_full()
+                            .h(space((SNIPPET_CHIP_HEIGHT as f32) / 4.))
+                            .px(space((SNIPPET_CHIP_PADDING_X as f32) / 4.))
+                            .rounded(radius::MD)
+                            .bg(tokens.fill.subtle)
+                            .kp_text(TextSize::Xs)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(tokens.fill.default))
+                            .when_some(colors, |chip, colors| {
+                                chip.child(card::snippet_dot(card::snippet_color(
+                                    &colors,
+                                    snippet.kind,
+                                )))
+                            })
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(tokens.text.secondary)
+                                    .child(t(snippet_label(snippet.kind))),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(SharedString::from(snippet.text.clone())),
+                            )
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(PreviewEvent::Snippet(text.clone()));
+                            }))
+                    }),
+                ))
+                .into_any_element(),
+        )
     }
 
     fn words(&self, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {
@@ -813,6 +955,17 @@ fn segmented(segments: impl IntoIterator<Item = Stateful<Div>>, cx: &App) -> Any
         .bg(tokens.fill.subtle)
         .children(segments)
         .into_any_element()
+}
+
+/// 快捷信息类型名的文案 key。
+pub fn snippet_label(kind: SnippetKind) -> &'static str {
+    match kind {
+        SnippetKind::Number => "preview:snippets.kinds.number",
+        SnippetKind::Phone => "preview:snippets.kinds.phone",
+        SnippetKind::Email => "preview:snippets.kinds.email",
+        SnippetKind::Time => "preview:snippets.kinds.time",
+        SnippetKind::Link => "preview:snippets.kinds.link",
+    }
 }
 
 fn type_key(kind: ClipboardKind, sub_kind: Option<ClipboardSubKind>) -> &'static str {

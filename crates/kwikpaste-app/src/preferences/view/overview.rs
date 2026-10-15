@@ -22,7 +22,7 @@ use kwikpaste_ui::{
 use super::{Preferences, category_label};
 use crate::{
     i18n,
-    preferences::{icons::PrefIcon, schema::TabId, text::format_bytes},
+    preferences::{icons::PrefIcon, text::format_bytes},
 };
 
 /// 排行行的悬停分组名：行内的清理按钮跟着整行显隐。
@@ -202,9 +202,13 @@ impl Preferences {
                 )
                 .link()
                 .xsmall()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.tab = TabId::Data;
-                    cx.notify();
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.navigate_to(
+                        super::TabId::Capture,
+                        Some("localData.storageLimit"),
+                        window,
+                        cx,
+                    );
                 })),
             );
         let reclaimable = &overview.reclaimable;

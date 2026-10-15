@@ -7,7 +7,8 @@
 //! - [`elevate_if_configured`]：启动最早期、单实例判重之前（与 1.x 相同），设置要求以管理员运行而
 //!   当前没提权时拉起提权的进程，调用方退出；已提权时（重）建计划任务。便携版、自测跳过。
 //! - [`sync_at_startup`]：core 起来之后，自启按设置写或删；便携版反过来以本机启动项为准、改设置
-//!   （设置随文件夹带到别的电脑时不应自动注册）。
+//!   （设置随文件夹带到别的电脑时不应自动注册）。首次运行（引导未完成）设置为关时也以本机为准，
+//!   不删 1.x 留下的启动项。
 //! - [`apply`]：设置变更时跟随 `general.autoStart` 与 `general.runAsAdmin`。
 //!
 //! # UI 怎么接（偏好设置）
@@ -85,13 +86,16 @@ pub fn sync_at_startup(cx: &mut App) {
         }
     };
     let wanted = core.settings().general.auto_start;
+    // 首次运行（引导未完成）的设置是刚建的默认值：已有的启动项（1.x 留下、安装包保住的）不删，
+    // 和便携版一样以本机为准。
+    let follow_system = portable() || (!wanted && !core.settings().onboarding.completed);
 
-    if !portable() {
+    if !follow_system {
         set_autostart(&entry, wanted);
         return;
     }
 
-    // 便携版：本机启动项为准；注册着就按当前 exe 路径重写（文件夹挪动后仍然有效）。
+    // 本机启动项为准；注册着就按当前 exe 路径重写（文件夹挪动后仍然有效）。
     let registered = match entry.is_enabled() {
         Ok(registered) => registered,
         Err(err) => {
@@ -106,7 +110,7 @@ pub fn sync_at_startup(cx: &mut App) {
         cx.spawn(async move |_| {
             let patch = serde_json::json!({ "general": { "autoStart": registered } });
             if let Err(err) = core.update_settings(patch).await {
-                log::error!("portable autostart setting could not follow the system: {err}");
+                log::error!("autostart setting could not follow the system: {err}");
             }
         })
         .detach();

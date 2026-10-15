@@ -73,9 +73,11 @@
     "today": "今天 {{time}}"
   },
   "controls": {
+    "moreOptions": "更多选项",
+    "quickPasteInUse": "{{keys}} 已被其他程序占用",
     "recordShortcut": "录制快捷键",
     "saving": "保存中…",
-    "shortcutConflict": "此快捷键与另一个全局快捷键冲突",
+    "shortcutConflict": "与「{{name}}」冲突",
     "shortcutInUse": "已被其他程序占用",
     "shortcutNotSet": "未设置"
   },
@@ -461,24 +463,18 @@
       "about": {
         "title": "应用信息"
       },
-      "actions": {
-        "title": "快捷动作"
-      },
       "appearance": {
-        "title": "主题与语言"
+        "title": "外观"
       },
       "backup": {
         "description": "导出或导入 快贴 备份包。",
         "title": "备份迁移"
       },
       "capture": {
-        "title": "内容类型"
-      },
-      "captureRules": {
-        "title": "收录规则"
+        "title": "收录"
       },
       "cards": {
-        "title": "列表显示"
+        "title": "卡片内容"
       },
       "cleanup": {
         "title": "自动清理"
@@ -547,7 +543,7 @@
         "title": "更新"
       },
       "window": {
-        "title": "打开窗口时"
+        "title": "窗口行为"
       }
     },
     "settings": {
@@ -658,6 +654,14 @@
           },
           "title": "窗口材质",
           "unsupported": "当前系统不支持，将使用纯色背景。"
+        },
+        "panelLayout": {
+          "description": "双栏：左边是剪贴板历史，右边常驻收藏和自定义分组，不用来回切换。",
+          "options": {
+            "single": "单栏",
+            "split": "双栏"
+          },
+          "title": "窗口布局"
         },
         "showOriginalPreview": {
           "description": "有备注的记录默认显示备注，鼠标移入卡片时临时显示原始内容。",
@@ -893,6 +897,10 @@
           "description": "去掉 HTML、RTF 等格式。",
           "title": "默认纯文本粘贴"
         },
+        "quickSnippetColors": {
+          "description": "按类型给快捷信息和预览里的对应文字加上颜色。",
+          "title": "快捷信息颜色"
+        },
         "quickSnippets": {
           "description": "在文本记录下方列出编号、数字、链接等，点击即可单独粘贴或复制。",
           "title": "提取快捷信息"
@@ -971,6 +979,33 @@
         }
       },
       "shortcuts": {
+        "doubleTap": {
+          "description": "快速连按两次所选按键，打开或隐藏剪贴板窗口。Shift 可能同时切换输入法中英文。",
+          "options": {
+            "macos": {
+              "alt": "⌥ Option",
+              "command": "⌘ Command",
+              "control": "⌃ Control",
+              "disabled": "关闭",
+              "shift": "⇧ Shift"
+            },
+            "windows": {
+              "alt": "Alt",
+              "control": "Ctrl",
+              "disabled": "关闭",
+              "shift": "Shift"
+            }
+          },
+          "title": "双击按键唤起"
+        },
+        "doubleTapSide": {
+          "options": {
+            "any": "任一侧",
+            "left": "仅左侧",
+            "right": "仅右侧"
+          },
+          "title": "按键位置"
+        },
         "mouseTrigger": {
           "description": "单击该按键打开或隐藏剪贴板窗口；它原来的单击功能（如中键开新标签页、侧键后退）会停用。",
           "options": {
@@ -1120,7 +1155,7 @@
         "title": "外观"
       },
       "capture": {
-        "title": "采集"
+        "title": "收录与清理"
       },
       "data": {
         "title": "数据"
@@ -1130,12 +1165,6 @@
       },
       "general": {
         "title": "通用"
-      },
-      "items": {
-        "title": "记录管理"
-      },
-      "overview": {
-        "title": "数据概览"
       },
       "paste": {
         "title": "粘贴与复制"
@@ -1153,7 +1182,14 @@
   },
   "search": {
     "empty": "没有找到相关设置",
-    "placeholder": "搜索配置项"
+    "group": "{{tab}} · {{section}}",
+    "openTab": "打开{{tab}}",
+    "placeholder": "搜索配置项",
+    "title": "搜索结果"
+  },
+  "sidebar": {
+    "collapse": "收起侧栏",
+    "expand": "展开侧栏"
   },
   "status": {
     "alwaysOn": "默认能力",
@@ -1164,7 +1200,6 @@
   "storage": {
     "error": "统计失败",
     "loading": "统计中",
-    "title": "本地存储",
     "usage": "{{total}} / {{target}}"
   },
   "storageLocation": {
@@ -1179,8 +1214,9 @@
     "reset": "还原默认目录",
     "resetConfirmContent": "将把当前历史数据库、设置文件和资源缓存迁回默认数据目录，并在迁移成功后删除当前自定义数据目录。",
     "resetConfirmTitle": "还原默认数据目录",
+    "resetUnavailableConfirmContent": "以后将一直使用默认数据目录，不再使用 {{path}}。原目录里的数据不会被删除，但重新连接后也不会自动恢复。",
     "restored": "数据目录已还原",
-    "unavailable": "自定义数据目录 {{path}} 当前不可用，本次使用默认目录。重新连接后重启快贴即可恢复。",
+    "unavailable": "自定义数据目录 {{path}} 当前不可用，本次使用默认目录。重新连接后重启快贴即可恢复，不再使用它可以还原默认目录。",
     "unavailableToast": "自定义数据目录当前不可用，本次使用默认目录"
   },
   "title": "快贴 偏好设置",

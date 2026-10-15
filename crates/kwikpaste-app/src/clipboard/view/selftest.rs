@@ -1794,7 +1794,7 @@ impl Driver {
                 .find_map(|item| {
                     item.quick_snippets
                         .first()
-                        .map(|text| (item.clone(), text.clone()))
+                        .map(|snippet| (item.clone(), Arc::<str>::from(snippet.text.as_str())))
                 })
         });
         let Some((item, text)) = target else {
@@ -1870,12 +1870,12 @@ impl Driver {
             || format!("{before} -> {after}, focused {still}"),
         );
 
-        // Esc 退出编辑态，焦点回到列表。
+        // 搜索框里的 Esc 和列表里一样逐层退出，没有可退的层就直接隐藏窗口。
         self.key(cx, "escape");
         let request = self.last_request(cx);
         self.check(
-            "escape in the search box ends editing",
-            matches!(request, Some(PanelCommand::EndEditing)),
+            "escape in the search box hides the panel",
+            matches!(request, Some(PanelCommand::Hide(_))),
             || format!("{request:?}"),
         );
         self.emit(cx, PanelEvent::EditingEnded);

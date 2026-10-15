@@ -358,10 +358,12 @@ impl Scene {
             .await
             .unwrap();
         let mut out = BTreeMap::new();
+        let mut clipboard = Clipboard::default();
+        clipboard.sensitive.redact_secrets = redact;
         for id in ids {
             let item = find_item_by_id(&self.pool, &id).await.unwrap().unwrap();
             let payload =
-                build_preview_payload(&self.pool, &self.images, &self.file_icons, item, redact)
+                build_preview_payload(&self.pool, &self.images, &self.file_icons, item, &clipboard)
                     .await
                     .unwrap();
             out.insert(id, serde_json::to_value(payload).unwrap());

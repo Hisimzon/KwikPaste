@@ -666,6 +666,20 @@ mod tests {
     }
 
     #[test]
+    fn released_display_settings_enable_quick_snippet_colors() {
+        let released = r#"{"clipboard":{"display":{"quickSnippets":false}}}"#;
+        let parsed: Settings = serde_json::from_str(released).unwrap();
+        assert!(parsed.clipboard.display.quick_snippet_colors);
+        assert!(!parsed.clipboard.display.quick_snippets);
+
+        let explicit = r#"{"clipboard":{"display":{"quickSnippetColors":false}}}"#;
+        let parsed: Settings = serde_json::from_str(explicit).unwrap();
+        assert!(!parsed.clipboard.display.quick_snippet_colors);
+        let json = serde_json::to_value(parsed).unwrap();
+        assert_eq!(json["clipboard"]["display"]["quickSnippetColors"], false);
+    }
+
+    #[test]
     fn released_display_settings_enable_quick_snippets() {
         let released = r#"{
             "clipboard": {
@@ -849,6 +863,27 @@ mod tests {
 
         let json = serde_json::to_value(&parsed).unwrap();
         assert_eq!(json["shortcuts"]["mouseTrigger"], "forward");
+    }
+
+    #[test]
+    fn double_tap_round_trips_keys_and_sides() {
+        use crate::settings::{DoubleTap, DoubleTapKey, KeySide};
+
+        let old: Settings = serde_json::from_str(r#"{"shortcuts": {}}"#).unwrap();
+        assert_eq!(old.shortcuts.double_tap, DoubleTap::default());
+        for key in ["disabled", "control", "shift", "alt", "command"] {
+            for side in ["any", "left", "right"] {
+                let value =
+                    serde_json::json!({"shortcuts": {"doubleTap": {"key": key, "side": side}}});
+                let parsed: Settings = serde_json::from_value(value).unwrap();
+                let json = serde_json::to_value(&parsed).unwrap();
+                assert_eq!(json["shortcuts"]["doubleTap"]["key"], key);
+                assert_eq!(json["shortcuts"]["doubleTap"]["side"], side);
+                assert_eq!(serde_json::from_value::<Settings>(json).unwrap(), parsed);
+            }
+        }
+        assert_eq!(old.shortcuts.double_tap.key, DoubleTapKey::Disabled);
+        assert_eq!(old.shortcuts.double_tap.side, KeySide::Any);
     }
 
     #[test]

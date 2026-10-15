@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GWL_STYLE, GWLP_USERDATA, GetWindowLongPtrW, MSGFLT_ALLOW, RegisterClassExW,
     SMTO_ABORTIFHUNG, SendMessageTimeoutW, SetWindowLongPtrW, WM_COPYDATA, WM_NCCREATE,
     WM_NCDESTROY, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT, WS_OVERLAPPED, WS_POPUP, WS_VISIBLE,
+    WS_EX_TRANSPARENT, WS_OVERLAPPED, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR};
 
@@ -196,8 +196,9 @@ fn create_message_window(names: &Names, sink: Sink) -> io::Result<HWND> {
         }
     };
 
-    // 与插件相同：可见但 0×0 且分层，用户看不到。
-    unsafe { SetWindowLongPtrW(window, GWL_STYLE, (WS_VISIBLE | WS_POPUP).0 as isize) };
+    // 插件把它设成可见：系统会撑到最小 15×15 停在屏幕左上角，可见 + 分层 + 鼠标穿透正是反作弊扫描的
+    // 覆盖层特征（WeGame 启动英雄联盟报 3,1051,150002）。`FindWindowW` 也找得到不可见窗口，不必可见。
+    unsafe { SetWindowLongPtrW(window, GWL_STYLE, WS_POPUP.0 as isize) };
     // 以管理员身份运行的主实例也能收到普通权限第二实例发来的参数。
     if let Err(err) =
         unsafe { ChangeWindowMessageFilterEx(window, WM_COPYDATA, MSGFLT_ALLOW, None) }
@@ -258,6 +259,8 @@ fn receive(hwnd: HWND, lparam: LPARAM) {
 mod tests {
     use std::sync::mpsc;
 
+    use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+
     use super::*;
 
     fn unique_identifier(name: &str) -> String {
@@ -293,6 +296,9 @@ mod tests {
 
         let received = receiver.try_recv().expect("forwarded invocation");
         assert_eq!(received, current_invocation());
+
+        let window = find_primary_window(&Names::new(&identifier)).expect("primary window");
+        assert!(!unsafe { IsWindowVisible(window) }.as_bool());
 
         drop(guard);
     }

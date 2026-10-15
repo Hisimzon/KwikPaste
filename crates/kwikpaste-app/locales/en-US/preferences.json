@@ -73,9 +73,11 @@
     "today": "Today {{time}}"
   },
   "controls": {
+    "moreOptions": "More options",
+    "quickPasteInUse": "{{keys}} in use by another app",
     "recordShortcut": "Record shortcut",
     "saving": "Saving…",
-    "shortcutConflict": "This shortcut conflicts with another global shortcut",
+    "shortcutConflict": "Conflicts with “{{name}}”",
     "shortcutInUse": "In use by another app",
     "shortcutNotSet": "Not set"
   },
@@ -471,24 +473,18 @@
       "about": {
         "title": "App Info"
       },
-      "actions": {
-        "title": "Quick Actions"
-      },
       "appearance": {
-        "title": "Theme & Language"
+        "title": "Appearance"
       },
       "backup": {
         "description": "Export or import KwikPaste backup packages.",
         "title": "Backup & Migration"
       },
       "capture": {
-        "title": "Content Types"
-      },
-      "captureRules": {
-        "title": "Capture Rules"
+        "title": "Capture"
       },
       "cards": {
-        "title": "List Display"
+        "title": "Card Content"
       },
       "cleanup": {
         "title": "Auto Cleanup"
@@ -557,7 +553,7 @@
         "title": "Updates"
       },
       "window": {
-        "title": "When Opening"
+        "title": "Window Behavior"
       }
     },
     "settings": {
@@ -668,6 +664,14 @@
           },
           "title": "Window Material",
           "unsupported": "Not supported on this system; a solid background is used."
+        },
+        "panelLayout": {
+          "description": "Two columns keeps favorites and custom groups beside the history, so you don't have to switch back and forth.",
+          "options": {
+            "single": "Single column",
+            "split": "Two columns"
+          },
+          "title": "Window Layout"
         },
         "showOriginalPreview": {
           "description": "Records with notes show the note by default, then temporarily reveal original content when hovering over the card.",
@@ -903,6 +907,10 @@
           "description": "Strip HTML and RTF formatting.",
           "title": "Paste as Plain Text by Default"
         },
+        "quickSnippetColors": {
+          "description": "Color quick info and the matching text in the preview by type.",
+          "title": "Quick info colors"
+        },
         "quickSnippets": {
           "description": "List codes, numbers, and links found in text records below each item. Click one to paste or copy just that part.",
           "title": "Extract Quick Info"
@@ -981,6 +989,33 @@
         }
       },
       "shortcuts": {
+        "doubleTap": {
+          "description": "Quickly tap the selected key twice to open or hide the clipboard window. Shift may also switch your input language.",
+          "options": {
+            "macos": {
+              "alt": "⌥ Option",
+              "command": "⌘ Command",
+              "control": "⌃ Control",
+              "disabled": "Off",
+              "shift": "⇧ Shift"
+            },
+            "windows": {
+              "alt": "Alt",
+              "control": "Ctrl",
+              "disabled": "Off",
+              "shift": "Shift"
+            }
+          },
+          "title": "Double-tap to toggle"
+        },
+        "doubleTapSide": {
+          "options": {
+            "any": "Either side",
+            "left": "Left only",
+            "right": "Right only"
+          },
+          "title": "Key side"
+        },
         "mouseTrigger": {
           "description": "Click the chosen button to open or hide the clipboard window. Its usual click action, like opening a new tab or going back, is turned off.",
           "options": {
@@ -1131,7 +1166,7 @@
         "title": "Appearance"
       },
       "capture": {
-        "title": "Capture"
+        "title": "Capture & Cleanup"
       },
       "data": {
         "title": "Data"
@@ -1141,12 +1176,6 @@
       },
       "general": {
         "title": "General"
-      },
-      "items": {
-        "title": "Items"
-      },
-      "overview": {
-        "title": "Overview"
       },
       "paste": {
         "title": "Paste & Copy"
@@ -1164,7 +1193,14 @@
   },
   "search": {
     "empty": "No matching settings",
-    "placeholder": "Search settings"
+    "group": "{{tab}} · {{section}}",
+    "openTab": "Open {{tab}}",
+    "placeholder": "Search settings",
+    "title": "Search Results"
+  },
+  "sidebar": {
+    "collapse": "Collapse Sidebar",
+    "expand": "Expand Sidebar"
   },
   "status": {
     "alwaysOn": "Default",
@@ -1175,7 +1211,6 @@
   "storage": {
     "error": "Calculation failed",
     "loading": "Calculating",
-    "title": "Local Storage",
     "usage": "{{total}} / {{target}}"
   },
   "storageLocation": {
@@ -1190,8 +1225,9 @@
     "reset": "Reset to default directory",
     "resetConfirmContent": "KwikPaste will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
     "resetConfirmTitle": "Reset Data Directory",
+    "resetUnavailableConfirmContent": "KwikPaste will keep using the default data directory and stop using {{path}}. Data in that directory is not deleted, but it won't be restored when it reconnects.",
     "restored": "Data directory restored",
-    "unavailable": "Custom data directory {{path}} is unavailable. This run uses the default directory. Reconnect it and restart KwikPaste to restore it.",
+    "unavailable": "Custom data directory {{path}} is unavailable. This run uses the default directory. Reconnect it and restart KwikPaste to restore it, or reset to the default directory to stop using it.",
     "unavailableToast": "The custom data directory is unavailable; using the default directory for now"
   },
   "title": "KwikPaste Preferences",

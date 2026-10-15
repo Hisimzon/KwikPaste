@@ -234,6 +234,7 @@ impl ClipboardList {
                         list.selection.exit();
                         list.controller.clear_selection();
                         list.refresh_after_removal(cx);
+                        cx.emit(super::ListIntent::Changed);
                     }
                     Err(err) => Self::toast_error("commands:labels.delete", &err, window, cx),
                 }

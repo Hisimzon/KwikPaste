@@ -1,8 +1,8 @@
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, FocusHandle, Global, Hsla, Image, ImageSource,
     InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Rems,
-    Render, Role, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Subscription,
-    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
+    Render, Role, ScrollAnchor, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
+    Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
     prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
@@ -18,7 +18,7 @@ use kwikpaste_core::{
 use kwikpaste_ui::{
     Button, Checkbox, ConfirmSpec, DialogSpec, Icon, IconName, Input, KpStyled as _, NumberInput,
     NumberInputState, ScrollArea, Select, SelectOption, SelectState, Slider, SliderState, Switch,
-    TextInput, form_dialog,
+    TextInput, TooltipExt as _, form_dialog,
     theme::{self, SemanticTokens, TextSize, px_rems, space},
     toast::{self, Toast},
 };
@@ -31,6 +31,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use super::{
@@ -56,7 +57,11 @@ mod image_text;
 mod overview;
 mod wetype;
 
-const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(960.), px(600.));
+const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(640.), px(480.));
+/// 侧栏展开、收起时的宽度（rem）和过渡时长。
+const SIDEBAR_WIDTH: f32 = 14.;
+const SIDEBAR_COLLAPSED_WIDTH: f32 = 4.25;
+const SIDEBAR_TRANSITION: Duration = Duration::from_millis(200);
 
 struct PreferencesWindow {
     handle: AnyWindowHandle,
@@ -92,11 +97,9 @@ fn initial_tab() -> TabId {
             Some("capture") => TabId::Capture,
             Some("window") => TabId::Window,
             Some("paste") => TabId::Paste,
-            Some("items") => TabId::Items,
             Some("sync") => TabId::Sync,
             Some("extensions") => TabId::Extensions,
-            Some("overview") => TabId::Overview,
-            Some("data") => TabId::Data,
+            Some("data" | "overview") => TabId::Data,
             Some("about") => TabId::About,
             _ => TabId::General,
         }
@@ -119,7 +122,7 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
                     this.refresh_image_text(cx);
                 }
             });
-            bring_window_to_front(window);
+            bring_window_to_front(window, cx);
         });
         return Ok(());
     }
@@ -155,8 +158,8 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
                 cx,
             );
         }
-        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
-            bring_window_to_front(window);
+        crate::platform::reveal_after_first_frame(window, cx, |window, cx| {
+            bring_window_to_front(window, cx);
         });
         view
     })?;
@@ -194,8 +197,8 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
                 this.refresh_extensions(window, cx);
             }
         });
-        crate::platform::reveal_after_first_frame(window, cx, |window, _| {
-            bring_window_to_front(window);
+        crate::platform::reveal_after_first_frame(window, cx, |window, cx| {
+            bring_window_to_front(window, cx);
         });
         Preferences::show_import_confirmation(path.clone(), window, cx);
         view
@@ -214,8 +217,10 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 取前台会同步收到窗口消息；放到任务里，等调用方的 GPUI 借用（窗口 update、托盘 dispatch）结束后再做，
+/// 否则这些消息回调拿不到 App / 窗口，日志里会是 `RefCell already borrowed` / `window not found`。
 #[cfg(target_os = "windows")]
-pub(super) fn bring_window_to_front(window: &Window) {
+pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
     use kwikpaste_os::win::foreground::bring_to_front;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -225,17 +230,53 @@ pub(super) fn bring_window_to_front(window: &Window) {
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return;
     };
-    let _ = bring_to_front(handle.hwnd.get());
+    let hwnd = handle.hwnd.get();
+    cx.spawn(async move |_| {
+        let _ = bring_to_front(hwnd);
+    })
+    .detach();
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn bring_window_to_front(_: &Window) {
-    // TODO: bridge to NSWindow makeKeyAndOrderFront without activating the panel.
-    log::debug!("macOS preferences foreground handoff is not implemented yet");
+pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
+    use kwikpaste_os::mac::window::OrdinaryWindow;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: 正在借用的 GPUI 窗口，NSView 此刻有效；之后由 OrdinaryWindow 持有 NSWindow。
+    let native = match unsafe { OrdinaryWindow::from_raw(handle.ns_view) } {
+        Ok(native) => native,
+        Err(err) => {
+            log::warn!("could not get the native preferences window: {err}");
+            return;
+        }
+    };
+    let handle = window.window_handle();
+    cx.spawn(async move |cx| {
+        // 窗口在这之前关掉了就不再显示它。
+        if handle.update(cx, |_, _, _| ()).is_err() {
+            return;
+        }
+        if let Err(err) = native.bring_to_front() {
+            log::warn!("could not bring the preferences window to front: {err}");
+        }
+    })
+    .detach();
 }
 
 struct Preferences {
     tab: TabId,
+    /// 每个页面的更多选项展开状态，仅在此窗口存活期间保留。
+    advanced_expanded: std::collections::HashSet<TabId>,
+    setting_anchors: std::collections::HashMap<&'static str, ScrollAnchor>,
+    sidebar_collapsed: bool,
+    /// 侧栏宽度过渡的开始时间；过渡结束后清掉。
+    sidebar_transition: Option<Instant>,
     settings: Settings,
     search: TextInput,
     _subscriptions: Vec<Subscription>,
@@ -328,7 +369,10 @@ impl Preferences {
         let settings = core_host::core(cx).map_or_else(Settings::default, |core| core.settings());
         let icons = cx.new(|_| KpImageCache::with_capacity(128));
         let search = TextInput::new(i18n::t("preferences:search.placeholder"), window, cx);
-        let search_subscription = search.on_change(cx, |_, _, cx| cx.notify());
+        let search_subscription = search.on_change(cx, |this, _, cx| {
+            this.scroll.set_offset(gpui::point(px(0.), px(0.)));
+            cx.notify();
+        });
         let theme = settings.appearance.theme;
         let language_value = settings.appearance.language;
         let appearance = SelectState::new(
@@ -618,7 +662,7 @@ impl Preferences {
                         this.icons.update(cx, |icons, cx| icons.clear(None, cx));
                         cx.notify();
                     }
-                    if this.tab == TabId::Overview
+                    if this.tab == TabId::Data
                         && matches!(
                             event,
                             CoreEvent::ClipboardUpserted { .. }
@@ -656,8 +700,19 @@ impl Preferences {
         // 窗口一打开就有焦点，Esc 不用先点一下界面就能关窗。
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let scroll = ScrollHandle::new();
+        let setting_anchors = schema::tabs(portable)
+            .into_iter()
+            .flat_map(|tab| tab.sections)
+            .flat_map(|section| section.settings)
+            .map(|setting| (setting.id, ScrollAnchor::for_handle(scroll.clone())))
+            .collect();
         Self {
             tab: initial_tab(),
+            advanced_expanded: Default::default(),
+            setting_anchors,
+            sidebar_collapsed: settings.appearance.preferences_sidebar_collapsed,
+            sidebar_transition: None,
             settings,
             search,
             _subscriptions: subscriptions,
@@ -666,7 +721,7 @@ impl Preferences {
             selects,
             number_inputs,
             sliders,
-            scroll: ScrollHandle::new(),
+            scroll,
             focus,
             recording: None,
             storage_overview: None,
@@ -761,13 +816,9 @@ impl Preferences {
         let Some(shortcut) = shortcut_from_keystroke(&event.keystroke) else {
             return;
         };
-        if shortcut_conflicts_with_settings(id, &shortcut, &self.settings) {
+        if let Some(other) = shortcut_conflicts_with_settings(id, &shortcut, &self.settings) {
             log::warn!("shortcut {shortcut:?} conflicts with an existing preference shortcut");
-            toast::show(
-                Toast::error(i18n::t("preferences:controls.shortcutConflict")),
-                window,
-                cx,
-            );
+            toast::show(Toast::error(shortcut_conflict_message(other)), window, cx);
             self.finish_recording(cx);
             return;
         }
@@ -1032,7 +1083,7 @@ impl Preferences {
     }
 
     /// 确认后恢复默认偏好（历史记录不动）。各控件的状态只在构造时按设置初始化，
-    /// 所以重置后整个视图按新设置重建，只保留当前页和滚动位置。
+    /// 所以重置后整个视图按新设置重建，保留当前页、滚动位置和窗口内的展开状态。
     fn reset_preferences(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(core) = core_host::core(cx).cloned() else {
             return;
@@ -1060,10 +1111,17 @@ impl Preferences {
                 let _ = entity.update_in(cx, |this, window, cx| match result {
                     Ok(_) => {
                         crate::platform::apply_language(cx);
-                        let (tab, scroll) = (this.tab, this.scroll.clone());
+                        let (tab, scroll, expanded, anchors) = (
+                            this.tab,
+                            this.scroll.clone(),
+                            this.advanced_expanded.clone(),
+                            this.setting_anchors.clone(),
+                        );
                         *this = Self::new(window, cx);
                         this.tab = tab;
                         this.scroll = scroll;
+                        this.advanced_expanded = expanded;
+                        this.setting_anchors = anchors;
                         this.refresh_storage_overview(cx);
                         toast::show(
                             Toast::success(i18n::t("commands:messages.settingsReset")),
@@ -1088,7 +1146,7 @@ impl Preferences {
             .detach();
     }
 
-    /// 数据目录行右侧的打开 / 更改 / 还原；迁移中或自定义目录不可用时只能打开。
+    /// 数据目录行右侧的打开 / 更改 / 还原；迁移中只能打开，自定义目录不可用时不能更改。
     fn render_storage_actions(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let location = self.storage_location.as_ref();
         let fallback = location.and_then(|location| location.unavailable_custom_path.as_deref());
@@ -1110,7 +1168,10 @@ impl Preferences {
             "storage-reset",
             i18n::t("preferences:storageLocation.reset"),
         )
-        .disabled(disabled || !location.is_some_and(|location| location.is_custom))
+        .disabled(
+            self.storage_migrating
+                || (fallback.is_none() && !location.is_some_and(|location| location.is_custom)),
+        )
         .on_click(cx.listener(|this, _, window, cx| this.reset_storage_directory(window, cx)));
         let mut actions = div().flex().items_center().gap(space(2.)).child(open);
         if !portable {
@@ -1229,9 +1290,20 @@ impl Preferences {
         if self.storage_migrating {
             return;
         }
+        let content = match self
+            .storage_location
+            .as_ref()
+            .and_then(|location| location.unavailable_custom_path.as_deref())
+        {
+            Some(path) => i18n::t_args(
+                "preferences:storageLocation.resetUnavailableConfirmContent",
+                &[("path", path)],
+            ),
+            None => i18n::t("preferences:storageLocation.resetConfirmContent"),
+        };
         let answer = kwikpaste_ui::confirm(
             ConfirmSpec::new(i18n::t("preferences:storageLocation.resetConfirmTitle"))
-                .content(i18n::t("preferences:storageLocation.resetConfirmContent"))
+                .content(content)
                 .ok_text(i18n::t("preferences:storageLocation.reset"))
                 .cancel_text(i18n::t("common:actions.cancel")),
             window,
@@ -2676,11 +2748,42 @@ impl Preferences {
             .detach();
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// 侧栏宽度过渡的进度（0–1，已缓动）；没有过渡时为 `None`。
+    fn sidebar_progress(&mut self, window: &mut Window) -> Option<f32> {
+        let start = self.sidebar_transition?;
+        let linear = start.elapsed().as_secs_f32() / SIDEBAR_TRANSITION.as_secs_f32();
+        if linear >= 1. {
+            self.sidebar_transition = None;
+            return None;
+        }
+
+        window.request_animation_frame();
+        // 缓出（三次）：开头快、收尾慢。
+        Some(1. - (1. - linear).powi(3))
+    }
+
+    fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
         let tokens = theme::semantic(cx);
         let component_tokens = theme::components(cx).preferences;
+        let collapsed = self.sidebar_collapsed;
+        let progress = self.sidebar_progress(window);
+        let (from, to) = if collapsed {
+            (SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH)
+        } else {
+            (SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH)
+        };
+        let width = progress.map_or(to, |progress| from + (to - from) * progress);
+        // 过渡中文字仍在：收起时前半程淡出，展开时后半程淡入；侧栏裁掉放不下的部分。
+        let show_labels = !collapsed || progress.is_some();
+        let label_opacity = progress.map_or(1., |progress| {
+            if collapsed {
+                (1. - progress * 2.).max(0.)
+            } else {
+                (progress * 2. - 1.).max(0.)
+            }
+        });
         let mut nav = div().flex().flex_col().gap(space(0.5));
         let mut group = None;
         for tab in tabs {
@@ -2722,132 +2825,155 @@ impl Preferences {
                             tokens.text.secondary
                         },
                     ))
-                    .child(title)
+                    // 收起时只留图标，名称放进提示。
+                    .when(collapsed && progress.is_none(), |item| {
+                        item.kp_tooltip(title.clone())
+                    })
+                    .when(show_labels, |item| {
+                        item.child(
+                            div()
+                                .whitespace_nowrap()
+                                .opacity(label_opacity)
+                                .child(title),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        let opening = this.tab != id;
-                        this.tab = id;
-                        if id == TabId::Overview {
-                            this.refresh_storage_overview(cx);
-                        }
-                        if id == TabId::Extensions && opening {
-                            this.refresh_extensions(window, cx);
-                            this.refresh_image_text(cx);
-                        }
-                        cx.notify();
+                        this.navigate_to(id, None, window, cx);
                     })),
             );
         }
-        let usage = self
-            .storage_overview
-            .as_ref()
-            .map(|overview| overview.usage.total_bytes)
-            .unwrap_or(0);
-        let limit = self.settings.clipboard.history.storage_limit_mb as u64 * 1024 * 1024;
-        let ratio = if limit == 0 {
-            0.0
+        let (toggle_icon, toggle_label) = if collapsed {
+            (
+                PrefIcon::PanelLeftOpen,
+                i18n::t("preferences:sidebar.expand"),
+            )
         } else {
-            (usage as f32 / limit as f32).clamp(0.0, 1.0)
+            (
+                PrefIcon::PanelLeftClose,
+                i18n::t("preferences:sidebar.collapse"),
+            )
         };
-        let storage_card = div()
-            .flex()
-            .flex_col()
-            .gap(space(1.5))
-            .rounded(theme::radius::LG)
-            .bg(tokens.fill.subtle)
-            .p(space(3.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(space(1.))
-                    .kp_text(TextSize::Sm)
-                    .child(PrefIcon::HardDrive.view(rems(1.), tokens.status.success.solid))
-                    .child(i18n::t("preferences:storage.title")),
-            )
-            .child(
-                div()
-                    .kp_text(TextSize::Xs)
-                    .text_color(tokens.text.muted)
-                    .child(format!(
-                        "{} / {}",
-                        text::format_bytes(usage),
-                        text::format_bytes(limit)
-                    )),
-            )
-            .child(
-                div()
-                    .h(px(4.))
-                    .w_full()
-                    .rounded(theme::radius::SM)
-                    .bg(tokens.fill.default)
-                    .child(
-                        div()
-                            .h_full()
-                            .rounded(theme::radius::SM)
-                            .w(rems(10. * ratio.max(0.12)))
-                            .bg(tokens.status.success.solid),
-                    ),
+        let toggle = kwikpaste_ui::icon_button(
+            cx,
+            "preferences-sidebar-toggle",
+            kwikpaste_ui::Glyph::Path(toggle_icon.path()),
+            toggle_label,
+            None,
+            kwikpaste_ui::IconButtonLook::Text,
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.sidebar_collapsed = !this.sidebar_collapsed;
+            this.apply_patch(
+                serde_json::json!({
+                    "appearance": { "preferencesSidebarCollapsed": this.sidebar_collapsed }
+                }),
+                cx,
             );
+            this.sidebar_transition = (!cx.reduce_motion()).then(Instant::now);
+            cx.notify();
+        }));
+        let brand = div()
+            .flex()
+            .items_center()
+            .gap(space(2.))
+            .px(space(1.))
+            .child(img(ImageSource::Image(logo())).size(rems(2.5)).flex_none())
+            .when(show_labels, |brand| {
+                brand.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .whitespace_nowrap()
+                        .opacity(label_opacity)
+                        .child(div().kp_text(TextSize::Base).child("KwikPaste"))
+                        .child(
+                            div()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.text.secondary)
+                                .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                        ),
+                )
+            });
+
         div()
             .flex()
             .flex_col()
+            .flex_none()
             .justify_between()
             .h_full()
-            .w(rems(14.))
+            .w(rems(width))
+            .overflow_hidden()
             .p(space(3.))
             .border_r_1()
             .border_color(tokens.border.divider)
             .bg(crate::platform::material::chrome_surface(cx))
             .child(
                 div()
+                    .id("preferences-sidebar-nav")
                     .flex()
                     .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .gap(space(3.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(space(2.))
-                            .px(space(1.))
-                            .child(img(ImageSource::Image(logo())).size(rems(2.5)))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .child(div().kp_text(TextSize::Base).child("KwikPaste"))
-                                    .child(
-                                        div()
-                                            .kp_text(TextSize::Xs)
-                                            .text_color(tokens.text.secondary)
-                                            .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                                    ),
-                            ),
-                    )
+                    .child(brand)
                     .child(nav),
             )
-            .child(storage_card)
+            .child(div().flex().pt(space(2.)).child(toggle))
     }
 
-    /// 这一项现在要不要显示：折叠的子项不显示；搜索时只显示匹配的。
-    fn setting_visible(&self, setting: &Setting, cx: &App) -> bool {
-        if setting.is_collapsed(&self.settings) {
-            return false;
+    /// 跳转先退出搜索，展开目标所在的更多选项，等目标完成布局后滚动到真实设置行。
+    fn navigate_to(
+        &mut self,
+        tab: TabId,
+        setting_id: Option<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let opening = self.tab != tab;
+        self.tab = tab;
+        self.search.set_value("", window, cx);
+        self.scroll.set_offset(gpui::point(px(0.), px(0.)));
+        if let Some(id) = setting_id {
+            let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
+            if schema::tabs(portable)
+                .into_iter()
+                .filter(|page| page.id == tab)
+                .flat_map(|page| page.sections)
+                .flat_map(|section| section.settings)
+                .any(|setting| setting.id == id && setting.is_advanced(&self.settings))
+            {
+                self.advanced_expanded.insert(tab);
+            }
+            if id == "ocr.status" {
+                self.extensions_expanded.insert("ocr".to_owned());
+            }
+            if let Some(anchor) = self.setting_anchors.get(id).cloned() {
+                // 页面和折叠内容需先完成布局，不能使用上一页或搜索结果的锚点位置。
+                window.on_next_frame(move |window, cx| {
+                    anchor.scroll_to(window, cx);
+                    window.on_next_frame(|window, _| window.refresh());
+                });
+            }
         }
+        if tab == TabId::Data {
+            self.refresh_storage_overview(cx);
+        }
+        if tab == TabId::Extensions && opening {
+            self.refresh_extensions(window, cx);
+            self.refresh_image_text(cx);
+        }
+        cx.notify();
+    }
+
+    /// 父开关关闭的子项仍收起；搜索不受页面或更多选项折叠的限制。
+    fn setting_visible(&self, setting: &Setting, cx: &App) -> bool {
         if setting.id == "ocr.status"
             && (!extensions::ocr_installed(cx) || !self.image_text_row_visible())
         {
             return false;
         }
-        let query = self.search.value(cx);
-        if query.is_empty() {
-            return true;
-        }
-
-        search_matches(
-            &query.to_lowercase(),
-            &text::setting_title(setting),
-            setting.keywords,
-        )
+        search_setting_matches(setting, &self.settings, &self.search.value(cx))
     }
 
     fn render_setting(
@@ -3056,7 +3182,7 @@ impl Preferences {
         };
         let tokens = theme::semantic(cx);
         let full_width = setting.control.full_width();
-        row_frame(first, tokens)
+        let row = row_frame(first, tokens)
             .when(full_width, |row| {
                 row.flex_col().items_start().gap(space(3.))
             })
@@ -3071,54 +3197,193 @@ impl Preferences {
                     .when(full_width, |wrapper| wrapper.w_full().justify_start())
                     .child(control),
             )
-            .into_any_element()
+            .into_any_element();
+        row_with_shortcut_feedback(row, setting, &self.settings, self.recording, cx)
     }
 
     fn render_page(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
         let tabs = schema::tabs(portable);
-        let tab = tabs.into_iter().find(|tab| tab.id == self.tab);
-        let sections = tab.map(|tab| tab.sections).unwrap_or_default();
-        let show_titles = sections.len() > 1;
+        let query = self.search.value(cx);
+        let searching = !query.trim().is_empty();
         let tokens = theme::semantic(cx);
-        // 分组不套卡片框：小号灰字标题下面直接是扁平的设置行，只在行与行之间画细分隔线。
-        // 搜索时没有匹配项的分组整个不显示，一项都没有时给一句空状态。
         let mut blocks: Vec<gpui::AnyElement> = Vec::new();
-        for section in sections {
-            if self.tab == TabId::Overview {
-                blocks.push(self.render_storage_overview(window, cx));
-                continue;
-            }
-            let visible: Vec<&Setting> = section
-                .settings
+        for tab in tabs
+            .iter()
+            .filter(|tab| page_in_scope(tab.id, self.tab, &query))
+        {
+            // 默认区只剩一个分组时，标题和页面标题重复，不显示。
+            let default_sections = tab
+                .sections
                 .iter()
-                .filter(|setting| self.setting_visible(setting, cx))
-                .collect();
-            if visible.is_empty() {
-                continue;
-            }
-            if let [setting] = visible.as_slice()
-                && matches!(setting.control, Control::LanSync)
-            {
-                blocks.push(self.render_lan_sync(cx));
-                continue;
-            }
-            if self.tab == TabId::Extensions {
-                if blocks.is_empty() {
-                    blocks.push(self.render_extensions(cx));
+                .filter(|section| {
+                    section
+                        .settings
+                        .iter()
+                        .any(|setting| !setting.is_advanced(&self.settings))
+                })
+                .count();
+            let expanded = self.advanced_expanded.contains(&tab.id);
+            let has_advanced = tab
+                .sections
+                .iter()
+                .flat_map(|section| &section.settings)
+                .any(|setting| setting.is_advanced(&self.settings));
+            for advanced in [false, true] {
+                if advanced && (searching || !has_advanced) {
+                    break;
                 }
-                continue;
+                if advanced {
+                    blocks.push(
+                        div()
+                            .id("preferences-more-options")
+                            .role(Role::Button)
+                            .aria_label(i18n::t("preferences:controls.moreOptions"))
+                            .aria_expanded(expanded)
+                            .tab_index(0)
+                            .flex()
+                            .items_center()
+                            .gap(space(2.))
+                            .px(space(1.))
+                            .py(space(2.))
+                            .kp_text(TextSize::Sm)
+                            .rounded(theme::radius::MD)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(tokens.fill.subtle))
+                            .focus_visible(|style| style.bg(tokens.fill.subtle))
+                            .child(
+                                Icon::new(IconName::ChevronDown)
+                                    .size(rems(1.))
+                                    .when(expanded, |icon| {
+                                        icon.rotate(gpui::radians(std::f32::consts::PI))
+                                    }),
+                            )
+                            .child(i18n::t("preferences:controls.moreOptions"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if !this.advanced_expanded.remove(&this.tab) {
+                                    this.advanced_expanded.insert(this.tab);
+                                }
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                    if !expanded {
+                        break;
+                    }
+                }
+                for section in &tab.sections {
+                    let visible: Vec<&Setting> = section
+                        .settings
+                        .iter()
+                        .filter(|setting| self.setting_visible(setting, cx))
+                        .filter(|setting| {
+                            searching || setting.is_advanced(&self.settings) == advanced
+                        })
+                        .collect();
+                    if visible.is_empty() {
+                        continue;
+                    }
+                    if !searching {
+                        if visible
+                            .iter()
+                            .any(|setting| matches!(setting.control, Control::StorageOverview))
+                        {
+                            blocks.push(
+                                div()
+                                    .id("preferences-overview-anchor")
+                                    .anchor_scroll(
+                                        self.setting_anchors.get("overview.dashboard").cloned(),
+                                    )
+                                    .child(self.render_storage_overview(window, cx))
+                                    .into_any_element(),
+                            );
+                            continue;
+                        }
+                        if visible
+                            .iter()
+                            .any(|setting| matches!(setting.control, Control::LanSync))
+                        {
+                            blocks.push(
+                                div()
+                                    .id("preferences-sync-anchor")
+                                    .anchor_scroll(
+                                        self.setting_anchors.get("sync.lan.devices").cloned(),
+                                    )
+                                    .child(self.render_lan_sync(cx))
+                                    .into_any_element(),
+                            );
+                            continue;
+                        }
+                        if tab.id == TabId::Extensions {
+                            if section.id == "extensions" {
+                                blocks.push(
+                                    div()
+                                        .id("preferences-extensions-anchor")
+                                        .anchor_scroll(
+                                            self.setting_anchors.get("extensions.manager").cloned(),
+                                        )
+                                        .child(self.render_extensions(cx))
+                                        .into_any_element(),
+                                );
+                            }
+                            continue;
+                        }
+                    }
+                    let mut rows = Vec::with_capacity(visible.len());
+                    for (index, setting) in visible.into_iter().enumerate() {
+                        let row = if searching && search_navigation_only(setting.control) {
+                            let id = setting.id;
+                            let tab_id = tab.id;
+                            setting_row(
+                                index == 0,
+                                text::setting_title(setting),
+                                text::setting_description(setting),
+                                Some(
+                                    Button::new(
+                                        format!("search-open-{id}"),
+                                        i18n::t_args(
+                                            "preferences:search.openTab",
+                                            &[("tab", &text::tab_title(tab_id))],
+                                        ),
+                                    )
+                                    .small()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.navigate_to(tab_id, Some(id), window, cx);
+                                    }))
+                                    .into_any_element(),
+                                ),
+                                tokens,
+                            )
+                        } else {
+                            self.render_setting(setting, index == 0, window, cx)
+                        };
+                        rows.push(
+                            div()
+                                .id(format!("preferences-row-{}", setting.id))
+                                .anchor_scroll(self.setting_anchors.get(setting.id).cloned())
+                                .child(row)
+                                .into_any_element(),
+                        );
+                    }
+                    let title = if searching {
+                        Some(i18n::t_args(
+                            "preferences:search.group",
+                            &[
+                                ("tab", &text::tab_title(tab.id)),
+                                ("section", &text::section_title(section)),
+                            ],
+                        ))
+                    } else {
+                        let show_titles = if advanced {
+                            tab.sections.len() > 1
+                        } else {
+                            default_sections > 1
+                        };
+                        show_titles.then(|| text::section_title(section))
+                    };
+                    blocks.push(section_block(title, None, rows, tokens));
+                }
             }
-            let mut rows = Vec::with_capacity(visible.len());
-            for (index, setting) in visible.into_iter().enumerate() {
-                rows.push(self.render_setting(setting, index == 0, window, cx));
-            }
-            blocks.push(section_block(
-                show_titles.then(|| text::section_title(&section)),
-                None,
-                rows,
-                tokens,
-            ));
         }
         if blocks.is_empty() {
             blocks.push(
@@ -3179,7 +3444,11 @@ impl Preferences {
                         div()
                             .kp_text(TextSize::Lg)
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(text::tab_title(self.tab)),
+                            .child(if searching {
+                                i18n::t("preferences:search.title")
+                            } else {
+                                text::tab_title(self.tab)
+                            }),
                     )
                     .child(Input::search(&self.search).small().width(rems(16.))),
             )
@@ -4849,6 +5118,35 @@ pub(super) fn row_label(
         })
 }
 
+/// 在完整设置行下面展示同一条错误提示；引导窗的可滚动设置列表也复用它。
+pub(super) fn row_with_shortcut_feedback(
+    row: gpui::AnyElement,
+    setting: &Setting,
+    settings: &Settings,
+    recording: Option<&'static str>,
+    cx: &App,
+) -> gpui::AnyElement {
+    let Some(problem) = shortcut_setting_problem(setting.id, settings, recording, cx) else {
+        return row;
+    };
+    let tokens = theme::semantic(cx);
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .child(row)
+        .child(
+            div()
+                .kp_text(TextSize::Xs)
+                .text_color(tokens.status.danger.solid)
+                .px(space(1.))
+                .pb(space(2.5))
+                .when(setting.parent.is_some(), |note| note.pl(space(5.)))
+                .child(problem),
+        )
+        .into_any_element()
+}
+
 /// 一整行设置：标题、说明和右侧控件。
 fn setting_row(
     first: bool,
@@ -4975,7 +5273,7 @@ impl Render for Preferences {
                 |root| root.bg(theme::semantic(cx).surface.window),
             )
             .text_color(theme::semantic(cx).text.primary)
-            .child(self.render_sidebar(cx))
+            .child(self.render_sidebar(window, cx))
             .child(self.render_page(window, cx))
     }
 }
@@ -4995,49 +5293,70 @@ pub(crate) fn shortcut_conflicts(left: &str, right: &str) -> bool {
     !left.trim().is_empty() && normalized(left) == normalized(right)
 }
 
+/// 找出冲突的另一项设置；快速粘贴按一个设置处理，不与自己的数字组合比较。
 pub(crate) fn shortcut_conflicts_with_settings(
     setting_id: &str,
     candidate: &str,
     settings: &Settings,
-) -> bool {
-    if candidate.trim().is_empty() {
-        return false;
+) -> Option<&'static str> {
+    if candidate.trim().is_empty()
+        || !matches!(
+            setting_id,
+            "shortcuts.openClipboard"
+                | "shortcuts.openPreference"
+                | "shortcuts.pastePlain"
+                | "shortcuts.quickPaste"
+                | "shortcuts.quickPasteModifiers"
+        )
+    {
+        return None;
     }
-    let other = match setting_id {
-        "shortcuts.openClipboard" => Some([
-            settings.shortcuts.open_preference.as_str(),
-            settings.shortcuts.paste_plain.as_str(),
-        ]),
-        "shortcuts.openPreference" => Some([
+    for (id, shortcut) in [
+        (
+            "shortcuts.openClipboard",
             settings.shortcuts.open_clipboard.as_str(),
-            settings.shortcuts.paste_plain.as_str(),
-        ]),
-        "shortcuts.pastePlain" => Some([
-            settings.shortcuts.open_clipboard.as_str(),
+        ),
+        (
+            "shortcuts.openPreference",
             settings.shortcuts.open_preference.as_str(),
-        ]),
-        _ => None,
-    };
-    if other.is_some_and(|others| {
-        others
-            .iter()
-            .any(|other| shortcut_conflicts(candidate, other))
-    }) {
-        return true;
+        ),
+        (
+            "shortcuts.pastePlain",
+            settings.shortcuts.paste_plain.as_str(),
+        ),
+    ] {
+        if id != setting_id && shortcut_conflicts(candidate, shortcut) {
+            return Some(id);
+        }
     }
-    settings.shortcuts.quick_paste.enabled
-        && (0..10).any(|index| {
-            let key = if index == 9 {
-                "0".to_owned()
-            } else {
-                (index + 1).to_string()
-            };
-            let quick = format!(
-                "{}+{key}",
-                settings.shortcuts.quick_paste.modifiers.accelerator()
-            );
-            shortcut_conflicts(candidate, &quick)
+    if !matches!(
+        setting_id,
+        "shortcuts.quickPaste" | "shortcuts.quickPasteModifiers"
+    ) && hotkey::wanted_quick_paste(&settings.shortcuts)
+        .iter()
+        .any(|(_, offset)| {
+            let shortcut = quick_paste_accelerator(settings, *offset);
+            shortcut_conflicts(candidate, &shortcut)
         })
+    {
+        return Some("shortcuts.quickPaste");
+    }
+    None
+}
+
+/// 快速粘贴的序号顺序为 1–9、0，保持设置中的修饰键顺序供显示和冲突比对。
+fn quick_paste_accelerator(settings: &Settings, offset: i64) -> String {
+    format!(
+        "{}+{}",
+        settings.shortcuts.quick_paste.modifiers.accelerator(),
+        (offset + 1) % 10
+    )
+}
+
+/// 这些快捷键设置的标题不分平台，与设置行显示的 i18n 标题相同。
+fn shortcut_conflict_message(other: &str) -> gpui::SharedString {
+    let title = i18n::t(&format!("preferences:schema.settings.{other}.title"));
+    i18n::t_args("preferences:controls.shortcutConflict", &[("name", &title)])
 }
 
 pub(crate) fn backup_confirmation_required(_: BackupContainerMode) -> bool {
@@ -5121,6 +5440,70 @@ fn normalize_recorded_key(key: &str) -> Option<String> {
     Some(name.to_owned())
 }
 
+/// 录制按钮的提示和行内提示共用原因；自身冲突优先于系统注册失败。
+fn shortcut_recorder_problem(
+    id: &str,
+    current: &str,
+    settings: &Settings,
+    recording: bool,
+    cx: &App,
+) -> Option<gpui::SharedString> {
+    if recording || current.trim().is_empty() {
+        return None;
+    }
+    if let Some(other) = shortcut_conflicts_with_settings(id, current, settings) {
+        return Some(shortcut_conflict_message(other));
+    }
+    hotkey::registration_failed(id, cx).then(|| i18n::t("preferences:controls.shortcutInUse"))
+}
+
+/// 仅修饰键子行显示快速粘贴的问题；双击修饰键只观察事件，没有可检测的冲突。
+fn shortcut_setting_problem(
+    id: &str,
+    settings: &Settings,
+    recording: Option<&'static str>,
+    cx: &App,
+) -> Option<gpui::SharedString> {
+    let current = match id {
+        "shortcuts.openClipboard" => &settings.shortcuts.open_clipboard,
+        "shortcuts.openPreference" => &settings.shortcuts.open_preference,
+        "shortcuts.pastePlain" => &settings.shortcuts.paste_plain,
+        "shortcuts.quickPasteModifiers" => {
+            let status = hotkey::registration_status(cx);
+            let mut reasons = Vec::new();
+            let mut occupied = Vec::new();
+            for (hotkey, offset) in hotkey::wanted_quick_paste(&settings.shortcuts) {
+                let shortcut = quick_paste_accelerator(settings, offset);
+                let formatted = text::format_shortcut(&shortcut);
+                if let Some(other) = shortcut_conflicts_with_settings(id, &shortcut, settings) {
+                    reasons.push(format!(
+                        "{formatted} — {}",
+                        shortcut_conflict_message(other)
+                    ));
+                } else if status.quick_paste_failed.contains(&hotkey) {
+                    occupied.push(formatted);
+                }
+            }
+            let (key_separator, reason_separator) = match i18n::language() {
+                i18n::Language::ZhCn => ("、", "；"),
+                i18n::Language::EnUs => (", ", "; "),
+            };
+            if !occupied.is_empty() {
+                reasons.push(
+                    i18n::t_args(
+                        "preferences:controls.quickPasteInUse",
+                        &[("keys", &occupied.join(key_separator))],
+                    )
+                    .to_string(),
+                );
+            }
+            return (!reasons.is_empty()).then(|| reasons.join(reason_separator).into());
+        }
+        _ => return None,
+    };
+    shortcut_recorder_problem(id, current, settings, recording == Some(id), cx)
+}
+
 /// 偏好设置与首次引导共用的快捷键录制控件外观。
 pub(crate) fn shortcut_recorder_button(
     id: &'static str,
@@ -5129,11 +5512,10 @@ pub(crate) fn shortcut_recorder_button(
     recording: bool,
     cx: &App,
 ) -> Button {
-    let conflict = shortcut_conflicts_with_settings(id, current, settings);
-    let occupied = !conflict && !current.trim().is_empty() && hotkey::registration_failed(id, cx);
+    let problem = shortcut_recorder_problem(id, current, settings, recording, cx);
     let label: gpui::SharedString = if recording {
         i18n::t("preferences:controls.recordShortcut")
-    } else if conflict || occupied {
+    } else if problem.is_some() {
         format!("{} ⚠", text::format_shortcut(current)).into()
     } else if current.trim().is_empty() {
         i18n::t("preferences:controls.shortcutNotSet")
@@ -5141,18 +5523,30 @@ pub(crate) fn shortcut_recorder_button(
         text::format_shortcut(current).into()
     };
     Button::new(format!("shortcut-{id}"), label)
-        .when((conflict || occupied) && !recording, |button| {
-            button.danger()
-        })
-        .tooltip(if recording {
-            i18n::t("preferences:controls.recordShortcut")
-        } else if conflict {
-            i18n::t("preferences:controls.shortcutConflict")
-        } else if occupied {
-            i18n::t("preferences:controls.shortcutInUse")
-        } else {
-            i18n::t("preferences:controls.recordShortcut")
-        })
+        .when(problem.is_some(), |button| button.danger())
+        .tooltip(problem.unwrap_or_else(|| i18n::t("preferences:controls.recordShortcut")))
+}
+
+/// 搜索非空时包含所有页面，清空后恢复当前页面。
+fn page_in_scope(tab: TabId, current: TabId, query: &str) -> bool {
+    !query.trim().is_empty() || tab == current
+}
+
+/// 搜索与普通页面共用父子可见性，不读取更多选项的展开状态。
+fn search_setting_matches(setting: &Setting, settings: &Settings, query: &str) -> bool {
+    !setting.is_collapsed(settings)
+        && search_matches(query, &text::setting_title(setting), setting.keywords)
+}
+
+/// 复杂面板在搜索结果中只提供跳转，普通设置继续使用原控件。
+fn search_navigation_only(control: Control) -> bool {
+    matches!(
+        control,
+        Control::LanSync
+            | Control::Extensions
+            | Control::StorageOverview
+            | Control::ImageTextStatus
+    )
 }
 
 pub(crate) fn search_matches(query: &str, title: &str, keywords: &[&str]) -> bool {
@@ -5173,8 +5567,9 @@ mod tests {
     use kwikpaste_core::settings::Settings;
 
     use super::{
-        backup_confirmation_required, format_socket_address, reorder_capture_kinds, search_matches,
-        shortcut_conflicts, shortcut_conflicts_with_settings, shortcut_from_keystroke,
+        backup_confirmation_required, format_socket_address, page_in_scope, reorder_capture_kinds,
+        search_matches, search_setting_matches, shortcut_conflicts,
+        shortcut_conflicts_with_settings, shortcut_from_keystroke,
     };
 
     #[test]
@@ -5185,23 +5580,96 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_conflicts_include_plain_paste_and_quick_paste() {
+    fn shortcut_conflicts_name_the_other_setting_including_quick_paste() {
         let mut settings = Settings::default();
         settings.shortcuts.paste_plain = "Alt+P".to_owned();
-        assert!(shortcut_conflicts_with_settings(
-            "shortcuts.openClipboard",
-            "P+Alt",
-            &settings
-        ));
+        for (id, candidate, expected) in [
+            (
+                "shortcuts.openClipboard",
+                "P+Alt",
+                Some("shortcuts.pastePlain"),
+            ),
+            (
+                "shortcuts.openClipboard",
+                "X+Alt",
+                Some("shortcuts.openPreference"),
+            ),
+            (
+                "shortcuts.openPreference",
+                "C+Alt",
+                Some("shortcuts.openClipboard"),
+            ),
+            (
+                "shortcuts.pastePlain",
+                "X+Alt",
+                Some("shortcuts.openPreference"),
+            ),
+            ("shortcuts.openClipboard", "Alt+C", None),
+            ("shortcuts.openClipboard", "", None),
+            ("shortcuts.pastePlain", "Alt+Control+1", None),
+        ] {
+            assert_eq!(
+                shortcut_conflicts_with_settings(id, candidate, &settings),
+                expected
+            );
+        }
 
         settings.shortcuts.quick_paste.enabled = true;
         settings.shortcuts.quick_paste.modifiers =
             kwikpaste_core::settings::QuickPasteModifiers::ControlAlt;
-        assert!(shortcut_conflicts_with_settings(
-            "shortcuts.pastePlain",
-            "Alt+Control+1",
-            &settings
-        ));
+        for digit in ["1", "3", "9", "0"] {
+            assert_eq!(
+                shortcut_conflicts_with_settings(
+                    "shortcuts.pastePlain",
+                    &format!("Alt+Control+{digit}"),
+                    &settings
+                ),
+                Some("shortcuts.quickPaste")
+            );
+        }
+        assert_eq!(
+            shortcut_conflicts_with_settings(
+                "shortcuts.quickPasteModifiers",
+                "Alt+Control+3",
+                &settings
+            ),
+            None
+        );
+        settings.shortcuts.paste_plain = "Control+Alt+3".to_owned();
+        for id in ["shortcuts.quickPaste", "shortcuts.quickPasteModifiers"] {
+            assert_eq!(
+                shortcut_conflicts_with_settings(id, "Alt+3+Control", &settings),
+                Some("shortcuts.pastePlain")
+            );
+        }
+        assert_eq!(
+            shortcut_conflicts_with_settings("shortcuts.doubleTap", "Alt+3+Control", &settings),
+            None
+        );
+        assert_eq!(
+            shortcut_conflicts_with_settings("shortcuts.doubleTapSide", "Alt+3+Control", &settings),
+            None
+        );
+    }
+
+    #[test]
+    fn global_search_includes_advanced_rows_but_not_collapsed_children() {
+        use super::schema::{self, TabId};
+        let tabs = schema::tabs(false);
+        let mut settings = Settings::default();
+        assert!(page_in_scope(TabId::Paste, TabId::General, "volume"));
+        assert!(!page_in_scope(TabId::Paste, TabId::General, "  "));
+        assert!(page_in_scope(TabId::General, TabId::General, ""));
+        let volume = tabs
+            .iter()
+            .flat_map(|tab| &tab.sections)
+            .flat_map(|section| &section.settings)
+            .find(|setting| setting.id == "copy.sound.volume")
+            .unwrap();
+        assert!(volume.advanced);
+        assert!(!search_setting_matches(volume, &settings, "volume"));
+        settings.clipboard.feedback.copy_sound = true;
+        assert!(search_setting_matches(volume, &settings, "volume"));
     }
 
     #[test]

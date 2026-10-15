@@ -279,6 +279,8 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     if code >= 0 {
         let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         if handle_key(wparam.0 as u32, event) {
+            // 被面板吞掉的按键不会到达下一颗钩子；双击观察器仍须看到它们以取消组合键手势。
+            super::win_v::observe_double_tap(wparam.0 as u32, event);
             return LRESULT(1);
         }
     }

@@ -13,10 +13,15 @@ use gpui::{
     RenderImage, SharedString, StatefulInteractiveElement as _, Styled, StyledText, Window, div,
     img, prelude::FluentBuilder as _, pulsating_between, relative,
 };
+use kwikpaste_core::clipboard::SnippetKind;
 use kwikpaste_ui::{
     Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _,
     theme::{
-        TextSize, components::KindTagTokens, css_color, radius, semantic::SemanticTokens, space,
+        TextSize,
+        components::{KindTag, KindTagTokens, SnippetTokens},
+        css_color, radius,
+        semantic::SemanticTokens,
+        space,
     },
 };
 
@@ -40,6 +45,8 @@ const PULSE_PERIOD: Duration = Duration::from_secs(2);
 pub struct CardEnv<'a> {
     pub tokens: &'static SemanticTokens,
     pub kind_tags: KindTagTokens,
+    /// 快捷信息按类型的颜色；关掉「快捷信息颜色」时为 `None`。
+    pub snippet_colors: Option<SnippetTokens>,
     pub reorder_source_opacity: f32,
     pub layout: &'a LayoutSpec,
     pub now: DateTime<Local>,
@@ -924,12 +931,20 @@ fn snippets(
                             .bg(tokens.fill.subtle)
                             .kp_text(TextSize::Xs)
                             .text_color(tokens.text.secondary)
-                            .child(div().truncate().child(shared(snippet)));
+                            .when_some(env.snippet_colors, |chip, colors| {
+                                chip.gap(space(1.5))
+                                    .child(snippet_dot(snippet_color(&colors, snippet.kind)))
+                            })
+                            .child(
+                                div()
+                                    .truncate()
+                                    .child(SharedString::from(snippet.text.clone())),
+                            );
                         let Some(on_pick) = on_pick.clone() else {
                             return chip.into_any_element();
                         };
-                        let text = snippet.clone();
-                        let long = snippet.chars().count() >= SNIPPET_TOOLTIP_MIN_CHARS;
+                        let text: Arc<str> = Arc::from(snippet.text.as_str());
+                        let long = snippet.text.chars().count() >= SNIPPET_TOOLTIP_MIN_CHARS;
 
                         // 按下时拦住事件，不触发卡片的选中、单击粘贴和双击粘贴（1.x `SnippetChip`）。
                         chip.cursor_pointer()
@@ -943,12 +958,34 @@ fn snippets(
                                 cx.stop_propagation();
                                 on_pick(text.clone(), window, cx);
                             })
-                            .when(long, |chip| chip.kp_tooltip(shared(snippet)))
+                            .when(long, |chip| {
+                                chip.kp_tooltip(SharedString::from(snippet.text.clone()))
+                            })
                             .into_any_element()
                     }),
             )
             .into_any_element(),
     )
+}
+
+/// 快捷信息类型对应的颜色。
+pub fn snippet_color(colors: &SnippetTokens, kind: SnippetKind) -> KindTag {
+    match kind {
+        SnippetKind::Number => colors.number,
+        SnippetKind::Phone => colors.phone,
+        SnippetKind::Email => colors.email,
+        SnippetKind::Time => colors.time,
+        SnippetKind::Link => colors.link,
+    }
+}
+
+/// 快捷信息前的类型圆点。
+pub fn snippet_dot(color: KindTag) -> Div {
+    div()
+        .flex_none()
+        .size(space(1.5))
+        .rounded_full()
+        .bg(color.foreground)
 }
 
 /// 置顶、敏感标记：有头部行时是右下角 20 px 的水印，没有时是正文右侧 16 px 的小图标。

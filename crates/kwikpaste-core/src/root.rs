@@ -482,19 +482,13 @@ impl Core {
             let Some(item) = db::items::find_item_by_id(&pool, &id).await? else {
                 return Ok(None);
             };
-            let redact = core
-                .0
-                .settings
-                .snapshot()
-                .clipboard
-                .sensitive
-                .redact_secrets;
+            let clipboard = core.0.settings.snapshot().clipboard;
             let payload = presenter::build_preview_payload(
                 &pool,
                 &core.0.images,
                 &core.0.file_icons,
                 item,
-                redact,
+                &clipboard,
             )
             .await?;
             Ok(Some(payload))

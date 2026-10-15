@@ -39,6 +39,30 @@ const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_millis(75),
 ];
 
+/// Windows 上收到变化通知后先等剪贴板静下来再读。Excel 拖动单元格时会先把选区放上剪贴板、紧接着自己再打开剪贴板；
+/// 这时去读（文本、HTML、RTF 都要 Excel 现场渲染）会占住剪贴板，Excel 就弹「剪贴板出现问题」。
+#[cfg(target_os = "windows")]
+const CLIPBOARD_SETTLE_DELAY: Duration = Duration::from_millis(150);
+
+/// 剪贴板一直在变时最多等这么多轮，之后照常读取。
+#[cfg(target_os = "windows")]
+const CLIPBOARD_SETTLE_MAX_ROUNDS: usize = 6;
+
+/// 等到剪贴板序号在一个 [`CLIPBOARD_SETTLE_DELAY`] 内不再变化，返回最终序号。
+#[cfg(target_os = "windows")]
+fn wait_for_settled_clipboard() -> Option<std::num::NonZeroU32> {
+    let mut seq = clipboard_win::seq_num();
+    for _ in 0..CLIPBOARD_SETTLE_MAX_ROUNDS {
+        std::thread::sleep(CLIPBOARD_SETTLE_DELAY);
+        let next = clipboard_win::seq_num();
+        if next == seq {
+            break;
+        }
+        seq = next;
+    }
+    seq
+}
+
 fn read_with_retry<T, E: std::fmt::Display>(
     retry_delays: &[Duration],
     mut read: impl FnMut() -> std::result::Result<Option<T>, E>,
@@ -232,6 +256,8 @@ pub(crate) fn spawn(core: &Arc<CoreInner>) -> Result<WatcherShutdown> {
                 reader,
                 core: weak,
                 repeats: RepeatFilter::new(REPEAT_WINDOW),
+                #[cfg(target_os = "windows")]
+                handled_seq: None,
             });
             if ready_tx.send(Ok(watcher.get_shutdown_channel())).is_err() {
                 return;
@@ -253,10 +279,21 @@ struct ClipboardChangeHandler {
     reader: ClipboardReader<SystemClipboard>,
     core: Weak<CoreInner>,
     repeats: RepeatFilter,
+    /// 已经读过的剪贴板序号：等待期间排队的通知指向同一次变化，不再重复读取。
+    #[cfg(target_os = "windows")]
+    handled_seq: Option<std::num::NonZeroU32>,
 }
 
 impl ClipboardHandler for ClipboardChangeHandler {
     fn on_clipboard_change(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            if self.handled_seq.is_some() && clipboard_win::seq_num() == self.handled_seq {
+                return;
+            }
+            self.handled_seq = wait_for_settled_clipboard();
+        }
+
         let Some(core) = self.core.upgrade() else {
             return;
         };

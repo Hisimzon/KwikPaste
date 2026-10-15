@@ -42,7 +42,7 @@ use windows::core::{PCWSTR, w};
 use super::monitor::BASE_DPI;
 use super::rect_from_win32;
 use super::system;
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect, Size, follow_cursor, scale_size};
 
 /// 子类 id，ASCII "KPNL"。
 const SUBCLASS_ID: usize = 0x4B50_4E4C;
@@ -134,7 +134,7 @@ impl Panel {
         .map_err(io::Error::other)?;
 
         let state = Box::into_raw(Box::new(SubclassState {
-            min_logical_size: options.min_logical_size,
+            min_logical_size: Cell::new(options.min_logical_size),
             text_scale: Cell::new(options.text_scale),
             drag: Cell::new(None),
             drag_sink: RefCell::new(None),
@@ -165,6 +165,47 @@ impl Panel {
             let state = unsafe { &*(data.0 as *const SubclassState) };
             state.text_scale.set(text_scale);
         }
+    }
+
+    /// 布局变化后立即更新子类过程使用的最小内容区尺寸。
+    pub fn set_min_logical_size(&self, size: (f64, f64)) {
+        let data = unsafe { GetPropW(self.hwnd, STATE_PROPERTY) };
+        if !data.is_invalid() {
+            let state = unsafe { &*(data.0 as *const SubclassState) };
+            state.min_logical_size.set(size);
+        }
+    }
+
+    /// 保留外框左上角调整内容区大小，必要时把整个外框夹回当前显示器工作区；不激活。
+    pub fn resize_content(&self, logical: (f64, f64)) -> io::Result<()> {
+        let outer = self.window_rect()?;
+        let insets = self.client_rect()?.insets_within(outer);
+        let content = scale_size(logical, f64::from(self.dpi()) / f64::from(BASE_DPI));
+        let work_area = work_area_of(self.hwnd)
+            .ok_or_else(|| io::Error::other("the panel monitor has no work area"))?;
+        let target = follow_cursor(
+            Point {
+                x: outer.left,
+                y: outer.top,
+            },
+            work_area,
+            Size {
+                width: content.width + insets.left + insets.right,
+                height: content.height + insets.top + insets.bottom,
+            },
+        );
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                None,
+                target.left,
+                target.top,
+                target.width(),
+                target.height(),
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+        }
+        .map_err(io::Error::other)
     }
 
     /// 在拖动区或缩放边按下时的通知（[`Panel::install`] 之后设置）。这类按下由子类过程自己处理，
@@ -288,7 +329,7 @@ impl Panel {
 
 /// 子类过程的私有状态，指针存在子类的 `dwRefData` 里，`WM_NCDESTROY` 时释放。
 struct SubclassState {
-    min_logical_size: (f64, f64),
+    min_logical_size: Cell<(f64, f64)>,
     /// 系统「文本大小」系数，由宿主经 [`Panel::set_text_scale`] 更新。
     text_scale: Cell<f64>,
     drag: Cell<Option<Drag>>,
@@ -509,8 +550,9 @@ fn apply_min_size(hwnd: HWND, state: &SubclassState, lparam: LPARAM) {
     let insets = client.insets_within(outer);
     let scale =
         f64::from(super::monitor::window_dpi(hwnd)) / f64::from(BASE_DPI) * state.text_scale.get();
-    let mut width = (state.min_logical_size.0 * scale).round() as i32;
-    let mut height = (state.min_logical_size.1 * scale).round() as i32;
+    let min = state.min_logical_size.get();
+    let mut width = (min.0 * scale).round() as i32;
+    let mut height = (min.1 * scale).round() as i32;
     // 文本放得很大、屏幕又小时，最小尺寸不能超过所在显示器的工作区，否则窗口放不下。
     if let Some(work_area) = work_area_of(hwnd) {
         width = width

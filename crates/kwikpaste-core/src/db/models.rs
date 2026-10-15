@@ -145,6 +145,12 @@ pub struct ClipboardItemQuery {
     /// 显式设置时覆盖 `kind`，`favorite` 仍与之叠加；为 None 时走显式 `kind`（保留给单测）。
     pub group: Option<ClipboardGroupFilter>,
     pub keyword: Option<String>,
+    /// 来源应用 id（同一应用的各安装版本都要列上）；空表示不限。
+    pub source_app_ids: Vec<String>,
+    /// 子类型；空表示不限。
+    pub sub_kinds: Vec<ClipboardSubKind>,
+    /// 只要这个时间及之后创建的记录。
+    pub created_since: Option<DateTime<Utc>>,
     pub sort: ClipboardItemSort,
     pub limit: i64,
     pub offset: i64,
@@ -171,6 +177,9 @@ impl Default for ClipboardItemQuery {
             pinned: None,
             group: None,
             keyword: None,
+            source_app_ids: Vec::new(),
+            sub_kinds: Vec::new(),
+            created_since: None,
             sort: ClipboardItemSort::UpdatedAt,
             limit: 20,
             offset: 0,
