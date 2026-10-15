@@ -159,6 +159,7 @@ impl ClipboardList {
         let window = self.window;
         cx.spawn(async move |_, cx| {
             if let Err(err) = task.await {
+                log::warn!("{label} failed: {err:#}");
                 window
                     .update(cx, |_, window, cx| error_toast(label, &err, window, cx))
                     .ok();
