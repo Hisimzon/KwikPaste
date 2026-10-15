@@ -54,6 +54,7 @@ use crate::{
 
 mod custom_rules;
 mod extensions;
+mod feedback;
 mod image_text;
 mod overview;
 mod wetype;
@@ -1425,6 +1426,7 @@ impl Preferences {
                     "about.checkUpdates" => crate::platform::updater::check_now(cx),
                     "about.website" => cx.open_url(text::WEBSITE_URL),
                     "about.github" => cx.open_url(text::REPOSITORY_URL),
+                    "diagnostics.reportProblem" => this.report_problem(window, cx),
                     "diagnostics.resetPreferences" => this.reset_preferences(window, cx),
                     _ => log::info!("preferences action requested: {id}"),
                 });

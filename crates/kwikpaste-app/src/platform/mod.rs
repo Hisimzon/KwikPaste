@@ -34,6 +34,7 @@
 pub(crate) mod autostart;
 pub mod drag_out;
 mod editing;
+pub mod feedback;
 pub mod host;
 pub(crate) mod hotkey;
 mod instance;

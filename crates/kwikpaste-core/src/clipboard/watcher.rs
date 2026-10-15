@@ -231,6 +231,7 @@ fn persist_captured(core: Arc<CoreInner>, item: ClipboardItem, source_app: Optio
 /// 平台句柄创建失败时返回错误，不会留下半启动的线程。
 pub(crate) fn spawn(core: &Arc<CoreInner>) -> Result<WatcherShutdown> {
     let weak = Arc::downgrade(core);
+    let running = core.watcher_running.clone();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
     std::thread::Builder::new()
@@ -260,13 +261,16 @@ pub(crate) fn spawn(core: &Arc<CoreInner>) -> Result<WatcherShutdown> {
                 #[cfg(target_os = "windows")]
                 handled_seq: None,
             });
+            running.store(true, Ordering::Relaxed);
             if ready_tx.send(Ok(watcher.get_shutdown_channel())).is_err() {
+                running.store(false, Ordering::Relaxed);
                 return;
             }
 
             log::info!("clipboard watcher started");
             // 阻塞直至停止句柄被丢弃。
             watcher.start_watch();
+            running.store(false, Ordering::Relaxed);
             log::info!("clipboard watcher stopped");
         })
         .map_err(|err| AppError::Other(anyhow!("failed to spawn clipboard watcher: {err}")))?;

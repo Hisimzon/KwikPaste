@@ -2,7 +2,7 @@
 //!
 //! - 位置：`<日志目录>/KwikPaste.log`（`CorePaths::log_dir`：安装版 `%LOCALAPPDATA%\<id>\logs`，
 //!   便携版 `data\logs`），追加写，1.x 留下的内容接着用；
-//! - 大小与轮换：上限 40 000 字节，再写一行就会超过时删掉整个文件重新开始（`KeepOne`），打开时已经
+//! - 大小与轮换：上限 40 000 字节，再写一行就会超过时轮换到 `KwikPaste.log.1`（覆盖上一份），打开时已经
 //!   超过也一样；
 //! - 格式：`[2026-10-03][04:05:06][target][LEVEL] message`，UTC；
 //! - 级别：本 workspace 的 crate（应用、core、updater、os）记到 info，debug 构建到 debug；其余 crate
@@ -48,6 +48,20 @@ pub fn init(dir: PathBuf) {
     }
 }
 
+/// 仅保留上一份；改名失败时保留当前日志，下一次写入再尝试。
+fn rotate(path: &Path) {
+    let previous = path.with_file_name("KwikPaste.log.1");
+    if let Err(err) = std::fs::remove_file(&previous)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("previous log could not be replaced: {err}");
+        return;
+    }
+    if let Err(err) = std::fs::rename(path, previous) {
+        eprintln!("log could not be rotated: {err}");
+    }
+}
+
 fn open_append(path: &Path) -> (Option<File>, u64) {
     match OpenOptions::new().create(true).append(true).open(path) {
         Ok(file) => {
@@ -75,10 +89,10 @@ fn line(target: &str, level: log::Level, message: &std::fmt::Arguments<'_>) -> S
 impl FileLogger {
     fn open(path: PathBuf) -> Self {
         let (file, size) = open_append(&path);
-        let (file, size) = if size >= MAX_BYTES {
-            // 先关掉句柄再删。
+        let (file, size) = if size > MAX_BYTES {
+            // Windows 改名前必须先关闭句柄。
             drop(file);
-            let _ = std::fs::remove_file(&path);
+            rotate(&path);
             open_append(&path)
         } else {
             (file, size)
@@ -95,7 +109,7 @@ impl FileLogger {
         if sink.file.is_none() || (sink.size != 0 && sink.size + len > MAX_BYTES) {
             sink.file = None;
             if sink.size != 0 {
-                let _ = std::fs::remove_file(&self.path);
+                rotate(&self.path);
             }
             (sink.file, sink.size) = open_append(&self.path);
         }
@@ -236,6 +250,12 @@ mod tests {
         emit(&logger, log::Level::Info, "KwikPaste::health", &filler);
         let text = std::fs::read_to_string(&path).expect("log file");
         assert_eq!(text.lines().count(), 1, "the file was not started over");
+        assert_eq!(
+            std::fs::metadata(dir.join("KwikPaste.log.1"))
+                .unwrap()
+                .len(),
+            fit * len
+        );
         drop(logger);
 
         // 打开时已经超过上限：同样从头开始。
@@ -245,6 +265,10 @@ mod tests {
         let text = std::fs::read_to_string(&path).expect("log file");
         assert!(text.ends_with("[KwikPaste::health][INFO] fresh\n"));
         assert!(!text.contains('y'));
+        assert_eq!(
+            std::fs::read(dir.join("KwikPaste.log.1")).unwrap(),
+            vec![b'y'; 41_000]
+        );
         drop(reopened);
         let _ = std::fs::remove_dir_all(dir);
     }

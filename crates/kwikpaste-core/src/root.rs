@@ -72,6 +72,7 @@ pub(crate) struct CoreInner {
     clipboard_provider: RwLock<Arc<dyn ClipboardProvider>>,
     cleanup_task: Mutex<Option<JoinHandle<()>>>,
     watcher: Mutex<Option<WatcherShutdown>>,
+    pub(crate) watcher_running: Arc<AtomicBool>,
 }
 
 impl Core {
@@ -124,6 +125,7 @@ impl Core {
                 clipboard_provider: RwLock::new(default_clipboard_provider()),
                 cleanup_task: Mutex::new(None),
                 watcher: Mutex::new(None),
+                watcher_running: Arc::new(AtomicBool::new(false)),
             });
 
             inner.sync.bind(Arc::downgrade(&inner));
@@ -236,6 +238,29 @@ impl Core {
     /// 暂停或恢复采集。暂停期间监听收到的变化直接丢弃（切换存储位置、覆盖导入备份时用）。
     pub fn set_capture_paused(&self, paused: bool) {
         self.0.watcher_pause.set_paused(paused);
+    }
+
+    /// 反馈只读取监听状态，不打开或读取系统剪贴板。
+    pub fn watcher_status(&self) -> (bool, bool) {
+        (
+            self.0
+                .watcher_running
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.0.watcher_pause.is_paused(),
+        )
+    }
+
+    /// 反馈只统计条数，SQL 不选择任何剪贴板内容字段。
+    pub async fn diagnostic_item_count(&self) -> Result<i64> {
+        let core = self.clone();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM clipboard_items")
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| crate::AppError::Other(err.into()))
+        })
+        .await
     }
 
     /// 播放一次复制提示音（偏好页试听）。

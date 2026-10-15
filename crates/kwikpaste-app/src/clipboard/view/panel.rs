@@ -180,8 +180,8 @@ impl ClipboardPanel {
             ListIntent::Paste { id, plain } => {
                 log::debug!("paste intent handled by panel host: {id} plain={plain}");
             }
-            ListIntent::PasteSnippet { id, text } => {
-                log::debug!("paste snippet intent handled by panel host: {id} ({text})");
+            ListIntent::PasteSnippet { id, .. } => {
+                log::debug!("paste snippet intent handled by panel host: {id}");
             }
             ListIntent::DragOut { id } => {
                 log::debug!("drag-out intent handled by panel host: {id}");

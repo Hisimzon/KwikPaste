@@ -96,6 +96,7 @@ pub(crate) mod testing {
     #[derive(Debug, Clone)]
     pub(crate) struct Request {
         pub line: String,
+        pub headers: String,
         pub body: Vec<u8>,
     }
 
@@ -171,11 +172,13 @@ pub(crate) mod testing {
             }
             return Request {
                 line: head.lines().next().unwrap_or_default().to_owned(),
+                headers: head,
                 body: bytes[end + 4..end + 4 + length].to_vec(),
             };
         }
         Request {
             line: String::new(),
+            headers: String::new(),
             body: Vec::new(),
         }
     }

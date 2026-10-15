@@ -15,6 +15,7 @@ mod announcement;
 mod channel;
 mod download;
 pub mod extensions;
+pub mod feedback;
 mod handoff;
 mod http;
 mod manifest;

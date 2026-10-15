@@ -1100,6 +1100,13 @@ fn about_sections() -> Vec<Section> {
         Section {
             id: "diagnostics",
             settings: vec![
+                Setting::new(
+                    "diagnostics.reportProblem",
+                    Control::Action { danger: false },
+                )
+                .keywords(&[
+                    "feedback", "bug", "report", "problem", "issue", "log", "反馈", "日志",
+                ]),
                 Setting::new("localData.logDirectory", Control::Action { danger: false })
                     .keywords(&["log", "diagnostic"])
                     .advanced(),
@@ -1206,6 +1213,10 @@ mod tests {
         assert_eq!(
             find("control.reopenOnboarding"),
             (TabId::About, "about", false)
+        );
+        assert_eq!(
+            find("diagnostics.reportProblem"),
+            (TabId::About, "diagnostics", false)
         );
         assert_eq!(tabs[8].sections[0].settings[0].id, "overview.dashboard");
         // Onboarding consumes this entire list, including advanced shortcuts.

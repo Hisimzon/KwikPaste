@@ -16,6 +16,7 @@ mod selftest;
 use gpui::{App, Application};
 
 fn main() -> anyhow::Result<()> {
+    platform::feedback::mark_started();
     #[cfg(target_os = "windows")]
     if ocr_memory::run_if_requested()? {
         return Ok(());
