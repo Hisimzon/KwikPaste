@@ -14,6 +14,7 @@ use crate::db::models::{ClipboardItemQuery, ClipboardKind};
 use crate::db::overview::{ClearScope, ContentCategory};
 use crate::events::CoreEvent;
 use crate::root::Core;
+use crate::settings::CopySoundTone;
 use crate::testing::{block_on, sample_png, Fixture};
 
 const NO_RETRY: [Duration; 0] = [];
@@ -75,7 +76,10 @@ fn capture_records_source_app_plays_sound_and_dedups() {
         1
     );
     assert_eq!(fixture.platform.sounds(), 2);
-    assert_eq!(*fixture.platform.sound_volumes.lock().unwrap(), [100, 100]);
+    assert_eq!(
+        *fixture.platform.played_sounds.lock().unwrap(),
+        [(CopySoundTone::Classic, 100); 2]
+    );
 
     let upserts: Vec<bool> = fixture
         .take_events()
@@ -89,26 +93,32 @@ fn capture_records_source_app_plays_sound_and_dedups() {
 }
 
 #[test]
-fn capture_uses_current_volume_and_preview_passes_its_own_clamped_volume() {
+fn capture_uses_current_tone_and_volume_and_preview_passes_its_own() {
     let fixture = Fixture::new();
     let core = fixture.start();
     copy_in(&core, text("sound disabled"));
     assert_eq!(fixture.platform.sounds(), 0);
-    for volume in [80, 0, 255] {
+    for (tone, volume) in [("chirp", 80), ("classic", 0), ("tick", 255)] {
         block_on(core.update_settings(json!({"clipboard": {"feedback": {
-            "copySound": true, "copySoundVolume": volume
+            "copySound": true, "copySoundVolume": volume, "copySoundTone": tone
         }}})))
         .unwrap();
         copy_in(&core, text(&format!("volume {volume}")));
     }
-    core.play_copy_sound(25);
-    core.play_copy_sound(255);
+    core.play_copy_sound(CopySoundTone::Chime, 25);
+    core.play_copy_sound(CopySoundTone::Bubble, 255);
     block_on(core.update_settings(json!({"clipboard": {"feedback": {"copySound": false}}})))
         .unwrap();
     copy_in(&core, text("sound disabled again"));
     assert_eq!(
-        *fixture.platform.sound_volumes.lock().unwrap(),
-        [80, 0, 100, 25, 100]
+        *fixture.platform.played_sounds.lock().unwrap(),
+        [
+            (CopySoundTone::Chirp, 80),
+            (CopySoundTone::Classic, 0),
+            (CopySoundTone::Tick, 100),
+            (CopySoundTone::Chime, 25),
+            (CopySoundTone::Bubble, 100),
+        ]
     );
     assert_eq!(fixture.platform.sounds(), 5);
 }

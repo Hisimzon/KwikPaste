@@ -837,6 +837,16 @@
             "title": "Preview sound"
           },
           "title": "Copy Sound",
+          "tone": {
+            "options": {
+              "bubble": "Bubble",
+              "chime": "Chime",
+              "chirp": "Chirp",
+              "classic": "Classic",
+              "tick": "Tick"
+            },
+            "title": "Sound tone"
+          },
           "volume": {
             "description": "Drag to adjust, release to save; 0% is silent.",
             "title": "Sound volume"

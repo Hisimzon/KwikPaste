@@ -959,6 +959,7 @@ pub struct Feedback {
     pub copy_sound: bool,
     /// 复制提示音的音量百分比；手改文件超出 100 的值在播放时夹取。
     pub copy_sound_volume: u8,
+    pub copy_sound_tone: CopySoundTone,
 }
 
 impl Default for Feedback {
@@ -966,8 +967,21 @@ impl Default for Feedback {
         Self {
             copy_sound: false,
             copy_sound_volume: 100,
+            copy_sound_tone: CopySoundTone::Classic,
         }
     }
+}
+
+/// 复制提示音的音色；不认识的值按宽松读取退回默认的经典音。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CopySoundTone {
+    #[default]
+    Classic,
+    Chirp,
+    Bubble,
+    Chime,
+    Tick,
 }
 
 /// 更新检查状态；旧文件中的自动检查、频率、跳过版本与渠道开关由 serde 忽略，保存时不再写出。

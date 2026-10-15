@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use kwikpaste_core::platform::{FrontmostApp, PlatformServices, ScannedApp};
+use kwikpaste_core::settings::CopySoundTone;
 use kwikpaste_core::{AppError, Result};
 
 #[cfg(target_os = "macos")]
@@ -48,8 +49,8 @@ impl PlatformServices for NativeServices {
         native::app_from_id(id)
     }
 
-    fn play_copy_sound(&self, volume_percent: u8) {
-        crate::sound::play_copy(volume_percent);
+    fn play_copy_sound(&self, tone: CopySoundTone, volume_percent: u8) {
+        crate::sound::play_copy(tone, volume_percent);
     }
 }
 

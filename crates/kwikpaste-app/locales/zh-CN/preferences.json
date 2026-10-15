@@ -827,6 +827,16 @@
             "title": "试听提示音"
           },
           "title": "复制成功提示音",
+          "tone": {
+            "options": {
+              "bubble": "气泡",
+              "chime": "叮咚",
+              "chirp": "啾啾",
+              "classic": "经典",
+              "tick": "轻敲"
+            },
+            "title": "提示音音色"
+          },
           "volume": {
             "description": "拖动调整音量，松开后保存；0% 为静音。",
             "title": "提示音音量"

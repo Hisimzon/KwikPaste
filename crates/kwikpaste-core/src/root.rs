@@ -264,8 +264,10 @@ impl Core {
     }
 
     /// 播放一次复制提示音（偏好页试听）。
-    pub fn play_copy_sound(&self, volume_percent: u8) {
-        self.0.platform().play_copy_sound(volume_percent.min(100));
+    pub fn play_copy_sound(&self, tone: crate::settings::CopySoundTone, volume_percent: u8) {
+        self.0
+            .platform()
+            .play_copy_sound(tone, volume_percent.min(100));
     }
 
     pub fn info(&self) -> &AppInfo {

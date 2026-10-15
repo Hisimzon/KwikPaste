@@ -12,7 +12,7 @@ use kwikpaste_core::{
     ops::{PreferenceDirectory, StorageOverview},
     readable_export::{ExportFormat, ExportOptions, ExportPreview},
     settings::Settings,
-    settings::{CaptureKind, Content, ItemAction, RetentionRule, RetentionUnit},
+    settings::{CaptureKind, Content, CopySoundTone, ItemAction, RetentionRule, RetentionUnit},
     sync::{LanDeviceView, LanNearbyView, LanSyncState, PairTarget},
 };
 use kwikpaste_ui::{
@@ -467,6 +467,13 @@ impl Preferences {
                             let path = setting.path;
                             let subscription = state.on_change(cx, move |this, value, cx| {
                                 if let (Some(path), Some(value)) = (path, value) {
+                                    // 换音色时顺带试听新音色。
+                                    if path == "clipboard.feedback.copySoundTone"
+                                        && let Ok(tone) =
+                                            serde_json::from_value(json!(value.as_ref()))
+                                    {
+                                        this.preview_copy_sound(tone, cx);
+                                    }
                                     this.apply_patch(
                                         values::choice_patch(path, &value, numeric),
                                         cx,
@@ -1402,7 +1409,8 @@ impl Preferences {
                     return;
                 };
                 entity.update(cx, |this, cx| match id {
-                    "copy.sound.preview" => this.preview_copy_sound(cx),
+                    "copy.sound.preview" => this
+                        .preview_copy_sound(this.settings.clipboard.feedback.copy_sound_tone, cx),
                     "backup.export" => this.open_export(ExportKind::Backup, window, cx),
                     "backup.importHistory" => this.import_backup(window, cx),
                     "localData.cleanCache" => this.clean_resource_cache(cx),
@@ -1434,14 +1442,14 @@ impl Preferences {
             .into_any_element()
     }
 
-    /// 试听取滑块当前值，不等待异步落盘；平台层在工作线程播放，不阻塞偏好窗。
-    fn preview_copy_sound(&self, cx: &App) {
+    /// 试听取滑块当前值，不等待异步落盘；平台层异步播放，不阻塞偏好窗。
+    fn preview_copy_sound(&self, tone: CopySoundTone, cx: &App) {
         let volume_percent = self.sliders.get("copy.sound.volume").map_or(
             self.settings.clipboard.feedback.copy_sound_volume.min(100),
             |state| state.value(cx),
         );
         if let Some(core) = core_host::core(cx) {
-            core.play_copy_sound(volume_percent);
+            core.play_copy_sound(tone, volume_percent);
         }
     }
 

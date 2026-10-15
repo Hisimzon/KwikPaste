@@ -240,6 +240,7 @@ const CLICK_ACTIONS: &[&str] = &[
     "singleClickCopy",
     "doubleClickCopy",
 ];
+const COPY_SOUND_TONES: &[&str] = &["classic", "chirp", "bubble", "chime", "tick"];
 const MIDDLE_CLICK_ACTIONS: &[&str] = &[
     "disabled",
     "singleClickPaste",
@@ -876,6 +877,16 @@ fn paste_sections() -> Vec<Section> {
                     .path("clipboard.feedback.copySound")
                     .keywords(&["sound", "feedback", "copy", "音效", "提示音", "声音"])
                     .advanced(),
+                Setting::new(
+                    "copy.sound.tone",
+                    Control::Select(Options::Values(COPY_SOUND_TONES)),
+                )
+                .path("clipboard.feedback.copySoundTone")
+                .keywords(&["音色", "音效", "提示音", "tone", "sound"])
+                .child_of("copy.sound", |settings| {
+                    !settings.clipboard.feedback.copy_sound
+                })
+                .advanced(),
                 Setting::new("copy.sound.volume", Control::Slider { min: 0, max: 100 })
                     .path("clipboard.feedback.copySoundVolume")
                     .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
@@ -1315,14 +1326,19 @@ mod tests {
                 .iter()
                 .map(|setting| setting.id)
                 .collect::<Vec<_>>(),
-            ["copy.sound", "copy.sound.volume", "copy.sound.preview"]
+            [
+                "copy.sound",
+                "copy.sound.tone",
+                "copy.sound.volume",
+                "copy.sound.preview"
+            ]
         );
         assert_eq!(
-            sound.settings[1].path,
+            sound.settings[2].path,
             Some("clipboard.feedback.copySoundVolume")
         );
         assert!(matches!(
-            sound.settings[1].control,
+            sound.settings[2].control,
             Control::Slider { min: 0, max: 100 }
         ));
         let mut settings = Settings::default();
@@ -1349,7 +1365,7 @@ mod tests {
             assert!(super::super::view::search_matches(
                 keyword,
                 "",
-                sound.settings[1].keywords
+                sound.settings[2].keywords
             ));
         }
     }

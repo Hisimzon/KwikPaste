@@ -17,6 +17,7 @@ use crate::paths::CorePaths;
 use crate::platform::{FrontmostApp, PlatformServices, ScannedApp};
 use crate::root::Core;
 use crate::runtime::CoreRuntime;
+use crate::settings::CopySoundTone;
 
 /// 在当前线程上跑完一个 future，不进入任何 tokio 上下文。
 pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
@@ -54,7 +55,7 @@ pub(crate) struct FakePlatform {
     pub frontmost: Mutex<Option<FrontmostApp>>,
     pub running: Mutex<Vec<ScannedApp>>,
     pub sounds: AtomicUsize,
-    pub sound_volumes: Mutex<Vec<u8>>,
+    pub played_sounds: Mutex<Vec<(CopySoundTone, u8)>>,
     /// 测试里视为正在运行的进程文件名。
     pub processes: Mutex<Vec<String>>,
 }
@@ -114,9 +115,12 @@ impl PlatformServices for FakePlatform {
             .any(|name| name.eq_ignore_ascii_case(exe_name))
     }
 
-    fn play_copy_sound(&self, volume_percent: u8) {
+    fn play_copy_sound(&self, tone: CopySoundTone, volume_percent: u8) {
         self.sounds.fetch_add(1, Ordering::SeqCst);
-        self.sound_volumes.lock().unwrap().push(volume_percent);
+        self.played_sounds
+            .lock()
+            .unwrap()
+            .push((tone, volume_percent));
     }
 }
 

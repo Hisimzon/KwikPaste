@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::models::Platform;
 use crate::error::{AppError, Result};
+use crate::settings::CopySoundTone;
 
 /// 这次剪贴板变更来自的前台应用。必须在剪贴板变化回调里**同步**探测，延后再问前台早就切走了。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +64,7 @@ pub trait PlatformServices: Send + Sync + 'static {
     fn app_from_id(&self, id: &str) -> Option<ScannedApp>;
 
     /// 异步播放一次复制提示音，不阻塞调用方；音量为 0 时静音，超过 100 时夹到 100。
-    fn play_copy_sound(&self, volume_percent: u8);
+    fn play_copy_sound(&self, tone: CopySoundTone, volume_percent: u8);
 }
 
 /// 没接平台层时的默认实现：识别不到前台应用、没有运行中应用、不播放提示音。
@@ -89,5 +90,5 @@ impl PlatformServices for NoPlatformServices {
         None
     }
 
-    fn play_copy_sound(&self, _volume_percent: u8) {}
+    fn play_copy_sound(&self, _tone: CopySoundTone, _volume_percent: u8) {}
 }
