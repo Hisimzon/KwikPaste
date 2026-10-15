@@ -49,7 +49,8 @@ pub enum PreviewTrigger {
     Keyboard,
     /// 松开空格时指针在预览窗里：之后与悬停一样，离开预览窗再关。
     Held,
-    /// “拆词”：不跟随悬停（菜单关上时指针下的是别的卡片），只随键盘换当前项。
+    /// “拆词”：不跟随悬停（菜单关上时指针下的是别的卡片），只随键盘换当前项；指针进过预览窗后转成
+    /// [`Self::Held`]。
     Words,
 }
 
@@ -191,6 +192,11 @@ impl ClipboardList {
                 self.previewing.pointer_inside = *inside;
                 if *inside {
                     self.previewing.hide_timer = None;
+                    // 拆词预览不跟随悬停，指针进过预览窗后与悬停一样，离开预览窗再关。
+                    if let Some((_, trigger @ PreviewTrigger::Words)) = &mut self.previewing.session
+                    {
+                        *trigger = PreviewTrigger::Held;
+                    }
                 } else {
                     self.schedule_preview_hide(cx);
                 }
