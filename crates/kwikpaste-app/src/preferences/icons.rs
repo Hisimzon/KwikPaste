@@ -59,6 +59,8 @@ pub enum PrefIcon {
     NotebookPen,
     ShieldAlert,
     Inbox,
+    PanelLeftClose,
+    PanelLeftOpen,
 }
 
 impl PrefIcon {
@@ -115,6 +117,8 @@ impl PrefIcon {
             Self::NotebookPen => include_str!("icons/lucide-notebook-pen.svg"),
             Self::ShieldAlert => include_str!("icons/lucide-shield-alert.svg"),
             Self::Inbox => include_str!("icons/lucide-inbox.svg"),
+            Self::PanelLeftClose => include_str!("icons/lucide-panel-left-close.svg"),
+            Self::PanelLeftOpen => include_str!("icons/lucide-panel-left-open.svg"),
         }
     }
 

@@ -415,7 +415,7 @@ fn update_e2e(cx: &mut App) {
                 }
                 log::info!("self-update e2e seeded record {seed}");
             }
-            let status = match updater.check(kwikpaste_updater::CheckMode::Manual).await {
+            let status = match updater.check().await {
                 Ok(status) => status,
                 Err(err) => {
                     log::error!("self-update e2e check failed: {err:#}");

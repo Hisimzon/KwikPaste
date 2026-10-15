@@ -1,12 +1,12 @@
 //! 下拉菜单与右键菜单（antd `Dropdown`）。弹层画在窗口内（gpui-component 的 PopupMenu），
 //! 不开原生菜单，不抢前台。打开时菜单拿焦点，钩子转来的 ↑/↓/←/→/Enter/Esc 由它处理。
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, Focusable as _, InteractiveElement, Interactivity,
-    IntoElement, ParentElement, SharedString, Stateful, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder as _,
+    AnyElement, App, Context, Div, ElementId, Focusable as _, ImageSource, InteractiveElement,
+    Interactivity, IntoElement, ParentElement, RenderImage, SharedString, Stateful,
+    StyleRefinement, Styled, Window, div, img, prelude::FluentBuilder as _,
 };
 use gpui_base::Selectable;
 use gpui_component::menu::{ContextMenuExt as _, DropdownMenu, PopupMenu, PopupMenuItem};
@@ -44,6 +44,8 @@ impl MenuIcon {
 pub struct MenuItem {
     label: SharedString,
     icon: Option<MenuIcon>,
+    /// 名称前面的位图（应用图标）。与 `icon` 不同，它画在名称一侧，左侧的勾选标记照常显示。
+    image: Option<Arc<RenderImage>>,
     shortcut: Option<SharedString>,
     danger: bool,
     checked: bool,
@@ -59,6 +61,7 @@ impl MenuItem {
         Self {
             label: label.into(),
             icon: None,
+            image: None,
             shortcut: None,
             danger: false,
             checked: false,
@@ -85,6 +88,11 @@ impl MenuItem {
 
     pub fn icon_path(mut self, path: impl Into<SharedString>) -> Self {
         self.icon = Some(MenuIcon::Path(path.into()));
+        self
+    }
+
+    pub fn image(mut self, image: Option<Arc<RenderImage>>) -> Self {
+        self.image = image;
         self
     }
 
@@ -169,6 +177,7 @@ fn build_menu(
 fn menu_item(item: MenuItem, cx: &App) -> PopupMenuItem {
     let tokens = theme::semantic(cx);
     let label = item.label;
+    let image = item.image;
     let shortcut = item.shortcut;
     let danger = item.danger;
     let color = if danger {
@@ -190,11 +199,21 @@ fn menu_item(item: MenuItem, cx: &App) -> PopupMenuItem {
             .gap(space(3.))
             .child(
                 div()
+                    .flex()
                     .min_w_0()
-                    .truncate()
-                    .kp_text(TextSize::Sm)
-                    .text_color(color)
-                    .child(label.clone()),
+                    .items_center()
+                    .gap(space(2.))
+                    .when_some(image.clone(), |row, image| {
+                        row.child(img(ImageSource::Render(image)).size(space(4.)).flex_none())
+                    })
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .kp_text(TextSize::Sm)
+                            .text_color(color)
+                            .child(label.clone()),
+                    ),
             )
             .when_some(shortcut.clone(), |row, shortcut| {
                 row.child(

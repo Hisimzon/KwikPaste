@@ -3,7 +3,9 @@
 
 use std::sync::Arc;
 
-use super::item::{ItemKind, ListItem};
+use chrono::{DateTime, Days, Local, NaiveTime, Utc};
+
+use super::item::{ItemKind, ListItem, SubKind};
 
 /// 范围：全部或收藏，始终有一个选中（1.x `ClipboardRange`）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -26,6 +28,122 @@ impl Range {
 /// 分组栏里分类按钮的顺序（文本、图片、文件）。
 pub const CATEGORIES: [ItemKind; 3] = [ItemKind::Text, ItemKind::Image, ItemKind::Files];
 
+/// 搜索框筛选里的时间范围：从本地某天零点起创建的记录。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Since {
+    Today,
+    Week,
+    Month,
+}
+
+impl Since {
+    pub const ALL: [Self; 3] = [Self::Today, Self::Week, Self::Month];
+
+    /// 起点：今天、近 7 天、近 30 天都含今天。
+    pub fn start(self, now: DateTime<Local>) -> DateTime<Utc> {
+        let days_back = match self {
+            Self::Today => 0,
+            Self::Week => 6,
+            Self::Month => 29,
+        };
+        let midnight = now
+            .date_naive()
+            .checked_sub_days(Days::new(days_back))
+            .map(|day| day.and_time(NaiveTime::MIN))
+            .and_then(|start| start.and_local_timezone(Local).earliest());
+
+        midnight.unwrap_or(now).with_timezone(&Utc)
+    }
+}
+
+/// 搜索框筛选里的类型：文本的子类型，富文本包括 RTF 和 HTML。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextKind {
+    Link,
+    Email,
+    Color,
+    Path,
+    Rich,
+}
+
+impl TextKind {
+    pub const ALL: [Self; 5] = [Self::Link, Self::Email, Self::Color, Self::Path, Self::Rich];
+
+    pub fn sub_kinds(self) -> &'static [SubKind] {
+        match self {
+            Self::Link => &[SubKind::Url],
+            Self::Email => &[SubKind::Email],
+            Self::Color => &[SubKind::Color],
+            Self::Path => &[SubKind::Path],
+            Self::Rich => &[SubKind::Rtf, SubKind::Html],
+        }
+    }
+}
+
+/// 历史记录里出现过的来源应用（core `HistoryApp`）：同一应用的各安装版本合成一项。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceApp {
+    pub ids: Arc<[Arc<str>]>,
+    pub name: Arc<str>,
+    pub icon_path: Option<Arc<str>>,
+}
+
+/// 搜索框的筛选条件：同一类里多选取“或”，不同类之间、与分组栏和搜索词之间取“且”。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SearchFilters {
+    pub since: Option<Since>,
+    pub apps: Vec<SourceApp>,
+    pub kinds: Vec<TextKind>,
+}
+
+impl SearchFilters {
+    pub fn is_empty(&self) -> bool {
+        self.since.is_none() && self.apps.is_empty() && self.kinds.is_empty()
+    }
+
+    /// 选中或取消一个应用（按 id 集合比较）。
+    pub fn toggle_app(&mut self, app: SourceApp) {
+        if let Some(index) = self.apps.iter().position(|it| it.ids == app.ids) {
+            self.apps.remove(index);
+        } else {
+            self.apps.push(app);
+        }
+    }
+
+    pub fn toggle_kind(&mut self, kind: TextKind) {
+        if let Some(index) = self.kinds.iter().position(|it| *it == kind) {
+            self.kinds.remove(index);
+        } else {
+            self.kinds.push(kind);
+        }
+    }
+
+    fn matches(&self, item: &ListItem, now: DateTime<Local>) -> bool {
+        if self
+            .since
+            .is_some_and(|since| item.created_at < since.start(now))
+        {
+            return false;
+        }
+        if !self.apps.is_empty()
+            && !item.source_app_id.as_ref().is_some_and(|id| {
+                self.apps
+                    .iter()
+                    .any(|app| app.ids.iter().any(|it| it == id))
+            })
+        {
+            return false;
+        }
+
+        self.kinds.is_empty()
+            || item.sub_kind.is_some_and(|sub| {
+                self.kinds
+                    .iter()
+                    .any(|kind| kind.sub_kinds().contains(&sub))
+            })
+    }
+}
+
 /// 当前视图的筛选条件。改动任何一项列表都整体重载。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ListFilter {
@@ -36,6 +154,8 @@ pub struct ListFilter {
     pub group_id: Option<Arc<str>>,
     /// 搜索词（已去掉首尾空白）。
     pub keyword: Arc<str>,
+    /// 搜索框的时间、来源应用、类型筛选。
+    pub search: SearchFilters,
 }
 
 impl ListFilter {
@@ -63,10 +183,13 @@ impl ListFilter {
         }
     }
 
-    /// 夹具数据源的过滤：与 core 的查询语义一致（分类、收藏、分组、搜索词不区分大小写地包含在
-    /// 摘要、备注或文件名里）。core 的搜索走 FTS，这里只求自测可用。
+    /// 夹具数据源的过滤：与 core 的查询语义一致（分类、收藏、分组、搜索框筛选、搜索词不区分大小写
+    /// 地包含在摘要、备注或文件名里）。core 的搜索走 FTS，这里只求自测可用。
     pub fn matches(&self, item: &ListItem) -> bool {
         if self.category.is_some_and(|category| category != item.kind) {
+            return false;
+        }
+        if !self.search.matches(item, Local::now()) {
             return false;
         }
         if self.favorites() && !item.is_favorite {
@@ -211,6 +334,18 @@ mod tests {
             ..ListFilter::default()
         };
         assert!(searching.may_include(Some(ItemKind::Text)));
+    }
+
+    #[test]
+    fn since_starts_at_local_midnight_including_today() {
+        let now = Local::now();
+        let today = now.date_naive();
+
+        let start = |since: Since| Since::start(since, now).with_timezone(&Local);
+        assert_eq!(start(Since::Today).date_naive(), today);
+        assert_eq!(start(Since::Today).time(), NaiveTime::MIN);
+        assert_eq!((today - start(Since::Week).date_naive()).num_days(), 6);
+        assert_eq!((today - start(Since::Month).date_naive()).num_days(), 29);
     }
 
     #[test]

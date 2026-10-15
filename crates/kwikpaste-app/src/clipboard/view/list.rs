@@ -104,10 +104,13 @@ pub enum ListIntent {
         id: Arc<str>,
     },
     ShowShortcuts,
+    OpenPreferences,
     /// 已交给宿主拖出（通知，自测据此核对拖的是哪一条）。
     DragOut {
         id: Arc<str>,
     },
+    /// 这个列表改了记录（收藏、置顶、备注、内容、分组、排序、删除）：双栏时另一栏据此刷新。
+    Changed,
 }
 
 /// 指针相对面板显示时的状态。面板出现在静止的光标下时，光标下的卡片不算被悬停选中：
@@ -294,6 +297,8 @@ pub struct ClipboardList {
     previewing: previewing::Previewing,
     /// 卡片上按下左键后拖动多远算拖出（平台层的拖出接口）。
     drag: DragTracker,
+    /// 双栏的右栏：面板显示时不抢焦点，页脚不放快捷键、偏好设置按钮。
+    pub(super) side: bool,
     reorder: Option<ReorderDrag>,
     reorder_geometry: Rc<RefCell<ReorderGeometry>>,
     reorder_scroll_task: Option<Task<()>>,
@@ -379,6 +384,7 @@ impl ClipboardList {
             pointer: Pointer::Moved,
             previewing: previewing::Previewing::default(),
             drag: DragTracker::default(),
+            side: false,
             reorder: None,
             reorder_geometry: Rc::default(),
             reorder_scroll_task: None,
@@ -442,6 +448,29 @@ impl ClipboardList {
         self.model.total()
     }
 
+    /// 设为双栏的右栏（见 [`Self::side`]）。
+    pub fn set_side(&mut self, cx: &mut Context<Self>) {
+        self.side = true;
+        cx.notify();
+    }
+
+    /// 面板显示中（收到 `Shown` 之后、`Hidden` 之前）。
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
+
+    /// 面板显示中才建的列表（双栏的右栏）错过了 `Shown`，补一次显示时的处理。
+    pub fn mark_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.on_panel_event(PanelEvent::Shown, window, cx);
+    }
+
+    /// 重拉当前范围：另一栏改了记录，这一栏的标记、条数和成员可能都变了。
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if let Some(request) = self.model.reload_current_range() {
+            self.fetch(request, cx);
+        }
+    }
+
     /// 处理 core 的列表变化（新记录、清理、整体重载）。
     pub fn on_update(&mut self, update: ListUpdate, cx: &mut Context<Self>) {
         let action = self
@@ -492,11 +521,13 @@ impl ClipboardList {
                 } else if deferred {
                     self.reload(cx);
                 }
-                window.focus(&self.focus, cx);
+                if !self.side {
+                    window.focus(&self.focus, cx);
+                }
                 cx.notify();
             }
             PanelEvent::EditingEnded => {
-                if self.note.is_none() && self.content_edit.is_none() {
+                if !self.side && self.note.is_none() && self.content_edit.is_none() {
                     window.focus(&self.focus, cx);
                 }
             }
@@ -1239,6 +1270,7 @@ impl ClipboardList {
                     if let Some(request) = list.model.reload_current_range() {
                         list.fetch(request, cx);
                     }
+                    cx.emit(ListIntent::Changed);
                 }
                 if original.is_some() {
                     cx.notify();
@@ -1669,6 +1701,13 @@ impl ClipboardList {
         let layout = self.layout;
         let env = CardEnv {
             tokens,
+            kind_tags: theme::components(cx).kind_tag,
+            snippet_colors: self
+                .settings
+                .clipboard
+                .display
+                .quick_snippet_colors
+                .then(|| theme::components(cx).snippet),
             reorder_source_opacity: theme::components(cx).reorder.source_opacity,
             layout: &layout,
             now: self.now,
@@ -1749,6 +1788,13 @@ impl Render for ClipboardList {
         let layout = self.layout;
         let env = CardEnv {
             tokens,
+            kind_tags: theme::components(cx).kind_tag,
+            snippet_colors: self
+                .settings
+                .clipboard
+                .display
+                .quick_snippet_colors
+                .then(|| theme::components(cx).snippet),
             reorder_source_opacity: theme::components(cx).reorder.source_opacity,
             layout: &layout,
             now: self.now,

@@ -9,7 +9,7 @@
 #   3. Rounds x (show, hide) through the single-instance path: after each show the window rect equals
 #      the rect the app wrote, the content rect equals the independently computed target, and the
 #      foreground window never changes.
-#   4. The minimum track size (WM_GETMINMAXINFO, cross-process) is 360x600 logical x DPI x text scale
+#   4. The minimum track size (WM_GETMINMAXINFO, cross-process) is 280x400 logical x DPI x text scale
 #      plus the resize border, clamped to the work area.
 #   5. PHANTOM_ACTIVATIONS == 0 and no WM_MOUSEACTIVATE override (patch W0002 in effect).
 #
@@ -69,8 +69,8 @@ try {
             $insets = @(($client[0] - $window[0]), ($client[1] - $window[1]), ($window[2] - $client[2]), ($window[3] - $client[3]))
             $work = [System.Windows.Forms.Screen]::FromHandle($panel).WorkingArea
             $scale = [double]$shown.dpi / 96.0
-            $minWidth = [math]::Min([math]::Round(360 * $tsf * $scale, [MidpointRounding]::AwayFromZero), $work.Width - $insets[0] - $insets[2]) + $insets[0] + $insets[2]
-            $minHeight = [math]::Min([math]::Round(600 * $tsf * $scale, [MidpointRounding]::AwayFromZero), $work.Height - $insets[1] - $insets[3]) + $insets[1] + $insets[3]
+            $minWidth = [math]::Min([math]::Round(280 * $tsf * $scale, [MidpointRounding]::AwayFromZero), $work.Width - $insets[0] - $insets[2]) + $insets[0] + $insets[2]
+            $minHeight = [math]::Min([math]::Round(400 * $tsf * $scale, [MidpointRounding]::AwayFromZero), $work.Height - $insets[1] - $insets[3]) + $insets[1] + $insets[3]
             $minTrack = [Probe]::MinTrackSize($panel)
             $minOk = $minTrack[0] -eq $minWidth -and $minTrack[1] -eq $minHeight
             Note ("min track size {0}x{1}, expected {2}x{3} -> {4}" -f $minTrack[0], $minTrack[1], $minWidth, $minHeight, $(if ($minOk) { 'ok' } else { 'FAIL' }))

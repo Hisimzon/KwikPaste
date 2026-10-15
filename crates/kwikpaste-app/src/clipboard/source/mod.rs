@@ -22,7 +22,12 @@ use kwikpaste_core::{
 
 pub use self::core_source::start_selftest_core;
 pub use self::fixture::{FixtureSource, FixtureStore};
-use super::model::{actions::OpenTarget, filter::ListFilter, item::ItemRef, list_model::Page};
+use super::model::{
+    actions::OpenTarget,
+    filter::{ListFilter, SourceApp},
+    item::ItemRef,
+    list_model::Page,
+};
 
 /// 一次列表查询：分页加上当前视图的筛选条件和排序（core `ClipboardItemQuery`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +98,9 @@ pub trait ClipboardSource: Send + Sync + 'static {
 
     /// 全部自定义分组，按排序。
     fn groups(&self) -> BoxFuture<'static, anyhow::Result<Vec<Group>>>;
+
+    /// 历史记录里出现过的来源应用，最近复制过的在前（搜索框的应用筛选）。夹具从记录里收集。
+    fn history_apps(&self) -> BoxFuture<'static, anyhow::Result<Vec<SourceApp>>>;
 
     /// 当前视图全部记录的 id 与保护标记（多选全选、跨页连选）。
     fn item_refs(&self, query: ListQuery) -> BoxFuture<'static, anyhow::Result<Vec<ItemRef>>>;

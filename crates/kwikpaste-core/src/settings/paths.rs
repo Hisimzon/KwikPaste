@@ -9,6 +9,8 @@ pub const TEXT_MAX_LINES: &str = "clipboard.display.textMaxLines";
 pub const IMAGE_MAX_HEIGHT: &str = "clipboard.display.imageMaxHeight";
 /// 列表样式：卡片或贴边（`Display::list_style`）。
 pub const LIST_STYLE: &str = "clipboard.display.listStyle";
+/// 面板布局：单栏或双栏（`Display::layout`）。
+pub const LAYOUT: &str = "clipboard.display.layout";
 /// 列表疏密（`Display::density`）。
 pub const DENSITY: &str = "clipboard.display.density";
 /// 自定义疏密下的各项尺寸（`Display::custom_layout`）。
@@ -17,6 +19,8 @@ pub const CUSTOM_LAYOUT: &str = "clipboard.display.customLayout";
 pub const FILE_MAX_COUNT: &str = "clipboard.display.fileMaxCount";
 /// 文本记录下方的快捷信息（`Display::quick_snippets`）。
 pub const QUICK_SNIPPETS: &str = "clipboard.display.quickSnippets";
+/// 快捷信息及预览文字按类型着色（`Display::quick_snippet_colors`）。
+pub const QUICK_SNIPPET_COLORS: &str = "clipboard.display.quickSnippetColors";
 /// 打开剪贴板窗口时回到列表顶部（`Window::scroll_to_top_on_open`）。
 pub const SCROLL_TO_TOP_ON_OPEN: &str = "clipboard.window.scrollToTopOnOpen";
 /// 点击列表项时的自动粘贴行为（`Content::auto_paste`）。
@@ -25,7 +29,8 @@ pub const AUTO_PASTE: &str = "clipboard.content.autoPaste";
 pub const SORT: &str = "clipboard.content.sort";
 
 /// 改了就要重新排版列表的设置。
-pub const LIST_LAYOUT: [&str; 7] = [
+pub const LIST_LAYOUT: [&str; 8] = [
+    LAYOUT,
     TEXT_MAX_LINES,
     IMAGE_MAX_HEIGHT,
     LIST_STYLE,
@@ -42,7 +47,8 @@ mod tests {
     use super::*;
     use crate::settings::{Settings, SettingsDelta};
 
-    const ALL: [&str; 10] = [
+    const ALL: [&str; 11] = [
+        LAYOUT,
         TEXT_MAX_LINES,
         IMAGE_MAX_HEIGHT,
         LIST_STYLE,

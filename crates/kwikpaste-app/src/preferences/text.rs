@@ -79,7 +79,19 @@ pub fn options(setting: &Setting) -> Vec<(SharedString, SharedString)> {
     let Control::Select(options) = setting.control else {
         return Vec::new();
     };
-    let label = |value: &str| t(&setting_key(setting, &format!("options.{value}")));
+    let label = |value: &str| {
+        let field = if setting.id == "shortcuts.doubleTap" {
+            let platform = if cfg!(target_os = "macos") {
+                "macos"
+            } else {
+                "windows"
+            };
+            format!("options.{platform}.{value}")
+        } else {
+            format!("options.{value}")
+        };
+        t(&setting_key(setting, &field))
+    };
 
     match options {
         Options::Values(values) => values

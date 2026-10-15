@@ -34,21 +34,36 @@ fn main() -> anyhow::Result<()> {
     }
     // 第一步：日志与 panic hook（崩溃记录、崩溃重启），见 `health`。
     health::install();
+    log::info!(
+        "launched with {:?}",
+        std::env::args_os().skip(1).collect::<Vec<_>>()
+    );
     #[cfg(target_os = "windows")]
     match std::env::current_exe() {
         Ok(path) => kwikpaste_core::clipboard::set_helper_exe(path),
         Err(err) => log::warn!("icon helper executable path is unavailable: {err}"),
     }
-    let Some(launch) = platform::launch()? else {
+    // 这里返回的错误只到 stderr（Windows 上没有控制台），先写进日志。
+    let Some(launch) =
+        platform::launch().inspect_err(|err| log::error!("startup failed: {err:#}"))?
+    else {
         return Ok(());
     };
-    let platform = platform::create()?;
+    let platform =
+        platform::create().inspect_err(|err| log::error!("platform init failed: {err:#}"))?;
     health::start_watchdog();
 
     let application = Application::with_platform(platform).with_assets(kwikpaste_ui::Assets);
     #[cfg(target_os = "macos")]
     application.on_reopen(platform::reopen_from_dock);
     application.run(move |cx: &mut App| {
+        // macOS 的退出走 `[NSApp terminate:]` 直接结束进程，`run` 不会返回，下面那次 `clean_exit`
+        // 到不了；不在这里清掉运行标记，外部看门狗会把每次正常退出（含 Homebrew 升级前的退出）当成崩溃重启。
+        cx.on_app_quit(|_| {
+            health::clean_exit();
+            async {}
+        })
+        .detach();
         kwikpaste_ui::init(cx);
         i18n::init(cx);
         clipboard::init(cx);

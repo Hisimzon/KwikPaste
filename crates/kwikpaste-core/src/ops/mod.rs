@@ -15,7 +15,7 @@ mod storage_tests;
 mod tests;
 
 pub use crate::db::items::{ReorderAnchor, ReorderSection};
-pub use apps::ClipboardAppView;
+pub use apps::{ClipboardAppView, HistoryApp};
 pub use groups::{ClipboardGroupInput, ClipboardGroupLayoutInput, DEFAULT_CLIPBOARD_GROUP_ICON};
 pub use items::{CapturedItem, CopyOutcome, ImageSave, QuickPasteTicket, UpdateNoteResult};
 pub use storage::{

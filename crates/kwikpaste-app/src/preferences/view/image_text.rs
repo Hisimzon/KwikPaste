@@ -5,8 +5,9 @@
 //! 起一个识别进程，结果由 core 在本次运行里缓存。
 
 use gpui::{
-    AnyElement, Context, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div,
-    prelude::FluentBuilder as _, relative,
+    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _,
+    relative,
 };
 use kwikpaste_core::{OcrStatus, OcrSupport};
 use kwikpaste_ui::{
@@ -198,6 +199,8 @@ impl Preferences {
         };
 
         row_frame(first, tokens)
+            .id("preferences-ocr-anchor")
+            .anchor_scroll(self.setting_anchors.get("ocr.status").cloned())
             .child(
                 div()
                     .flex()

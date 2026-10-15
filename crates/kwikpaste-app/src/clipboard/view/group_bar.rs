@@ -2,7 +2,8 @@
 //!
 //! - 范围始终有一个选中；分类、自定义分组再点一次取消；
 //! - 隐藏的分组不出现在栏上；放不下的自定义分组收进“更多”菜单；
-//! - 自定义分组右键可以编辑、隐藏、删除；新增、编辑、管理分组的弹框由主窗口打开（`group_dialogs`）。
+//! - 自定义分组右键可以编辑、隐藏、删除；新增、编辑、管理分组的弹框由主窗口打开（`group_dialogs`）；
+//! - 双栏布局拆成两条：左栏只有分类，右栏是「收藏」加自定义分组的页签（始终有一个选中）。
 
 use std::sync::Arc;
 
@@ -36,6 +37,19 @@ const GAP: f32 = 4.;
 const CUSTOM_START: f32 = 170. + 4. + GAP;
 /// 末尾留给“更多”或“新增”按钮的位置。
 const ACTION_SLOT: f32 = GAP + BUTTON;
+/// 右栏页签里自定义分组的起点：左内边距 + 收藏按钮 + 分隔线，再加分隔线外边距和一个间距。
+const SIDE_START: f32 = 12. + BUTTON + GAP + 5. + 4. + GAP;
+
+/// 分组栏放哪些按钮。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarMode {
+    /// 单栏：范围、分类、自定义分组。
+    Full,
+    /// 双栏的左栏：只有分类。
+    Categories,
+    /// 双栏的右栏：收藏和自定义分组。
+    Side,
+}
 
 /// 分组栏发给主窗口的事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +65,7 @@ pub enum GroupBarEvent {
 }
 
 pub struct GroupBar {
+    mode: BarMode,
     groups: Vec<Group>,
     range: Range,
     category: Option<ItemKind>,
@@ -63,9 +78,9 @@ impl EventEmitter<GroupBarEvent> for GroupBar {}
 /// 选中项胶囊里名称的最大宽度（同 [`super::chrome`] 里的 `max_w`）。
 const CHIP_LABEL_MAX: f32 = 72.;
 
-/// 一行能放下几个自定义分组（宽度为设计 px）。
-pub fn capacity(width: f32) -> usize {
-    let available = (width - CUSTOM_START - ACTION_SLOT).max(0.);
+/// 一行能放下几个自定义分组（宽度为设计 px，`start` 是第一个自定义分组的起点）。
+fn capacity_from(width: f32, start: f32) -> usize {
+    let available = (width - start - ACTION_SLOT).max(0.);
     ((available + GAP) / (BUTTON + GAP)).floor().max(0.) as usize
 }
 
@@ -81,13 +96,21 @@ fn chip_extra(label: &str) -> f32 {
 }
 
 impl GroupBar {
-    pub fn new() -> Self {
+    pub fn new(mode: BarMode) -> Self {
         Self {
+            mode,
             groups: Vec::new(),
             range: Range::All,
             category: None,
             group_id: None,
             hints: false,
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: BarMode, cx: &mut Context<Self>) {
+        if self.mode != mode {
+            self.mode = mode;
+            cx.notify();
         }
     }
 
@@ -132,9 +155,13 @@ impl GroupBar {
                 t("clipboard:groups.favorite"),
             ),
         };
-        let selected = self.range == range;
-        // Mod+Q 的角标标在按下去会切到的那个按钮上。
-        let hint = (self.hints && self.range.toggled() == range).then(|| SharedString::from("Q"));
+        let (selected, hint) = if self.mode == BarMode::Side {
+            (self.group_id.is_none(), None)
+        } else {
+            // Mod+Q 的角标标在按下去会切到的那个按钮上。
+            let hint = self.hints && self.range.toggled() == range;
+            (self.range == range, hint.then(|| SharedString::from("Q")))
+        };
 
         icon_button(cx, id, Glyph::Icon(icon), label, hint, look(selected))
             .role(Role::Tab)
@@ -333,19 +360,57 @@ fn create_entries(entity: gpui::WeakEntity<GroupBar>) -> Vec<MenuEntry> {
 
 impl Render for GroupBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = window.viewport_size().width.as_f32() / window.rem_size().as_f32() * 16.;
+        let mut width = window.viewport_size().width.as_f32() / window.rem_size().as_f32() * 16.;
+        if self.mode != BarMode::Full {
+            // 双栏两列等宽，每条分组栏占一半。
+            width /= 2.;
+        }
+        let bar = div()
+            .id(match self.mode {
+                BarMode::Side => "clipboard-side-group-bar",
+                _ => "clipboard-group-bar",
+            })
+            .role(Role::TabList)
+            .aria_label(t("clipboard:accessibility.groupBar"))
+            .flex()
+            .flex_none()
+            .w_full()
+            .items_center()
+            .gap(space((GAP) / 4.))
+            .overflow_hidden()
+            .px(space((12.) / 4.))
+            .pb(space((8.) / 4.));
+        let drag_area = div()
+            .flex_1()
+            .min_w_0()
+            .h(space((32.) / 4.))
+            .window_drag_area();
+        if self.mode == BarMode::Categories {
+            let categories = CATEGORIES.map(|kind| self.category_button(kind, cx));
+            return bar.children(categories).child(drag_area);
+        }
+
         let visible: Vec<Group> = self
             .groups
             .iter()
             .filter(|group| !group.is_hidden)
             .cloned()
             .collect();
+        let side = self.mode == BarMode::Side;
+        let start = if side { SIDE_START } else { CUSTOM_START };
         // 选中的范围、分类和自定义分组都是带名称的胶囊，先扣掉它们多占的宽度再算放得下几个。
-        let mut chips = chip_extra(&match self.range {
-            Range::All => t("clipboard:groups.all"),
-            Range::Favorite => t("clipboard:groups.favorite"),
-        });
-        if let Some(kind) = self.category {
+        let mut chips = if side {
+            0.
+        } else {
+            chip_extra(&match self.range {
+                Range::All => t("clipboard:groups.all"),
+                Range::Favorite => t("clipboard:groups.favorite"),
+            })
+        };
+        if side && self.group_id.is_none() {
+            chips += chip_extra(&t("clipboard:groups.favorite"));
+        }
+        if let Some(kind) = self.category.filter(|_| !side) {
             chips += chip_extra(&t(match kind {
                 ItemKind::Text => "clipboard:groups.text",
                 ItemKind::Image => "clipboard:groups.image",
@@ -357,21 +422,22 @@ impl Render for GroupBar {
             .group_id
             .as_ref()
             .and_then(|id| visible.iter().position(|group| group.id == *id));
-        let mut fits = capacity(width - chips);
+        let mut fits = capacity_from(width - chips, start);
         if let Some(index) = selected {
             let with_chip = visible
                 .get(index)
                 .map_or(0., |group| chip_extra(&group.name));
-            fits = capacity(width - chips - with_chip);
+            fits = capacity_from(width - chips - with_chip, start);
             if index >= fits {
-                fits = capacity(width - chips - chip_extra(&t("clipboard:groups.more")));
+                fits = capacity_from(
+                    width - chips - chip_extra(&t("clipboard:groups.more")),
+                    start,
+                );
             }
         }
         let inline = visible.len().min(fits);
         let overflow: Vec<Group> = visible.iter().skip(inline).cloned().collect();
 
-        let ranges = [Range::All, Range::Favorite].map(|range| self.range_button(range, cx));
-        let categories = CATEGORIES.map(|kind| self.category_button(kind, cx));
         let customs: Vec<AnyElement> = visible
             .iter()
             .take(inline)
@@ -383,31 +449,20 @@ impl Render for GroupBar {
             self.more_button(overflow, cx)
         };
 
-        div()
-            .id("clipboard-group-bar")
-            .role(Role::TabList)
-            .aria_label(t("clipboard:accessibility.groupBar"))
-            .flex()
-            .flex_none()
-            .w_full()
-            .items_center()
-            .gap(space((GAP) / 4.))
-            .overflow_hidden()
-            .px(space((12.) / 4.))
-            .pb(space((8.) / 4.))
-            .children(ranges)
-            .child(separator(cx))
-            .children(categories)
-            .child(separator(cx))
+        let bar = if side {
+            bar.child(self.range_button(Range::Favorite, cx))
+        } else {
+            let ranges = [Range::All, Range::Favorite].map(|range| self.range_button(range, cx));
+            let categories = CATEGORIES.map(|kind| self.category_button(kind, cx));
+            bar.children(ranges)
+                .child(separator(cx))
+                .children(categories)
+        };
+
+        bar.child(separator(cx))
             .when(!customs.is_empty(), |bar| bar.children(customs))
             .child(action)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h(space((32.) / 4.))
-                    .window_drag_area(),
-            )
+            .child(drag_area)
     }
 }
 
@@ -418,9 +473,9 @@ mod tests {
     /// 360 px 宽的面板放 5 个自定义分组（1.x 同宽时的实测）。
     #[test]
     fn the_default_panel_fits_five_custom_groups() {
-        assert_eq!(capacity(360.), 5);
-        assert_eq!(capacity(200.), 0);
-        assert_eq!(capacity(500.), 10);
+        assert_eq!(capacity_from(360., CUSTOM_START), 5);
+        assert_eq!(capacity_from(200., CUSTOM_START), 0);
+        assert_eq!(capacity_from(500., CUSTOM_START), 10);
     }
 
     /// 胶囊多占的宽度：两个全角字 24、两个半角字 14，名称再长也只算到上限。

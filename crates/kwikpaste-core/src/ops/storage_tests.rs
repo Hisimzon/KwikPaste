@@ -207,7 +207,7 @@ fn storage_switch_rejects_existing_kwikpaste_data_target() {
 }
 
 #[test]
-fn unavailable_custom_storage_cannot_be_moved_until_restart() {
+fn unavailable_custom_storage_can_only_be_reset_to_default() {
     let mut fixture = Fixture::new();
     let local = fixture.root().join("local");
     let installed = || CorePaths::new(AppEnv::Dev, local.clone(), local.join("logs"), None);
@@ -221,11 +221,28 @@ fn unavailable_custom_storage_cannot_be_moved_until_restart() {
         .unwrap_err()
         .to_string();
     assert_eq!(err, label(core.language(), Key::StorageCustomUnavailable));
-    assert!(block_on(core.reset_storage_location()).is_err());
-    assert_eq!(
-        core.storage_location().unwrap().unavailable_custom_path,
-        Some(custom.to_string_lossy().into_owned())
-    );
+
+    let location = block_on(core.reset_storage_location()).unwrap().location;
+    assert_eq!(location.unavailable_custom_path, None);
+    assert!(!location.is_custom);
+    block_on(core.shutdown()).unwrap();
+    assert!(!installed().storage_location().unwrap().is_custom);
+}
+
+#[test]
+fn storage_cannot_move_into_install_dir() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let install_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+
+    let err = block_on(core.change_storage_location(install_dir))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err, label(core.language(), Key::StorageInsideInstallDir));
     block_on(core.shutdown()).unwrap();
 }
 

@@ -852,6 +852,26 @@ fn push_filter_clauses(
         qb.push(" AND clipboard_items.is_pinned = ")
             .push_bind(pinned);
     }
+    if !q.source_app_ids.is_empty() {
+        qb.push(" AND clipboard_items.source_app_id IN (");
+        let mut ids = qb.separated(", ");
+        for id in &q.source_app_ids {
+            ids.push_bind(id.clone());
+        }
+        qb.push(")");
+    }
+    if !q.sub_kinds.is_empty() {
+        qb.push(" AND clipboard_items.sub_kind IN (");
+        let mut kinds = qb.separated(", ");
+        for kind in &q.sub_kinds {
+            kinds.push_bind(*kind);
+        }
+        qb.push(")");
+    }
+    if let Some(since) = q.created_since {
+        qb.push(" AND clipboard_items.created_at >= ")
+            .push_bind(since);
+    }
 }
 
 /// OCR 匹配作为非相关子查询，FTS 一次求命中集合后用 item_id 主键关联。
@@ -901,7 +921,7 @@ pub(crate) async fn image_text_flags(
 mod tests {
     use super::*;
     use crate::db::groups::insert_group;
-    use crate::db::models::{ClipboardGroup, ClipboardKind, Platform};
+    use crate::db::models::{ClipboardGroup, ClipboardKind, ClipboardSubKind, Platform};
     use crate::db::test_support::memory_pool;
     use chrono::DateTime;
 
@@ -1254,6 +1274,82 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(ids(&pins), ["pin"]);
+    }
+
+    #[tokio::test]
+    async fn query_filters_by_source_app_sub_kind_and_creation_time() {
+        let pool = memory_pool().await;
+        let old = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let new = old + chrono::Duration::days(2);
+        for id in ["app-a", "app-b"] {
+            crate::db::apps::upsert_app(
+                &pool,
+                &crate::db::models::ClipboardApp {
+                    id: id.to_owned(),
+                    name: id.to_owned(),
+                    icon_file: None,
+                    platform: Platform::Windows,
+                    created_at: old,
+                    updated_at: old,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let mut link = sample_item("link");
+        link.source_app_id = Some("app-a".to_owned());
+        link.sub_kind = Some(ClipboardSubKind::Url);
+        let mut mail = sample_item("mail");
+        mail.source_app_id = Some("app-b".to_owned());
+        mail.sub_kind = Some(ClipboardSubKind::Email);
+        mail.created_at = new;
+        mail.updated_at = new;
+        for item in [&link, &mail, &sample_item("plain")] {
+            insert_item(&pool, item).await.unwrap();
+        }
+
+        let query = |q: ClipboardItemQuery| {
+            let pool = pool.clone();
+            async move { ids(&query_items(&pool, &q).await.unwrap()).join(",") }
+        };
+        assert_eq!(
+            query(ClipboardItemQuery {
+                source_app_ids: vec!["app-a".to_owned()],
+                ..Default::default()
+            })
+            .await,
+            "link"
+        );
+        assert_eq!(
+            query(ClipboardItemQuery {
+                sub_kinds: vec![ClipboardSubKind::Email, ClipboardSubKind::Color],
+                ..Default::default()
+            })
+            .await,
+            "mail"
+        );
+        assert_eq!(
+            query(ClipboardItemQuery {
+                created_since: Some(old + chrono::Duration::days(1)),
+                ..Default::default()
+            })
+            .await,
+            "mail"
+        );
+        assert_eq!(
+            query(ClipboardItemQuery {
+                source_app_ids: vec!["app-a".to_owned()],
+                sub_kinds: vec![ClipboardSubKind::Email],
+                ..Default::default()
+            })
+            .await,
+            "",
+            "conditions combine with AND"
+        );
+
+        let apps = crate::db::apps::list_history_apps(&pool).await.unwrap();
+        let apps: Vec<&str> = apps.iter().map(|app| app.id.as_str()).collect();
+        assert_eq!(apps, ["app-b", "app-a"], "most recently copied first");
     }
 
     #[tokio::test]

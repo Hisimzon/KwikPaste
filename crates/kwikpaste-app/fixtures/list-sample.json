@@ -22,7 +22,10 @@
       "isSensitive": false,
       "kind": "text",
       "platform": "windows",
-      "quickSnippets": ["20260924", "138 1234 5678"],
+      "quickSnippets": [
+        { "kind": "number", "text": "20260924" },
+        { "kind": "phone", "text": "138 1234 5678" }
+      ],
       "size": 48,
       "sourceAppIconPath": "{assets}/icons/app-00.png",
       "sourceAppId": "app.sample.editor",
@@ -477,7 +480,7 @@
       "isSensitive": false,
       "kind": "text",
       "platform": "windows",
-      "quickSnippets": ["v1.4.0"],
+      "quickSnippets": [{ "kind": "number", "text": "v1.4.0" }],
       "size": 64,
       "sourceAppIconPath": "{assets}/icons/app-09.png",
       "sourceAppId": "app.sample.word",

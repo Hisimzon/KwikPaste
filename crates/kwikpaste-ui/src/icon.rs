@@ -13,6 +13,8 @@ use crate::assets::PREFIX;
 /// 应用可用的图标。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconName {
+    /// `lucide:app-window`：搜索框筛选的来源应用。
+    AppWindow,
     Check,
     ChevronDown,
     /// 1.x `i-lucide:circle-check`：复制成功。
@@ -21,6 +23,8 @@ pub enum IconName {
     ClipboardPaste,
     /// 1.x `i-lucide:clipboard-type`：纯文本粘贴。
     ClipboardType,
+    /// `lucide:clock`：搜索框筛选的时间。
+    Clock,
     Close,
     Copy,
     /// 1.x `i-lucide:copy-check`：复制为纯文本。
@@ -33,6 +37,8 @@ pub enum IconName {
     EyeOff,
     /// 1.x `i-lucide:file-symlink`：粘贴为路径。
     FileSymlink,
+    /// `lucide:filter-x`：清除搜索框筛选。
+    FilterX,
     Folder,
     /// 1.x `i-lucide:folder-open`：在文件管理器中显示。
     FolderOpen,
@@ -60,8 +66,12 @@ pub enum IconName {
     Keyboard,
     /// 1.x `i-lucide:laptop`：来自 macOS 设备的同步记录。
     Laptop,
+    /// `lucide:link`：链接类型。
+    Link,
     /// 1.x `i-lucide:list-checks`：多选。
     ListChecks,
+    /// `lucide:list-filter`：搜索框筛选入口。
+    ListFilter,
     /// 1.x `i-lucide:mail`：发送邮件。
     Mail,
     /// 1.x `i-lucide:monitor`：来自 Windows 设备的同步记录。
@@ -87,6 +97,8 @@ pub enum IconName {
     Settings2,
     /// 1.x `i-lets-icons:setting-line`：偏好设置。
     SettingLine,
+    /// `lucide:shapes`：搜索框筛选的类型。
+    Shapes,
     /// 1.x `i-lucide:square-arrow-out-up-right`：打开链接。
     SquareArrowOutUpRight,
     Star,
@@ -100,12 +112,21 @@ pub enum IconName {
     Trash,
     /// 1.x `i-lucide:trash-2`：删除分组。
     Trash2,
+    /// `lucide:type`：富文本类型。
+    Type,
 }
 
 impl IconName {
     /// 从 1.x iconify 包导出的图标的资源文件名；其余用 gpui-kit-assets 的默认集。
     fn exported(self) -> Option<&'static str> {
         Some(match self {
+            Self::AppWindow => "lucide-app-window.svg",
+            Self::Clock => "lucide-clock.svg",
+            Self::FilterX => "lucide-filter-x.svg",
+            Self::Link => "lucide-link.svg",
+            Self::ListFilter => "lucide-list-filter.svg",
+            Self::Shapes => "lucide-shapes.svg",
+            Self::Type => "lucide-type.svg",
             Self::CircleCheck => "lucide-circle-check.svg",
             Self::ClipboardPaste => "lucide-clipboard-paste.svg",
             Self::ClipboardType => "lucide-clipboard-type.svg",

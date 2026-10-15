@@ -267,11 +267,100 @@ impl Driver {
 
     /// 头部齿轮应和托盘复用同一个偏好设置宿主意图。
     async fn header_actions(&mut self, cx: &mut AsyncApp) {
+        let state = cx.update(|cx| {
+            cx.try_global::<crate::platform::updater::UpdateStateHost>()
+                .map(|host| host.0.clone())
+        });
+        if let Some(state) = state {
+            let original = cx.update(|cx| state.read(cx).0.clone());
+            let mut fake = original.clone();
+            fake.supported = true;
+            #[cfg(target_os = "windows")]
+            {
+                fake.install_kind = kwikpaste_updater::InstallKind::Portable;
+            }
+            #[cfg(target_os = "macos")]
+            {
+                fake.install_kind = kwikpaste_updater::InstallKind::MacApp {
+                    bundle: PathBuf::from("selftest.app"),
+                };
+            }
+            fake.update = Some(kwikpaste_updater::UpdateMetadata {
+                current_version: fake.current_version.clone(),
+                version: "9.9.9-selftest".to_owned(),
+                date: None,
+                body: None,
+                target: "selftest".to_owned(),
+                download_url: "https://example.invalid/update".to_owned(),
+                downloaded: false,
+                release_notes_url: "https://example.invalid/notes".to_owned(),
+            });
+            for (name, status, expected) in [
+                (
+                    "header shows a pending update badge",
+                    fake.clone(),
+                    Some("9.9.9-selftest"),
+                ),
+                (
+                    "header hides updates that cannot self-install",
+                    kwikpaste_updater::UpdateStatus {
+                        supported: false,
+                        ..fake.clone()
+                    },
+                    None,
+                ),
+                (
+                    "header hides unmanaged updates",
+                    kwikpaste_updater::UpdateStatus {
+                        install_kind: kwikpaste_updater::InstallKind::Unmanaged,
+                        ..fake.clone()
+                    },
+                    None,
+                ),
+                (
+                    "header removes a withdrawn update badge",
+                    kwikpaste_updater::UpdateStatus {
+                        update: None,
+                        ..fake
+                    },
+                    None,
+                ),
+            ] {
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.0 = status;
+                        cx.notify();
+                    })
+                });
+                self.pause(cx, 32).await;
+                let version = cx.update(|cx| {
+                    self.panel
+                        .read(cx)
+                        .header()
+                        .read(cx)
+                        .pending_update_version(cx)
+                });
+                self.check(name, version.as_deref() == expected, || {
+                    format!("version {version:?}")
+                });
+            }
+            cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    state.0 = original;
+                    cx.notify();
+                })
+            });
+        } else {
+            self.check("updater state exists for the panel header", false, || {
+                "missing UpdateStateHost".to_owned()
+            });
+        }
+
         self.panel_intents.borrow_mut().clear();
         cx.update(|cx| {
-            let header = self.panel.read(cx).header().clone();
-            header.update(cx, |_, cx| {
-                cx.emit(super::header::HeaderEvent::OpenPreferences);
+            let list = self.panel.read(cx).list().clone();
+            list.update(cx, |_, cx| {
+                cx.emit(super::list::ListIntent::OpenPreferences);
             });
         });
         let opened = self
@@ -281,7 +370,7 @@ impl Driver {
             .any(|intent| matches!(intent, super::panel::PanelIntent::OpenPreferences));
         let intents = self.panel_intents.borrow().clone();
         self.check(
-            "header settings emits the preferences intent",
+            "footer settings emits the preferences intent",
             opened,
             || format!("intents {intents:?}"),
         );
@@ -1705,7 +1794,7 @@ impl Driver {
                 .find_map(|item| {
                     item.quick_snippets
                         .first()
-                        .map(|text| (item.clone(), text.clone()))
+                        .map(|snippet| (item.clone(), Arc::<str>::from(snippet.text.as_str())))
                 })
         });
         let Some((item, text)) = target else {
@@ -1781,12 +1870,12 @@ impl Driver {
             || format!("{before} -> {after}, focused {still}"),
         );
 
-        // Esc 退出编辑态，焦点回到列表。
+        // 搜索框里的 Esc 和列表里一样逐层退出，没有可退的层就直接隐藏窗口。
         self.key(cx, "escape");
         let request = self.last_request(cx);
         self.check(
-            "escape in the search box ends editing",
-            matches!(request, Some(PanelCommand::EndEditing)),
+            "escape in the search box hides the panel",
+            matches!(request, Some(PanelCommand::Hide(_))),
             || format!("{request:?}"),
         );
         self.emit(cx, PanelEvent::EditingEnded);

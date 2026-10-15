@@ -9,7 +9,7 @@ use kwikpaste_core::{clipboard::WordSpan, presenter::PreviewContentMetrics};
 use kwikpaste_ui::theme::{TextSize, fonts};
 
 /// 面板与卡片之间的距离。
-const GAP: f64 = 40.;
+const GAP: f64 = 28.;
 /// 面板离显示器边缘至少这么远。
 const MARGIN: f64 = 32.;
 const MIN_WIDTH: f64 = 288.;
@@ -42,6 +42,13 @@ pub const WORDS_BAR_HEIGHT: f64 = 41.;
 /// 词块实际会比测得的略宽；宁可多留一行空白也不能裁掉最后一行）。
 const WORDS_EDGE: f64 = 3.;
 const FALLBACK_SIZE: (f64, f64) = (320., 240.);
+/// 预览快捷信息区的上下内边距。
+pub const SNIPPETS_PADDING_Y: f64 = 12.;
+/// 快捷信息小块的高度、左右内边距、圆点直径，以及圆点、类型名、内容之间的间距。
+pub const SNIPPET_CHIP_HEIGHT: f64 = 24.;
+pub const SNIPPET_CHIP_PADDING_X: f64 = 8.;
+pub const SNIPPET_DOT: f64 = 6.;
+pub const SNIPPET_PART_GAP: f64 = 4.;
 
 /// 逻辑像素的矩形。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,6 +132,7 @@ pub fn geometry(
     card: RectF,
     monitor: RectF,
     metrics: Option<&PreviewContentMetrics>,
+    snippets: f64,
     prefer_left: bool,
     scale: f64,
 ) -> Geometry {
@@ -132,7 +140,7 @@ pub fn geometry(
     let source = card
         .intersect(&monitor)
         .unwrap_or_else(|| card.clamp_into(&monitor));
-    let size = panel_size(metrics, &available, scale);
+    let size = panel_size(metrics, snippets, &available, scale);
     let placement = placement(&source, &available, size, prefer_left, scale);
     let panel = raw_panel(&source, placement, size, scale).clamp_into(&available);
 
@@ -183,9 +191,10 @@ pub fn measure_metrics(
     PreviewContentMetrics::Words { chips: measured }
 }
 
-/// 按内容度量算面板尺寸，规则与面板的渲染一一对应。
+/// 按内容度量算面板尺寸，规则与面板的渲染一一对应。`snippets` 是纯文本下方快捷信息区的高度。
 fn panel_size(
     metrics: Option<&PreviewContentMetrics>,
+    snippets: f64,
     available: &RectF,
     scale: f64,
 ) -> (f64, f64) {
@@ -198,7 +207,7 @@ fn panel_size(
     let (width, height) = match metrics {
         None => (max_width, header + EMPTY_HEIGHT * scale),
         Some(PreviewContentMetrics::Text { rows }) => {
-            (max_width, header + text_height(*rows) * scale)
+            (max_width, header + (text_height(*rows) + snippets) * scale)
         }
         Some(PreviewContentMetrics::Words { chips }) => {
             let widths: Vec<(f64, bool)> = chips
@@ -223,6 +232,64 @@ fn panel_size(
         width.clamp(min_width, max_width),
         height.clamp(min_height, max_height),
     )
+}
+
+/// 快捷信息小块折行的内容宽度（设计 px）：与纯文本同宽，再扣掉两侧边框和取整余量。
+pub fn snippets_content_width(monitor: &RectF, scale: f64) -> f64 {
+    (MAX_WIDTH * scale).min(monitor.inset(MARGIN).width) / scale - TEXT_PADDING_X * 2. - WORDS_EDGE
+}
+
+/// 一个快捷信息小块的宽度（设计 px）：按 `text-xs` 量类型名和内容，`dot` 时前面多一个圆点。
+pub fn snippet_chip_width(label: &str, text: &str, dot: bool, scale: f64, window: &Window) -> f64 {
+    let font_size = px(TextSize::Xs.font_size().0 * 16. * scale as f32);
+    let measure = |line: &str| {
+        let mut ui_font = font(fonts::UI_FAMILY);
+        ui_font.fallbacks = Some(fonts::ui_fallbacks());
+        let run = TextRun {
+            len: line.len(),
+            font: ui_font,
+            ..TextRun::default()
+        };
+        window
+            .text_system()
+            .layout_line(line, font_size, &[run], None)
+            .width
+            .as_f32() as f64
+            / scale
+    };
+    let dot = if dot {
+        SNIPPET_DOT + SNIPPET_PART_GAP
+    } else {
+        0.
+    };
+
+    (SNIPPET_CHIP_PADDING_X * 2. + dot + measure(label) + SNIPPET_PART_GAP + measure(text) + 1.)
+        .ceil()
+}
+
+/// 快捷信息区的高度（含顶部 1px 分隔线），小块按 `content_width` 折行；没有小块时为 0。
+pub fn snippets_height(chips: &[f64], content_width: f64) -> f64 {
+    if chips.is_empty() {
+        return 0.;
+    }
+
+    let mut rows = 1_u32;
+    let mut line_width = 0.;
+    for (index, &chip) in chips.iter().enumerate() {
+        let width = chip.min(content_width);
+        if index == 0 {
+            line_width = width;
+        } else if line_width + WORD_GAP + width > content_width {
+            rows += 1;
+            line_width = width;
+        } else {
+            line_width += WORD_GAP + width;
+        }
+    }
+
+    1. + SNIPPETS_PADDING_Y * 2.
+        + f64::from(rows) * SNIPPET_CHIP_HEIGHT
+        + f64::from(rows - 1) * WORD_GAP
 }
 
 fn text_height(rows: u32) -> f64 {
@@ -494,23 +561,38 @@ mod tests {
             card(800.),
             MONITOR,
             Some(&PreviewContentMetrics::Text { rows: 3 }),
+            0.,
             false,
             1.,
         );
         assert_eq!(geometry.placement, Placement::Right);
         assert_eq!(geometry.panel.width, 480.);
         assert_eq!(geometry.panel.height, 48. + 3. * 22. + 32.);
-        assert_eq!(geometry.panel.left, 800. + 340. + 40.);
+        assert_eq!(geometry.panel.left, 800. + 340. + GAP);
         assert_eq!(geometry.panel.top, 340. - geometry.panel.height / 2.);
+
+        let chips = [200., 200., 120.];
+        let snippets = snippets_height(&chips, 445.);
+        assert_eq!(snippets, 1. + 24. + 2. * 24. + 4.);
+        let with_snippets = super::geometry(
+            card(800.),
+            MONITOR,
+            Some(&PreviewContentMetrics::Text { rows: 3 }),
+            snippets,
+            false,
+            1.,
+        );
+        assert_eq!(with_snippets.panel.height, geometry.panel.height + snippets);
+        assert_eq!(snippets_height(&[], 445.), 0.);
     }
 
     #[test]
     fn the_pointer_side_wins_and_falls_back_to_the_other_side() {
-        let left = geometry(card(800.), MONITOR, None, true, 1.);
+        let left = geometry(card(800.), MONITOR, None, 0., true, 1.);
         assert_eq!(left.placement, Placement::Left);
 
         // 贴着右边缘：右边放不下，换到左边。
-        let edge = geometry(card(1500.), MONITOR, None, false, 1.);
+        let edge = geometry(card(1500.), MONITOR, None, 0., false, 1.);
         assert_eq!(edge.placement, Placement::Left);
     }
 
@@ -523,6 +605,7 @@ mod tests {
                 width: Some(4000.),
                 height: Some(1000.),
             }),
+            0.,
             false,
             1.,
         );
@@ -534,6 +617,7 @@ mod tests {
                 width: Some(10.),
                 height: Some(10.),
             }),
+            0.,
             &MONITOR.inset(MARGIN),
             1.,
         );
@@ -552,6 +636,7 @@ mod tests {
         // 内容宽 448：一行放 4 个（4×100 + 3×4 = 412），9 个占 3 行。
         let height = panel_size(
             Some(&PreviewContentMetrics::Words { chips }),
+            0.,
             &MONITOR.inset(MARGIN),
             1.,
         )
@@ -597,7 +682,7 @@ mod tests {
 
     #[test]
     fn panels_scale_with_text_size() {
-        let size = panel_size(None, &MONITOR.inset(MARGIN), 1.25);
+        let size = panel_size(None, 0., &MONITOR.inset(MARGIN), 1.25);
         assert_eq!(size, (600., (48. + 96.) * 1.25));
     }
 
@@ -605,6 +690,7 @@ mod tests {
     fn long_text_fills_the_panel_and_scrolls() {
         let (width, height) = panel_size(
             Some(&PreviewContentMetrics::Text { rows: 40 }),
+            0.,
             &MONITOR.inset(MARGIN),
             1.,
         );

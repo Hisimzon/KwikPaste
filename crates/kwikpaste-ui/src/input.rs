@@ -4,9 +4,9 @@
 //! （`SetForegroundWindow` + `TrackPopupMenuEx`），会抢前台、破坏不激活面板。
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EntityInputHandler as _, FocusHandle, Focusable as _,
-    IntoElement, ParentElement as _, Rems, RenderOnce, SharedString, Styled as _, Subscription,
-    Window, div, prelude::FluentBuilder as _,
+    AnyElement, App, AppContext as _, Context, Entity, EntityInputHandler as _, FocusHandle,
+    Focusable as _, IntoElement, ParentElement as _, Rems, RenderOnce, SharedString, Styled as _,
+    Subscription, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
     FocusableExt as _, Sizable as _,
@@ -16,7 +16,7 @@ use gpui_component::{
 use crate::{
     icon::{Icon, IconName},
     tag::KeyHint,
-    theme,
+    theme::{self, space},
 };
 
 /// 输入框的 key context。应用要在输入框聚焦时改写某个键（例如搜索框把 ↑/↓ 交给列表），就用
@@ -160,6 +160,8 @@ pub struct Input {
     search: bool,
     hint_key: Option<SharedString>,
     accessibility_label: Option<SharedString>,
+    chips: Vec<AnyElement>,
+    suffix: Option<AnyElement>,
 }
 
 impl Input {
@@ -173,10 +175,12 @@ impl Input {
             search: false,
             hint_key: None,
             accessibility_label: None,
+            chips: Vec::new(),
+            suffix: None,
         }
     }
 
-    /// 搜索框:前缀放搜索图标、可清空。主窗口头部用 `.small()` 加 `.width(space((260.) / 4.))`(260 px)。
+    /// 搜索框：前缀放搜索图标、可清空。不给宽度时占满父元素（主窗口头部）。
     pub fn search(input: &TextInput) -> Self {
         Self {
             search: true,
@@ -211,6 +215,18 @@ impl Input {
         self
     }
 
+    /// 搜索框：排在搜索图标后、输入文字前的标签（已选的筛选条件）。
+    pub fn chips(mut self, chips: Vec<AnyElement>) -> Self {
+        self.chips = chips;
+        self
+    }
+
+    /// 排在清空按钮后面的元素。
+    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
+        self.suffix = Some(suffix.into_any_element());
+        self
+    }
+
     /// 读屏名称；不给时用占位文字。
     pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
         self.accessibility_label = Some(label.into());
@@ -227,6 +243,7 @@ impl RenderOnce for Input {
             InputSize::Medium => theme::TextSize::Base.font_size(),
         };
         let hint_key = self.hint_key;
+        let chips = self.chips;
 
         KitInput::new(&self.input.state)
             .when(self.size == InputSize::Small, |input| input.small())
@@ -249,32 +266,40 @@ impl RenderOnce for Input {
                     .rounded_full()
                     .prefix(
                         div()
-                            .relative()
                             .flex()
                             .items_center()
-                            .justify_center()
+                            .gap(space(1.))
                             .child(
                                 div()
-                                    .when(hint_key.is_some(), |icon| icon.opacity(0.))
+                                    .relative()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
                                     .child(
-                                        Icon::new(IconName::Search)
-                                            .size(icon_size)
-                                            .color(icon_color),
-                                    ),
+                                        div()
+                                            .when(hint_key.is_some(), |icon| icon.opacity(0.))
+                                            .child(
+                                                Icon::new(IconName::Search)
+                                                    .size(icon_size)
+                                                    .color(icon_color),
+                                            ),
+                                    )
+                                    .when_some(hint_key, |prefix, key| {
+                                        prefix.child(
+                                            div()
+                                                .absolute()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .size_full()
+                                                .child(KeyHint::new(key)),
+                                        )
+                                    }),
                             )
-                            .when_some(hint_key, |prefix, key| {
-                                prefix.child(
-                                    div()
-                                        .absolute()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .size_full()
-                                        .child(KeyHint::new(key)),
-                                )
-                            }),
+                            .children(chips),
                     )
             })
+            .when_some(self.suffix, |input, suffix| input.suffix(suffix))
             .when_some(self.accessibility_label, |input, label| {
                 input.aria_label(label)
             })
@@ -311,11 +336,13 @@ impl TextAreaInput {
         self.state.read(cx).value()
     }
 
-    /// 改写内容，不触发变化回调。
+    /// 改写内容，不触发变化回调；光标放到末尾（多行框默认会落在开头）。
     pub fn set_value(&self, value: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
         let value: SharedString = value.into();
         self.state.update(cx, |state, cx| {
-            state.set_value(value.to_string(), window, cx)
+            state.set_value(value.to_string(), window, cx);
+            let end = state.value().len();
+            state.set_selected_range(end..end, cx);
         });
     }
 

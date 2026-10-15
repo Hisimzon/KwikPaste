@@ -72,6 +72,8 @@ pub struct Appearance {
     pub theme: Theme,
     pub material: Material,
     pub language: Language,
+    /// 偏好设置窗口的侧栏收起成只有图标；旧配置没有这个字段，按展开读取。
+    pub preferences_sidebar_collapsed: bool,
 }
 
 impl Default for Appearance {
@@ -80,6 +82,7 @@ impl Default for Appearance {
             theme: Theme::Auto,
             material: Material::Default,
             language: Language::ZhCN,
+            preferences_sidebar_collapsed: false,
         }
     }
 }
@@ -137,6 +140,8 @@ pub struct Shortcuts {
     pub win_v: bool,
     /// 仅 Windows：单击这个鼠标按键打开或隐藏剪贴板窗口，按键原有的单击功能随之停用。默认关闭。
     pub mouse_trigger: MouseTrigger,
+    /// 双击修饰键开合剪贴板窗口。默认关闭。
+    pub double_tap: DoubleTap,
     /// 仅 Windows（macOS 待实现）：前台应用全屏时（如游戏），全局快捷键、鼠标按键唤起和 Win+V
     /// 都交还给它。默认开启。
     pub pause_in_fullscreen: bool,
@@ -155,6 +160,7 @@ impl Default for Shortcuts {
             paste_plain: String::new(),
             win_v: false,
             mouse_trigger: MouseTrigger::Disabled,
+            double_tap: DoubleTap::default(),
             pause_in_fullscreen: true,
             pause_app_ids: Vec::new(),
             quick_paste: QuickPaste::default(),
@@ -171,6 +177,36 @@ pub enum MouseTrigger {
     Middle,
     Back,
     Forward,
+}
+
+/// 双击修饰键触发配置；旧文件缺字段时默认关闭。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DoubleTap {
+    pub key: DoubleTapKey,
+    pub side: KeySide,
+}
+
+/// Alt 在 macOS 上是 Option；Command 仅 macOS 支持，Windows 按禁用处理。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DoubleTapKey {
+    #[default]
+    Disabled,
+    Control,
+    Shift,
+    Alt,
+    Command,
+}
+
+/// 修饰键的物理位置；Any 仍要求连续两次按同一侧。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum KeySide {
+    #[default]
+    Any,
+    Left,
+    Right,
 }
 
 /// 全局快速粘贴：修饰键 + 1–9 粘贴第 1–9 条，修饰键 + 0 粘贴第 10 条。
@@ -452,6 +488,7 @@ impl Default for Content {
             sort: ClipboardItemSort::UpdatedAt,
             item_actions: vec![
                 ItemAction::Copy,
+                ItemAction::OpenLink,
                 ItemAction::SplitWords,
                 ItemAction::Star,
                 ItemAction::PinItem,
@@ -480,6 +517,8 @@ impl Default for Content {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Display {
+    /// 面板使用单栏，或历史与收藏分组并排的双栏。
+    pub layout: ListLayout,
     /// 文本摘要最多显示行数。
     pub text_max_lines: u8,
     /// 图片缩略图显示高度，单位 px。
@@ -489,6 +528,8 @@ pub struct Display {
     /// 文本记录下方列出识别到的编号、数字、链接等快捷信息，点击单独粘贴。
     /// 旧配置没有这个字段，按默认开启读取。
     pub quick_snippets: bool,
+    /// 按类型给快捷信息和预览中的对应文字着色；旧配置缺失时默认开启。
+    pub quick_snippet_colors: bool,
     /// 列表条目画成独立卡片，还是贴边排列、用分隔线隔开。
     pub list_style: ListStyle,
     /// 列表疏密。旧配置没有这个字段，存量用户升级后同样按「标准」读取，比旧版的「舒适」紧一档。
@@ -500,15 +541,26 @@ pub struct Display {
 impl Default for Display {
     fn default() -> Self {
         Self {
+            layout: ListLayout::Single,
             text_max_lines: 3,
             image_max_height: 64,
             file_max_count: 3,
             quick_snippets: true,
+            quick_snippet_colors: true,
             list_style: ListStyle::Card,
             density: ListDensity::Standard,
             custom_layout: CustomListLayout::default(),
         }
     }
+}
+
+/// 剪贴板窗口的布局：单栏，或左边历史、右边收藏与自定义分组的双栏。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ListLayout {
+    #[default]
+    Single,
+    Split,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -912,36 +964,13 @@ impl Default for Feedback {
     }
 }
 
-/// 1.x 的渠道开关 `includeBeta` / `includeNightly` 在 2.x 删掉了（2.x 只有一个更新渠道）：读取时忽略，
-/// 下次写盘不再写出。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// 更新检查状态；旧文件中的自动检查、频率、跳过版本与渠道开关由 serde 忽略，保存时不再写出。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Update {
-    pub auto_check: bool,
-    pub frequency: UpdateFrequency,
     pub last_checked_at: Option<String>,
-    pub skipped_version: Option<String>,
-}
-
-/// 设置文件落盘时写入完整结构，已有安装会保留各自显式保存的值；这里的默认值只作用于全新安装。
-impl Default for Update {
-    fn default() -> Self {
-        Self {
-            auto_check: true,
-            frequency: UpdateFrequency::default(),
-            last_checked_at: None,
-            skipped_version: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum UpdateFrequency {
-    #[default]
-    Daily,
-    Weekly,
-    Monthly,
+    /// 已经弹过更新窗的版本：自动检查只在第一次发现某个版本时弹窗，之后只留面板徽标。
+    pub prompted_version: Option<String>,
 }
 
 /// 扩展的宿主设置，不包含身份或远程设备数据。

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, anyhow, bail};
 use gpui::Window;
-use kwikpaste_core::settings::WindowPosition;
+use kwikpaste_core::settings::{ListLayout, WindowPosition};
 use kwikpaste_core::window_state::WindowGeometry;
 use kwikpaste_os::geometry::{Point, Rect, Size, center_in, follow_cursor, scale_size};
 use kwikpaste_os::win::monitor::{self, BASE_DPI, MonitorInfo};
@@ -14,8 +14,8 @@ use kwikpaste_os::win::{self as os, keyboard, mouse};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::editing::{EditReport, EditTrigger};
-use super::panel::{PANEL_SIZE, PanelCommand};
-use super::window_state::PanelLayout;
+use super::panel::{PanelCommand, panel_default_size, panel_min_size};
+use super::window_state::{PanelLayout, shift_layout_width};
 
 /// 钩子确认吞掉带标记的 Alt 的最长等待（实测约 1.5 ms）。
 const MARKED_ALT_TIMEOUT: Duration = Duration::from_millis(50);
@@ -33,6 +33,7 @@ pub struct NativePanel {
     last: Cell<Option<WindowGeometry>>,
     /// 系统「文本大小」系数。
     text_scale: Cell<f64>,
+    layout: Cell<ListLayout>,
     /// 编辑态：进入前的前台窗口；`None` 表示不在编辑态。
     editing: Cell<Option<isize>>,
     /// 拖动区、缩放边上的按下要收起弹出菜单，经它发给面板任务。
@@ -44,7 +45,7 @@ impl NativePanel {
         *self.commands.borrow_mut() = Some(sender);
     }
 
-    pub fn attach(window: &Window, text_scale: f64) -> anyhow::Result<Self> {
+    pub fn attach(window: &Window, text_scale: f64, layout: ListLayout) -> anyhow::Result<Self> {
         let handle = HasWindowHandle::window_handle(window)
             .map_err(|err| anyhow!("panel window handle: {err:?}"))?;
         let RawWindowHandle::Win32(handle) = handle.as_raw() else {
@@ -56,6 +57,7 @@ impl NativePanel {
             panel: unsafe { win_panel::Panel::from_raw(handle.hwnd.get()) },
             last: Cell::new(None),
             text_scale: Cell::new(text_scale),
+            layout: Cell::new(layout),
             editing: Cell::new(None),
             commands: RefCell::new(None),
         })
@@ -63,7 +65,7 @@ impl NativePanel {
 
     pub fn install(&self) -> anyhow::Result<()> {
         self.panel.install(PanelOptions {
-            min_logical_size: PANEL_SIZE,
+            min_logical_size: panel_min_size(self.layout.get()),
             text_scale: self.text_scale.get(),
         })?;
         if let Some(sender) = self.commands.borrow().clone() {
@@ -86,6 +88,37 @@ impl NativePanel {
     pub fn set_text_scale(&self, text_scale: f64) {
         self.text_scale.set(text_scale);
         self.panel.set_text_scale(text_scale);
+    }
+
+    /// 切换布局：先更新原生最小尺寸，再移动记住的宽度；可见时就地调整，不重新跟随光标。
+    pub fn set_layout(
+        &self,
+        layout: ListLayout,
+        saved: Option<WindowGeometry>,
+    ) -> Option<WindowGeometry> {
+        let old = self.layout.replace(layout);
+        if old == layout {
+            return None;
+        }
+        self.panel.set_min_logical_size(panel_min_size(layout));
+        let visible = self.is_visible();
+        let geometry = if visible {
+            self.geometry()
+        } else {
+            self.last.get().or(saved)
+        }?;
+        let mut geometry = shift_layout_width(geometry, old, layout, self.text_scale.get());
+        self.last.set(Some(geometry));
+        if visible {
+            match self.panel.resize_content((geometry.width, geometry.height)) {
+                Ok(()) => {
+                    geometry = self.geometry().unwrap_or(geometry);
+                    self.last.set(Some(geometry));
+                }
+                Err(err) => log::warn!("panel layout size could not be applied: {err}"),
+            }
+        }
+        Some(geometry)
     }
 
     /// 按设置的摆放方式定位：跟随光标（光标所在显示器、光标附近）、居中（光标所在显示器的工作区正中）
@@ -127,16 +160,21 @@ impl NativePanel {
         })
     }
 
-    /// 内容区尺寸：默认 360×600 × 文本缩放；存档里更大就沿用，但不小于当前文本缩放下的默认尺寸。
+    /// 内容区尺寸：没有存档用布局的默认尺寸，有存档就沿用，但不小于最小尺寸（都乘文本缩放）。
     fn target_size(&self, saved: Option<WindowGeometry>, monitor: &MonitorInfo) -> Size {
         let text_scale = self.text_scale.get();
-        let default = (PANEL_SIZE.0 * text_scale, PANEL_SIZE.1 * text_scale);
-        let logical = saved.map_or(default, |geometry| {
-            (
-                geometry.width.max(default.0),
-                geometry.height.max(default.1),
-            )
-        });
+        let layout = self.layout.get();
+        let default = panel_default_size(layout);
+        let min = panel_min_size(layout);
+        let logical = saved.map_or(
+            (default.0 * text_scale, default.1 * text_scale),
+            |geometry| {
+                (
+                    geometry.width.max(min.0 * text_scale),
+                    geometry.height.max(min.1 * text_scale),
+                )
+            },
+        );
 
         scale_size(logical, monitor.scale())
     }

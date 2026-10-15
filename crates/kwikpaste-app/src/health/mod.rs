@@ -259,7 +259,7 @@ pub fn take_gave_up_notice() -> Option<PathBuf> {
         .and_then(|notice| notice.lock().ok()?.take())
 }
 
-/// 正常退出（`Application::run` 返回之后）：删掉运行标记。
+/// 正常退出（应用退出回调里，Windows 上 `Application::run` 返回后再调一次）：删掉运行标记。
 pub fn clean_exit() {
     set_phase(Phase::Shutdown);
     if let Some(running_file) = STATE.get().and_then(|state| state.running_file.as_deref()) {

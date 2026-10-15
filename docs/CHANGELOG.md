@@ -2,6 +2,39 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.5 - 2026-10-15
+
+- Added Double-tap to open: quickly press Ctrl, Alt or Shift twice (and Command on macOS) to show or hide the clipboard window. It can be limited to the left or right key, and is turned on in Preferences under shortcuts.
+- A shortcut conflict now names the feature it clashes with right under the setting, and a shortcut already taken by another app is reported too.
+- The search box can filter records by time, source app and type.
+- Preferences are regrouped into 10 tabs, rarely used options are folded under More options, and search finds settings across tabs.
+- The text preview lists the links, emails, phone numbers, times and codes found in the text; click one to copy only that part. They are colored by type (can be turned off in Preferences), links in the preview open directly, and the gap between the preview and the clipboard window is tighter.
+- Fixed Win+Shift+V and other combinations being taken over as Win+V on Windows; only a plain Win+V is taken over now.
+- Fixed being unable to reset to the default data folder when a custom one is unavailable (for example an unplugged drive), and the install folder can no longer be chosen as the data folder.
+- Fixed the first launch removing a startup entry left by 1.x.
+- Fixed KwikPaste's hidden window being flagged by some games' anti-cheat on Windows.
+- Fixed rough rounded borders on translucent windows.
+- Fixed on macOS: the target app not receiving keys when pasting from a pinned clipboard window, the app being restarted again and again after waking from sleep, and Preferences and the welcome window not coming to the front.
+- Fixed Split words selecting a record other than the one clicked, the note caret not being at the end, and a click not entering edit mode again.
+
+## 2.0.4 - 2026-10-14
+
+- Added Window layout: switch to two columns to keep favorites and custom groups beside the clipboard history, so you don't have to switch back and forth.
+- The clipboard window can be made smaller, down to 280×400 per column.
+- The search box is wider and fills the rest of the header; the Preferences button moved to the footer, which also shows the position of the selected item.
+- Link, email, color and path labels are now colored tags that are easier to tell apart, and rich-text (HTML, RTF) records that contain a link can open it directly. New installs include Open link in the quick actions by default.
+- Import backup accepts EcoPaste backups and tells you when a backup file is not recognized.
+- Updates are now checked every six hours, and a failed check is retried after an hour. A new version opens the update window once; after you close it, a NEW badge stays at the top of the clipboard window and the same version does not pop up again. The Check for updates automatically, frequency and Skip this version options were removed.
+- The Preferences window can be made smaller, its sidebar can be collapsed and stays collapsed after a restart, and Esc closes the window. The storage card at the bottom of the sidebar was removed.
+- A single Esc in the search box now closes the clipboard window instead of needing two.
+- Fixed Excel reporting a clipboard problem when dragging cells on Windows.
+- Fixed the clipboard window covering Preferences or the update window when they were opened from it.
+
+## 2.0.3 - 2026-10-11
+
+- Fixed KwikPaste crashing when Check for updates finds a new version.
+- Fixed the update window being too short when an update was already known, which cut off the release notes and put the buttons on top of the text.
+
 ## 2.0.2 - 2026-10-11
 
 - Added Preferences › Extensions, where you can install, enable, update and remove the official extensions. Extensions are downloaded separately, signature-checked and updated in the background; if you do not install one it uses no disk space or memory.

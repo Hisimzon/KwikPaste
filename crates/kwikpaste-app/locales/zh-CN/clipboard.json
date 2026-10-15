@@ -16,6 +16,7 @@
     "category": "暂无{{category}}记录",
     "favoriteCategory": "暂无收藏的{{category}}记录",
     "favorites": "暂无收藏记录",
+    "filtered": "没有符合筛选条件的记录",
     "group": "「{{group}}」分组暂无相关记录",
     "groupCategory": "「{{group}}」分组下暂无{{category}}记录",
     "groupFallback": "该分组",
@@ -31,7 +32,30 @@
     "searchGroupFavorites": "「{{group}}」分组下的收藏中未找到与「{{keyword}}」相关的记录",
     "searchHistory": "未找到「{{keyword}}」相关记录"
   },
+  "filter": {
+    "apps": "来源应用",
+    "clear": "清除筛选",
+    "kinds": {
+      "color": "颜色",
+      "email": "邮箱",
+      "link": "链接",
+      "path": "路径",
+      "rich": "富文本"
+    },
+    "noApps": "还没有记录到来源应用",
+    "remove": "移除筛选「{{name}}」",
+    "since": {
+      "month": "近 30 天",
+      "today": "今天",
+      "week": "近 7 天"
+    },
+    "time": "时间",
+    "title": "筛选",
+    "type": "类型"
+  },
   "footer": {
+    "position": "第 {{index}} / {{count}} 项",
+    "preferences": "偏好设置",
     "select": "多选",
     "shortcuts": "快捷键",
     "total": "共 {{count}} 项"
@@ -58,10 +82,11 @@
     "useCustomIcon": "使用自定义 SVG"
   },
   "header": {
-    "openPreference": "偏好设置",
     "pin": "固定窗口",
     "searchPlaceholder": "搜索剪贴板...",
-    "unpin": "取消固定"
+    "unpin": "取消固定",
+    "updateAvailable": "有新版本 v{{version}}，点击更新",
+    "updateBadge": "新版本"
   },
   "menu": {
     "addNote": "添加备注",

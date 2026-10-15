@@ -41,6 +41,7 @@ pub enum CommandKey {
     StorageInsufficientSpace,
     StorageSpaceUnavailable,
     StorageTargetHasData,
+    StorageInsideInstallDir,
     StorageCustomUnavailable,
     SyncNotRunning,
     SyncInvalidCode,

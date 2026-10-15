@@ -57,7 +57,6 @@
     "ok": "好",
     "progress": "下载进度：{{progress}}%",
     "releaseNotes": "查看更新日志",
-    "skip": "跳过此版本",
     "title": "软件更新",
     "unsupported": "这个版本没有提供更新说明。",
     "updatingTitle": "正在更新 快贴"

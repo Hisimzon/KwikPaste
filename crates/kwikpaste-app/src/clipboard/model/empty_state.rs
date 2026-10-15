@@ -1,4 +1,5 @@
-//! 空列表的提示文案（1.x `getEmptyDescription`）：按搜索词、范围、分类、自定义分组组合出 16 种。
+//! 空列表的提示文案（1.x `getEmptyDescription`）：按搜索词、范围、分类、自定义分组组合出 16 种；
+//! 用了搜索框的筛选时只有一种。
 
 use super::{filter::ListFilter, item::ItemKind};
 
@@ -12,6 +13,8 @@ pub struct EmptyText {
     pub category: Option<ItemKind>,
     /// `{{group}}`：选了自定义分组时才有。
     pub group: bool,
+    /// 用了搜索框的筛选：只提示没有符合筛选的记录。
+    pub filtered: bool,
 }
 
 /// 当前筛选条件下列表为空时的提示。
@@ -20,6 +23,15 @@ pub fn empty_text(filter: &ListFilter) -> EmptyText {
     let favorites = filter.favorites();
     let group = filter.group_id.is_some();
     let category = filter.category;
+    if !filter.search.is_empty() {
+        return EmptyText {
+            key: "clipboard:empty.filtered",
+            searching: false,
+            category: None,
+            group: false,
+            filtered: true,
+        };
+    }
 
     let key = match (searching, group, favorites, category.is_some()) {
         (true, true, true, true) => "clipboard:empty.searchGroupFavoriteCategory",
@@ -45,6 +57,7 @@ pub fn empty_text(filter: &ListFilter) -> EmptyText {
         searching,
         category,
         group,
+        filtered: false,
     }
 }
 
@@ -77,6 +90,7 @@ mod tests {
                             category,
                             group_id: group.then(|| "g".into()),
                             keyword: if searching { "k".into() } else { "".into() },
+                            ..ListFilter::default()
                         };
                         let text = empty_text(&filter);
 

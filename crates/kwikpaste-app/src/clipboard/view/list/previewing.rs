@@ -22,11 +22,15 @@ use kwikpaste_ui::theme;
 use super::{ClipboardList, Pointer, ops::error_toast};
 use crate::{
     clipboard::{
-        model::preview::{self, HEADER_HEIGHT, RectF},
+        model::{
+            actions::OpenTarget,
+            preview::{self, HEADER_HEIGHT, RectF},
+        },
         source::{Preview, PreviewContentMetrics, PreviewTextView},
         view::preview::{
             ImageTextView, PreviewEvent, PreviewWindow,
             native::{self, NativePreview},
+            snippet_label,
         },
     },
     i18n::t,
@@ -45,6 +49,8 @@ pub enum PreviewTrigger {
     Keyboard,
     /// 松开空格时指针在预览窗里：之后与悬停一样，离开预览窗再关。
     Held,
+    /// “拆词”：不跟随悬停（菜单关上时指针下的是别的卡片），只随键盘换当前项。
+    Words,
 }
 
 impl PreviewTrigger {
@@ -116,7 +122,7 @@ impl ClipboardList {
     /// 直接打开现有预览，并切到可选择词语的模式。
     pub fn split_words(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
         self.settings.clipboard.preview.text_view = PreviewTextView::Words;
-        self.open_preview(id, PreviewTrigger::Keyboard, cx);
+        self.open_preview(id, PreviewTrigger::Words, cx);
     }
 
     /// 正在预览的记录与打开方式。
@@ -192,7 +198,25 @@ impl ClipboardList {
             PreviewEvent::TextView(view) => self.switch_preview_text_view(*view, cx),
             PreviewEvent::Words { paste } => self.use_preview_words(*paste, cx),
             PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
+            PreviewEvent::Snippet(text) => self.copy_preview_snippet(text.clone(), cx),
+            PreviewEvent::Open(target) => self.open_preview_target(*target, cx),
         }
+    }
+
+    /// 点了预览里的链接 / 邮箱：关掉预览，交给浏览器或邮件客户端。
+    fn open_preview_target(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.previewing.session.clone() else {
+            return;
+        };
+        let window = self.window;
+        cx.spawn(async move |list, cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    list.update(cx, |list, cx| list.open(id, target, window, cx))
+                })
+                .ok();
+        })
+        .detach();
     }
 
     /// 指针进出卡片（悬停预览）。
@@ -208,6 +232,7 @@ impl ClipboardList {
         let preview = &self.settings.clipboard.preview;
         self.previewing.hide_timer = None;
         match self.previewing.session.clone() {
+            Some((_, PreviewTrigger::Words)) => return,
             Some((session, PreviewTrigger::Keyboard)) => {
                 if session != *id {
                     self.open_preview(id.clone(), PreviewTrigger::Keyboard, cx);
@@ -299,9 +324,12 @@ impl ClipboardList {
         }
     }
 
-    /// 键盘预览时换了当前项：等卡片布局稳定后换内容。
+    /// 键盘预览或拆词时换了当前项：等卡片布局稳定后换内容。
     pub(super) fn preview_follow_active(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.previewing.session, Some((_, PreviewTrigger::Keyboard))) {
+        if !matches!(
+            self.previewing.session,
+            Some((_, PreviewTrigger::Keyboard | PreviewTrigger::Words))
+        ) {
             return;
         }
 
@@ -309,10 +337,14 @@ impl ClipboardList {
             cx.background_executor().timer(FOLLOW_DELAY).await;
             list.update(cx, |list, cx| {
                 list.previewing.follow_timer = None;
-                let keyboard =
-                    matches!(list.previewing.session, Some((_, PreviewTrigger::Keyboard)));
-                if let (true, Some(item)) = (keyboard, list.active_item()) {
-                    list.open_preview(item.id.clone(), PreviewTrigger::Keyboard, cx);
+                let trigger = match list.previewing.session {
+                    Some((_, trigger @ (PreviewTrigger::Keyboard | PreviewTrigger::Words))) => {
+                        trigger
+                    }
+                    _ => return,
+                };
+                if let Some(item) = list.active_item() {
+                    list.open_preview(item.id.clone(), trigger, cx);
                 }
             })
             .ok();
@@ -472,6 +504,32 @@ impl ClipboardList {
         (!words.is_empty()).then(|| (id.clone(), words))
     }
 
+    /// 复制预览快捷信息区点中的一段，预览保持打开。
+    fn copy_preview_snippet(&mut self, text: Arc<str>, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.previewing.session.clone() else {
+            return;
+        };
+        let fragment = ClipboardFragment::Snippet {
+            text: text.to_string(),
+        };
+        let task = self.host.copy_fragment(id, fragment, cx);
+        let window = self.window;
+        cx.spawn(async move |_, cx| {
+            let result = task.await;
+            window
+                .update(cx, |_, window, cx| match result {
+                    Ok(()) => kwikpaste_ui::toast::show(
+                        kwikpaste_ui::toast::Toast::success(t("commands:messages.copied")),
+                        window,
+                        cx,
+                    ),
+                    Err(err) => error_toast("commands:labels.copy", &err, window, cx),
+                })
+                .ok();
+        })
+        .detach();
+    }
+
     /// 粘贴或复制预览里选中的词，然后关掉预览（1.x `pasteSelection` / `copySelection`）。
     pub fn use_preview_words(&mut self, paste: bool, cx: &mut Context<Self>) {
         let Some((id, indices)) = self.preview_words(cx) else {
@@ -591,10 +649,35 @@ impl ClipboardList {
                 window,
             ),
         });
+        let snippet_colors = self.settings.clipboard.display.quick_snippet_colors;
+        let snippets_height = match &preview {
+            Some(preview) if matches!(preview.metrics, PreviewContentMetrics::Text { .. }) => {
+                let chips: Vec<f64> = preview
+                    .payload
+                    .snippets
+                    .iter()
+                    .map(|snippet| {
+                        preview::snippet_chip_width(
+                            &t(snippet_label(snippet.kind)),
+                            &snippet.text,
+                            snippet_colors,
+                            text_scale,
+                            window,
+                        )
+                    })
+                    .collect();
+                preview::snippets_height(
+                    &chips,
+                    preview::snippets_content_width(&place.monitor, text_scale),
+                )
+            }
+            _ => 0.,
+        };
         let geometry = preview::geometry(
             place.card,
             place.monitor,
             measured_metrics.as_ref(),
+            snippets_height,
             prefer_left,
             text_scale,
         );
@@ -604,6 +687,7 @@ impl ClipboardList {
         let text_view = self.settings.clipboard.preview.text_view;
         let preview_window = self.previewing.window.as_ref()?;
         preview_window.panel.update(cx, |panel, cx| {
+            panel.snippet_colors = snippet_colors;
             panel.set(preview, rows, text_view, image_box, image_text, cx)
         });
 

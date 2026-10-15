@@ -27,7 +27,10 @@
       "kind": "text",
       "note": null,
       "platform": "windows",
-      "quickSnippets": ["20260924", "138 1234 5678"],
+      "quickSnippets": [
+        { "kind": "number", "text": "20260924" },
+        { "kind": "phone", "text": "138 1234 5678" }
+      ],
       "searchText": null,
       "size": 48,
       "sourceAppIconFile": "cd0f09d38ad6a2c6d694ae14b0dd30fe2e97b1e600963c4af8943025c317b24d.png",
@@ -101,7 +104,7 @@
       "kind": "text",
       "note": null,
       "platform": "windows",
-      "quickSnippets": ["v1.3.0"],
+      "quickSnippets": [{ "kind": "number", "text": "v1.3.0" }],
       "searchText": null,
       "size": 24,
       "sourceAppId": null,

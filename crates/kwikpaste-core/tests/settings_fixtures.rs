@@ -10,7 +10,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use kwikpaste_core::settings::{Settings, SettingsStore};
+use kwikpaste_core::settings::{ListLayout, Settings, SettingsStore};
 use kwikpaste_core::{AppEnv, CorePaths};
 use serde_json::Value;
 
@@ -117,6 +117,29 @@ fn missing_copy_sound_volume_preserves_old_feedback_and_defaults_to_full_volume(
 }
 
 #[test]
+fn old_layout_defaults_to_single_and_split_round_trips() {
+    let content = include_str!("fixtures/settings/v1.4.0-customized.json");
+    let (_temp, paths, store) = load(content);
+    assert_eq!(
+        store.snapshot().clipboard.display.layout,
+        ListLayout::Single
+    );
+    assert!(store.load_report().fallbacks.is_empty());
+
+    let saved = store
+        .update(serde_json::json!({"clipboard": {"display": {"layout": "split"}}}))
+        .unwrap();
+    let json: Value = serde_json::from_str(
+        &fs::read_to_string(paths.config_dir().unwrap().join("settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(json["clipboard"]["display"]["layout"], "split");
+    let restored: Settings = serde_json::from_value(json).unwrap();
+    assert_eq!(restored.clipboard.display.layout, ListLayout::Split);
+    assert_eq!(restored, saved);
+}
+
+#[test]
 fn copy_sound_volume_round_trips_as_a_camel_case_number() {
     for volume in [0, 50, 100, 255] {
         let mut settings = Settings::default();
@@ -185,15 +208,27 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pauseInFullscreen"] = Value::Bool(true);
     expected["shortcuts"]["pauseAppIds"] = Value::Array(Vec::new());
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
-    // 夹具没有免焦点搜索开关,读取后应补上新版本默认值(默认关)。
+    expected["shortcuts"]["doubleTap"] = serde_json::json!({"key": "disabled", "side": "any"});
+    // 夹具没有免焦点搜索开关，读取后应补上新版本默认值（默认关）。
     expected["clipboard"]["search"]["typeToSearch"] = Value::Bool(false);
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
+    expected["clipboard"]["display"]["layout"] = Value::from("single");
+    expected["clipboard"]["display"]["quickSnippetColors"] = Value::Bool(true);
+    expected["appearance"]["preferencesSidebarCollapsed"] = Value::from(false);
     expected["extensions"] =
         serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});
-    // 2.x 删掉了 1.x 的更新渠道开关。
+    // 旧文件中的更新选项已移除，读取时忽略，保存时不再写出。
     let update = expected["update"].as_object_mut().unwrap();
-    update.remove("includeBeta");
-    update.remove("includeNightly");
+    for key in [
+        "includeBeta",
+        "includeNightly",
+        "autoCheck",
+        "frequency",
+        "skippedVersion",
+    ] {
+        update.remove(key);
+    }
+    update.insert("promptedVersion".to_owned(), Value::Null);
     assert_eq!(serde_json::to_value(store.snapshot()).unwrap(), expected);
 
     // 夹具的每个叶子都不是默认值，否则它覆盖不到对应字段的取值写法。

@@ -2,16 +2,17 @@
 
 use gpui::{
     AnyElement, App, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
-    Rems, Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
+    Radians, Rems, Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
     prelude::FluentBuilder as _, svg,
 };
 
 use crate::{Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _, theme};
 
-/// 按钮里的图标：内置图标或资源路径（自定义分组图标）。
+/// 按钮里的图标：内置图标（可旋转）或资源路径（自定义分组图标）。
 #[derive(Clone)]
 pub enum Glyph {
     Icon(IconName),
+    Rotated(IconName, Radians),
     Path(SharedString),
 }
 
@@ -19,6 +20,11 @@ impl Glyph {
     pub fn render(&self, size: Rems, color: gpui::Hsla) -> AnyElement {
         match self {
             Self::Icon(name) => Icon::new(*name).size(size).color(color).into_any_element(),
+            Self::Rotated(name, angle) => Icon::new(*name)
+                .size(size)
+                .color(color)
+                .rotate(*angle)
+                .into_any_element(),
             Self::Path(path) => svg()
                 .path(path.clone())
                 .flex_none()

@@ -324,6 +324,7 @@ pub fn start<V: Render>(
     settings::serve(cx, events);
     settings::apply_language(cx);
     let text_scale = system::init(cx);
+    updater::start(cx);
     if let Some(core) = core_host::core(cx) {
         window_state::migrate_legacy(core);
     }
@@ -366,19 +367,12 @@ pub fn start<V: Render>(
     // Host 请求（托盘、快捷键、第二次启动和备份文件）统一交给偏好窗口。
     // 注册必须先于 `queue_launch_arguments`，这样冷启动携带的备份文件不会退回面板。
     host::set_handler(cx, |host_request, cx| {
-        // 从主窗口里的按钮进来时，偏好窗会盖住主窗口：先把主窗口收起来。
-        // 快捷键、托盘、二次启动这些入口本来就没有可见的主窗口，不动。
-        if matches!(
-            host_request,
-            host::HostRequest::OpenPreferences {
-                source: host::RequestSource::Panel
-            }
-        ) {
-            request(
-                cx,
-                panel::PanelCommand::Hide(panel::Trigger::now(panel::TriggerSource::Ui)),
-            );
-        }
+        // 与 1.x 相同：面板置顶，不收起会一直压在偏好窗口上（盖住标题栏的关闭按钮）。按点击外部处理，
+        // 固定面板时照旧保留。
+        self::request(
+            cx,
+            PanelCommand::Hide(Trigger::now(TriggerSource::OutsideClick)),
+        );
         let result = if matches!(host_request, host::HostRequest::OpenPreferences { .. })
             && core_host::core(cx).is_some_and(|core| !core.settings().onboarding.completed)
         {
@@ -400,7 +394,6 @@ pub fn start<V: Render>(
     }
     probe::follow_clipboard(cx);
     instance::serve(cx, launch.instance, launch.invocations, commands);
-    updater::start(cx);
     if selftest::enabled(selftest::UPDATER_UI) {
         updater::selftest_update_window(cx);
     }

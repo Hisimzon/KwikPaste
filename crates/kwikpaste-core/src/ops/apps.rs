@@ -26,6 +26,14 @@ pub struct ClipboardAppView {
     pub updated_at: DateTime<Utc>,
 }
 
+/// 历史记录里出现过的一个来源应用（同一应用的各安装版本合成一项）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryApp {
+    pub ids: Vec<String>,
+    pub name: String,
+    pub icon_path: Option<String>,
+}
+
 /// 把来源应用数据库模型转换为偏好页可直接渲染的视图模型。
 fn build_clipboard_app_view(store: &AppIconStore, app: ClipboardApp) -> ClipboardAppView {
     let icon_path = app
@@ -72,6 +80,34 @@ impl Core {
                 .into_iter()
                 .map(|app| build_clipboard_app_view(&core.0.app_icons, app))
                 .collect())
+        })
+        .await
+    }
+
+    /// 历史记录里出现过的来源应用（搜索框的应用筛选），最近复制过的在前。同一应用的多个安装版本
+    /// 合成一项，名称和图标取最近的版本，`ids` 列出全部版本供查询使用。
+    pub async fn list_history_apps(&self) -> Result<Vec<HistoryApp>> {
+        let core = self.clone();
+        self.hop(async move {
+            let rows = crate::db::apps::list_history_apps(&core.0.db.pool().await).await?;
+            let mut apps: Vec<(String, HistoryApp)> = Vec::new();
+            for row in rows {
+                let family = crate::app_ids::app_family_key(&row.id);
+                if let Some((_, app)) = apps.iter_mut().find(|(key, _)| *key == family) {
+                    app.ids.push(row.id);
+                    continue;
+                }
+                let view = build_clipboard_app_view(&core.0.app_icons, row);
+                apps.push((
+                    family,
+                    HistoryApp {
+                        ids: vec![view.id],
+                        name: view.name,
+                        icon_path: view.icon_path,
+                    },
+                ));
+            }
+            Ok(apps.into_iter().map(|(_, app)| app).collect())
         })
         .await
     }

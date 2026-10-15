@@ -5,7 +5,7 @@
 //! core 的 tokio runtime 上执行，宿主（GPUI）在任何执行器里都可以直接 await 公开的 async 方法。
 //!
 //! 宿主要接的两个接口：
-//! - [`UpdaterUi`]（UI 线）：自动检查发现更新时显示更新窗，显示公告对话框并返回用户的选择，打开链接；
+//! - [`UpdaterUi`]（UI 线）：检查后记录更新状态，自动检查第一次发现某个版本时弹更新窗，显示公告对话框并返回用户的选择，打开链接；
 //! - [`HandoffHost`]（平台线）：安装交接时停输入、删托盘、释放单实例、退出进程。
 //!
 //! 与附录 E §5 相比按 v2 路线精简：没有分桶 / 灰度、闸门、canary 与演练渠道，没有自动降级、
@@ -59,8 +59,11 @@ pub trait UpdaterUi: Send + Sync + 'static {
     /// 扩展状态变化；在后台线程回调，由宿主送进已有 UI 消息队列。
     fn extensions_changed(&self, _status: Vec<extensions::ExtensionStatus>) {}
 
-    /// 自动检查发现了可以装的新版本：显示更新窗（与 1.x 一样，自动检查找到更新就弹出更新窗）。
+    /// 检查成功后发布当前更新状态（含没有更新），由宿主刷新持久提示，不自动打开更新窗。
     fn update_available(&self, status: UpdateStatus);
+
+    /// 自动检查第一次发现这个版本：弹出更新窗。关掉后只留面板徽标，同一版本不再弹。
+    fn prompt_update(&self, _status: UpdateStatus) {}
 
     /// 显示一条公告并等用户响应。按 [`AnnouncementPrompt::buttons`] 的顺序摆按钮，点哪个按钮就返回
     /// [`ButtonRole::outcome`]；按 Esc、点标题栏关闭都返回 [`AnnouncementOutcome::Closed`]。
@@ -68,13 +71,6 @@ pub trait UpdaterUi: Send + Sync + 'static {
 
     /// 用系统浏览器打开公告按钮的链接（已校验：https，域名是 fastthree.com / github.com / gitee.com）。
     fn open_url(&self, url: &str);
-}
-
-/// 检查是手动发起的还是自动的：自动检查还没到频率设定的时间就直接返回当前状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckMode {
-    Manual,
-    Auto,
 }
 
 /// 更新窗与偏好页展示的状态。
@@ -202,9 +198,8 @@ impl Updater {
         &self.0.extensions
     }
 
-    /// 开始后台调度（重复调用无效）：清理上次更新留下的临时文件，8 秒后拉公告，
-    /// 之后按设置的频率自动检查，发现更新时调用 [`UpdaterUi::update_available`]；
-    /// 每轮（至多一小时）看一次当天的使用统计是否已送达。
+    /// 开始后台调度（重复调用无效）：清理上次更新留下的临时文件，8 秒后检查并发布状态（顺带拉公告），
+    /// 之后每小时看一次扩展、当天使用统计和是否到了下次检查（见 [`scheduler`]）。
     pub fn start(&self) {
         let mut scheduler = lock(&self.0.scheduler);
         if scheduler.is_some() {
@@ -215,25 +210,17 @@ impl Updater {
         *scheduler = Some(self.0.core.runtime().spawn(async move {
             updater.clean_leftovers();
             tokio::time::sleep(scheduler::INITIAL_DELAY).await;
-            announcement::schedule(
-                &updater.0.core,
-                &updater.0.announcements,
-                &updater.0.ui,
-                announcement::Trigger::Launch,
-            );
-
+            let mut last_success = None;
             loop {
                 updater.0.extensions.schedule_daily();
-                usage::schedule(&updater.0.core, &updater.0.usage, usage::Trigger::Daily);
-                let settings = updater.0.core.settings().update;
-                let delay = scheduler::next_auto_check_delay(&settings, Utc::now());
-                if !delay.is_zero() {
-                    tokio::time::sleep(delay).await;
-                    continue;
+                if scheduler::check_due(last_success, Utc::now()) {
+                    if updater.run_auto_check().await {
+                        last_success = Some(Utc::now());
+                    }
+                } else {
+                    usage::schedule(&updater.0.core, &updater.0.usage);
                 }
-
-                updater.run_auto_check().await;
-                tokio::time::sleep(scheduler::RETRY_AFTER_CHECK).await;
+                tokio::time::sleep(scheduler::TICK).await;
             }
         }));
     }
@@ -250,11 +237,12 @@ impl Updater {
     }
 
     /// 检查更新：读 v2 清单（只有一个渠道），顺带上报统计、拉公告。
-    pub async fn check(&self, mode: CheckMode) -> Result<UpdateStatus> {
+    pub async fn check(&self) -> Result<UpdateStatus> {
         let updater = self.clone();
-        hop(self.0.core.runtime(), async move {
-            updater.check_inner(mode).await
-        })
+        hop(
+            self.0.core.runtime(),
+            async move { updater.check_inner().await },
+        )
         .await
     }
 
@@ -280,38 +268,15 @@ impl Updater {
         .await
     }
 
-    /// 跳过这个版本：记进 `update.skippedVersion`，之后的检查不再提供它。
-    pub async fn skip(&self, version: String) -> Result<UpdateStatus> {
-        self.0
-            .core
-            .update_settings(serde_json::json!({ "update": { "skippedVersion": version } }))
-            .await?;
-        *lock(&self.0.pending) = None;
-        Ok(self.status())
-    }
-
-    async fn check_inner(&self, mode: CheckMode) -> Result<UpdateStatus> {
+    async fn check_inner(&self) -> Result<UpdateStatus> {
         let inner = &self.0;
-        let settings = inner.core.settings().update;
-        if mode == CheckMode::Auto
-            && !scheduler::next_auto_check_delay(&settings, Utc::now()).is_zero()
-        {
-            return Ok(inner.status());
-        }
-
-        usage::schedule(&inner.core, &inner.usage, usage::Trigger::Check);
-        announcement::schedule(
-            &inner.core,
-            &inner.announcements,
-            &inner.ui,
-            announcement::Trigger::Check,
-        );
+        usage::schedule(&inner.core, &inner.usage);
+        announcement::schedule(&inner.core, &inner.announcements, &inner.ui);
 
         if inner.kind.is_managed() {
             let mirrors = (inner.endpoints)()?;
             let criteria = Criteria {
                 current: inner.core.info().version.clone(),
-                skipped: settings.skipped_version.clone(),
                 os: os::current(),
                 platform_keys: inner.kind.platform_keys(),
             };
@@ -324,7 +289,9 @@ impl Updater {
         if let Err(err) = inner.core.update_settings(checked_at).await {
             log::warn!("persist update check timestamp failed: {err}");
         }
-        Ok(inner.status())
+        let status = inner.status();
+        inner.ui.update_available(status.clone());
+        Ok(status)
     }
 
     async fn download_inner(
@@ -396,12 +363,27 @@ impl Updater {
         installed.map_err(AppError::Other)
     }
 
-    async fn run_auto_check(&self) {
-        match self.check_inner(CheckMode::Auto).await {
-            Ok(status) if status.update.is_some() => self.0.ui.update_available(status),
-            Ok(_) => {}
-            Err(err) => log::warn!("automatic update check failed: {err}"),
+    /// 自动检查，成功返回 true；第一次发现某个版本时记下它并弹更新窗。
+    async fn run_auto_check(&self) -> bool {
+        let status = match self.check_inner().await {
+            Ok(status) => status,
+            Err(err) => {
+                log::warn!("automatic update check failed: {err}");
+                return false;
+            }
+        };
+        let inner = &self.0;
+        if let Some(update) = &status.update
+            && inner.core.settings().update.prompted_version.as_deref()
+                != Some(update.version.as_str())
+        {
+            let prompted = serde_json::json!({ "update": { "promptedVersion": update.version } });
+            if let Err(err) = inner.core.update_settings(prompted).await {
+                log::warn!("persist prompted update version failed: {err}");
+            }
+            inner.ui.prompt_update(status);
         }
+        true
     }
 
     /// 上次更新留下的临时目录（一天以前的）和便携版的 `.old` / `.new`。

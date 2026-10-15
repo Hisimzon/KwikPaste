@@ -7,7 +7,10 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{App, Context, IntoElement as _, ParentElement as _, Styled as _, Task, Window, div};
+use gpui::{
+    App, Context, Div, InteractiveElement as _, IntoElement as _, MouseButton, MouseDownEvent,
+    ParentElement as _, Styled as _, Task, Window, div,
+};
 use kwikpaste_core::{
     clipboard::ClipboardFragment,
     settings::{AutoPaste, Settings},
@@ -33,6 +36,17 @@ use crate::{
     i18n::{t, t_args},
     platform::EditTrigger,
 };
+
+/// 弹框里的多行输入框。打开时没拿到编辑态（面板仍不可激活，没有光标）的话，点它再按鼠标触发请求一次。
+fn editable_area(input: &TextAreaInput, target: EditTarget) -> Div {
+    div()
+        .capture_any_mouse_down(move |event: &MouseDownEvent, _, cx| {
+            if event.button == MouseButton::Left {
+                editing::begin(target, EditTrigger::Mouse, cx);
+            }
+        })
+        .child(TextArea::new(input))
+}
 
 /// 1.x 备注框 `maxLength={256}`。
 const NOTE_MAX_CHARS: usize = 256;
@@ -377,6 +391,7 @@ impl ClipboardList {
                     } else {
                         list.patch_item(&id, |item| item.is_favorite = favorite, cx);
                     }
+                    cx.emit(ListIntent::Changed);
                 }
                 Err(err) => {
                     let label = if current {
@@ -412,6 +427,7 @@ impl ClipboardList {
                     if let Some(request) = list.model.reload_current_range() {
                         list.fetch(request, cx);
                     }
+                    cx.emit(ListIntent::Changed);
                 }
                 Err(err) => {
                     let label = if current {
@@ -451,7 +467,7 @@ impl ClipboardList {
             DialogSpec::new(t("clipboard:note.title"))
                 .ok_text(t("common:actions.save"))
                 .cancel_text(t("common:actions.cancel")),
-            move |_, _| TextArea::new(&content).into_any_element(),
+            move |_, _| editable_area(&content, EditTarget::Note).into_any_element(),
             window,
             cx,
         );
@@ -506,6 +522,7 @@ impl ClipboardList {
                         },
                         cx,
                     );
+                    cx.emit(ListIntent::Changed);
                 }
                 Err(err) => Self::toast_error("commands:labels.saveNote", &err, window, cx),
             })
@@ -547,7 +564,7 @@ impl ClipboardList {
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .child(TextArea::new(&content))
+                                    .child(editable_area(&content, EditTarget::Content))
                                     .when(rich, |el| {
                                         el.child(
                                             div()
@@ -620,6 +637,7 @@ impl ClipboardList {
             list.update_in(cx, |list, window, cx| match result {
                 Ok(saved) => {
                     list.patch_item(&id, |item| *item = saved, cx);
+                    cx.emit(ListIntent::Changed);
                     Self::toast_success("commands:messages.noteSaved", window, cx);
                 }
                 Err(err) => Self::toast_error("clipboard:menu.editContent", &err, window, cx),
@@ -680,6 +698,7 @@ impl ClipboardList {
                 Ok(()) => {
                     Self::toast_success("commands:messages.deleted", window, cx);
                     list.remove_item(&id, cx);
+                    cx.emit(ListIntent::Changed);
                 }
                 Err(err) => Self::toast_error("commands:labels.delete", &err, window, cx),
             })
@@ -793,7 +812,7 @@ impl ClipboardList {
     /// 按住修饰键点了链接、邮箱卡片的正文（1.x `openItemLink`）：关掉预览，打开链接或写邮件。
     pub fn open_link(&mut self, item: &ListItem, window: &mut Window, cx: &mut Context<Self>) {
         self.close_preview(cx);
-        let target = if item.sub_kind == Some(SubKind::Email) {
+        let target = if item.link_sub_kind() == Some(SubKind::Email) {
             OpenTarget::Email
         } else {
             OpenTarget::Link
