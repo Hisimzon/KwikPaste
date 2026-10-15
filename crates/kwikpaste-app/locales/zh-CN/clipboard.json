@@ -151,6 +151,7 @@
     "copySelected": "复制选中项",
     "createGroup": "新增分组",
     "deleteSelected": "删除选中项",
+    "editContent": "编辑选中项内容",
     "favoriteSelected": "收藏 / 取消收藏",
     "focusSearch": "聚焦搜索框",
     "navigate": "上下导航",

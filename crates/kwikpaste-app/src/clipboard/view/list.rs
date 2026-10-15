@@ -1832,8 +1832,11 @@ impl Render for ClipboardList {
             let wheel = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
-                        if phase != DispatchPhase::Capture || !bounds.contains(&event.position) {
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Capture
+                            || !bounds.contains(&event.position)
+                            || kwikpaste_ui::has_dialog(window, cx)
+                        {
                             return;
                         }
                         // 只接管鼠标滚轮的“行”增量；触控板的像素增量（自带惯性）交给列表自己处理。

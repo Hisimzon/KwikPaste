@@ -77,6 +77,7 @@ pub const HOOK_KEYS: &[HookKey] = &[
     key(0x41, "a", Repeat, &[CTRL]),
     key(0x43, "c", Repeat, &[CTRL]),
     key(0x44, "d", Repeat, &[CTRL]),
+    key(0x45, "e", Repeat, &[CTRL]),
     key(0x46, "f", Repeat, &[CTRL]),
     key(0x4B, "k", Repeat, &[CTRL]),
     key(0x4D, "m", Repeat, &[CTRL]),

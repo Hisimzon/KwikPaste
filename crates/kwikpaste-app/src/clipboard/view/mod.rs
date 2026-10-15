@@ -68,6 +68,8 @@ actions!(
         TogglePinned,
         /// Mod+M：编辑当前项的备注。
         EditNote,
+        /// Mod+E：编辑当前项的内容。
+        EditContent,
         /// Delete / Mod+Delete / Mod+Backspace：删除当前项；多选时删除已勾选的记录。
         DeleteSelected,
         /// Mod+O：打开链接 / 邮箱 / 文件位置。
@@ -116,6 +118,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-d", ToggleFavorite, panel),
         KeyBinding::new("secondary-t", TogglePinned, panel),
         KeyBinding::new("secondary-m", EditNote, panel),
+        KeyBinding::new("secondary-e", EditContent, panel),
         KeyBinding::new("delete", DeleteSelected, panel),
         KeyBinding::new("secondary-backspace", DeleteSelected, panel),
         KeyBinding::new("secondary-delete", DeleteSelected, panel),

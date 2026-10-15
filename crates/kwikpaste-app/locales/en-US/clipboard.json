@@ -151,6 +151,7 @@
     "copySelected": "Copy selected item",
     "createGroup": "Create group",
     "deleteSelected": "Delete selected item",
+    "editContent": "Edit selected item content",
     "favoriteSelected": "Favorite / unfavorite",
     "focusSearch": "Focus search",
     "navigate": "Navigate up/down",

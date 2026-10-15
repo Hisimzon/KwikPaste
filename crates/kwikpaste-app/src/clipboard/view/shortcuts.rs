@@ -23,6 +23,7 @@ const SHORTCUTS: &[(&str, &[&str])] = &[
     ("clipboard:shortcuts.splitSelected", &["CmdOrCtrl", "S"]),
     ("clipboard:shortcuts.openSelected", &["CmdOrCtrl", "O"]),
     ("clipboard:shortcuts.noteSelected", &["CmdOrCtrl", "M"]),
+    ("clipboard:shortcuts.editContent", &["CmdOrCtrl", "E"]),
     ("clipboard:shortcuts.favoriteSelected", &["CmdOrCtrl", "D"]),
     ("clipboard:shortcuts.pinSelected", &["CmdOrCtrl", "T"]),
     (

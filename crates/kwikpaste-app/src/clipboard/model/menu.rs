@@ -91,12 +91,9 @@ impl MenuAction {
             Self::ToggleFavorite => Some("CmdOrCtrl+D"),
             Self::TogglePinned => Some("CmdOrCtrl+T"),
             Self::EditNote => Some("CmdOrCtrl+M"),
+            Self::EditContent => Some("CmdOrCtrl+E"),
             Self::Delete => Some(super::shortcut::DELETE_SELECTED),
-            Self::SaveImage
-            | Self::CopyImageText
-            | Self::MoveToGroup
-            | Self::Select
-            | Self::EditContent => None,
+            Self::SaveImage | Self::CopyImageText | Self::MoveToGroup | Self::Select => None,
         }
     }
 
@@ -213,13 +210,13 @@ mod tests {
     }
 
     #[test]
-    fn content_editor_is_text_only_and_has_no_shortcut() {
+    fn content_editor_is_text_only_and_has_edit_shortcut() {
         let mut item = with_actions(&[ItemAction::EditNote]);
         assert_eq!(
             menu_groups(&item, true, false),
             vec![vec![MenuAction::EditNote, MenuAction::EditContent]]
         );
-        assert_eq!(MenuAction::EditContent.accelerator(), None);
+        assert_eq!(MenuAction::EditContent.accelerator(), Some("CmdOrCtrl+E"));
         for kind in [
             super::super::item::ItemKind::Image,
             super::super::item::ItemKind::Files,
