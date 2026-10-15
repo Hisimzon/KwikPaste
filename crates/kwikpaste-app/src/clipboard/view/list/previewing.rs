@@ -9,7 +9,7 @@
 //! 预览窗的几何在打开时按卡片在屏幕上的位置算（见 [`crate::clipboard::model::preview::geometry`]）：
 //! 卡片的位置由列表渲染时挂在卡片上的 canvas 记下。
 
-use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
+use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc, time::Duration};
 
 use futures::channel::oneshot;
 use gpui::{
@@ -200,6 +200,10 @@ impl ClipboardList {
             PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
             PreviewEvent::Snippet(text) => self.copy_preview_snippet(text.clone(), cx),
             PreviewEvent::Open(target) => self.open_preview_target(*target, cx),
+            PreviewEvent::Reveal(path) => {
+                self.close_preview(cx);
+                cx.reveal_path(Path::new(path.as_ref()));
+            }
         }
     }
 

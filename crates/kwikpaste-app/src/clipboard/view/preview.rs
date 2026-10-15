@@ -59,6 +59,8 @@ pub enum PreviewEvent {
     Snippet(Arc<str>),
     /// 点了链接、邮箱记录的正文：打开链接或写邮件。
     Open(OpenTarget),
+    /// 点了文件记录里的一行：在文件管理器中定位这个文件。
+    Reveal(Arc<str>),
 }
 
 /// 有识别文字的图片记录正在看的那一面。
@@ -824,8 +826,15 @@ impl PreviewPanel {
                     t("preview:file.missingPath")
                 };
 
+                let target: Arc<str> = file.path.as_str().into();
+                let reveal = file.exists.then(|| {
+                    let target = target.clone();
+                    cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::Reveal(target.clone())))
+                });
+
                 div().px(space((8.) / 4.)).child(
                     div()
+                        .id(ElementId::Name(target.into()))
                         .flex()
                         .min_h(space((FILE_ROW_HEIGHT as f32) / 4.))
                         .items_center()
@@ -835,6 +844,11 @@ impl PreviewPanel {
                         .py(space((6.) / 4.))
                         .when(!file.exists, |row| {
                             row.opacity(theme::components(cx).preview_file.missing_opacity)
+                        })
+                        .when_some(reveal, |row, reveal| {
+                            row.cursor_pointer()
+                                .hover(|style| style.bg(tokens.fill.subtle))
+                                .on_click(reveal)
                         })
                         .child(match (file.icon_path.is_some(), icon_state) {
                             (true, Some(ImageState::Ready(image))) => {
