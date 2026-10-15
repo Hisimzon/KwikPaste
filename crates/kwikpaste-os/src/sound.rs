@@ -1,7 +1,8 @@
 //! 复制成功提示音：内嵌 16-bit PCM WAV，按平方曲线调整音量。
 //!
-//! 播放在短命工作线程里完成：Windows 的同步 `PlaySoundW` 持有内存直到播放结束，
-//! macOS 的 `NSSound` 则持有到播放结束。调用方（包括偏好页试听）不等待音频设备。
+//! WAV 开头有 200 ms 静音：输出设备省电休眠后要几百毫秒才醒，0.1 秒的提示音会被整段吞掉。
+//! Windows 用异步 `PlaySoundW`；macOS 在短命线程里持有 `NSSound` 到播放结束。
+//! 调用方（包括偏好页试听）不等待音频设备。
 
 const COPY_SOUND: &[u8] = include_bytes!("../assets/sounds/copy.wav");
 
@@ -108,40 +109,56 @@ fn scale_pcm_wav(bytes: &[u8], percent: u8) -> Result<std::borrow::Cow<'_, [u8]>
     Ok(std::borrow::Cow::Owned(scaled))
 }
 
-/// 异步播放一次复制提示音；静音不创建线程，失败只记日志。
+/// 异步播放一次复制提示音；静音直接返回，失败只记日志。
+///
+/// `SND_ASYNC` 播放期间系统一直读这段内存，所以缩放后的副本存在静态里，
+/// 换音量时先停掉正在播的声音再释放旧副本。不加 `SND_NOSTOP`：新的播放替换上一段声音。
 #[cfg(target_os = "windows")]
 pub fn play_copy(volume_percent: u8) {
-    use windows::Win32::Media::Audio::{PlaySoundW, SND_MEMORY, SND_NODEFAULT, SND_SYNC};
+    use std::sync::Mutex;
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
     use windows::core::PCWSTR;
 
+    static SCALED: Mutex<Option<(u8, Vec<u8>)>> = Mutex::new(None);
+
+    let volume_percent = volume_percent.min(100);
     if volume_percent == 0 {
         return;
     }
-    let spawned = std::thread::Builder::new()
-        .name("copy-sound".to_owned())
-        .spawn(move || {
-            let bytes = match scale_pcm_wav(COPY_SOUND, volume_percent) {
-                Ok(bytes) => bytes,
+    let mut scaled = SCALED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let bytes: &[u8] = if volume_percent == 100 {
+        COPY_SOUND
+    } else {
+        if scaled.as_ref().map(|(percent, _)| *percent) != Some(volume_percent) {
+            let next = match scale_pcm_wav(COPY_SOUND, volume_percent) {
+                Ok(bytes) => bytes.into_owned(),
                 Err(err) => {
                     log::warn!("the copy sound data is invalid: {err}");
                     return;
                 }
             };
-            // 同步调用返回前，工作线程一直持有 bytes。不能加 SND_ASYNC，否则副本会提前释放。
-            // 不加 SND_NOSTOP：新的播放替换同进程里的上一段声音，而不是排队或叠加。
-            let played = unsafe {
-                PlaySoundW(
-                    PCWSTR(bytes.as_ptr().cast()),
-                    None,
-                    SND_MEMORY | SND_SYNC | SND_NODEFAULT,
-                )
-            };
-            if !played.as_bool() {
-                log::warn!("the copy sound could not be played");
+            // 传空指针会同步停掉当前声音，之后旧副本才能释放。
+            unsafe {
+                let _ = PlaySoundW(PCWSTR::null(), None, SND_NODEFAULT);
             }
-        });
-    if let Err(err) = spawned {
-        log::warn!("the copy sound thread could not start: {err}");
+            *scaled = Some((volume_percent, next));
+        }
+        let Some((_, bytes)) = scaled.as_ref() else {
+            return;
+        };
+        bytes
+    };
+    let played = unsafe {
+        PlaySoundW(
+            PCWSTR(bytes.as_ptr().cast()),
+            None,
+            SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+        )
+    };
+    if !played.as_bool() {
+        log::warn!("the copy sound could not be played");
     }
 }
 
