@@ -81,6 +81,31 @@
     "shortcutInUse": "已被其他程序占用",
     "shortcutNotSet": "未设置"
   },
+  "customRules": {
+    "action": "动作",
+    "actions": {
+      "ignore": "不记录",
+      "sensitive": "敏感内容",
+      "snippet": "快捷信息"
+    },
+    "add": "添加规则",
+    "delete": "删除",
+    "edit": "编辑规则",
+    "empty": "还没有文本匹配规则",
+    "fromTemplate": "从模板添加",
+    "matches": "匹配 {{count}} 处",
+    "name": "名称",
+    "pattern": "正则表达式",
+    "templates": {
+      "identity": "身份证号",
+      "ipv4": "IPv4 地址",
+      "mac": "MAC 地址",
+      "new": "新规则",
+      "ticket": "工单号",
+      "tracking": "快递单号"
+    },
+    "test": "测试文本"
+  },
   "extensions": {
     "details": {
       "feature": "功能",
@@ -482,6 +507,9 @@
       "click": {
         "title": "点击行为"
       },
+      "customRules": {
+        "title": "文本匹配规则"
+      },
       "deleteProtection": {
         "title": "删除保护"
       },
@@ -775,6 +803,10 @@
           "description": "复制或粘贴旧记录时，刷新它的使用时间和次数。",
           "title": "复用时更新记录"
         }
+      },
+      "customRules": {
+        "description": "用正则匹配复制的文字：提取为快捷信息、标记为敏感内容，或不记录。敏感与不记录只对之后复制的内容生效。",
+        "title": "文本匹配规则"
       },
       "diagnostics": {
         "resetPreferences": {

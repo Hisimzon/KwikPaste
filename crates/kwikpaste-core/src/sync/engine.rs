@@ -294,7 +294,14 @@ pub(crate) async fn receive_with_options(
     let built = {
         let core = core.clone();
         tokio::task::spawn_blocking(move || {
-            build_item_with_settings(&core.images, &payload, &capture, &sensitive, plain_only)
+            build_item_with_settings(
+                &core.images,
+                &payload,
+                &capture,
+                &sensitive,
+                plain_only,
+                settings.clipboard.compiled_rules(),
+            )
         })
         .await
         .context("build received item task failed")??

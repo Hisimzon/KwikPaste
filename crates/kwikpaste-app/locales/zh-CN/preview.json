@@ -22,6 +22,7 @@
   },
   "snippets": {
     "kinds": {
+      "custom": "自定义",
       "email": "邮箱",
       "link": "链接",
       "number": "编号",

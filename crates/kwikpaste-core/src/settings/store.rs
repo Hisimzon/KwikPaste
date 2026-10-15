@@ -284,6 +284,9 @@ pub(crate) fn read_replacement(path: &Path) -> Result<Settings> {
 fn validate_settings(settings: &Settings) -> Result<()> {
     validate_window_open_group(&settings.clipboard.window.select_group_on_open)?;
     validate_retention_rules(&settings.clipboard.history.rules)?;
+    crate::clipboard::rules::validate_rules(&settings.clipboard.custom_rules).map_err(|error| {
+        AppError::Other(anyhow::anyhow!(error.message(settings.appearance.language)))
+    })?;
     validate_lan_sync(&settings.sync.lan)?;
 
     let mut shortcuts = std::collections::HashSet::new();
@@ -395,6 +398,40 @@ fn deep_merge(base: &mut serde_json::Value, patch: serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_rule_patch_rejection_keeps_settings_and_disk_unchanged() -> anyhow::Result<()> {
+        use crate::{
+            clipboard::rules::{tests::rule, RuleAction, RuleError},
+            testing::{block_on, Fixture},
+        };
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let path = fixture.paths.config_dir()?.join("settings.json");
+        for (tag, language) in [("zh-CN", Language::ZhCN), ("en-US", Language::EnUS)] {
+            block_on(core.update_settings(serde_json::json!({"appearance":{"language":tag}})))?;
+            let before = core.settings();
+            let bytes = std::fs::read(&path)?;
+            for (pattern, error) in [
+                ("[".to_owned(), RuleError::Invalid),
+                ("a*".to_owned(), RuleError::Empty),
+                ("a".repeat(501), RuleError::TooLong),
+            ] {
+                let value = rule(&pattern, RuleAction::Ignore);
+                let result = block_on(
+                    core.update_settings(serde_json::json!({"clipboard":{"customRules":[value]}})),
+                );
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains(error.message(language)));
+                assert_eq!(core.settings(), before);
+                assert_eq!(std::fs::read(&path)?, bytes);
+            }
+        }
+        block_on(core.shutdown())?;
+        Ok(())
+    }
 
     #[test]
     fn old_settings_without_extensions_load_with_additive_defaults() -> anyhow::Result<()> {

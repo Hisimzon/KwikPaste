@@ -94,8 +94,9 @@ impl ClipboardList {
         let old = &self.settings.clipboard;
         let new = &settings.clipboard;
         let resort = old.content.sort != new.content.sort;
-        let refresh = old.display != new.display || old.sensitive != new.sensitive;
-        let preview_changed = old.preview != new.preview;
+        let rules_changed = old.custom_rules != new.custom_rules;
+        let refresh = old.display != new.display || old.sensitive != new.sensitive || rules_changed;
+        let preview_changed = old.preview != new.preview || rules_changed;
         // 风格、密度、行数、图片高度变了：行高全变，像换排序一样整体重排。
         let layout = LayoutSpec::from_settings(&new.display);
         let relayout = layout != self.layout;

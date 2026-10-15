@@ -38,7 +38,7 @@ impl SettingsLoadReport {
 
 /// 解析设置文件内容，返回设置与回落记录。
 pub(super) fn parse(content: &str) -> (Settings, SettingsLoadReport) {
-    let raw: Value = match serde_json::from_str(content) {
+    let mut raw: Value = match serde_json::from_str(content) {
         Ok(raw) => raw,
         Err(err) => {
             log::warn!("settings file is not valid JSON, using defaults: {err}");
@@ -46,8 +46,44 @@ pub(super) fn parse(content: &str) -> (Settings, SettingsLoadReport) {
         }
     };
 
+    let mut custom_fallbacks = Vec::new();
+    // 逐条丢弃不可执行规则，避免坏规则重置其他设置或阻止后续无关设置保存。
+    if let Some(value) = raw
+        .get_mut("clipboard")
+        .and_then(|clipboard| clipboard.get_mut("customRules"))
+    {
+        if let Value::Array(items) = value {
+            let mut ids = HashSet::new();
+            let mut kept = Vec::new();
+            for (index, item) in std::mem::take(items).into_iter().enumerate() {
+                let valid =
+                    serde_json::from_value::<crate::clipboard::rules::CustomRule>(item.clone())
+                        .ok()
+                        .filter(|rule| {
+                            crate::clipboard::rules::validate_rules(std::slice::from_ref(rule))
+                                .is_ok()
+                        })
+                        .is_some_and(|rule| ids.insert(rule.id));
+                if valid && kept.len() < crate::clipboard::rules::MAX_CUSTOM_RULES {
+                    kept.push(item);
+                } else {
+                    custom_fallbacks.push(format!("clipboard.customRules[{index}]"));
+                }
+            }
+            *items = kept;
+        } else {
+            *value = Value::Array(Vec::new());
+            custom_fallbacks.push("clipboard.customRules".to_owned());
+        }
+    }
     if let Ok(settings) = Settings::deserialize(&raw) {
-        return (settings, SettingsLoadReport::default());
+        return (
+            settings,
+            SettingsLoadReport {
+                unreadable: false,
+                fallbacks: custom_fallbacks,
+            },
+        );
     }
 
     let Value::Object(mut fields) = raw else {
@@ -63,6 +99,7 @@ pub(super) fn parse(content: &str) -> (Settings, SettingsLoadReport) {
         .and_then(|history| history.remove("rules"));
 
     let mut merger = Merger::<Settings>::new("");
+    merger.fallbacks = custom_fallbacks;
     merger.merge(&mut Vec::new(), Value::Object(fields));
 
     if let Some(rules) = rules {
@@ -287,6 +324,27 @@ mod tests {
         let mut paths: Vec<&str> = report.fallbacks.iter().map(String::as_str).collect();
         paths.sort_unstable();
         paths
+    }
+
+    #[test]
+    fn custom_rules_round_trip_and_broken_entries_do_not_reset_settings() {
+        let (settings, report) = parse(
+            r#"{"general":{"autoStart":true},"clipboard":{"customRules":[
+            {"id":"good","name":"工单","pattern":"ABC-[0-9]+","action":"snippet","future":42},
+            {"id":"unknown","name":"unknown","pattern":"abc","action":"futureAction"},
+            {"id":"bad","name":"broken","pattern":"[","action":"ignore"},
+            {"id":"typed","name":42,"pattern":"abc","action":"snippet"},
+            {"id":"empty","name":"empty","pattern":"a*","action":"sensitive"}
+        ]}}"#,
+        );
+        assert!(settings.general.auto_start);
+        assert_eq!(settings.clipboard.custom_rules.len(), 1);
+        assert!(settings.clipboard.custom_rules[0].enabled);
+        assert_eq!(report.fallbacks.len(), 4);
+        let json = serde_json::to_string(&settings).unwrap();
+        assert_eq!(parse(&json).0, settings);
+        assert!(parse(&json).1.fallbacks.is_empty());
+        assert!(parse("{}").0.clipboard.custom_rules.is_empty());
     }
 
     #[test]

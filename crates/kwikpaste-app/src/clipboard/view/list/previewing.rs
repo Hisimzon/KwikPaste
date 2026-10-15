@@ -662,7 +662,11 @@ impl ClipboardList {
                     .iter()
                     .map(|snippet| {
                         preview::snippet_chip_width(
-                            &t(snippet_label(snippet.kind)),
+                            &snippet
+                                .label
+                                .clone()
+                                .map(gpui::SharedString::from)
+                                .unwrap_or_else(|| t(snippet_label(snippet.kind))),
                             &snippet.text,
                             snippet_colors,
                             text_scale,

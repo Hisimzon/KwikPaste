@@ -84,6 +84,16 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
 pub async fn upsert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<UpsertResult> {
     if let Some(existing) = find_item_by_content_hash(pool, &item.content_hash).await? {
         increment_item_use_count(pool, &existing).await?;
+        // 规则新增后再次复制同一内容，也要收紧敏感标记；不清除历史敏感状态。
+        if item.is_sensitive {
+            sqlx::query(
+                "UPDATE clipboard_items SET is_sensitive = 1 WHERE id = ? AND is_sensitive = 0",
+            )
+            .bind(&existing)
+            .execute(pool)
+            .await
+            .context("failed to mark recopied item sensitive")?;
+        }
         return Ok(UpsertResult {
             id: existing,
             deduplicated: true,

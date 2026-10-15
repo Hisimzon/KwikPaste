@@ -332,6 +332,17 @@ impl TextAreaInput {
         Self { state }
     }
 
+    /// 多行文本变化时通知拥有者；返回的订阅需要长期保存。
+    pub fn on_change<V: 'static>(
+        &self,
+        cx: &mut Context<V>,
+        handler: impl Fn(&mut V, SharedString, &mut Context<V>) + 'static,
+    ) -> Subscription {
+        cx.observe(&self.state, move |view, state, cx| {
+            handler(view, state.read(cx).value(), cx);
+        })
+    }
+
     pub fn value(&self, cx: &App) -> SharedString {
         self.state.read(cx).value()
     }

@@ -514,6 +514,7 @@ impl Core {
                         &settings.clipboard.capture,
                         &settings.clipboard.sensitive,
                         settings.clipboard.content.copy_plain,
+                        settings.clipboard.compiled_rules(),
                     )?,
                     None => None,
                 }

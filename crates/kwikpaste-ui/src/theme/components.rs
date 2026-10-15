@@ -114,6 +114,7 @@ pub struct KindTagTokens {
 /// 快捷信息按类型的颜色：卡片和预览里的圆点、预览正文里的淡色底。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SnippetTokens {
+    pub custom: KindTag,
     pub number: KindTag,
     pub phone: KindTag,
     pub email: KindTag,
@@ -310,6 +311,7 @@ impl ComponentTokens {
             },
             // 链接、邮箱与类型标签同色；手机号、时间借用路径的绿和颜色的橙，与官网一致。
             snippet: SnippetTokens {
+                custom: kind_tag(s.accent.solid),
                 number: kind_tag(s.hues.magenta_6),
                 phone: kind_tag(s.kinds.path),
                 email: kind_tag(s.kinds.email),

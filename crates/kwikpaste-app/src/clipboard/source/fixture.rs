@@ -323,6 +323,7 @@ fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextVie
                 .filter_map(|snippet| {
                     let start = text.find(&snippet.text)?;
                     Some(PreviewSnippet {
+                        label: None,
                         text: snippet.text.clone(),
                         kind: snippet.kind,
                         range: start..start + snippet.text.len(),

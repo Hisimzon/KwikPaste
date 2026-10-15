@@ -971,6 +971,7 @@ fn snippets(
 /// 快捷信息类型对应的颜色。
 pub fn snippet_color(colors: &SnippetTokens, kind: SnippetKind) -> KindTag {
     match kind {
+        SnippetKind::Custom => colors.custom,
         SnippetKind::Number => colors.number,
         SnippetKind::Phone => colors.phone,
         SnippetKind::Email => colors.email,

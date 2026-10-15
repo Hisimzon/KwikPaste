@@ -1268,6 +1268,7 @@ async fn import_ecopaste_history(
                 &settings.clipboard.capture,
                 &settings.clipboard.sensitive,
                 settings.clipboard.content.copy_plain,
+                settings.clipboard.compiled_rules(),
             )?
             else {
                 skipped_items += 1;

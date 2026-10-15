@@ -10,9 +10,7 @@ use super::files::{
     count_file_paths, is_image_path, path_to_string, resolve_file_icon_path,
     resolve_preview_file_is_dir, resolve_preview_file_size,
 };
-use super::text::{
-    count_preview_text_rows, preview_sub_kind, preview_text, preview_text_rows, preview_text_source,
-};
+use super::text::{count_preview_text_rows, preview_sub_kind, preview_text, preview_text_source};
 use crate::clipboard::{
     preview_quick_snippets, split_words, validate_image_file_name, word_spans, FileIconStore,
     ImageStore, PreviewSnippet, WordSpan,
@@ -145,9 +143,12 @@ pub(crate) fn preview_content_metrics(
     let redact_sensitive = clipboard.sensitive.redact_secrets;
 
     match item.kind {
-        ClipboardKind::Text => {
-            preview_text_metrics(item, redact_sensitive, clipboard.preview.text_view)
-        }
+        ClipboardKind::Text => preview_text_metrics(
+            item,
+            redact_sensitive,
+            clipboard.preview.text_view,
+            clipboard.compiled_rules(),
+        ),
         ClipboardKind::Image => PreviewContentMetrics::Image {
             width: item.width.map(|value| value as f64),
             height: item.height.map(|value| value as f64),
@@ -172,10 +173,14 @@ fn preview_text_metrics(
     item: &ClipboardItem,
     redact_sensitive: bool,
     text_view: PreviewTextView,
+    rules: &crate::clipboard::rules::CompiledRules,
 ) -> PreviewContentMetrics {
     if redact_sensitive && item.is_sensitive {
         return PreviewContentMetrics::Text {
-            rows: preview_text_rows(item, redact_sensitive),
+            rows: count_preview_text_rows(
+                &super::text::mask_with_rules(preview_text_source(item), rules),
+                false,
+            ),
         };
     }
 
@@ -252,11 +257,15 @@ pub(crate) async fn build_preview_payload(
 
     match item.kind {
         ClipboardKind::Text => {
-            text = Some(preview_text(&item, redact_sensitive));
+            text = Some(if redact_sensitive && item.is_sensitive {
+                super::text::mask_with_rules(preview_text_source(&item), clipboard.compiled_rules())
+            } else {
+                preview_text(&item, false)
+            });
             if !(redact_sensitive && item.is_sensitive) {
                 (words, words_truncated) = word_spans(preview_text_source(&item));
                 if clipboard.display.quick_snippets {
-                    snippets = preview_quick_snippets(&item);
+                    snippets = preview_quick_snippets(&item, clipboard.compiled_rules());
                 }
             }
         }
@@ -422,7 +431,12 @@ mod tests {
     fn preview_text_metrics_follow_the_text_view() {
         let is_words = |item: &ClipboardItem, redact: bool, view: PreviewTextView| {
             matches!(
-                preview_text_metrics(item, redact, view),
+                preview_text_metrics(
+                    item,
+                    redact,
+                    view,
+                    &crate::clipboard::rules::CompiledRules::default()
+                ),
                 PreviewContentMetrics::Words { .. }
             )
         };

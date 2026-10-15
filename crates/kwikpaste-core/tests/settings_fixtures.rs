@@ -212,6 +212,7 @@ fn customized_settings_round_trip_exactly() {
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
     expected["clipboard"]["display"]["layout"] = Value::from("single");
     expected["clipboard"]["display"]["quickSnippetColors"] = Value::Bool(true);
+    expected["clipboard"]["customRules"] = Value::Array(Vec::new());
     expected["appearance"]["preferencesSidebarCollapsed"] = Value::from(false);
     expected["extensions"] =
         serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});

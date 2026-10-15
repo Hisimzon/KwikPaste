@@ -52,6 +52,7 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
+mod custom_rules;
 mod extensions;
 mod image_text;
 mod overview;
@@ -3176,6 +3177,7 @@ impl Preferences {
             Control::CaptureOrder => self.render_capture_order(cx),
             Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
+            Control::CustomRules => self.render_custom_rules(cx),
             Control::AppExclusion => self.render_app_exclusion(setting.id, value, cx),
             Control::Action { danger } => self.render_action(setting.id, danger, cx),
             _ => self.render_action(setting.id, false, cx),

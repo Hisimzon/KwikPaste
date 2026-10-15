@@ -129,6 +129,8 @@ pub enum Control {
     Retention,
     /// 按类型、来源、大小的清理规则。
     RetentionRules,
+    /// 用户文本匹配规则列表。
+    CustomRules,
     /// 清理状态与「立即清理」。
     CleanupStatus,
     /// 数据概览。
@@ -151,6 +153,7 @@ impl Control {
             Self::CaptureKinds
                 | Self::CaptureOrder
                 | Self::RetentionRules
+                | Self::CustomRules
                 | Self::LanSync
                 | Self::Extensions
         )
@@ -950,6 +953,14 @@ fn capture_sections() -> Vec<Section> {
                 Setting::new("source.excludedApps", Control::AppExclusion)
                     .path("clipboard.filters.excludedAppIds")
                     .keywords(&["exclude", "ignore", "app", "source"]),
+            ],
+        },
+        Section {
+            id: "customRules",
+            settings: vec![
+                Setting::new("customRules", Control::CustomRules)
+                    .path(kwikpaste_core::settings::paths::CUSTOM_RULES)
+                    .keywords(&["regex", "pattern", "snippet", "sensitive", "ignore"]),
             ],
         },
         Section {

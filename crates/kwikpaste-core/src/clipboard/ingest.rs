@@ -186,6 +186,7 @@ pub fn build_item(store: &ImageStore, payload: &ClipboardPayload) -> Result<Opti
         &Capture::default(),
         &Sensitive::default(),
         false,
+        &crate::clipboard::rules::CompiledRules::default(),
     )
 }
 
@@ -196,11 +197,17 @@ pub fn build_item_with_settings(
     capture: &Capture,
     sensitive: &Sensitive,
     plain_only: bool,
+    rules: &super::rules::CompiledRules,
 ) -> Result<Option<ClipboardItem>> {
     let mut is_sensitive = false;
     let draft = match payload {
         ClipboardPayload::Text(text) => {
-            if contains_secret(&text.text) {
+            if rules.matches(super::rules::RuleAction::Ignore, &text.text) {
+                return Ok(None);
+            }
+            if contains_secret(&text.text)
+                || rules.matches(super::rules::RuleAction::Sensitive, &text.text)
+            {
                 if !sensitive.collect_secrets {
                     return Ok(None);
                 }
@@ -363,6 +370,55 @@ mod tests {
     }
 
     #[test]
+    fn custom_ignore_sensitive_and_collect_secrets_apply_to_plain_source() {
+        use super::super::rules::{tests::rule, CompiledRules, RuleAction};
+        let (_dir, store) = store();
+        let payload = text_payload(
+            "正文 ABC-12345 结束",
+            Some("<b>正文 ABC-12345 结束</b>"),
+            None,
+        );
+        let capture = Capture::default();
+        let sensitive = Sensitive::default();
+        let rules = CompiledRules::new(&[rule("ABC-[0-9]+", RuleAction::Ignore)]);
+        assert!(
+            build_item_with_settings(&store, &payload, &capture, &sensitive, false, &rules)
+                .unwrap()
+                .is_none()
+        );
+        let rules = CompiledRules::new(&[rule("ABC-[0-9]+", RuleAction::Sensitive)]);
+        assert!(
+            build_item_with_settings(&store, &payload, &capture, &sensitive, false, &rules)
+                .unwrap()
+                .unwrap()
+                .is_sensitive
+        );
+        let sensitive = Sensitive {
+            collect_secrets: false,
+            redact_secrets: true,
+        };
+        assert!(
+            build_item_with_settings(&store, &payload, &capture, &sensitive, false, &rules)
+                .unwrap()
+                .is_none()
+        );
+        let safe = text_payload("正常正文", None, None);
+        assert!(
+            !build_item_with_settings(&store, &safe, &capture, &sensitive, false, &rules)
+                .unwrap()
+                .unwrap()
+                .is_sensitive
+        );
+        let files = ClipboardPayload::Files(vec!["ABC-12345".into()]);
+        assert!(
+            !build_item_with_settings(&store, &files, &capture, &sensitive, false, &rules)
+                .unwrap()
+                .unwrap()
+                .is_sensitive
+        );
+    }
+
+    #[test]
     fn plain_text_runs_subtype_detection() {
         let (_d, s) = store();
         let item = build_item(&s, &text_payload("https://example.com", None, None))
@@ -400,6 +456,7 @@ mod tests {
             &Capture::default(),
             &Sensitive::default(),
             true,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -460,6 +517,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap();
         let larger_item = build_item_with_settings(
@@ -468,6 +526,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap();
 
@@ -489,6 +548,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap();
 
@@ -509,6 +569,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap();
 
@@ -529,6 +590,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             true,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap();
 
@@ -548,6 +610,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap();
         assert!(item.is_none());
@@ -566,6 +629,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -586,6 +650,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -612,6 +677,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -636,6 +702,7 @@ mod tests {
             &capture,
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -656,6 +723,7 @@ mod tests {
                 redact_secrets: false,
             },
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -677,6 +745,7 @@ mod tests {
                 redact_secrets: true,
             },
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap();
 
@@ -695,6 +764,7 @@ mod tests {
                 redact_secrets: true,
             },
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -713,6 +783,7 @@ mod tests {
             &Capture::default(),
             &Sensitive::default(),
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -732,6 +803,7 @@ mod tests {
                 redact_secrets: true,
             },
             false,
+            &crate::clipboard::rules::CompiledRules::default(),
         )
         .unwrap()
         .unwrap();
@@ -761,8 +833,15 @@ mod tests {
             ..Capture::default()
         };
         let payload = ClipboardPayload::Files(vec!["/a/b.txt".to_owned()]);
-        let item =
-            build_item_with_settings(&s, &payload, &capture, &Sensitive::default(), false).unwrap();
+        let item = build_item_with_settings(
+            &s,
+            &payload,
+            &capture,
+            &Sensitive::default(),
+            false,
+            &crate::clipboard::rules::CompiledRules::default(),
+        )
+        .unwrap();
 
         assert!(item.is_some());
     }
@@ -801,8 +880,15 @@ mod tests {
             width: 20,
             height: 10,
         });
-        let item =
-            build_item_with_settings(&s, &payload, &capture, &Sensitive::default(), false).unwrap();
+        let item = build_item_with_settings(
+            &s,
+            &payload,
+            &capture,
+            &Sensitive::default(),
+            false,
+            &crate::clipboard::rules::CompiledRules::default(),
+        )
+        .unwrap();
         assert!(item.is_none());
     }
 
@@ -819,8 +905,15 @@ mod tests {
             width: 20,
             height: 10,
         });
-        let item =
-            build_item_with_settings(&s, &payload, &capture, &Sensitive::default(), false).unwrap();
+        let item = build_item_with_settings(
+            &s,
+            &payload,
+            &capture,
+            &Sensitive::default(),
+            false,
+            &crate::clipboard::rules::CompiledRules::default(),
+        )
+        .unwrap();
 
         assert!(item.is_none());
         assert!(!s
@@ -836,8 +929,15 @@ mod tests {
             ..Capture::default()
         };
         let payload = ClipboardPayload::Files(vec!["/a/b.txt".to_owned()]);
-        let item =
-            build_item_with_settings(&s, &payload, &capture, &Sensitive::default(), false).unwrap();
+        let item = build_item_with_settings(
+            &s,
+            &payload,
+            &capture,
+            &Sensitive::default(),
+            false,
+            &crate::clipboard::rules::CompiledRules::default(),
+        )
+        .unwrap();
         assert!(item.is_none());
     }
 

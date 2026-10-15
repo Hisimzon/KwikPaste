@@ -81,6 +81,31 @@
     "shortcutInUse": "In use by another app",
     "shortcutNotSet": "Not set"
   },
+  "customRules": {
+    "action": "Action",
+    "actions": {
+      "ignore": "Don't record",
+      "sensitive": "Sensitive",
+      "snippet": "Quick snippet"
+    },
+    "add": "Add rule",
+    "delete": "Delete",
+    "edit": "Edit rule",
+    "empty": "No text matching rules yet",
+    "fromTemplate": "Add from template",
+    "matches": "{{count}} matches",
+    "name": "Name",
+    "pattern": "Regular expression",
+    "templates": {
+      "identity": "Mainland ID number",
+      "ipv4": "IPv4 address",
+      "mac": "MAC address",
+      "new": "New rule",
+      "ticket": "Ticket number",
+      "tracking": "CN tracking number"
+    },
+    "test": "Test text"
+  },
   "extensions": {
     "details": {
       "feature": "What it does",
@@ -492,6 +517,9 @@
       "click": {
         "title": "Click Actions"
       },
+      "customRules": {
+        "title": "Text matching rules"
+      },
       "deleteProtection": {
         "title": "Delete Protection"
       },
@@ -785,6 +813,10 @@
           "description": "Refresh a record's last-used time and use count when you copy or paste it again.",
           "title": "Update Record on Reuse"
         }
+      },
+      "customRules": {
+        "description": "Match copied text with a regex to show it as a quick snippet, mark it sensitive, or skip recording it. Sensitive and Don't record apply to new copies only.",
+        "title": "Text matching rules"
       },
       "diagnostics": {
         "resetPreferences": {

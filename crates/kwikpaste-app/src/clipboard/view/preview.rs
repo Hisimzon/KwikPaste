@@ -598,10 +598,13 @@ impl PreviewPanel {
                                 )))
                             })
                             .child(
-                                div()
-                                    .flex_none()
-                                    .text_color(tokens.text.secondary)
-                                    .child(t(snippet_label(snippet.kind))),
+                                div().flex_none().text_color(tokens.text.secondary).child(
+                                    snippet
+                                        .label
+                                        .clone()
+                                        .map(SharedString::from)
+                                        .unwrap_or_else(|| t(snippet_label(snippet.kind))),
+                                ),
                             )
                             .child(
                                 div()
@@ -974,6 +977,7 @@ fn segmented(segments: impl IntoIterator<Item = Stateful<Div>>, cx: &App) -> Any
 /// 快捷信息类型名的文案 key。
 pub fn snippet_label(kind: SnippetKind) -> &'static str {
     match kind {
+        SnippetKind::Custom => "preview:snippets.kinds.custom",
         SnippetKind::Number => "preview:snippets.kinds.number",
         SnippetKind::Phone => "preview:snippets.kinds.phone",
         SnippetKind::Email => "preview:snippets.kinds.email",

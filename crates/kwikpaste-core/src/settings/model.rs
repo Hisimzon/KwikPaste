@@ -246,6 +246,9 @@ impl QuickPasteModifiers {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Clipboard {
+    pub custom_rules: Vec<crate::clipboard::rules::CustomRule>,
+    #[serde(skip)]
+    pub rule_cache: crate::clipboard::rules::RuleCache,
     pub capture: Capture,
     pub content: Content,
     pub display: Display,
@@ -256,6 +259,13 @@ pub struct Clipboard {
     pub preview: Preview,
     pub feedback: Feedback,
     pub filters: Filters,
+}
+
+impl Clipboard {
+    /// 所有同修订的设置快照共享已编译规则。
+    pub fn compiled_rules(&self) -> &crate::clipboard::rules::CompiledRules {
+        self.rule_cache.get(&self.custom_rules)
+    }
 }
 
 /// 剪贴板内容类型采集开关。关闭后监听与手动读取都不入库对应类型。

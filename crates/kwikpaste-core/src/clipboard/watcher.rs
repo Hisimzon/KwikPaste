@@ -185,6 +185,7 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         &settings.clipboard.capture,
         &settings.clipboard.sensitive,
         settings.clipboard.content.copy_plain,
+        settings.clipboard.compiled_rules(),
     ) {
         Ok(Some(item)) => item,
         Ok(None) => return None,
