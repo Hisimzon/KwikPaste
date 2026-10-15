@@ -161,14 +161,11 @@
   "feedback": {
     "attachments": "Included",
     "close": "Close",
-    "contact": "Contact",
-    "contactPlaceholder": "Email or other contact (optional), so we can reply",
     "description": "Description",
     "descriptionPlaceholder": "What went wrong? For example: the panel doesn't open when I press the shortcut",
     "errors": {
       "badResponse": "The feedback service returned an unexpected response.",
       "collect": "Couldn't collect diagnostics.",
-      "contactLength": "Contact info can be at most 200 characters.",
       "descriptionLength": "Describe the problem in up to 5,000 characters.",
       "noEndpoint": "This development build has no feedback service configured.",
       "offline": "Can't reach the feedback service. Check your network connection.",

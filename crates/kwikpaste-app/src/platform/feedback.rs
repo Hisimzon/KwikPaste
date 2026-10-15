@@ -62,12 +62,7 @@ pub fn prepare(cx: &mut App) -> Task<Result<FeedbackDraft>> {
 }
 
 /// UI 点击发送时传入预览过的草稿；await 成功后仅展示 code，失败可继续用同一草稿保存。
-pub fn submit(
-    draft: FeedbackDraft,
-    description: String,
-    contact: String,
-    cx: &mut App,
-) -> Task<Result<Receipt>> {
+pub fn submit(draft: FeedbackDraft, description: String, cx: &mut App) -> Task<Result<Receipt>> {
     let Some(core) = crate::core_host::core(cx) else {
         return Task::ready(Err(FeedbackError::Collect));
     };
@@ -75,7 +70,7 @@ pub fn submit(
     cx.background_executor().spawn(async move {
         let result = kwikpaste_core::runtime::hop(&runtime, async move {
             Ok(async move {
-                let body = body(&draft, description, contact)?;
+                let body = body(&draft, description)?;
                 let receipt = transport::upload(body).await?;
                 Ok(Receipt { code: receipt.code })
             }
@@ -95,13 +90,12 @@ pub fn submit(
 pub fn save(
     draft: FeedbackDraft,
     description: String,
-    contact: String,
     path: PathBuf,
     cx: &mut App,
 ) -> Task<Result<()>> {
     cx.background_executor().spawn(async move {
         let result = (|| {
-            let body = body(&draft, description, contact)?;
+            let body = body(&draft, description)?;
             std::fs::write(path, body).map_err(|_| FeedbackError::Save)
         })();
         if let Err(error) = &result {
@@ -111,10 +105,9 @@ pub fn save(
     })
 }
 
-fn body(draft: &FeedbackDraft, description: String, contact: String) -> Result<Vec<u8>> {
+fn body(draft: &FeedbackDraft, description: String) -> Result<Vec<u8>> {
     let mut payload = draft.payload.clone();
     payload.description = description;
-    payload.contact = contact;
     transport::encode(&payload)
 }
 
@@ -244,7 +237,6 @@ fn collect(
         payload: Payload {
             schema: 1,
             description: String::new(),
-            contact: String::new(),
             app,
             diagnostics,
             settings: stored_settings,
@@ -327,8 +319,8 @@ mod tests {
         assert_eq!(draft.payload.diagnostics["clipboard"]["itemCount"], 0);
         assert!(draft.payload.diagnostics["settingsChanged"].is_object());
         assert_eq!(
-            body(&draft, "test".into(), String::new()).unwrap(),
-            body(&draft, "test".into(), String::new()).unwrap()
+            body(&draft, "test".into()).unwrap(),
+            body(&draft, "test".into()).unwrap()
         );
         std::fs::write(
             core.paths().config_dir().unwrap().join("settings.json"),

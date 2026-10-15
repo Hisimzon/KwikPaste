@@ -31,7 +31,6 @@ pub struct App {
 pub struct Payload {
     pub schema: u8,
     pub description: String,
-    pub contact: String,
     pub app: App,
     pub diagnostics: Value,
     pub settings: Value,
@@ -49,8 +48,6 @@ pub struct Receipt {
 pub enum FeedbackError {
     #[error("description must be 1-5000 characters")]
     DescriptionLength,
-    #[error("contact must be at most 200 characters")]
-    ContactLength,
     #[error("attachments are malformed or too large")]
     TooLarge,
     #[error("no feedback endpoint is configured")]
@@ -75,13 +72,10 @@ pub enum FeedbackError {
 
 pub type Result<T> = std::result::Result<T, FeedbackError>;
 
-/// 描述去首尾空白后 1–5000 字符，联系方式最多 200 字符；弹窗和编码共用。
-pub fn validate(description: &str, contact: &str) -> Result<()> {
+/// 描述去首尾空白后 1–5000 字符；弹窗和编码共用。
+pub fn validate(description: &str) -> Result<()> {
     if !(1..=5000).contains(&description.trim().chars().count()) {
         return Err(FeedbackError::DescriptionLength);
-    }
-    if contact.chars().count() > 200 {
-        return Err(FeedbackError::ContactLength);
     }
     Ok(())
 }
@@ -99,7 +93,7 @@ pub fn tail(text: &str, limit: usize) -> &str {
 pub fn encode(payload: &Payload) -> Result<Vec<u8>> {
     let mut payload = payload.clone();
     payload.description = payload.description.trim().to_owned();
-    validate(&payload.description, &payload.contact)?;
+    validate(&payload.description)?;
     if payload.schema != 1
         || !payload.diagnostics.is_object()
         || serde_json::to_vec(&payload.diagnostics)
@@ -221,7 +215,6 @@ mod tests {
         Payload {
             schema: 1,
             description: " test ".into(),
-            contact: String::new(),
             app: App {
                 version: "2.0.5".into(),
                 official: false,
@@ -282,7 +275,7 @@ mod tests {
             assert!(headers.contains("content-type: application/json"));
             assert!(headers.contains("content-encoding: gzip"));
             let body = decode(&requests[0].body);
-            assert_eq!(body.as_object().unwrap().len(), 7);
+            assert_eq!(body.as_object().unwrap().len(), 6);
             assert_eq!(body["schema"], 1);
             assert_eq!(body["description"], "test");
             assert_eq!(body["app"]["osVersion"], "10.0.26100");
@@ -311,9 +304,6 @@ mod tests {
         p.description = "a".repeat(5001);
         assert_eq!(encode(&p).err(), Some(FeedbackError::DescriptionLength));
         p.description = "ok".into();
-        p.contact = "a".repeat(201);
-        assert_eq!(encode(&p).err(), Some(FeedbackError::ContactLength));
-        p.contact.clear();
         p.diagnostics = json!({"large":"x".repeat(256 * 1024)});
         assert_eq!(encode(&p).err(), Some(FeedbackError::TooLarge));
         p.diagnostics = json!({});
