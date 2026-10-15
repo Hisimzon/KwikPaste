@@ -107,8 +107,18 @@ pub fn dispatch(cx: &mut App, request: HostRequest) {
     }
 }
 
-/// 冷启动：命令行带了备份文件就排队，等 UI 注册处理函数时交出。
+/// 自动启动（含静默更新重启）只进托盘，不恢复原命令行中的导入窗口。
+pub fn auto_launch() -> bool {
+    std::env::args_os()
+        .skip(1)
+        .any(|arg| arg == AUTO_LAUNCH_ARG)
+}
+
+/// 冷启动：非自动启动时命令行带了备份文件就排队，等 UI 注册处理函数时交出。
 pub fn queue_launch_arguments(cx: &mut App) {
+    if auto_launch() {
+        return;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cwd = std::env::current_dir().unwrap_or_default();
     if let Some(path) = backup_path(&args, &cwd) {

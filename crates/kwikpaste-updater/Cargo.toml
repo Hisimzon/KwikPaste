@@ -19,6 +19,7 @@ base64.workspace = true
 chrono.workspace = true
 flate2.workspace = true
 kwikpaste-core.workspace = true
+kwikpaste-os.workspace = true
 kwikpaste-ext-protocol = { path = "../kwikpaste-ext-protocol" }
 log.workspace = true
 minisign-verify.workspace = true

@@ -19,6 +19,7 @@ fn handoff<'a>(
         launcher,
         exe,
         args: vec![OsString::from("--auto-launch")],
+        silent: false,
         from: "2.0.0".to_owned(),
         to: "2.0.1".to_owned(),
     }
@@ -137,8 +138,10 @@ fn portable_handoff_swaps_the_exe_and_releases_the_single_instance_first() {
     let package = test.root().join("KwikPaste-2.0.1-portable.zip");
     fs::write(&package, portable_package(b"MZ new")).unwrap();
 
-    test.block_on(handoff(&test, &host, &launcher, exe.clone()).portable(&package))
-        .unwrap();
+    let mut update = handoff(&test, &host, &launcher, exe.clone());
+    update.silent = true;
+    update.args = crate::restart_args(Vec::new(), true);
+    test.block_on(update.portable(&package)).unwrap();
 
     assert_eq!(fs::read(&exe).unwrap(), b"MZ new");
     assert_eq!(
@@ -204,7 +207,10 @@ fn mac_handoff_swaps_the_bundle_and_schedules_a_relaunch() {
     fs::write(&archive, app_archive()).unwrap();
     let exe = bundle.join("Contents/MacOS/KwikPaste");
 
-    test.block_on(handoff(&test, &host, &launcher, exe).mac_app(&bundle, &archive, &work))
+    let mut update = handoff(&test, &host, &launcher, exe);
+    update.silent = true;
+    update.args = crate::restart_args(Vec::new(), true);
+    test.block_on(update.mac_app(&bundle, &archive, &work))
         .unwrap();
 
     assert_eq!(
@@ -222,6 +228,7 @@ fn mac_handoff_swaps_the_bundle_and_schedules_a_relaunch() {
         ]
     );
     assert!(journal[4].starts_with("spawn sh -c "), "{}", journal[4]);
+    assert!(journal[4].contains("/usr/bin/open -g -j"));
     assert!(journal[4].ends_with(&format!("{} --auto-launch", bundle.display())));
     assert_eq!(journal[5], "host: exit(0)");
     assert_eq!(record(&test).unwrap().kind, "app");

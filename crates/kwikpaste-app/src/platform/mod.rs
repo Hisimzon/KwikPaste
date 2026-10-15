@@ -388,6 +388,7 @@ pub fn start<V: Render>(
     });
     host::queue_launch_arguments(cx);
     let should_open_onboarding = (!selftest::active()
+        && !host::auto_launch()
         && core_host::core(cx).is_some_and(|core| !core.settings().onboarding.completed))
         || selftest::onboarding_requested();
     if should_open_onboarding && let Err(err) = crate::preferences::open_onboarding(cx) {

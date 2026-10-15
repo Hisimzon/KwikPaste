@@ -247,6 +247,7 @@ pub fn start(cx: &mut App) {
     });
     cx.set_global(HandoffRequests(requests.clone()));
     let host = Arc::new(Handoff { requests });
+    let handoff_record = kwikpaste_updater::take_handoff(core.paths());
 
     let created = match Updater::new(
         core,
@@ -261,6 +262,9 @@ pub fn start(cx: &mut App) {
             return;
         }
     };
+    if let Some(record) = handoff_record {
+        created.record_handoff(record);
+    }
     let extension_state = cx.new(|_| ExtensionState(created.extensions().status()));
     cx.set_global(ExtensionStateHost(extension_state));
     let update_state = cx.new(|_| UpdateState(created.status()));
@@ -486,6 +490,7 @@ struct Ui {
 }
 
 enum UiRequest {
+    IdleDuration(oneshot::Sender<Option<Duration>>),
     Extensions(Vec<ExtensionStatus>),
     Update(Box<UpdateStatus>),
     Prompt(Box<UpdateStatus>),
@@ -493,6 +498,21 @@ enum UiRequest {
 }
 
 impl UpdaterUi for Ui {
+    fn idle_duration(&self) -> HostFuture<'_, Option<Duration>> {
+        Box::pin(async move {
+            let (reply, result) = oneshot::channel();
+            if self
+                .requests
+                .send(UiRequest::IdleDuration(reply))
+                .await
+                .is_err()
+            {
+                return None;
+            }
+            result.await.unwrap_or(None)
+        })
+    }
+
     fn extensions_changed(&self, status: Vec<ExtensionStatus>) {
         if self
             .requests
@@ -560,6 +580,20 @@ impl Global for UpdateWindowHost {}
 
 fn serve_ui(request: UiRequest, cx: &mut App) {
     match request {
+        UiRequest::IdleDuration(reply) => {
+            let idle = if any_app_window_visible() {
+                None
+            } else {
+                match kwikpaste_os::idle::duration() {
+                    Ok(duration) => Some(duration),
+                    Err(err) => {
+                        log::warn!("system idle time is unavailable: {err}");
+                        None
+                    }
+                }
+            };
+            let _ = reply.send(idle);
+        }
         UiRequest::Extensions(status) => {
             if let Some(state) = cx
                 .try_global::<ExtensionStateHost>()
@@ -599,6 +633,56 @@ fn serve_ui(request: UiRequest, cx: &mut App) {
             }
         }
     }
+}
+
+/// 枚举本进程的原生顶层窗口，覆盖 GPUI 窗口以及后台线程打开的系统对话框。
+#[cfg(target_os = "windows")]
+fn any_app_window_visible() -> bool {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+    };
+
+    unsafe extern "system" fn visit(window: HWND, data: LPARAM) -> i32 {
+        let mut process = 0;
+        // SAFETY: EnumWindows 提供有效窗口，输出指针指向栈上的 u32。
+        unsafe { GetWindowThreadProcessId(window, &mut process) };
+        if process == std::process::id() && unsafe { IsWindowVisible(window) } != 0 {
+            // SAFETY: data 指向本次同步枚举期间存活的 bool。
+            unsafe { *(data as *mut bool) = true };
+        }
+        1
+    }
+
+    let mut visible = false;
+    // SAFETY: 回调不保留指针，visible 在同步枚举完成前一直有效。
+    if unsafe { EnumWindows(Some(visit), (&mut visible as *mut bool) as LPARAM) } == 0 {
+        log::warn!(
+            "could not enumerate application windows: {}",
+            std::io::Error::last_os_error()
+        );
+        return true;
+    }
+    visible
+}
+
+/// 在主线程查询 NSApplication 的全部窗口，包含 NSAlert、面板及编辑器；状态栏图标自己的
+/// `NSStatusBarWindow` 一直可见，不算。
+#[cfg(target_os = "macos")]
+fn any_app_window_visible() -> bool {
+    use objc2::runtime::{AnyClass, NSObjectProtocol};
+
+    let Some(main_thread) = objc2::MainThreadMarker::new() else {
+        log::warn!("application visibility was queried off the main thread");
+        return true;
+    };
+    let status_bar = AnyClass::get(c"NSStatusBarWindow");
+    objc2_app_kit::NSApplication::sharedApplication(main_thread)
+        .windows()
+        .iter()
+        .any(|window| {
+            window.isVisible() && status_bar.is_none_or(|class| !window.isKindOfClass(class))
+        })
 }
 
 fn open_update_window(status: UpdateStatus, cx: &mut App) {

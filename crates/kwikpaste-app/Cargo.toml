@@ -54,6 +54,7 @@ windows-sys = { workspace = true, features = ["Win32_System_Threading", "Win32_S
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_platform.workspace = true
+objc2.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
 workspace = true
