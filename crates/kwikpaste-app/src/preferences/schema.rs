@@ -657,7 +657,7 @@ fn appearance_sections() -> Vec<Section> {
                     .keywords(&["theme", "dark", "light"]),
                 Setting::new("appearance.material", Control::Tiles(TilesKind::Material))
                     .path("appearance.material")
-                    .keywords(&["material", "mica", "acrylic", "transparency"]),
+                    .keywords(&["material", "mica", "frosted", "blur", "transparency"]),
                 Setting::new(
                     "appearance.listStyle",
                     Control::Select(Options::Values(LIST_STYLES)),

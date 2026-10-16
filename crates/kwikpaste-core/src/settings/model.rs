@@ -104,7 +104,9 @@ pub enum Material {
     #[default]
     Default,
     Mica,
-    Acrylic,
+    /// 磨砂。设置值沿用已发布的 `acrylic`。
+    #[serde(rename = "acrylic")]
+    Frosted,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

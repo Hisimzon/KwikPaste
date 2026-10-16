@@ -16,7 +16,7 @@ use gpui_component::{Theme, ThemeMode};
 
 use components::ComponentTokens;
 pub use css_color::css_color;
-pub use palette::{MATERIAL_ACRYLIC_ALPHA, MATERIAL_MICA_ALPHA, MaterialKind};
+pub use palette::{MATERIAL_FROSTED_ALPHA, MATERIAL_MICA_ALPHA, MaterialKind};
 pub use semantic::SemanticTokens;
 use std::sync::OnceLock;
 pub use tokens::{TextSize, control_height, motion, px_rems, radius, space};
@@ -57,6 +57,8 @@ struct KpTheme {
     preference: ThemePreference,
     system: Appearance,
     text_scale: f32,
+    /// 窗口材质是不是磨砂：磨砂用表面整体变透明的那套 token。
+    frosted: bool,
     /// 当前明暗对应的运行时 token；切换外观时替换而不是修改静态色板。
     set: &'static ThemeSet,
 }
@@ -67,6 +69,10 @@ impl KpTheme {
     fn appearance(&self) -> Appearance {
         resolve(self.preference, self.system)
     }
+
+    fn intern(&self) -> &'static ThemeSet {
+        intern(self.appearance(), self.frosted)
+    }
 }
 
 struct ThemeSet {
@@ -75,16 +81,23 @@ struct ThemeSet {
     components: ComponentTokens,
 }
 
-/// 每个色板与明暗组合只构建一次，所有访问器共享同一个驻留集合。
-fn intern(appearance: Appearance) -> &'static ThemeSet {
+/// 每个色板、明暗与磨砂组合只构建一次，所有访问器共享同一个驻留集合。
+fn intern(appearance: Appearance, frosted: bool) -> &'static ThemeSet {
     static LIGHT: OnceLock<&'static ThemeSet> = OnceLock::new();
     static DARK: OnceLock<&'static ThemeSet> = OnceLock::new();
-    let (slot, palette) = match appearance {
-        Appearance::Light => (&LIGHT, &palette::LIGHT),
-        Appearance::Dark => (&DARK, &palette::DARK),
+    static LIGHT_FROSTED: OnceLock<&'static ThemeSet> = OnceLock::new();
+    static DARK_FROSTED: OnceLock<&'static ThemeSet> = OnceLock::new();
+    let (slot, palette) = match (appearance, frosted) {
+        (Appearance::Light, false) => (&LIGHT, &palette::LIGHT),
+        (Appearance::Dark, false) => (&DARK, &palette::DARK),
+        (Appearance::Light, true) => (&LIGHT_FROSTED, &palette::LIGHT),
+        (Appearance::Dark, true) => (&DARK_FROSTED, &palette::DARK),
     };
     slot.get_or_init(|| {
-        let semantic = SemanticTokens::from_palette(palette);
+        let mut semantic = SemanticTokens::from_palette(palette);
+        if frosted {
+            frost(&mut semantic);
+        }
         let components = ComponentTokens::from_semantic(&semantic);
         Box::leak(Box::new(ThemeSet {
             palette,
@@ -93,6 +106,27 @@ fn intern(appearance: Appearance) -> &'static ThemeSet {
         }))
     })
 }
+
+/// 磨砂：不透明表面统一乘上 `frosted_surface_alpha`，边框、文字、主色不变。填充和悬停色本来就是
+/// 叠在表面上的半透明色，不再缩放。
+fn frost(s: &mut SemanticTokens) {
+    let alpha = s.materials.frosted_surface_alpha;
+    for color in [
+        &mut s.surface.window,
+        &mut s.surface.panel,
+        &mut s.surface.raised,
+        &mut s.surface.overlay,
+        &mut s.accent.subtle,
+        &mut s.accent.subtle_hover,
+        &mut s.status.success.subtle,
+        &mut s.status.warning.subtle,
+        &mut s.status.danger.subtle,
+        &mut s.status.info.subtle,
+    ] {
+        color.a *= alpha;
+    }
+}
+
 /// 完全透明。有系统材质的窗口让 `Root` 不画底色时用。
 pub fn transparent() -> Hsla {
     gpui::transparent_black()
@@ -121,19 +155,20 @@ pub(crate) fn init(cx: &mut App) {
         preference: ThemePreference::System,
         system: cx.window_appearance().into(),
         text_scale: 1.,
-        set: intern(Appearance::from(cx.window_appearance())),
+        frosted: false,
+        set: intern(Appearance::from(cx.window_appearance()), false),
     });
     apply(cx);
 }
 
 /// 指定明暗的角色语义 token，测试和无全局主题的初始化路径使用。
 pub fn semantic_for(appearance: Appearance) -> &'static SemanticTokens {
-    &intern(appearance).semantic
+    &intern(appearance, false).semantic
 }
 
 /// 指定明暗的组件状态 token，测试和无全局主题的初始化路径使用。
 pub fn components_for(appearance: Appearance) -> &'static ComponentTokens {
-    &intern(appearance).components
+    &intern(appearance, false).components
 }
 
 /// 当前角色语义 token，新界面只通过这个入口读取颜色。
@@ -174,8 +209,21 @@ pub fn set_preference(preference: ThemePreference, cx: &mut App) {
     }
 
     cx.global_mut::<KpTheme>().preference = preference;
-    let appearance = cx.global::<KpTheme>().appearance();
-    cx.global_mut::<KpTheme>().set = intern(appearance);
+    cx.global_mut::<KpTheme>().set = cx.global::<KpTheme>().intern();
+    apply(cx);
+}
+
+/// 窗口材质切到或切离磨砂时由平台层调用，换成对应的 token 并刷新所有窗口。
+pub fn set_frosted(frosted: bool, cx: &mut App) {
+    let Some(theme) = cx.try_global::<KpTheme>() else {
+        return;
+    };
+    if theme.frosted == frosted {
+        return;
+    }
+
+    cx.global_mut::<KpTheme>().frosted = frosted;
+    cx.global_mut::<KpTheme>().set = cx.global::<KpTheme>().intern();
     apply(cx);
 }
 
@@ -210,7 +258,7 @@ pub(crate) fn sync_system_appearance(window: &Window, cx: &mut App) {
     let follows_system = theme.preference == ThemePreference::System;
     cx.global_mut::<KpTheme>().system = system;
     if follows_system {
-        cx.global_mut::<KpTheme>().set = intern(system);
+        cx.global_mut::<KpTheme>().set = cx.global::<KpTheme>().intern();
         apply(cx);
     }
 }

@@ -772,7 +772,7 @@
         "material": {
           "description": "Falls back to a solid color when unsupported or when reduced transparency is on.",
           "options": {
-            "acrylic": "Acrylic",
+            "acrylic": "Frosted",
             "default": "Default",
             "mica": "Mica"
           },

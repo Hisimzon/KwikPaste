@@ -1,5 +1,5 @@
 //! macOS 窗口材质层：在 GPUI 视图下面放一块系统 `NSVisualEffectView`，映射与 1.x 相同：
-//! Mica → `UnderWindowBackground`，Acrylic → `Popover`。
+//! Mica → `UnderWindowBackground`，磨砂 → `Popover`。
 //!
 //! 不用 GPUI 的 `Blurred`：它的模糊视图去掉了系统色调和饱和度，较新的 macOS 上偏好设置、预览这类
 //! 窗口几乎没有模糊，桌面直接透出来，文字看不清。系统材质自带色调，跟随窗口的深浅色外观。
@@ -47,7 +47,7 @@ pub(crate) fn apply_to_view(
             return Ok(None);
         }
         Material::Mica => NSVisualEffectMaterial::UnderWindowBackground,
-        Material::Acrylic => NSVisualEffectMaterial::Popover,
+        Material::Frosted => NSVisualEffectMaterial::Popover,
     };
 
     let effect = existing.unwrap_or_else(|| {

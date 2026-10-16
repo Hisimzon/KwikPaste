@@ -123,6 +123,20 @@ fn type_scale_matches_wind4() {
 }
 
 #[test]
+fn frosted_scales_surfaces_but_keeps_borders_and_text() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let plain = &intern(appearance, false).semantic;
+        let frosted = &intern(appearance, true).semantic;
+        let alpha = plain.materials.frosted_surface_alpha;
+        assert_eq!(frosted.surface.panel.a, plain.surface.panel.a * alpha);
+        assert_eq!(frosted.surface.raised.a, plain.surface.raised.a * alpha);
+        assert_eq!(frosted.border, plain.border);
+        assert_eq!(frosted.text, plain.text);
+        assert_eq!(frosted.fill, plain.fill);
+    }
+}
+
+#[test]
 fn token_sets_are_interned() {
     for appearance in [Appearance::Light, Appearance::Dark] {
         assert!(std::ptr::eq(

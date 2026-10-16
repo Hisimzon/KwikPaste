@@ -762,7 +762,7 @@
         "material": {
           "description": "系统不支持或开启了减少透明度时使用纯色。",
           "options": {
-            "acrylic": "亚克力",
+            "acrylic": "磨砂",
             "default": "默认",
             "mica": "云母"
           },

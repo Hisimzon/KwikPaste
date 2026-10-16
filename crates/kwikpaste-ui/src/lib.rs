@@ -95,7 +95,7 @@ pub fn open_window<V: Render>(
     Ok((window.into(), view))
 }
 
-/// 窗口有系统材质（Mica / Acrylic）时让 `Root` 不画底色：gpui-component 的 Root 插件默认铺一层
+/// 窗口有系统材质（Mica / 磨砂）时让 `Root` 不画底色：gpui-component 的 Root 插件默认铺一层
 /// 不透明的主题 `background`，会把材质整个盖住。半透明底色由应用的根视图自己画。
 pub fn set_root_translucent(window: &mut Window, translucent: bool, cx: &mut App) {
     let Some(root) = window.root::<gpui_base::Root>().flatten() else {

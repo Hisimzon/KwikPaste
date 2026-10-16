@@ -1,15 +1,20 @@
-//! 窗口材质（Mica / Acrylic）的 DWM 调用，门槛与 1.x（window-vibrancy）相同，做法按附录 C §7：
+//! 窗口材质（Mica / 磨砂）的 DWM 调用，门槛与 1.x（window-vibrancy）相同，做法按附录 C §7：
 //!
 //! | 材质 | build ≥ 22523 | 22000–22522 | 17763–21999 | 更早 |
 //! |---|---|---|---|---|
 //! | mica | `DWMWA_SYSTEMBACKDROP_TYPE(38) = 2` | `DWMWA_MICA_EFFECT(1029) = 1` | 不支持 | 不支持 |
-//! | acrylic | `38 = 3`（TRANSIENTWINDOW） | 宿主用 GPUI `Blurred`（accent 4） | 同左 | 不支持 |
+//! | 磨砂 | accent 4（`ACCENT_ENABLE_ACRYLICBLURBEHIND`） | 同左 | 同左 | 不支持 |
 //!
-//! DWM 背板会被窗口的 accent policy 压掉（GPUI 的 `Transparent` 下的是 accent 2），所以设背板之前
+//! 磨砂用旧式的 accent 亚克力（与 QcClip 相同），不用系统亚克力背板（`DWMSBT_TRANSIENTWINDOW`）：
+//! 后者的亮度层和噪点调不了，整体发灰。accent 4 的色调可以自己给：浅色给一层白抵消灰雾，深色几乎
+//! 不加色调。纯高斯模糊（accent 3）在浅色下颜色太艳、次要文字看不清，也不用。窗口尺寸变化后
+//! accent 4 的模糊区域不会跟着更新，所以缩放后要重设（[`set_backdrop`] 装的子类负责）。
+//!
+//! DWM 背板会被窗口的 accent policy 压掉（GPUI 的 `Transparent` 下的是 accent 2），所以设 Mica 之前
 //! 先把 accent 清成 0（[`clear_accent`]）。`DwmGetWindowAttribute(38)` 读回值不可信（属性留着、画面
 //! 没了），验收只认截图。
 //!
-//! DWM 只给「框架活动」的窗口画背板，非活动窗口只画一块纯色回退（Acrylic 是平灰，Mica 是平涂底色）。
+//! DWM 只给「框架活动」的窗口画 Mica，非活动窗口只画一块平涂底色。
 //! 面板和预览这类从不激活的浮层用 [`keep_popup_frame_active`] 把框架状态一直留在活动。
 //!
 //! 另有：深浅色（`DWMWA_USE_IMMERSIVE_DARK_MODE`，跟随应用主题，GPUI 只会按系统设）、圆角、
@@ -19,15 +24,14 @@ use std::ffi::c_void;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
-    DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
-    DwmSetWindowAttribute,
+    DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, PostMessageW, SendMessageW, WM_APP, WM_NCACTIVATE,
-    WM_NCDESTROY, WM_SHOWWINDOW, WS_EX_TOOLWINDOW,
+    GWL_EXSTYLE, GetWindowLongPtrW, PostMessageW, SIZE_MINIMIZED, SendMessageW, WM_APP,
+    WM_NCACTIVATE, WM_NCDESTROY, WM_SHOWWINDOW, WM_SIZE, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, s, w};
 use windows_registry::{CURRENT_USER, LOCAL_MACHINE};
@@ -38,10 +42,18 @@ const DWMWA_MICA_EFFECT: i32 = 1029;
 const WCA_ACCENT_POLICY: u32 = 0x13;
 const BUILD_MICA: u32 = 22000;
 const BUILD_BACKDROP_TYPE: u32 = 22523;
-const BUILD_ACRYLIC: u32 = 17763;
+const BUILD_FROSTED: u32 = 17763;
 const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 /// [`keep_popup_frame_active`] 的子类 id（"KPMA"）。
 const ACTIVE_FRAME_SUBCLASS: usize = 0x4b50_4d41;
+/// 磨砂窗口缩放后重设 accent 的子类 id（"KPFR"）。
+const FROSTED_SUBCLASS: usize = 0x4b50_4652;
+/// `ACCENT_ENABLE_ACRYLICBLURBEHIND`。
+const ACCENT_ACRYLIC: u32 = 4;
+/// 浅色磨砂的色调：55% 白（ABGR），抵消 accent 亚克力的灰雾。
+const FROSTED_TINT_LIGHT: u32 = (140 << 24) | 0x00ff_ffff;
+/// 深色磨砂几乎不加色调；alpha 为 0 时 accent 亚克力不生效，所以给 1。
+const FROSTED_TINT_DARK: u32 = 1 << 24;
 /// 失活走完之后把框架重新置为活动的私有消息，只投递给窗口自己。
 const WM_REASSERT_ACTIVE_FRAME: u32 = WM_APP + 0x4d;
 
@@ -49,7 +61,7 @@ const WM_REASSERT_ACTIVE_FRAME: u32 = WM_APP + 0x4d;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialSupport {
     pub mica: bool,
-    pub acrylic: bool,
+    pub frosted: bool,
 }
 
 /// 系统 build 号；读不到时为 0（按不支持处理）。
@@ -65,7 +77,7 @@ pub fn build() -> u32 {
 pub fn support(build: u32) -> MaterialSupport {
     MaterialSupport {
         mica: build >= BUILD_MICA,
-        acrylic: build >= BUILD_ACRYLIC,
+        frosted: build >= BUILD_FROSTED,
     }
 }
 
@@ -89,27 +101,38 @@ pub fn system_dark() -> bool {
 /// 窗口要的背板。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backdrop {
-    /// 不要系统背板（不透明窗口，或用 GPUI `Blurred` 的旧式亚克力）。
+    /// 不要系统背板（不透明窗口）。
     None,
     Mica,
-    /// 只在 build ≥ 22523 上走 DWM；更早的系统由宿主改用 GPUI `Blurred`。
-    Acrylic,
+    /// 磨砂：accent 亚克力，背后是模糊的窗口内容；`dark` 决定色调。
+    Frosted {
+        dark: bool,
+    },
 }
 
-/// Acrylic 在这个 build 上是否走 DWM 背板（否则宿主用 GPUI `Blurred`）。
-pub fn acrylic_uses_backdrop(build: u32) -> bool {
-    build >= BUILD_BACKDROP_TYPE
-}
-
-/// 设背板。Mica / DWM Acrylic 先清 accent（否则被 GPUI 的 accent 2 压掉）；`None` 撤掉之前设过的背板。
+/// 设背板，在 GPUI 设完 accent 之后调用。Mica 先清 accent（否则被 GPUI 的 accent 2 压掉）；
+/// 磨砂先撤掉 DWM 背板再设 accent，并装上缩放后重设的子类；`None` 撤掉之前设过的背板。
 pub fn set_backdrop(hwnd: isize, backdrop: Backdrop, build: u32) {
     let window = HWND(hwnd as *mut c_void);
+    if !matches!(backdrop, Backdrop::Frosted { .. }) {
+        let _ = unsafe { RemoveWindowSubclass(window, Some(frosted_proc), FROSTED_SUBCLASS) };
+    }
     match backdrop {
-        Backdrop::None => {
-            if build >= BUILD_BACKDROP_TYPE {
-                set_u32(window, DWMWA_SYSTEMBACKDROP_TYPE.0, DWMSBT_NONE.0 as u32);
-            } else if build >= BUILD_MICA {
-                set_u32(window, DWMWA_MICA_EFFECT, 0);
+        Backdrop::None => clear_system_backdrop(window, build),
+        Backdrop::Frosted { dark } => {
+            clear_system_backdrop(window, build);
+            let tint = if dark {
+                FROSTED_TINT_DARK
+            } else {
+                FROSTED_TINT_LIGHT
+            };
+            set_accent(window, ACCENT_ACRYLIC, 0, tint);
+            // 子类的数据就是色调；重复安装只更新数据。
+            let installed = unsafe {
+                SetWindowSubclass(window, Some(frosted_proc), FROSTED_SUBCLASS, tint as usize)
+            };
+            if !installed.as_bool() {
+                log::debug!("frosted resize subclass could not be installed");
             }
         }
         Backdrop::Mica => {
@@ -124,14 +147,36 @@ pub fn set_backdrop(hwnd: isize, backdrop: Backdrop, build: u32) {
                 set_u32(window, DWMWA_MICA_EFFECT, 1);
             }
         }
-        Backdrop::Acrylic => {
-            clear_accent(window);
-            set_u32(
-                window,
-                DWMWA_SYSTEMBACKDROP_TYPE.0,
-                DWMSBT_TRANSIENTWINDOW.0 as u32,
-            );
+    }
+}
+
+/// 磨砂窗口的子类：尺寸变化（最小化除外）后按存下的色调重设 accent。
+unsafe extern "system" fn frosted_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    tint: usize,
+) -> LRESULT {
+    let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+    match msg {
+        WM_SIZE if wparam.0 != SIZE_MINIMIZED as usize => {
+            set_accent(hwnd, ACCENT_ACRYLIC, 0, tint as u32);
         }
+        WM_NCDESTROY => {
+            let _ = unsafe { RemoveWindowSubclass(hwnd, Some(frosted_proc), FROSTED_SUBCLASS) };
+        }
+        _ => {}
+    }
+    result
+}
+
+fn clear_system_backdrop(window: HWND, build: u32) {
+    if build >= BUILD_BACKDROP_TYPE {
+        set_u32(window, DWMWA_SYSTEMBACKDROP_TYPE.0, DWMSBT_NONE.0 as u32);
+    } else if build >= BUILD_MICA {
+        set_u32(window, DWMWA_MICA_EFFECT, 0);
     }
 }
 
@@ -192,7 +237,7 @@ unsafe extern "system" fn active_frame_proc(
     }
 }
 
-/// 窗口的深浅色（影响 Mica / Acrylic 的底色和系统画的边框）。
+/// 窗口的深浅色（影响 Mica 的底色和系统画的边框）。
 pub fn set_dark_mode(hwnd: isize, dark: bool) {
     set_u32(
         HWND(hwnd as *mut c_void),
@@ -242,8 +287,13 @@ struct CompositionAttributeData {
 type SetWindowCompositionAttribute =
     unsafe extern "system" fn(HWND, *mut CompositionAttributeData) -> BOOL;
 
-/// 把 accent policy 清成 `ACCENT_DISABLED`（未公开的 `SetWindowCompositionAttribute`）。
+/// 把 accent policy 清成 `ACCENT_DISABLED`。
 fn clear_accent(window: HWND) {
+    set_accent(window, 0, 2, 0);
+}
+
+/// 设 accent policy（未公开的 `SetWindowCompositionAttribute`），`gradient` 是 ABGR 色调。
+fn set_accent(window: HWND, state: u32, flags: u32, gradient: u32) {
     let Ok(user32) = (unsafe { GetModuleHandleW(w!("user32.dll")) }) else {
         return;
     };
@@ -253,9 +303,9 @@ fn clear_accent(window: HWND) {
     };
     let set: SetWindowCompositionAttribute = unsafe { std::mem::transmute(proc) };
     let mut accent = AccentPolicy {
-        state: 0,
-        flags: 2,
-        gradient: 0,
+        state,
+        flags,
+        gradient,
         animation: 0,
     };
     let mut data = CompositionAttributeData {
@@ -264,7 +314,7 @@ fn clear_accent(window: HWND) {
         size: size_of::<AccentPolicy>(),
     };
     if !unsafe { set(window, &mut data) }.as_bool() {
-        log::debug!("SetWindowCompositionAttribute(accent 0) failed");
+        log::debug!("SetWindowCompositionAttribute(accent {state}) failed");
     }
 }
 
@@ -278,24 +328,23 @@ mod tests {
             support(19045),
             MaterialSupport {
                 mica: false,
-                acrylic: true
+                frosted: true
             }
         );
         assert_eq!(
             support(22000),
             MaterialSupport {
                 mica: true,
-                acrylic: true
+                frosted: true
             }
         );
         assert_eq!(
             support(17134),
             MaterialSupport {
                 mica: false,
-                acrylic: false
+                frosted: false
             }
         );
-        assert!(!acrylic_uses_backdrop(22000) && acrylic_uses_backdrop(26100));
     }
 
     #[test]
