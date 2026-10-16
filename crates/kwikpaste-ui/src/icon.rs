@@ -114,6 +114,11 @@ pub enum IconName {
     Trash2,
     /// `lucide:type`：富文本类型。
     Type,
+    /// 自绘标题栏的窗口按钮（Fluent 字形）。
+    WindowClose,
+    WindowMaximize,
+    WindowMinimize,
+    WindowRestore,
 }
 
 impl IconName {
@@ -190,6 +195,10 @@ impl IconName {
             Self::Star => Kit::Star,
             Self::Sun => Kit::Sun,
             Self::TextSize => Kit::ALargeSmall,
+            Self::WindowClose => Kit::WindowClose,
+            Self::WindowMaximize => Kit::WindowMaximize,
+            Self::WindowMinimize => Kit::WindowMinimize,
+            Self::WindowRestore => Kit::WindowRestore,
             _ => return None,
         })
     }

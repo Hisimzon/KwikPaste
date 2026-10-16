@@ -31,6 +31,7 @@ mod strings;
 mod styled;
 mod tag;
 pub mod theme;
+mod title_bar;
 pub mod toast;
 mod toggle;
 mod tooltip;
@@ -58,6 +59,7 @@ pub use slider::{Slider, SliderState};
 pub use strings::{UiLocale, UiStrings, set_ui_strings, ui_strings};
 pub use styled::KpStyled;
 pub use tag::{Kbd, KeyHint, Shortcut, Tag, TagColor};
+pub use title_bar::{DRAWS_TITLE_BAR, TITLE_BAR_HEIGHT, TitleBar, titlebar_options};
 pub use toggle::{Checkbox, Switch};
 pub use tooltip::{TooltipBubble, TooltipExt};
 

@@ -16,8 +16,8 @@ use futures::channel::oneshot;
 use gpui::{
     Animation, AnimationExt as _, App, AppContext as _, AsyncApp, Context, Entity, Global,
     ImageSource, InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, img, prelude::FluentBuilder as _, pulsating_between, px, relative, size,
+    StatefulInteractiveElement as _, Styled as _, Window, WindowBounds, WindowOptions, div, img,
+    prelude::FluentBuilder as _, pulsating_between, px, relative, size,
 };
 use kwikpaste_ui::theme::TextSize;
 use kwikpaste_ui::{Button, KpStyled as _, theme};
@@ -719,13 +719,13 @@ fn open_new_update_window(status: UpdateStatus, cx: &mut App) {
     let height = update_window_height(&status, i18n::language());
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(
-            size(px(520.), px(update_window_height_px(height))),
+            size(
+                px(520.),
+                px(update_window_height_px(height)) + kwikpaste_ui::TITLE_BAR_HEIGHT,
+            ),
             cx,
         )),
-        titlebar: Some(TitlebarOptions {
-            title: Some(t("common:update.title")),
-            ..Default::default()
-        }),
+        titlebar: Some(kwikpaste_ui::titlebar_options(t("common:update.title"))),
         focus: false,
         ..Default::default()
     };
@@ -1055,201 +1055,207 @@ impl Render for UpdateWindow {
             window.set_window_title(&window_title);
             self.window_title = window_title.to_string();
         }
+        let body =
+            div()
+                .flex_1()
+                .min_h_0()
+                .relative()
+                .flex()
+                .gap(px(20.))
+                .p(px(20.))
+                .child(div().flex_none().w(px(56.)).child(
+                    img(ImageSource::Image(crate::clipboard::view::app_logo())).size(px(56.)),
+                ))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .pb(px(64.))
+                        .overflow_hidden()
+                        .child(div().kp_text(TextSize::Lg).child(title))
+                        .child(
+                            div()
+                                .kp_text(TextSize::Sm)
+                                .text_color(tokens.text.secondary)
+                                .child(description),
+                        )
+                        .when_some(release_notes, |element, notes| {
+                            let lines = notes.lines().map(|line| {
+                                div()
+                                    .w_full()
+                                    .kp_text(TextSize::Sm)
+                                    .text_color(tokens.text.secondary)
+                                    .child(line.to_owned())
+                            });
+                            element.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_none()
+                                    .gap(px(4.))
+                                    .h(px(RELEASE_NOTES_BLOCK_HEIGHT))
+                                    .max_h(px(RELEASE_NOTES_BLOCK_HEIGHT))
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .rounded(px(6.))
+                                    .border_1()
+                                    .border_color(tokens.border.subtle)
+                                    .bg(tokens.surface.raised)
+                                    .p(px(8.))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .kp_text(TextSize::Sm)
+                                            .text_color(tokens.text.secondary)
+                                            .child(t("common:update.notes")),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("update-notes-scroll")
+                                            .flex_none()
+                                            .h(px(120.))
+                                            .min_h_0()
+                                            .overflow_y_scroll()
+                                            .track_scroll(&self.notes_scroll)
+                                            .child(div().flex().flex_col().children(lines)),
+                                    ),
+                            )
+                        })
+                        .when(show_release_notes, |element| {
+                            // 纯文字链接，左边缘与说明文字对齐（链接按钮自带左右内边距，会缩进一截）。
+                            let label = t("common:update.releaseNotes");
+                            element.child(
+                                div().flex().child(
+                                    div()
+                                        .id("update-release-notes")
+                                        .role(gpui::Role::Link)
+                                        .aria_label(label.clone())
+                                        .kp_text(TextSize::Sm)
+                                        .text_color(tokens.accent.solid)
+                                        .cursor_pointer()
+                                        .hover(|style| {
+                                            style.text_color(tokens.accent.hover).underline()
+                                        })
+                                        .child(label)
+                                        .on_click(
+                                            cx.listener(|view, _, _, _| view.open_release_notes()),
+                                        ),
+                                ),
+                            )
+                        })
+                        .when(show_progress, |element| {
+                            element.child(
+                                div()
+                                    .mt(px(6.))
+                                    .h(px(6.))
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .rounded_full()
+                                    .bg(tokens.fill.default)
+                                    .child(progress_fill),
+                            )
+                        })
+                        .when_some(progress_text, |element, progress| {
+                            element.child(
+                                div()
+                                    .kp_text(TextSize::Sm)
+                                    .text_color(tokens.text.secondary)
+                                    .child(t_args(
+                                        "common:update.progress",
+                                        &[("progress", &progress)],
+                                    )),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(20.))
+                        .right(px(20.))
+                        .bottom(px(16.))
+                        .flex()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(div().flex_1())
+                        .when(
+                            update.is_some()
+                                && !self.downloading
+                                && !self.installing
+                                && !downloaded
+                                && self.error.is_none(),
+                            |element| {
+                                element.child(
+                                    Button::new("update-later", t("common:update.later"))
+                                        .on_click(|_, window, _| window.remove_window()),
+                                )
+                            },
+                        )
+                        .when(self.checking || self.downloading, |element| {
+                            element.child(
+                                Button::new("update-cancel", t("common:update.cancel"))
+                                    .on_click(|_, window, _| window.remove_window()),
+                            )
+                        })
+                        .when(self.check_failed, |element| {
+                            element.child(
+                                Button::new("update-check-again", t("common:update.checkAgain"))
+                                    .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
+                            )
+                        })
+                        .when(
+                            (update.is_none() && !self.checking) || self.error.is_some(),
+                            |element| {
+                                element.child(
+                                    Button::new("update-ok", t("common:update.ok"))
+                                        .primary()
+                                        .on_click(|_, window, _| window.remove_window()),
+                                )
+                            },
+                        )
+                        .when(
+                            update.is_some()
+                                && !self.downloading
+                                && !self.installing
+                                && self.error.is_none()
+                                && downloaded,
+                            |element| {
+                                element.child(
+                                    Button::new("update-install", t("common:update.install"))
+                                        .primary()
+                                        .on_click(cx.listener(|view, _, _, cx| view.install(cx))),
+                                )
+                            },
+                        )
+                        .when(
+                            update.is_some()
+                                && !self.downloading
+                                && !self.installing
+                                && !downloaded
+                                && self.error.is_none(),
+                            |element| {
+                                element.child(
+                                    Button::new("update-download", t("common:update.download"))
+                                        .primary()
+                                        .on_click(cx.listener(|view, _, _, cx| view.download(cx))),
+                                )
+                            },
+                        ),
+                );
         div()
             .size_full()
-            .relative()
             .flex()
-            .gap(px(20.))
-            .p(px(20.))
+            .flex_col()
             .bg(crate::platform::material::shell_surface(
                 cx,
                 tokens.surface.panel,
             ))
             .text_color(tokens.text.primary)
-            .child(
-                div().flex_none().w(px(56.)).child(
-                    img(ImageSource::Image(crate::clipboard::view::app_logo())).size(px(56.)),
-                ),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .pb(px(64.))
-                    .overflow_hidden()
-                    .child(div().kp_text(TextSize::Lg).child(title))
-                    .child(
-                        div()
-                            .kp_text(TextSize::Sm)
-                            .text_color(tokens.text.secondary)
-                            .child(description),
-                    )
-                    .when_some(release_notes, |element, notes| {
-                        let lines = notes.lines().map(|line| {
-                            div()
-                                .w_full()
-                                .kp_text(TextSize::Sm)
-                                .text_color(tokens.text.secondary)
-                                .child(line.to_owned())
-                        });
-                        element.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_none()
-                                .gap(px(4.))
-                                .h(px(RELEASE_NOTES_BLOCK_HEIGHT))
-                                .max_h(px(RELEASE_NOTES_BLOCK_HEIGHT))
-                                .min_h_0()
-                                .overflow_hidden()
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(tokens.border.subtle)
-                                .bg(tokens.surface.raised)
-                                .p(px(8.))
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .kp_text(TextSize::Sm)
-                                        .text_color(tokens.text.secondary)
-                                        .child(t("common:update.notes")),
-                                )
-                                .child(
-                                    div()
-                                        .id("update-notes-scroll")
-                                        .flex_none()
-                                        .h(px(120.))
-                                        .min_h_0()
-                                        .overflow_y_scroll()
-                                        .track_scroll(&self.notes_scroll)
-                                        .child(div().flex().flex_col().children(lines)),
-                                ),
-                        )
-                    })
-                    .when(show_release_notes, |element| {
-                        // 纯文字链接，左边缘与说明文字对齐（链接按钮自带左右内边距，会缩进一截）。
-                        let label = t("common:update.releaseNotes");
-                        element.child(
-                            div().flex().child(
-                                div()
-                                    .id("update-release-notes")
-                                    .role(gpui::Role::Link)
-                                    .aria_label(label.clone())
-                                    .kp_text(TextSize::Sm)
-                                    .text_color(tokens.accent.solid)
-                                    .cursor_pointer()
-                                    .hover(|style| {
-                                        style.text_color(tokens.accent.hover).underline()
-                                    })
-                                    .child(label)
-                                    .on_click(
-                                        cx.listener(|view, _, _, _| view.open_release_notes()),
-                                    ),
-                            ),
-                        )
-                    })
-                    .when(show_progress, |element| {
-                        element.child(
-                            div()
-                                .mt(px(6.))
-                                .h(px(6.))
-                                .w_full()
-                                .overflow_hidden()
-                                .rounded_full()
-                                .bg(tokens.fill.default)
-                                .child(progress_fill),
-                        )
-                    })
-                    .when_some(progress_text, |element, progress| {
-                        element.child(
-                            div()
-                                .kp_text(TextSize::Sm)
-                                .text_color(tokens.text.secondary)
-                                .child(t_args(
-                                    "common:update.progress",
-                                    &[("progress", &progress)],
-                                )),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(20.))
-                    .right(px(20.))
-                    .bottom(px(16.))
-                    .flex()
-                    .justify_between()
-                    .gap(px(8.))
-                    .child(div().flex_1())
-                    .when(
-                        update.is_some()
-                            && !self.downloading
-                            && !self.installing
-                            && !downloaded
-                            && self.error.is_none(),
-                        |element| {
-                            element.child(
-                                Button::new("update-later", t("common:update.later"))
-                                    .on_click(|_, window, _| window.remove_window()),
-                            )
-                        },
-                    )
-                    .when(self.checking || self.downloading, |element| {
-                        element.child(
-                            Button::new("update-cancel", t("common:update.cancel"))
-                                .on_click(|_, window, _| window.remove_window()),
-                        )
-                    })
-                    .when(self.check_failed, |element| {
-                        element.child(
-                            Button::new("update-check-again", t("common:update.checkAgain"))
-                                .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
-                        )
-                    })
-                    .when(
-                        (update.is_none() && !self.checking) || self.error.is_some(),
-                        |element| {
-                            element.child(
-                                Button::new("update-ok", t("common:update.ok"))
-                                    .primary()
-                                    .on_click(|_, window, _| window.remove_window()),
-                            )
-                        },
-                    )
-                    .when(
-                        update.is_some()
-                            && !self.downloading
-                            && !self.installing
-                            && self.error.is_none()
-                            && downloaded,
-                        |element| {
-                            element.child(
-                                Button::new("update-install", t("common:update.install"))
-                                    .primary()
-                                    .on_click(cx.listener(|view, _, _, cx| view.install(cx))),
-                            )
-                        },
-                    )
-                    .when(
-                        update.is_some()
-                            && !self.downloading
-                            && !self.installing
-                            && !downloaded
-                            && self.error.is_none(),
-                        |element| {
-                            element.child(
-                                Button::new("update-download", t("common:update.download"))
-                                    .primary()
-                                    .on_click(cx.listener(|view, _, _, cx| view.download(cx))),
-                            )
-                        },
-                    ),
-            )
+            .child(kwikpaste_ui::TitleBar::new().title(window_title))
+            .child(body)
     }
 }
 

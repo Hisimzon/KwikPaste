@@ -177,6 +177,18 @@ pub struct ScrollbarTokens {
     pub thumb_hover: Hsla,
 }
 
+/// 自绘标题栏的窗口按钮：普通按钮悬停、按下是中性填充，关闭按钮悬停变红（Windows 惯例）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CaptionButtonTokens {
+    pub foreground: Hsla,
+    pub inactive_foreground: Hsla,
+    pub hover: Hsla,
+    pub pressed: Hsla,
+    pub close_hover: Hsla,
+    pub close_pressed: Hsla,
+    pub close_foreground: Hsla,
+}
+
 /// 淡色底跟着文字色走，材质窗口上也不会变成一块实色。
 fn kind_tag(foreground: Hsla) -> KindTag {
     KindTag {
@@ -230,6 +242,7 @@ pub struct ComponentTokens {
     pub dialog: DialogTokens,
     pub switch: SwitchTokens,
     pub scrollbar: ScrollbarTokens,
+    pub caption_button: CaptionButtonTokens,
 }
 
 impl ComponentTokens {
@@ -354,6 +367,15 @@ impl ComponentTokens {
             scrollbar: ScrollbarTokens {
                 thumb: s.text.faint,
                 thumb_hover: s.text.muted,
+            },
+            caption_button: CaptionButtonTokens {
+                foreground: s.text.primary,
+                inactive_foreground: s.text.muted,
+                hover: s.fill.default,
+                pressed: s.fill.strong,
+                close_hover: s.status.danger.solid,
+                close_pressed: s.status.danger.active,
+                close_foreground: s.white,
             },
         }
     }

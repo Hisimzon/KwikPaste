@@ -2,7 +2,7 @@ use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, FocusHandle, Global, Hsla, Image, ImageSource,
     InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Rems,
     Render, Role, ScrollAnchor, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
-    Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
+    Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowOptions, div, img,
     prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
@@ -133,10 +133,9 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(window_size(cx), cx)),
         window_min_size: Some(WINDOW_MIN_SIZE),
-        titlebar: Some(TitlebarOptions {
-            title: Some(i18n::t("preferences:windowTitle")),
-            ..Default::default()
-        }),
+        titlebar: Some(kwikpaste_ui::titlebar_options(i18n::t(
+            "preferences:windowTitle",
+        ))),
         focus: false,
         ..Default::default()
     };
@@ -185,10 +184,9 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(window_size(cx), cx)),
         window_min_size: Some(WINDOW_MIN_SIZE),
-        titlebar: Some(TitlebarOptions {
-            title: Some(i18n::t("preferences:windowTitle")),
-            ..Default::default()
-        }),
+        titlebar: Some(kwikpaste_ui::titlebar_options(i18n::t(
+            "preferences:windowTitle",
+        ))),
         focus: false,
         ..Default::default()
     };
@@ -2902,6 +2900,7 @@ impl Preferences {
             cx.notify();
         }));
         let brand = div()
+            .window_control_area(WindowControlArea::Drag)
             .flex()
             .items_center()
             .gap(space(2.))
@@ -3496,13 +3495,18 @@ impl Preferences {
                 cx,
                 tokens.surface.panel,
             ))
+            .child(kwikpaste_ui::TitleBar::new())
             .child(
                 div()
                     .flex()
                     .flex_none()
                     .items_center()
                     .justify_between()
-                    .h(rems(4.))
+                    .h(rems(if kwikpaste_ui::DRAWS_TITLE_BAR {
+                        3.
+                    } else {
+                        4.
+                    }))
                     .px(space(7.))
                     .border_b_1()
                     .border_color(tokens.border.divider)
