@@ -75,6 +75,7 @@ const ICONS = [
   "lucide:panel-left-open",
   // 快捷键页：触发方式、进入二级页、返回。
   "lucide:mouse",
+  "lucide:mouse-pointer-2",
   "lucide:chevron-right",
   "lucide:arrow-left",
 ];

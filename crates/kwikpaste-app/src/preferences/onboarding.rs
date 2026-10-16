@@ -1,6 +1,7 @@
 //! 首次启动引导窗：步骤和设置契约与 1.x `src/pages/Onboarding` 保持一致。
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, Div, Entity, FocusHandle, Global, ImageSource,
@@ -727,6 +728,26 @@ impl Onboarding {
                                 });
                             })
                             .into_any_element()
+                    }
+                    Control::Segmented(options) => {
+                        let entity = cx.entity().downgrade();
+                        let numeric = matches!(options, schema::Options::Numbers(_));
+                        view::choices::segmented(
+                            id,
+                            text::setting_title(&setting),
+                            text::options(&setting),
+                            values::get_choice(&settings_json, path).as_deref(),
+                            setting.is_disabled(&self.settings),
+                            Rc::new(move |value, _, cx| {
+                                let _ = entity.update(cx, |this, cx| {
+                                    this.update_settings(
+                                        values::choice_patch(path, value, numeric),
+                                        cx,
+                                    );
+                                });
+                            }),
+                            cx,
+                        )
                     }
                     Control::Select(_) => match self.selects.get(id) {
                         Some(state) => Select::new(state)

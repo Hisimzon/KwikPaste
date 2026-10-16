@@ -58,11 +58,14 @@ pub struct Section {
     pub settings: Vec<Setting>,
 }
 
-/// 外观磁贴的种类。
+/// 带示意图的磁贴：选项本身有视觉含义的设置。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TilesKind {
     Theme,
     Material,
+    ListStyle,
+    PanelLayout,
+    WindowPosition,
 }
 
 impl TilesKind {
@@ -70,6 +73,9 @@ impl TilesKind {
         match self {
             Self::Theme => &["auto", "light", "dark"],
             Self::Material => &["default", "mica", "acrylic"],
+            Self::ListStyle => LIST_STYLES,
+            Self::PanelLayout => PANEL_LAYOUTS,
+            Self::WindowPosition => WINDOW_POSITIONS,
         }
     }
 }
@@ -85,7 +91,7 @@ pub enum PermissionKind {
     RunAsAdministrator,
 }
 
-/// 下拉选项：值的文案取 `schema.settings.<id>.options.<value>`；快捷键选项直接显示按键。
+/// 下拉或分段的选项：值的文案取 `schema.settings.<id>.options.<value>`；快捷键选项直接显示按键。
 #[derive(Clone, Copy, Debug)]
 pub enum Options {
     Values(&'static [&'static str]),
@@ -95,11 +101,14 @@ pub enum Options {
     Shortcuts(&'static [(&'static str, &'static str)]),
 }
 
-/// 设置项右侧的控件。1.x 的 `select` 与 `segmented` 视觉统一为下拉，这里合成一种。
+/// 设置项右侧的控件。
 #[derive(Clone, Copy, Debug)]
 pub enum Control {
     Switch,
+    /// 选项多或文案长：下拉。
     Select(Options),
+    /// 两到六个短选项：分段控件，全部选项一眼可见。
+    Segmented(Options),
     Number {
         min: u64,
         max: u64,
@@ -149,12 +158,12 @@ pub enum Control {
 }
 
 impl Control {
-    /// 采集类型、采集顺序和清理规则需要整行宽度，换到标题下方单独一行；外观磁贴现在画成
-    /// 下拉框，和其他选项一样靠右。
+    /// 采集类型、采集顺序、清理规则和磁贴需要整行宽度，换到标题下方单独一行。
     pub fn full_width(self) -> bool {
         matches!(
             self,
-            Self::CaptureKinds
+            Self::Tiles(_)
+                | Self::CaptureKinds
                 | Self::CaptureOrder
                 | Self::RetentionRules
                 | Self::CustomRules
@@ -423,7 +432,7 @@ fn general_sections(portable: bool) -> Vec<Section> {
             #[cfg(target_os = "windows")]
             Setting::new(
                 "control.trayClick",
-                Control::Select(Options::Values(TRAY_CLICK)),
+                Control::Segmented(Options::Values(TRAY_CLICK)),
             )
             .path("general.trayClick")
             .keywords(&["tray", "click", "preferences", "clipboard"])
@@ -594,7 +603,7 @@ pub(super) fn shortcut_settings() -> Vec<Setting> {
         .keywords(DOUBLE_TAP_KEYWORDS),
         Setting::new(
             "shortcuts.doubleTapSide",
-            Control::Select(Options::Values(KEY_SIDES)),
+            Control::Segmented(Options::Values(KEY_SIDES)),
         )
         .path("shortcuts.doubleTap.side")
         .keywords(DOUBLE_TAP_KEYWORDS)
@@ -658,15 +667,12 @@ fn appearance_sections() -> Vec<Section> {
                 Setting::new("appearance.material", Control::Tiles(TilesKind::Material))
                     .path("appearance.material")
                     .keywords(&["material", "mica", "frosted", "blur", "transparency"]),
-                Setting::new(
-                    "appearance.listStyle",
-                    Control::Select(Options::Values(LIST_STYLES)),
-                )
-                .path("clipboard.display.listStyle")
-                .keywords(&["list", "card", "seamless", "divider", "style"]),
+                Setting::new("appearance.listStyle", Control::Tiles(TilesKind::ListStyle))
+                    .path("clipboard.display.listStyle")
+                    .keywords(&["list", "card", "seamless", "divider", "style"]),
                 Setting::new(
                     "appearance.listDensity",
-                    Control::Select(Options::Values(LIST_DENSITIES)),
+                    Control::Segmented(Options::Values(LIST_DENSITIES)),
                 )
                 .path("clipboard.display.density")
                 .keywords(&["density", "compact", "spacing", "height", "custom"]),
@@ -677,7 +683,7 @@ fn appearance_sections() -> Vec<Section> {
                 // 无间风格条目贴边排列，间距不生效，一并收起。
                 Setting::new(
                     "appearance.itemGap",
-                    Control::Select(Options::Numbers(LIST_ITEM_GAPS)),
+                    Control::Segmented(Options::Numbers(LIST_ITEM_GAPS)),
                 )
                 .path("clipboard.display.customLayout.itemGap")
                 .keywords(&["density", "gap", "spacing", "margin"])
@@ -687,7 +693,7 @@ fn appearance_sections() -> Vec<Section> {
                 }),
                 Setting::new(
                     "appearance.itemPadding",
-                    Control::Select(Options::Numbers(LIST_PADDINGS_Y)),
+                    Control::Segmented(Options::Numbers(LIST_PADDINGS_Y)),
                 )
                 .path("clipboard.display.customLayout.paddingY")
                 .keywords(&["density", "padding", "height"])
@@ -757,16 +763,13 @@ fn window_sections() -> Vec<Section> {
             settings: vec![
                 Setting::new(
                     "appearance.panelLayout",
-                    Control::Select(Options::Values(PANEL_LAYOUTS)),
+                    Control::Tiles(TilesKind::PanelLayout),
                 )
                 .path("clipboard.display.layout")
                 .keywords(&["layout", "split", "column", "favorite", "group", "sidebar"]),
-                Setting::new(
-                    "window.position",
-                    Control::Select(Options::Values(WINDOW_POSITIONS)),
-                )
-                .path("clipboard.window.position")
-                .keywords(&["window", "position", "cursor"]),
+                Setting::new("window.position", Control::Tiles(TilesKind::WindowPosition))
+                    .path("clipboard.window.position")
+                    .keywords(&["window", "position", "cursor"]),
                 Setting::new("search.defaultFocus", Control::Switch)
                     .path("clipboard.search.defaultFocus")
                     .keywords(&["search", "focus", "open"]),
@@ -776,7 +779,7 @@ fn window_sections() -> Vec<Section> {
                     .advanced(),
                 Setting::new(
                     "window.selectRangeOnOpen",
-                    Control::Select(Options::Values(OPEN_RANGES)),
+                    Control::Segmented(Options::Values(OPEN_RANGES)),
                 )
                 .path("clipboard.window.selectRangeOnOpen")
                 .keywords(&["window", "range", "all", "favorite", "open"])
@@ -801,7 +804,7 @@ fn window_sections() -> Vec<Section> {
         Section {
             id: "sort",
             settings: vec![
-                Setting::new("search.sort", Control::Select(Options::Values(SORTS)))
+                Setting::new("search.sort", Control::Segmented(Options::Values(SORTS)))
                     .path("clipboard.content.sort")
                     .keywords(&["sort", "frequency", "usage", "created", "updated"]),
                 Setting::new("copy.updateOnReuse", Control::Switch)
@@ -818,7 +821,7 @@ fn window_sections() -> Vec<Section> {
                     .keywords(&["preview", "hover"]),
                 Setting::new(
                     "preview.delay",
-                    Control::Select(Options::Values(HOVER_DELAYS)),
+                    Control::Segmented(Options::Values(HOVER_DELAYS)),
                 )
                 .path("clipboard.preview.hoverDelayMs")
                 .keywords(&["preview", "delay", "hover"])
@@ -830,14 +833,14 @@ fn window_sections() -> Vec<Section> {
                     .keywords(&["space", "preview", "keyboard"]),
                 Setting::new(
                     "preview.textView",
-                    Control::Select(Options::Values(TEXT_VIEWS)),
+                    Control::Segmented(Options::Values(TEXT_VIEWS)),
                 )
                 .path("clipboard.preview.textView")
                 .keywords(&["preview", "text", "words", "split"])
                 .advanced(),
                 Setting::new(
                     "preview.gap",
-                    Control::Select(Options::Numbers(PREVIEW_GAPS)),
+                    Control::Segmented(Options::Numbers(PREVIEW_GAPS)),
                 )
                 .path("clipboard.preview.gap")
                 .keywords(&["preview", "gap", "spacing", "distance", "margin"])
@@ -949,22 +952,16 @@ fn paste_sections() -> Vec<Section> {
                     .advanced(),
                 Setting::new(
                     "copy.sound.tone",
-                    Control::Select(Options::Values(COPY_SOUND_TONES)),
+                    Control::Segmented(Options::Values(COPY_SOUND_TONES)),
                 )
                 .path("clipboard.feedback.copySoundTone")
-                .keywords(&["音色", "音效", "提示音", "tone", "sound"])
+                .keywords(&["音色", "音效", "提示音", "试听", "tone", "sound", "preview"])
                 .child_of("copy.sound", |settings| {
                     !settings.clipboard.feedback.copy_sound
                 })
                 .advanced(),
                 Setting::new("copy.sound.volume", Control::Slider { min: 0, max: 100 })
                     .path("clipboard.feedback.copySoundVolume")
-                    .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
-                    .child_of("copy.sound", |settings| {
-                        !settings.clipboard.feedback.copy_sound
-                    })
-                    .advanced(),
-                Setting::new("copy.sound.preview", Control::Action { danger: false })
                     .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
                     .child_of("copy.sound", |settings| {
                         !settings.clipboard.feedback.copy_sound
@@ -1093,7 +1090,7 @@ fn capture_sections() -> Vec<Section> {
                 .advanced(),
                 Setting::new(
                     "localData.storageLimitAction",
-                    Control::Select(Options::Values(STORAGE_LIMIT_ACTIONS)),
+                    Control::Segmented(Options::Values(STORAGE_LIMIT_ACTIONS)),
                 )
                 .path("clipboard.history.storageLimitAction")
                 .keywords(&["storage", "limit", "cleanup", "remind"])
@@ -1396,12 +1393,7 @@ mod tests {
                 .iter()
                 .map(|setting| setting.id)
                 .collect::<Vec<_>>(),
-            [
-                "copy.sound",
-                "copy.sound.tone",
-                "copy.sound.volume",
-                "copy.sound.preview"
-            ]
+            ["copy.sound", "copy.sound.tone", "copy.sound.volume"]
         );
         assert_eq!(
             sound.settings[2].path,

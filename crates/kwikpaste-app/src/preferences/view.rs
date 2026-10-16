@@ -52,6 +52,7 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
+pub(super) mod choices;
 mod custom_rules;
 mod extensions;
 mod feedback;
@@ -282,7 +283,6 @@ struct Preferences {
     settings: Settings,
     search: TextInput,
     _subscriptions: Vec<Subscription>,
-    appearance: SelectState,
     language: SelectState,
     selects: std::collections::HashMap<&'static str, SelectState>,
     number_inputs: std::collections::HashMap<&'static str, NumberInputState>,
@@ -381,31 +381,7 @@ impl Preferences {
             this.scroll.set_offset(gpui::point(px(0.), px(0.)));
             cx.notify();
         });
-        let theme = settings.appearance.theme;
         let language_value = settings.appearance.language;
-        let appearance = SelectState::new(
-            vec![
-                SelectOption::new(
-                    "auto",
-                    i18n::t("preferences:schema.settings.appearance.theme.options.auto"),
-                ),
-                SelectOption::new(
-                    "light",
-                    i18n::t("preferences:schema.settings.appearance.theme.options.light"),
-                ),
-                SelectOption::new(
-                    "dark",
-                    i18n::t("preferences:schema.settings.appearance.theme.options.dark"),
-                ),
-            ],
-            Some(match theme {
-                kwikpaste_core::settings::Theme::Auto => "auto",
-                kwikpaste_core::settings::Theme::Light => "light",
-                kwikpaste_core::settings::Theme::Dark => "dark",
-            }),
-            window,
-            cx,
-        );
         let language = SelectState::new(
             vec![
                 SelectOption::new(
@@ -421,11 +397,6 @@ impl Preferences {
             window,
             cx,
         );
-        let appearance_sub = appearance.on_change(cx, |this, value, cx| {
-            if let Some(value) = value {
-                this.update("appearance.theme", json!(value.as_ref()), cx);
-            }
-        });
         let language_sub = language.on_change(cx, |this, value, cx| {
             if let Some(value) = value {
                 this.update("appearance.language", json!(value.as_ref()), cx);
@@ -473,43 +444,10 @@ impl Preferences {
                             let path = setting.path;
                             let subscription = state.on_change(cx, move |this, value, cx| {
                                 if let (Some(path), Some(value)) = (path, value) {
-                                    // 换音色时顺带试听新音色。
-                                    if path == "clipboard.feedback.copySoundTone"
-                                        && let Ok(tone) =
-                                            serde_json::from_value(json!(value.as_ref()))
-                                    {
-                                        this.preview_copy_sound(tone, cx);
-                                    }
                                     this.apply_patch(
                                         values::choice_patch(path, &value, numeric),
                                         cx,
                                     );
-                                }
-                            });
-                            setting_subscriptions.push(subscription);
-                            selects.insert(setting.id, state);
-                        }
-                        Control::Tiles(kind) => {
-                            let options = kind
-                                .values()
-                                .iter()
-                                .map(|value| {
-                                    SelectOption::new(
-                                        *value,
-                                        i18n::t(&format!(
-                                            "preferences:schema.settings.{}.options.{}",
-                                            setting.id, value
-                                        )),
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            let selected =
-                                values::get_choice(&settings_json, setting.path.unwrap_or(""));
-                            let state = SelectState::new(options, selected.as_deref(), window, cx);
-                            let path = setting.path;
-                            let subscription = state.on_change(cx, move |this, value, cx| {
-                                if let (Some(path), Some(value)) = (path, value) {
-                                    this.update(path, json!(value.as_ref()), cx);
                                 }
                             });
                             setting_subscriptions.push(subscription);
@@ -693,7 +631,6 @@ impl Preferences {
             .into_iter()
             .chain([
                 search_subscription,
-                appearance_sub,
                 language_sub,
                 lan_name_sub,
                 lan_max_image_sub,
@@ -731,7 +668,6 @@ impl Preferences {
             settings,
             search,
             _subscriptions: subscriptions,
-            appearance,
             language,
             selects,
             number_inputs,
@@ -1425,8 +1361,6 @@ impl Preferences {
                     return;
                 };
                 entity.update(cx, |this, cx| match id {
-                    "copy.sound.preview" => this
-                        .preview_copy_sound(this.settings.clipboard.feedback.copy_sound_tone, cx),
                     "backup.export" => this.open_export(ExportKind::Backup, window, cx),
                     "backup.importHistory" => this.import_backup(window, cx),
                     "localData.cleanCache" => this.clean_resource_cache(cx),
@@ -1456,6 +1390,34 @@ impl Preferences {
                 });
             })
             .into_any_element()
+    }
+
+    /// 分段与磁贴选定后写回设置；换音色时顺带试听，点已选中的音色也再响一次。
+    fn choice_handler(
+        &self,
+        path: Option<&'static str>,
+        numeric: bool,
+        cx: &Context<Self>,
+    ) -> choices::OnSelect {
+        let entity = cx.entity().downgrade();
+        Rc::new(move |value, _, cx| {
+            let Some(path) = path else {
+                return;
+            };
+            let _ = entity.update(cx, |this, cx| {
+                if path == "clipboard.feedback.copySoundTone"
+                    && let Ok(tone) = serde_json::from_value(json!(value))
+                {
+                    this.preview_copy_sound(tone, cx);
+                }
+                if numeric {
+                    this.apply_patch(values::choice_patch(path, value, true), cx);
+                } else {
+                    // 走 `update`：切到自定义密度时要带上当前档位的间距作起点。
+                    this.update(path, json!(value), cx);
+                }
+            });
+        })
     }
 
     /// 试听取滑块当前值，不等待异步落盘；平台层异步播放，不阻塞偏好窗。
@@ -3085,6 +3047,7 @@ impl Preferences {
         let path = setting.path;
         let settings_json = values::to_json(&self.settings);
         let value = path.and_then(|path| values::get(&settings_json, path).cloned());
+        let choice = path.and_then(|path| values::get_choice(&settings_json, path));
         let control = match setting.control {
             Control::Switch => {
                 let configured = value
@@ -3110,7 +3073,24 @@ impl Preferences {
                     })
                     .into_any_element()
             }
-            Control::Select(_) | Control::Tiles(_) | Control::GroupSelect => {
+            Control::Segmented(options) => choices::segmented(
+                setting.id,
+                title.clone(),
+                text::options(setting),
+                choice.as_deref(),
+                setting.is_disabled(&self.settings),
+                self.choice_handler(path, matches!(options, schema::Options::Numbers(_)), cx),
+                cx,
+            ),
+            Control::Tiles(kind) => choices::tiles(
+                kind,
+                setting.id,
+                title.clone(),
+                choice.as_deref(),
+                self.choice_handler(path, false, cx),
+                cx,
+            ),
+            Control::Select(_) | Control::GroupSelect => {
                 if let Some(state) = self.selects.get(setting.id) {
                     Select::new(state)
                         .width(CONTROL_WIDTH)
@@ -4334,7 +4314,7 @@ impl Render for ReadableExportDialog {
 
 /// 分段切换里的一段（同预览窗的文本方式切换）：选中段在亮色里是浮起的白块，暗色里亮一档。
 fn segment(
-    id: &'static str,
+    id: impl Into<gpui::ElementId>,
     label: gpui::SharedString,
     selected: bool,
     cx: &App,

@@ -875,12 +875,9 @@
           "title": "默认复制为纯文本"
         },
         "sound": {
-          "preview": {
-            "controlLabel": "试听",
-            "title": "试听提示音"
-          },
           "title": "复制成功提示音",
           "tone": {
+            "description": "点一下音色即可试听。",
             "options": {
               "bubble": "气泡",
               "chime": "叮咚",

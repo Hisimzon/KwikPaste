@@ -885,12 +885,9 @@
           "title": "Copy as Plain Text by Default"
         },
         "sound": {
-          "preview": {
-            "controlLabel": "Preview",
-            "title": "Preview sound"
-          },
           "title": "Copy Sound",
           "tone": {
+            "description": "Click a tone to hear it.",
             "options": {
               "bubble": "Bubble",
               "chime": "Chime",
