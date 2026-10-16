@@ -291,28 +291,32 @@
     }
   },
   "ocrEngine": {
-    "description": "Measured on 41 test images with a Ryzen 7 9850X3D. An engine uses memory only while recognizing and exits when done; switching affects images copied afterwards.",
-    "download": "Download · {{size}}",
-    "inUse": "In use",
+    "description": "An engine runs only while recognizing and exits when done; switching affects images copied afterwards.",
+    "download": "Download {{size}}",
+    "footnote": "Error rate, speed and memory were measured on 41 test images with a Ryzen 7 9850X3D.",
     "medium": {
-      "description": "Reads blurry and low-contrast images too, but is the slowest and heaviest: about 710 MB peak memory while recognizing, about 1.3 s per image, about 0.3% character errors. Not recommended on PCs with less than 8 GB of memory.",
-      "name": "PP-OCRv6 High accuracy"
+      "name": "PP-OCRv6 High accuracy",
+      "stats": "~0.3% errors · ~1.3 s per image · ~710 MB peak memory",
+      "summary": "Reads blurry and low-contrast images too; not recommended with less than 8 GB of memory"
     },
+    "recommended": "Recommended",
     "small": {
-      "description": "More accurate on small text, code and URLs: about 320 MB peak memory while recognizing, about 0.4 s per image, about 0.5% character errors.",
-      "name": "PP-OCRv6 Standard"
+      "name": "PP-OCRv6 Standard",
+      "stats": "~0.5% errors · ~0.4 s per image · ~320 MB peak memory",
+      "summary": "More accurate on small text, code and URLs"
     },
     "system": {
-      "description": "Built into Windows: no download, almost no memory, fastest (about 0.02 s per image). Often misses or misreads small text, code and blurry images; about 22% character errors in testing.",
-      "name": "System"
+      "name": "System",
+      "stats": "~22% errors · ~0.02 s per image · almost no memory",
+      "summary": "Built into Windows, no download; often misreads small text, code and blurry images"
     },
     "tiny": {
-      "description": "Good for most screenshots: about 210 MB peak memory while recognizing, about 0.2 s per image, about 1% character errors.",
-      "name": "PP-OCRv6 Light"
+      "name": "PP-OCRv6 Light",
+      "stats": "~1% errors · ~0.2 s per image · ~210 MB peak memory",
+      "summary": "Good for most screenshots"
     },
     "title": "Recognition engine",
-    "unavailable": "Not available yet",
-    "use": "Use"
+    "unavailable": "Not available yet"
   },
   "overview": {
     "categories": {

@@ -287,7 +287,7 @@ impl Preferences {
                     "ocr" if enabled => {
                         rows.push(self.render_image_text_status(false, cx));
                         if cfg!(target_os = "windows") {
-                            rows.extend(self.render_ocr_engines(&all, cx));
+                            rows.push(self.render_ocr_engines(&all, cx));
                         }
                     }
                     "wetype" if enabled => rows.extend(self.render_wetype(cx)),
