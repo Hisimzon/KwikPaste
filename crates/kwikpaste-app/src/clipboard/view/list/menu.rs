@@ -142,6 +142,7 @@ impl ClipboardList {
             MenuAction::TogglePinned => self.toggle_pinned(id, window, cx),
             MenuAction::EditNote => self.edit_note(id, window, cx),
             MenuAction::EditContent => self.edit_content(id, window, cx),
+            MenuAction::RestoreOriginal => self.restore_original(id, window, cx),
             MenuAction::Select => {
                 // 进入多选并勾上这一条（受删除保护的勾不上，1.x 同）。
                 self.selection.enter();

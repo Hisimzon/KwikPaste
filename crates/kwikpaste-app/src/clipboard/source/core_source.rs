@@ -291,6 +291,22 @@ impl ClipboardSource for CoreSource {
         .boxed()
     }
 
+    fn restore_original_content(
+        &self,
+        id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<ListItem>> {
+        let core = self.core.clone();
+        async move {
+            core.restore_original_content(&id).await?;
+            let view = core
+                .list_item(&id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Text record no longer exists"))?;
+            Ok(ListItem::from(view))
+        }
+        .boxed()
+    }
+
     fn delete(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>> {
         let core = self.core.clone();
 
@@ -650,6 +666,7 @@ impl From<ClipboardAction> for ItemAction {
             ClipboardAction::ToggleFavorite => Self::ToggleFavorite,
             ClipboardAction::TogglePinned => Self::TogglePinned,
             ClipboardAction::EditNote => Self::EditNote,
+            ClipboardAction::RestoreOriginal => Self::RestoreOriginal,
             ClipboardAction::Select => Self::Select,
             ClipboardAction::Delete => Self::Delete,
         }
@@ -662,6 +679,18 @@ mod tests {
 
     use super::*;
     use crate::clipboard::model::item::FilesPreview;
+
+    #[test]
+    fn restore_original_action_maps_from_core() {
+        assert_eq!(
+            ItemAction::from(ClipboardAction::RestoreOriginal),
+            ItemAction::RestoreOriginal
+        );
+        assert_eq!(
+            serde_json::from_str::<ItemAction>(r#""restoreOriginal""#).unwrap(),
+            ItemAction::RestoreOriginal
+        );
+    }
 
     /// 真 core（临时目录、内存剪贴板）存入合成记录，经适配器读回列表。
     #[test]

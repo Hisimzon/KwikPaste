@@ -636,6 +636,13 @@ impl ClipboardSource for FixtureSource {
         Box::pin(async { anyhow::bail!("Content editing requires the core data source") })
     }
 
+    fn restore_original_content(
+        &self,
+        _id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<ListItem>> {
+        Box::pin(async { anyhow::bail!("Content editing requires the core data source") })
+    }
+
     fn delete(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>> {
         self.with_store(move |store| {
             store.remove(&id).ok_or_else(|| missing(&id))?;

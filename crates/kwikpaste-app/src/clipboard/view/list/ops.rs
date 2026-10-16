@@ -675,6 +675,24 @@ impl ClipboardList {
         .detach();
     }
 
+    /// 恢复编辑前的原文，刷新方式同保存编辑。
+    pub fn restore_original(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_preview_of(&id, cx);
+        let future = self.source.restore_original_content(id.clone());
+        cx.spawn_in(window, async move |list, cx| {
+            let result = future.await;
+            list.update_in(cx, |list, window, cx| match result {
+                Ok(restored) => {
+                    list.patch_item(&id, |item| *item = restored, cx);
+                    cx.emit(ListIntent::Changed);
+                }
+                Err(err) => Self::toast_error("clipboard:menu.restoreOriginal", &err, window, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// 自测用：备注框里的输入框。
     pub fn note_input(&self) -> Option<TextAreaInput> {
         self.note.as_ref().map(|note| note.input.clone())

@@ -106,6 +106,7 @@ pub(crate) mod tests {
             note: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            has_original: false,
             origin_device_id: None,
             source_app_name: None,
             source_app_icon_file: None,

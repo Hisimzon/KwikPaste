@@ -22,7 +22,7 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// 已发布（含 2.0 新增）迁移的 sha384：LF 是 macOS 检出的字节，CRLF 是 Windows 检出的字节。
 /// 用户库的 `_sqlx_migrations` 里存的就是这两种之一，对不上的话存量用户启动即失败；
 /// 跨平台覆盖导入备份时按这张表换算（[`adopt_published_checksums`]）。新增迁移要在这里补上两种值。
-pub(crate) const PUBLISHED: [(i64, &str, &str); 8] = [
+pub(crate) const PUBLISHED: [(i64, &str, &str); 9] = [
     (
         1,
         "bfa656aa68eed66f8dab5bacb9efa4bafeb11713fd417239e05f7b4c5757330fae5eafeeb138771c6d18785670c44b05",
@@ -59,6 +59,7 @@ pub(crate) const PUBLISHED: [(i64, &str, &str); 8] = [
         "1362c23e2e06f89ea2e0265702cd12c7e69722fc3890562108970452a205a25a15d27318778fb10aae41a5e9ba293fbe",
     ),
     (8, "e9a4905e3f6285520158e89fd59054ad5beb1549c5cd2ee9bd099e7efc64c6cbd7d9a30500171243a6a4091f26ddd958", "32ae6ae06370708b427782341654b48bdefa38d232320db81581b3a4d9122ac34e7c0b4396544c7561f71f95dd790920"),
+    (9, "d6eaf11e575215e774a7d9f253d72825ef510acbd306fcd987d015a632acf7b3e9b0b09fd7a1eb797ca59372c8ecb013", "d8bd6edaf64504cb6b9888f66f9cd3b54d4bdf5b47416d54d91b0e2238b35efc880575b1c2b5b9b2ce81af7e89ef204c"),
 ];
 
 /// 把另一个平台写下的已发布迁移校验和改成本平台的值，返回改了几条。
@@ -228,6 +229,53 @@ mod tests {
             .unwrap();
         assert_eq!(adopt_published_checksums(&pool).await.unwrap(), 0);
         assert!(MIGRATOR.run(&pool).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn original_content_migration_preserves_existing_items() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let old = Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|migration| migration.version <= 8)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        };
+        old.run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO clipboard_items (id, kind, content, content_hash, search_text, platform, created_at, updated_at) \
+             VALUES ('old', 'text', 'originalneedle', 'hash', 'originalneedle', 'windows', \
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool).await.unwrap();
+        let before = sqlx::query_as::<_, crate::db::models::ClipboardItem>(
+            "SELECT * FROM clipboard_items WHERE id = 'old'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        MIGRATOR.run(&pool).await.unwrap();
+        let after = crate::db::items::find_item_by_id(&pool, "old")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!after.has_original);
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
+        );
+        let hits: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM clipboard_items_fts WHERE clipboard_items_fts MATCH 'originalneedle'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(hits, 1);
     }
 
     #[tokio::test]

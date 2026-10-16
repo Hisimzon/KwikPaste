@@ -24,6 +24,7 @@ pub enum MenuAction {
     MoveToGroup,
     EditNote,
     EditContent,
+    RestoreOriginal,
     Select,
     Delete,
 }
@@ -52,6 +53,7 @@ const GROUPS: [&[MenuAction]; 4] = [
         MenuAction::MoveToGroup,
         MenuAction::EditNote,
         MenuAction::EditContent,
+        MenuAction::RestoreOriginal,
     ],
     &[MenuAction::Select, MenuAction::Delete],
 ];
@@ -74,6 +76,7 @@ impl MenuAction {
             Self::ToggleFavorite => ItemAction::ToggleFavorite,
             Self::TogglePinned => ItemAction::TogglePinned,
             Self::EditNote => ItemAction::EditNote,
+            Self::RestoreOriginal => ItemAction::RestoreOriginal,
             Self::Select => ItemAction::Select,
             Self::Delete => ItemAction::Delete,
             Self::PasteImageAsFile | Self::MoveToGroup | Self::EditContent => return None,
@@ -100,6 +103,7 @@ impl MenuAction {
             | Self::SaveImage
             | Self::CopyImageText
             | Self::MoveToGroup
+            | Self::RestoreOriginal
             | Self::Select => {
                 return None;
             }
@@ -130,6 +134,7 @@ impl MenuAction {
             Self::EditNote if item.note.is_some() => "clipboard:menu.editNote",
             Self::EditNote => "clipboard:menu.addNote",
             Self::EditContent => "clipboard:menu.editContent",
+            Self::RestoreOriginal => "clipboard:menu.restoreOriginal",
             Self::Select => "clipboard:menu.select",
             Self::Delete => "clipboard:menu.delete",
         }

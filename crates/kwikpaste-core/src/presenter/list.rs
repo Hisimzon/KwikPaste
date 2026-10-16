@@ -345,6 +345,9 @@ pub(crate) fn compute_available_actions(
     actions.push(ClipboardAction::ToggleFavorite);
     actions.push(ClipboardAction::TogglePinned);
     actions.push(ClipboardAction::EditNote);
+    if item.kind == ClipboardKind::Text && item.has_original {
+        actions.push(ClipboardAction::RestoreOriginal);
+    }
     actions.push(ClipboardAction::Select);
     actions.push(ClipboardAction::Delete);
 
@@ -434,6 +437,25 @@ mod tests {
         let actions = compute_available_actions(&text_item(None, false), false);
 
         assert!(!actions.contains(&ClipboardAction::SaveImage));
+    }
+
+    #[test]
+    fn restore_original_requires_a_text_snapshot() {
+        let mut item = text_item(None, false);
+        assert!(
+            !compute_available_actions(&item, false).contains(&ClipboardAction::RestoreOriginal)
+        );
+        item.has_original = true;
+        assert!(compute_available_actions(&item, false).contains(&ClipboardAction::RestoreOriginal));
+        for kind in [ClipboardKind::Image, ClipboardKind::Files] {
+            item.kind = kind;
+            assert!(!compute_available_actions(&item, false)
+                .contains(&ClipboardAction::RestoreOriginal));
+        }
+        assert_eq!(
+            serde_json::to_value(ClipboardAction::RestoreOriginal).unwrap(),
+            "restoreOriginal"
+        );
     }
 
     #[test]

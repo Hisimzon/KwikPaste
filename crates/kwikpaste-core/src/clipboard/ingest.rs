@@ -329,6 +329,7 @@ pub fn build_item_with_settings(
         note: None,
         created_at: now,
         updated_at: now,
+        has_original: false,
         origin_device_id: None,
         source_app_name: None,
         source_app_icon_file: None,

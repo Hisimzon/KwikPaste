@@ -13,6 +13,7 @@ use crate::clipboard::{
 use crate::db::models::{ClipboardItemQuery, ClipboardKind};
 use crate::db::overview::{ClearScope, ContentCategory};
 use crate::events::CoreEvent;
+use crate::presenter::ClipboardAction;
 use crate::root::Core;
 use crate::settings::CopySoundTone;
 use crate::testing::{block_on, sample_png, Fixture};
@@ -1002,6 +1003,7 @@ fn rich_text_edit_drops_formats_and_unchanged_save_is_a_noop() {
             )
         ));
         block_on(core.update_text_content(&id, before.search_text.clone().unwrap())).unwrap();
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().has_original);
         assert_eq!(
             serde_json::to_value(block_on(core.find_item(&id)).unwrap()).unwrap(),
             serde_json::to_value(Some(before)).unwrap()
@@ -1016,6 +1018,88 @@ fn rich_text_edit_drops_formats_and_unchanged_save_is_a_noop() {
         assert_eq!(fixture.clipboard.snapshot(), text("  edited plain text  "));
         block_on(core.prepare_paste(&id, false)).unwrap();
         assert_eq!(fixture.clipboard.snapshot(), text("  edited plain text  "));
+    }
+}
+
+#[test]
+fn text_edits_restore_first_original_and_clear_snapshot() {
+    for state in [
+        text("https://example.com/originalneedle"),
+        MemoryState {
+            text: Some("originalneedle".into()),
+            html: Some("<b>originalneedle</b>".into()),
+            ..Default::default()
+        },
+        MemoryState {
+            text: Some("originalneedle".into()),
+            rtf: Some(r"{\rtf1 originalneedle}".into()),
+            ..Default::default()
+        },
+    ] {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let id = copy_in(&core, state).unwrap();
+        block_on(core.update_note(&id, Some("kept note".into()))).unwrap();
+        block_on(core.toggle_pinned(&id)).unwrap();
+        let before = block_on(core.find_item(&id)).unwrap().unwrap();
+        let metadata = edit_metadata(&core, &id);
+        let sync = sync_numbers(&core, &id);
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        fixture.take_events();
+
+        for edit in ["firsteditneedle", "secondeditneedle"] {
+            block_on(core.update_text_content(&id, edit.into())).unwrap();
+            assert!(block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        }
+        let refreshed = block_on(core.list_item(&id)).unwrap().unwrap();
+        let page = block_on(core.list_items(ClipboardItemQuery::default())).unwrap();
+        for view in [refreshed, page.list.into_iter().next().unwrap()] {
+            assert!(view.item.has_original);
+            assert!(view.item.content.is_empty());
+            assert!(view
+                .available_actions
+                .contains(&ClipboardAction::RestoreOriginal));
+        }
+        block_on(core.restore_original_content(&id)).unwrap();
+        assert_eq!(
+            serde_json::to_value(block_on(core.find_item(&id)).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        let restored = block_on(core.list_item(&id)).unwrap().unwrap();
+        assert!(!restored.item.has_original);
+        assert!(!restored
+            .available_actions
+            .contains(&ClipboardAction::RestoreOriginal));
+        assert_eq!(edit_metadata(&core, &id), metadata);
+        assert_eq!(sync_numbers(&core, &id), sync);
+        assert!(fixture.take_events().is_empty());
+        for (keyword, total) in [
+            ("originalneedle", 1),
+            ("firsteditneedle", 0),
+            ("secondeditneedle", 0),
+        ] {
+            assert_eq!(
+                block_on(core.list_items(ClipboardItemQuery {
+                    keyword: Some(keyword.into()),
+                    ..Default::default()
+                }))
+                .unwrap()
+                .total,
+                total
+            );
+        }
+        assert_eq!(
+            block_on(core.restore_original_content(&id))
+                .unwrap_err()
+                .to_string(),
+            "No original content to restore"
+        );
+        block_on(core.update_text_content(&id, "third edit".into())).unwrap();
+        assert!(block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        block_on(core.delete_item(&id)).unwrap();
+        assert!(block_on(core.find_item(&id)).unwrap().is_none());
+        block_on(core.shutdown()).unwrap();
     }
 }
 
@@ -1101,4 +1185,17 @@ fn text_edit_allows_duplicate_hashes_and_capture_reuses_newest_created() {
             .total,
         2
     );
+    block_on(core.update_text_content(&second, "first unique".into())).unwrap();
+    block_on(core.restore_original_content(&first)).unwrap();
+    assert_eq!(use_count(&core, &first), 1);
+    assert_eq!(use_count(&core, &second), 2);
+    assert!(
+        !block_on(core.find_item(&first))
+            .unwrap()
+            .unwrap()
+            .has_original
+    );
+    assert_eq!(copy_in(&core, text("first unique")).unwrap(), second);
+    assert_eq!(use_count(&core, &first), 1);
+    assert_eq!(use_count(&core, &second), 3);
 }

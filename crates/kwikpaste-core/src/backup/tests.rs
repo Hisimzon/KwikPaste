@@ -410,6 +410,7 @@ async fn merge_preserves_is_sensitive_flag() {
         note: None,
         created_at: ts,
         updated_at: ts,
+        has_original: false,
         origin_device_id: None,
         source_app_name: None,
         source_app_icon_file: None,
@@ -565,6 +566,34 @@ fn export(source: &Source, mode: BackupExportMode, password: Option<&str>) -> Pa
     assert_eq!(path.extension().unwrap(), BACKUP_EXTENSION);
     assert_eq!(fs::metadata(&path).unwrap().len(), result.total_bytes);
     path
+}
+
+#[test]
+fn backup_preserves_original_content_for_merge_and_overwrite() {
+    let source = source();
+    let id = store(&source.core, text("shared text"));
+    let before = block_on(source.core.find_item(&id)).unwrap().unwrap();
+    block_on(source.core.update_text_content(&id, "edited text".into())).unwrap();
+    let backup = export(&source, BackupExportMode::Plain, None);
+
+    for strategy in [BackupImportStrategy::Merge, BackupImportStrategy::Overwrite] {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        block_on(core.import_history_backup(input(&backup, None), strategy)).unwrap();
+        assert_eq!(
+            block_on(core.find_item(&id)).unwrap().unwrap().content,
+            "edited text"
+        );
+        assert!(block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        block_on(core.restore_original_content(&id)).unwrap();
+        assert_eq!(
+            serde_json::to_value(block_on(core.find_item(&id)).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        block_on(core.shutdown()).unwrap();
+    }
+    block_on(source.core.shutdown()).unwrap();
 }
 
 #[test]

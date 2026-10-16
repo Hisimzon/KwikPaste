@@ -167,6 +167,7 @@ mod tests {
             note: None,
             created_at: used,
             updated_at: used,
+            has_original: false,
             origin_device_id: None,
             source_app_name: None,
             source_app_icon_file: None,

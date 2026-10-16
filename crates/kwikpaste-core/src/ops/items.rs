@@ -18,8 +18,8 @@ use crate::clipboard::{
 use crate::db::items::{
     clear_items, delete_item, delete_items, find_item_by_id, find_item_id_at,
     increment_item_use_count, list_item_refs, mark_item_favorite, reorder_item,
-    toggle_item_favorite, toggle_item_pinned, touch_item_last_used, update_item_group,
-    update_item_note, update_item_text_content, ReorderAnchor, ReorderSection,
+    restore_item_original_content, toggle_item_favorite, toggle_item_pinned, touch_item_last_used,
+    update_item_group, update_item_note, update_item_text_content, ReorderAnchor, ReorderSection,
 };
 use crate::db::models::{
     ClipboardItem, ClipboardItemQuery, ClipboardItemRef, ClipboardKind, ClipboardSubKind,
@@ -681,7 +681,7 @@ impl Core {
         .await
     }
 
-    /// 编辑文本记录：按采集规则重建内容字段，保留元数据，不发布同步或复用事件。
+    /// 编辑文本记录：保留首次原文，按采集规则重建内容字段，不发布同步或复用事件。
     pub async fn update_text_content(&self, id: &str, content: String) -> Result<()> {
         let core = self.clone();
         let id = id.to_owned();
@@ -715,6 +715,14 @@ impl Core {
             update_item_text_content(&pool, &item).await
         })
         .await
+    }
+
+    /// 恢复首次编辑前的原文并清除快照；保留元数据，不发事件，界面自行刷新记录。
+    pub async fn restore_original_content(&self, id: &str) -> Result<()> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move { restore_item_original_content(&core.0.db.pool().await, &id).await })
+            .await
     }
 
     /// 把记录移到自定义分组；分组不存在时报错。
