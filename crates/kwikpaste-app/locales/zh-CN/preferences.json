@@ -290,28 +290,41 @@
     }
   },
   "ocrEngine": {
-    "description": "识别引擎只在识别时运行，处理完自动退出；切换后只影响之后复制的图片。",
+    "columns": {
+      "errors": "错字率",
+      "memory": "内存",
+      "speed": "每张"
+    },
+    "description": "引擎只在识别时运行，识别完立即退出并释放全部内存。切换后只影响之后复制的图片。",
     "download": "下载 {{size}}",
-    "footnote": "错字率、速度和内存为实测参考：41 张测试图，Ryzen 7 9850X3D。",
+    "footnote": "数据为实测参考：41 张测试图，Ryzen 7 9850X3D。识别时内存为峰值。",
     "medium": {
+      "errors": "0.3%",
+      "memory": "710 MB",
       "name": "PP-OCRv6 高精度",
-      "stats": "错字率约 0.3% · 每张约 1.3 秒 · 内存峰值约 710 MB",
-      "summary": "模糊、低对比的图片也能认准；内存 8 GB 以下的电脑不建议使用"
+      "speed": "1.3 秒",
+      "summary": "最准，模糊图片也能认对；内存小于 8 GB 不建议"
     },
     "recommended": "推荐",
     "small": {
+      "errors": "0.5%",
+      "memory": "320 MB",
       "name": "PP-OCRv6 标准",
-      "stats": "错字率约 0.5% · 每张约 0.4 秒 · 内存峰值约 320 MB",
+      "speed": "0.4 秒",
       "summary": "小字、代码和网址更准"
     },
     "system": {
+      "errors": "22%",
+      "memory": "约 20 MB",
       "name": "系统识别",
-      "stats": "错字率约 22% · 每张约 0.02 秒 · 几乎不占内存",
-      "summary": "Windows 自带，无需下载；小字、代码和模糊图片容易漏字或认错"
+      "speed": "0.02 秒",
+      "summary": "Windows 自带，无需下载；小字和代码容易认错"
     },
     "tiny": {
+      "errors": "1%",
+      "memory": "210 MB",
       "name": "PP-OCRv6 轻量",
-      "stats": "错字率约 1% · 每张约 0.2 秒 · 内存峰值约 210 MB",
+      "speed": "0.2 秒",
       "summary": "适合大多数截图"
     },
     "title": "识别引擎",

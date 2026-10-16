@@ -6,7 +6,7 @@
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Role,
     SharedString, StatefulInteractiveElement as _, Styled as _, Toggled, div,
-    prelude::FluentBuilder as _,
+    prelude::FluentBuilder as _, rems,
 };
 use kwikpaste_ui::{
     KpStyled as _, Tag, TagColor,
@@ -22,6 +22,9 @@ use crate::i18n;
 pub(super) const TIERS: [&str; 3] = ["ocr-tiny", "ocr-small", "ocr-medium"];
 /// 第一次选 PP-OCRv6 时推荐的档位。
 const RECOMMENDED: &str = "ocr-tiny";
+/// 三项实测数据，定宽排开，各行上下对齐方便比较；窗口窄时自动换行。
+const STATS: [&str; 3] = ["errors", "speed", "memory"];
+const STAT_WIDTH: f32 = 6.;
 
 /// 一个选项此刻的样子；`action` 为空时整行不可点。
 struct Choice {
@@ -151,7 +154,7 @@ impl Preferences {
             .into_any_element()
     }
 
-    /// 单选行：圆点、名称（可带推荐标签）、一句定位、一行实测数据，右侧是下载提示或进度。
+    /// 单选行：圆点；名称（可带推荐标签）与下载提示或进度，一句定位，一行实测数据。
     fn render_choice(&self, choice: Choice, cx: &mut Context<Self>) -> AnyElement {
         let tokens = theme::semantic(cx);
         let name = i18n::t(&format!("preferences:ocrEngine.{}.name", choice.key));
@@ -200,7 +203,7 @@ impl Preferences {
                     .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .gap(space(0.5))
+                    .gap(space(1.))
                     .child(
                         div()
                             .flex()
@@ -211,6 +214,20 @@ impl Preferences {
                                 line.child(
                                     Tag::new(i18n::t("preferences:ocrEngine.recommended"))
                                         .color(TagColor::Primary),
+                                )
+                            })
+                            .child(div().flex_1())
+                            .when_some(choice.trailing, |line, trailing| {
+                                line.child(
+                                    div()
+                                        .flex_none()
+                                        .kp_text(TextSize::Xs)
+                                        .text_color(if clickable {
+                                            tokens.accent.text
+                                        } else {
+                                            tokens.text.muted
+                                        })
+                                        .child(trailing),
                                 )
                             }),
                     )
@@ -225,27 +242,25 @@ impl Preferences {
                     )
                     .child(
                         div()
-                            .kp_text(TextSize::Xs)
-                            .text_color(tokens.text.muted)
-                            .child(i18n::t(&format!(
-                                "preferences:ocrEngine.{}.stats",
-                                choice.key
-                            ))),
+                            .flex()
+                            .flex_wrap()
+                            .gap_y(space(0.5))
+                            .children(STATS.map(|stat| {
+                                div()
+                                    .flex_none()
+                                    .w(rems(STAT_WIDTH))
+                                    .flex()
+                                    .gap(space(1.))
+                                    .kp_text(TextSize::Xs)
+                                    .child(div().text_color(tokens.text.muted).child(i18n::t(
+                                        &format!("preferences:ocrEngine.columns.{stat}"),
+                                    )))
+                                    .child(div().text_color(tokens.text.primary).child(i18n::t(
+                                        &format!("preferences:ocrEngine.{}.{stat}", choice.key),
+                                    )))
+                            })),
                     ),
             )
-            .when_some(choice.trailing, |row, trailing| {
-                row.child(
-                    div()
-                        .flex_none()
-                        .kp_text(TextSize::Xs)
-                        .text_color(if clickable {
-                            tokens.accent.text
-                        } else {
-                            tokens.text.muted
-                        })
-                        .child(trailing),
-                )
-            })
             .into_any_element()
     }
 }
