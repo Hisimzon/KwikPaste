@@ -129,7 +129,7 @@ fn frosted_scales_surfaces_and_keeps_borders_looking_the_same() {
         let frosted = &intern(appearance, true).semantic;
         let alpha = plain.materials.frosted_surface_alpha;
         assert_eq!(frosted.surface.panel.a, plain.surface.panel.a * alpha);
-        assert_eq!(frosted.surface.raised.a, plain.surface.raised.a * alpha);
+        assert_eq!(frosted.surface.raised, plain.surface.raised);
         assert_eq!(frosted.text, plain.text);
         assert_eq!(frosted.fill, plain.fill);
         if alpha < 1. {

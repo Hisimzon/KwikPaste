@@ -107,9 +107,11 @@ fn intern(appearance: Appearance, frosted: bool) -> &'static ThemeSet {
     })
 }
 
-/// 磨砂：不透明表面统一乘上 `frosted_surface_alpha`，文字、主色不变。填充和悬停色本来就是叠在
-/// 表面上的半透明色，不再缩放。不透明的中性边框换成等效的黑 / 白半透明叠加色：叠在原面板色上
-/// 颜色不变，叠在模糊背景上不会变成一圈黑边（深色）或白边（浅色）。
+/// 磨砂：窗口里铺开的表面（窗口、面板、淡底）统一乘上 `frosted_surface_alpha`，文字、主色不变。
+/// 浮起层（`raised` / `overlay`：下拉、提示、对话框、悬浮按钮）保持不透明：它们浮在同一窗口的内容上，
+/// 背后没有模糊，半透明会直接透出下面的字。填充和悬停色本来就是叠在表面上的半透明色，不再缩放。
+/// 不透明的中性边框换成等效的黑 / 白半透明叠加色：叠在原面板色上颜色不变，叠在模糊背景上不会变成
+/// 一圈黑边（深色）或白边（浅色）。
 fn frost(s: &mut SemanticTokens) {
     let alpha = s.materials.frosted_surface_alpha;
     if alpha >= 1. {
@@ -126,8 +128,6 @@ fn frost(s: &mut SemanticTokens) {
     for color in [
         &mut s.surface.window,
         &mut s.surface.panel,
-        &mut s.surface.raised,
-        &mut s.surface.overlay,
         &mut s.accent.subtle,
         &mut s.accent.subtle_hover,
         &mut s.status.success.subtle,

@@ -1104,7 +1104,7 @@ impl Render for UpdateWindow {
                                     .rounded(px(6.))
                                     .border_1()
                                     .border_color(tokens.border.subtle)
-                                    .bg(tokens.surface.raised)
+                                    .bg(tokens.fill.subtle)
                                     .p(px(8.))
                                     .child(
                                         div()
