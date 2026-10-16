@@ -107,10 +107,22 @@ fn intern(appearance: Appearance, frosted: bool) -> &'static ThemeSet {
     })
 }
 
-/// 磨砂：不透明表面统一乘上 `frosted_surface_alpha`，边框、文字、主色不变。填充和悬停色本来就是
-/// 叠在表面上的半透明色，不再缩放。
+/// 磨砂：不透明表面统一乘上 `frosted_surface_alpha`，文字、主色不变。填充和悬停色本来就是叠在
+/// 表面上的半透明色，不再缩放。不透明的中性边框换成等效的黑 / 白半透明叠加色：叠在原面板色上
+/// 颜色不变，叠在模糊背景上不会变成一圈黑边（深色）或白边（浅色）。
 fn frost(s: &mut SemanticTokens) {
     let alpha = s.materials.frosted_surface_alpha;
+    if alpha >= 1. {
+        return;
+    }
+    let panel = s.surface.panel;
+    for border in [
+        &mut s.border.default,
+        &mut s.border.subtle,
+        &mut s.border_disabled,
+    ] {
+        *border = overlay_for(*border, panel);
+    }
     for color in [
         &mut s.surface.window,
         &mut s.surface.panel,
@@ -124,6 +136,20 @@ fn frost(s: &mut SemanticTokens) {
         &mut s.status.info.subtle,
     ] {
         color.a *= alpha;
+    }
+}
+
+/// 叠在 `base` 上恰好得到 `color` 明度的白色（更亮时）或黑色（更暗时）半透明色。
+fn overlay_for(color: Hsla, base: Hsla) -> Hsla {
+    if color.l >= base.l {
+        gpui::hsla(
+            0.,
+            0.,
+            1.,
+            (color.l - base.l) / (1. - base.l).max(f32::EPSILON),
+        )
+    } else {
+        gpui::hsla(0., 0., 0., (base.l - color.l) / base.l.max(f32::EPSILON))
     }
 }
 
