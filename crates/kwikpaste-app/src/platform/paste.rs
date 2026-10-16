@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{App, AsyncApp, Task};
 use kwikpaste_core::clipboard::ClipboardFragment;
+use kwikpaste_core::db::models::ClipboardItemQuery;
 use kwikpaste_core::ops::CopyOutcome;
 use kwikpaste_core::{AppError, Core, Result};
 use kwikpaste_os::keystroke;
@@ -39,6 +40,17 @@ const MODIFIER_POLL_INTERVAL: Duration = Duration::from_millis(15);
 
 /// 粘贴一条记录：写回剪贴板、让出前台、注入粘贴键。
 pub fn paste(cx: &mut App, id: String, plain: bool, keep_visible: bool) -> Task<Result<()>> {
+    paste_selection(cx, id, plain, None, keep_visible)
+}
+
+/// 优先合并多选文本；不能合并时仍粘贴 `id`，整个操作只注入一次粘贴键。
+pub fn paste_selection(
+    cx: &mut App,
+    id: String,
+    plain: bool,
+    selection: Option<(Vec<String>, ClipboardItemQuery)>,
+    keep_visible: bool,
+) -> Task<Result<()>> {
     let Some(core) = core_host::core(cx).cloned() else {
         return Task::ready(Err(core_missing()));
     };
@@ -46,7 +58,14 @@ pub fn paste(cx: &mut App, id: String, plain: bool, keep_visible: bool) -> Task<
     cx.spawn(async move |cx: &mut AsyncApp| {
         let _phase = super::enter_phase(crate::health::Phase::Paste);
         let started = Instant::now();
-        core.prepare_paste(&id, plain).await?;
+        let merged = if let Some((ids, query)) = selection {
+            core.copy_text_selection(ids, query).await?.is_some()
+        } else {
+            false
+        };
+        if !merged {
+            core.prepare_paste(&id, plain).await?;
+        }
         let report = yield_and_inject(cx, keep_visible).await?;
         probe::pasted("item", &id, plain, report, started.elapsed());
         Ok(())
@@ -97,12 +116,31 @@ pub fn copy(
     plain: bool,
     keep_visible: bool,
 ) -> Task<Result<CopyOutcome>> {
+    copy_selection(cx, id, plain, None, keep_visible)
+}
+
+/// 优先合并多选文本；不能合并时仍复制 `id`，隐藏规则同 [`copy`]。
+pub fn copy_selection(
+    cx: &mut App,
+    id: String,
+    plain: bool,
+    selection: Option<(Vec<String>, ClipboardItemQuery)>,
+    keep_visible: bool,
+) -> Task<Result<CopyOutcome>> {
     let Some(core) = core_host::core(cx).cloned() else {
         return Task::ready(Err(core_missing()));
     };
 
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let outcome = core.copy_item(&id, plain).await?;
+        let merged = if let Some((ids, query)) = selection {
+            core.copy_text_selection(ids, query).await?
+        } else {
+            None
+        };
+        let outcome = match merged {
+            Some(outcome) => outcome,
+            None => core.copy_item(&id, plain).await?,
+        };
         if keep_visible {
             cx.update(|cx| {
                 super::request(cx, PanelCommand::SetInputCapture(false));

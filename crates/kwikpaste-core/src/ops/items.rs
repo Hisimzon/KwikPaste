@@ -1,6 +1,7 @@
 //! 单条记录的操作：写回剪贴板（复制、粘贴前准备、片段、快速粘贴）、手动读取、收藏置顶备注分组、
 //! 删除与清空、链接与文件定位、图片另存。
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -301,6 +302,52 @@ async fn load_fragment_text(
 }
 
 impl Core {
+    /// 按当前列表顺序合并至少两条文本记录，一次写回纯文本并逐条记录复用。
+    /// `ids` 的传入顺序无关；`query` 必须与列表一致，分页参数不影响合并。
+    /// 不足两条或包含图片 / 文件时不写剪贴板，返回 `None`，调用方继续原来的单条操作。
+    pub async fn copy_text_selection(
+        &self,
+        ids: Vec<String>,
+        mut query: ClipboardItemQuery,
+    ) -> Result<Option<CopyOutcome>> {
+        let core = self.clone();
+        self.hop(async move {
+            let ids: HashSet<_> = ids.into_iter().collect();
+            if ids.len() < 2 {
+                return Ok(None);
+            }
+
+            let pool = core.0.db.pool().await;
+            query.ocr_enabled = core.ocr_enabled();
+            let refs = list_item_refs(&pool, &query).await?;
+            let mut items = Vec::new();
+            for item_ref in refs.into_iter().filter(|item| ids.contains(&item.id)) {
+                let item = find_required(&pool, &item_ref.id).await?;
+                if item.kind != ClipboardKind::Text {
+                    return Ok(None);
+                }
+                items.push(item);
+            }
+            if items.len() < 2 {
+                return Ok(None);
+            }
+
+            let text = items
+                .iter()
+                .map(clipboard::fragment_source)
+                .collect::<Vec<_>>()
+                .join("\n");
+            write_fragment(&core.0, &text)?;
+            for item in items {
+                mark_item_reused_if_enabled(&core.0, &pool, &item.id, item.kind).await?;
+            }
+            Ok(Some(CopyOutcome {
+                hide_window: core.settings().clipboard.content.copy_then_hide_window,
+            }))
+        })
+        .await
+    }
+
     /// 把记录写回剪贴板（不粘贴）。`plain = true` 强制纯文本；否则文本记录按「复制时去除格式」设置。
     pub async fn copy_item(&self, id: &str, plain: bool) -> Result<CopyOutcome> {
         let core = self.clone();

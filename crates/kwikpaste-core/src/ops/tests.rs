@@ -336,6 +336,110 @@ fn copy_and_paste_follow_plain_text_settings_and_reuse() {
 }
 
 #[test]
+fn text_selection_joins_in_list_order_using_full_plain_text() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let mut ids = Vec::new();
+    let mut plain_texts = std::collections::HashMap::new();
+    for state in [
+        text("plain"),
+        text("https://example.com"),
+        text("test@example.com"),
+        text("#123456"),
+        text("C:\\fixture.txt"),
+        MemoryState {
+            text: Some("HTML plain text".repeat(100)),
+            html: Some("<b>HTML plain text</b>".repeat(100)),
+            ..Default::default()
+        },
+        MemoryState {
+            text: Some("RTF plain text".into()),
+            rtf: Some("{\\rtf1 RTF plain text}".into()),
+            ..Default::default()
+        },
+    ] {
+        let plain = state.text.clone().unwrap();
+        let id = copy_in(&core, state).unwrap();
+        plain_texts.insert(id.clone(), plain);
+        ids.push(id);
+    }
+    block_on(core.toggle_pinned(&ids[0])).unwrap();
+    block_on(core.update_settings(json!({"clipboard": {"content": {
+        "updateOnReuse": true, "copyThenHideWindow": true
+    }}})))
+    .unwrap();
+    block_on(core.hop({
+        let core = core.clone();
+        let id = ids[0].clone();
+        async move {
+            sqlx::query("UPDATE clipboard_items SET is_sensitive = 1 WHERE id = ?")
+                .bind(id)
+                .execute(&core.0.db.pool().await)
+                .await
+                .unwrap();
+            Ok(())
+        }
+    }))
+    .unwrap();
+    let query = ClipboardItemQuery {
+        limit: 1,
+        offset: 1,
+        ..Default::default()
+    };
+    let refs = block_on(core.list_item_refs(query.clone())).unwrap();
+    let expected = refs
+        .iter()
+        .map(|item| plain_texts[&item.id].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let reversed = refs.iter().rev().map(|item| item.id.clone()).collect();
+
+    let outcome = block_on(core.copy_text_selection(reversed, query))
+        .unwrap()
+        .unwrap();
+    assert!(outcome.hide_window);
+    assert_eq!(fixture.clipboard.snapshot(), text(&expected));
+    assert!(core
+        .writeback_guard()
+        .should_skip(&crate::db::items::content_hash(
+            ClipboardKind::Text,
+            &expected
+        )));
+    for id in ids {
+        assert_eq!(use_count(&core, &id), 2);
+    }
+}
+
+#[test]
+fn text_selection_does_not_write_when_any_item_is_non_text() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let first = copy_in(&core, text("first")).unwrap();
+    let second = copy_in(&core, text("second")).unwrap();
+    for state in [
+        MemoryState {
+            png: Some(sample_png(2, 2)),
+            ..Default::default()
+        },
+        MemoryState {
+            files: Some(vec!["C:/fixture.txt".into()]),
+            ..Default::default()
+        },
+    ] {
+        let other = copy_in(&core, state).unwrap();
+        fixture.clipboard.set_text("unchanged".into()).unwrap();
+        assert!(block_on(core.copy_text_selection(
+            vec![first.clone(), other.clone(), second.clone()],
+            ClipboardItemQuery::default(),
+        ))
+        .unwrap()
+        .is_none());
+        assert_eq!(fixture.clipboard.snapshot(), text("unchanged"));
+        assert_eq!(use_count(&core, &other), 1);
+    }
+}
+
+#[test]
 fn paste_image_as_file_uses_original_and_suppresses_writeback() {
     let fixture = Fixture::new();
     let core = fixture.start();

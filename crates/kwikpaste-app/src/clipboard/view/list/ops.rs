@@ -13,6 +13,7 @@ use gpui::{
 };
 use kwikpaste_core::{
     clipboard::ClipboardFragment,
+    db::models::ClipboardItemQuery,
     settings::{AutoPaste, Settings},
 };
 use kwikpaste_ui::{
@@ -30,7 +31,7 @@ use crate::{
             item::{ListItem, SubKind},
             layout::LayoutSpec,
         },
-        source::Group,
+        source::{Group, core_source::item_query},
         view::editing::{self, EditTarget},
     },
     i18n::{t, t_args},
@@ -184,11 +185,27 @@ impl ClipboardList {
         self.controller.active_item(&self.model).cloned()
     }
 
-    /// 粘贴一条记录：交给宿主（写回剪贴板、让出前台、注入粘贴键），同时发 `ListIntent::Paste` 通知。
+    /// 多选快照：交给 core 按完整列表排序并读取原文，不能使用可能脱敏或未加载的卡片正文。
+    fn text_selection(&self) -> Option<(Vec<String>, ClipboardItemQuery)> {
+        (self.selection.count() >= 2).then(|| {
+            (
+                self.selection
+                    .ids()
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect(),
+                item_query(&self.view_query()),
+            )
+        })
+    }
+
+    /// 粘贴记录或多选文本：交给宿主写回、让出前台、注入粘贴键，同时发 `ListIntent::Paste` 通知。
     pub fn paste_item(&mut self, id: Arc<str>, plain: bool, cx: &mut Context<Self>) {
         log::info!("paste requested for {id} (plain: {plain})");
         self.close_preview(cx);
-        let task = self.host.paste(id.clone(), plain, cx);
+        let task = self
+            .host
+            .paste(id.clone(), plain, self.text_selection(), cx);
         self.report_host_failure("commands:labels.paste", task, cx);
         cx.emit(ListIntent::Paste { id, plain });
     }
@@ -331,7 +348,7 @@ impl ClipboardList {
         cx: &mut Context<Self>,
     ) {
         self.close_preview_of(&id, cx);
-        let task = self.host.copy(id.clone(), plain, cx);
+        let task = self.host.copy(id.clone(), plain, self.text_selection(), cx);
 
         cx.spawn_in(window, async move |list, cx| {
             let result = task.await;
