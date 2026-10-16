@@ -81,6 +81,10 @@ def main():
                '--cmake_extra_defines', 'onnxruntime_BUILD_UNIT_TESTS=OFF', 'onnxruntime_BUILD_SHARED_LIB=OFF',
                'onnxruntime_USE_DML=OFF', 'onnxruntime_USE_CUDA=OFF', 'onnxruntime_USE_TENSORRT=OFF',
                'onnxruntime_USE_TELEMETRY=OFF', 'onnxruntime_USE_MIMALLOC=OFF', 'CMAKE_OBJECT_PATH_MAX=160']
+    # ORT's dependency patches fail with Strawberry Perl's old patch.exe, which comes first on CI's PATH.
+    git_patch = Path(shutil.which('git')).parents[1] / 'usr/bin/patch.exe'
+    if git_patch.is_file():
+        command += ['Patch_EXECUTABLE=' + git_patch.as_posix()]
     # Ninja uses the loaded MSVC target environment; it must not receive --arm64.
     if args.target.startswith('aarch64'):
         if os.environ.get('VSCMD_ARG_TGT_ARCH', '').lower() != 'arm64':
