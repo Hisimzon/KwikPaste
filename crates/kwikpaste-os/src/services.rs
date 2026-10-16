@@ -25,6 +25,11 @@ impl PlatformServices for NativeServices {
         native::frontmost_app()
     }
 
+    #[cfg(target_os = "windows")]
+    fn clipboard_source_app(&self, owner: Option<&Path>) -> Option<FrontmostApp> {
+        native::clipboard_source_app(owner)
+    }
+
     fn clipboard_owner(&self) -> Option<std::path::PathBuf> {
         native::clipboard_owner()
     }

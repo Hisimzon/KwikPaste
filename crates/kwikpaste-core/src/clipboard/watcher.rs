@@ -143,7 +143,7 @@ impl Drop for PauseGuard {
 /// 处理一次剪贴板变化的同步部分：识别来源 → 过滤忽略的应用 → 读取（带重试）→ 转成记录
 /// （图片在这里落盘）→ 同一次复制的重复通知、自身写回则跳过 → 补齐来源应用。返回 `None` 表示这次不入库。
 ///
-/// **先**抓前台应用：等异步入库再问，前台早就切回别的窗口了。自身写回的事件会在 guard 处丢弃，
+/// **先**抓来源应用：Windows 优先用剪贴板所有者，其它情况用前台。自身写回的事件会在 guard 处丢弃，
 /// 但顺序换不得：guard 判定依赖 content_hash，必须先把内容读出来才能判，而读取期间用户可能已经切走前台。
 pub(crate) fn capture_change<B: ClipboardBackend>(
     core: &CoreInner,
@@ -155,8 +155,8 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         return None;
     }
 
-    let source = core.platform().frontmost_app();
     let owner = core.platform().clipboard_owner();
+    let source = core.platform().clipboard_source_app(owner.as_deref());
     log::debug!("clipboard change: owner {owner:?}");
     let settings = core.settings.snapshot();
 
