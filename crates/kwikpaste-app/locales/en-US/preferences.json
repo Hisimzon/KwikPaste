@@ -220,6 +220,12 @@
     "queued": {
       "title": "{{count}} images waiting"
     },
+    "recognizeAll": {
+      "action": "Recognize all again",
+      "content": "Recognize all {{count}} images again with the current engine. Until that finishes, their text can't be found by search.",
+      "ok": "Recognize again",
+      "title": "Recognize all again"
+    },
     "running": {
       "description": "Recognition runs in a separate background process that exits when it's done, so it doesn't add to memory use.",
       "title": "Recognizing {{done}} of {{total}} images"
@@ -296,7 +302,7 @@
       "memory": "Memory",
       "speed": "Per image"
     },
-    "description": "An engine runs only while recognizing, then exits and releases all of its memory. Switching affects images copied afterwards.",
+    "description": "An engine runs only while recognizing, then exits and releases all of its memory. Switching affects images copied afterwards; use “Recognize all again” for older ones.",
     "download": "Download {{size}}",
     "footnote": "Measured on 41 test images with a Ryzen 7 9850X3D. Memory is the peak while recognizing.",
     "medium": {
