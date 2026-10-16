@@ -717,8 +717,24 @@ fn note_annotation(env: &CardEnv<'_>, note: &Arc<str>) -> AnyElement {
                     .color(env.tokens.accent.solid),
             ),
         )
-        .child(div().flex_1().min_w_0().child(shared(note)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .line_clamp(env.layout.text_max_lines)
+                .text_ellipsis()
+                .child(shared(&Arc::from(note_line(note)))),
+        )
         .into_any_element()
+}
+
+/// 多行备注在卡片上并成一行，用 ` / ` 隔开（如 `ty / tongyi`），跳过空行。
+fn note_line(note: &str) -> String {
+    note.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
 fn image_body(
@@ -1018,5 +1034,16 @@ fn status_marks(tokens: &SemanticTokens, pinned: bool, sensitive: bool, inline: 
             .right(space((8.) / 4.))
             .bottom(space((8.) / 4.))
             .items_end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::note_line;
+
+    #[test]
+    fn multi_line_notes_join_into_one_line() {
+        assert_eq!(note_line("ty\n tongyi \n\n"), "ty / tongyi");
+        assert_eq!(note_line("备注"), "备注");
     }
 }
