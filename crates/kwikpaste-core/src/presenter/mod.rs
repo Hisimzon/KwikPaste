@@ -4,12 +4,16 @@
 //! `tests/fixtures/presenter/` 下的 golden 夹具就是按 1.4.0 的加工规则录的。
 
 mod files;
+mod html;
 mod list;
 mod preview;
 mod text;
 mod view;
 
 pub use files::{is_image_path, FileIconResult};
+pub use html::{
+    parse_preview_html, PreviewBlock, PreviewDocument, PreviewInline, PreviewInlineStyle,
+};
 pub use list::display_created_at;
 pub use preview::{
     ClipboardPreviewFileEntry, ClipboardPreviewPayload, PreviewContentMetrics, PreviewWordChip,

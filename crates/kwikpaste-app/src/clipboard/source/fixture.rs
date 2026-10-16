@@ -397,6 +397,7 @@ fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextVie
                 .as_deref()
                 .map(|text| i64::try_from(text.encode_utf16().count()).unwrap_or(i64::MAX)),
             text,
+            document: None,
             image_exists: image_path.is_some(),
             image_path: image_path.map(|path| path.to_string_lossy().into_owned()),
             image_width: item.width.map(i64::from),

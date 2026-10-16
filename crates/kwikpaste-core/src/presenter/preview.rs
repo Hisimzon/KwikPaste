@@ -11,6 +11,7 @@ use super::files::{
     resolve_preview_file_is_dir, resolve_preview_file_size,
 };
 use super::text::{count_preview_text_rows, preview_sub_kind, preview_text, preview_text_source};
+use super::{parse_preview_html, PreviewDocument};
 use crate::clipboard::{
     preview_quick_snippets, split_words, validate_image_file_name, word_spans, FileIconStore,
     ImageStore, PreviewSnippet, WordSpan,
@@ -37,8 +38,11 @@ pub struct ClipboardPreviewPayload {
     pub kind: ClipboardKind,
     pub sub_kind: Option<ClipboardSubKind>,
     pub updated_at: DateTime<Utc>,
-    /// 预览展示用纯文本。HTML / RTF 条目返回 `search_text`，不返回富文本源；敏感内容按设置遮罩。
+    /// 预览展示用纯文本。HTML / RTF 条目返回 `search_text`；敏感内容按设置遮罩。
     pub text: Option<String>,
+    /// 未遮罩 HTML 的有界展示文档；纯文本、RTF 和脱敏展示均为空。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<PreviewDocument>,
     pub image_path: Option<String>,
     pub image_width: Option<i64>,
     pub image_height: Option<i64>,
@@ -221,6 +225,7 @@ pub(crate) fn build_image_text_preview(
         sub_kind: None,
         updated_at: item.updated_at,
         text: Some(text),
+        document: None,
         image_path: None,
         image_width: None,
         image_height: None,
@@ -247,6 +252,7 @@ pub(crate) async fn build_preview_payload(
 ) -> Result<ClipboardPreviewPayload> {
     let redact_sensitive = clipboard.sensitive.redact_secrets;
     let mut text = None;
+    let mut document = None;
     let mut image_path = None;
     let mut image_exists = false;
     let mut files = Vec::new();
@@ -263,6 +269,9 @@ pub(crate) async fn build_preview_payload(
                 preview_text(&item, false)
             });
             if !(redact_sensitive && item.is_sensitive) {
+                if item.sub_kind == Some(ClipboardSubKind::Html) {
+                    document = Some(parse_preview_html(&item.content));
+                }
                 (words, words_truncated) = word_spans(preview_text_source(&item));
                 if clipboard.display.quick_snippets {
                     snippets = preview_quick_snippets(&item, clipboard.compiled_rules());
@@ -288,6 +297,7 @@ pub(crate) async fn build_preview_payload(
         sub_kind: preview_sub_kind,
         updated_at: item.updated_at,
         text,
+        document,
         image_path,
         image_width: item.width,
         image_height: item.height,
@@ -366,6 +376,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(payload.text.as_deref(), Some(text));
+        assert_eq!(payload.document, Some(parse_preview_html(&item.content)));
         assert_eq!(
             payload
                 .snippets
@@ -413,6 +424,11 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(payload.text.as_deref(), Some(text));
+        assert!(payload.document.is_none());
+        assert!(serde_json::to_value(&payload)
+            .unwrap()
+            .get("document")
+            .is_none());
         assert!(payload.words.is_empty());
         assert!(payload.snippets.is_empty());
 
@@ -421,9 +437,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(payload.snippets.len(), 5);
+        assert!(payload.document.is_some());
+
+        item.sub_kind = Some(ClipboardSubKind::Rtf);
+        let payload = build_preview_payload(&pool, &images, &icons, item.clone(), &clipboard)
+            .await
+            .unwrap();
+        assert_eq!(payload.text.as_deref(), Some(text));
+        assert!(payload.document.is_none());
+
         let (image_text, _) =
             build_image_text_preview(&item, text.to_owned(), PreviewTextView::Plain);
         assert!(image_text.snippets.is_empty());
+        assert!(image_text.document.is_none());
     }
 
     // 面板按预览方式开窗：原文方式按文本行，选词方式按词块；脱敏展示的敏感内容没有词可选，始终按文本行。
