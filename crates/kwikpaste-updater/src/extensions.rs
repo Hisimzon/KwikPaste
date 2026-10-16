@@ -11,12 +11,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DownloadProgress, UpdaterUi, lock, other};
 
-const KNOWN: &[(&str, u32)] = &[("ocr", OCR_PROTOCOL), ("wetype", WETYPE_PROTOCOL)];
+const KNOWN: &[(&str, u32)] = &[
+    ("ocr", OCR_PROTOCOL),
+    ("wetype", WETYPE_PROTOCOL),
+    #[cfg(target_os = "windows")]
+    ("ocr-tiny", OCR_PROTOCOL),
+    #[cfg(target_os = "windows")]
+    ("ocr-small", OCR_PROTOCOL),
+    #[cfg(target_os = "windows")]
+    ("ocr-medium", OCR_PROTOCOL),
+];
 const DAILY: Duration = Duration::from_secs(24 * 60 * 60);
 #[cfg(not(debug_assertions))]
 const ENDPOINT: &str = "https://paste.fastthree.com/api/v1/extensions";
 #[cfg(any(not(debug_assertions), test))]
-const MAX_EXTENSION_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_EXTENSION_BYTES: u64 = 256 * 1024 * 1024;
 
 /// 服务端选出的兼容版本；签名内容与应用更新器的 `.sig` 格式相同。
 #[derive(Debug, Clone, Deserialize, Serialize)]

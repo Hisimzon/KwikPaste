@@ -123,6 +123,35 @@ fn seed_ocr_demo(core: &Core) -> anyhow::Result<()> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "png"))
         .collect();
     paths.sort();
+    // `KP_OCR_DEMO_MODE=off` 关掉识别；`fresh` 先清掉识别结果再开启，内存对比时让每次都真的识别一遍。
+    let mode = std::env::var("KP_OCR_DEMO_MODE").unwrap_or_default();
+    let enabled = mode != "off";
+    #[cfg(debug_assertions)]
+    if enabled {
+        futures::executor::block_on(core.install_extension_from_dev(
+            "ocr",
+            "0.0.0-dev",
+            kwikpaste_core::extensions::OCR_PROTOCOL,
+        ))?;
+        #[cfg(target_os = "windows")]
+        if let Ok(id) = std::env::var("KP_OCR_DEMO_ENGINE") {
+            anyhow::ensure!(
+                matches!(id.as_str(), "ocr-tiny" | "ocr-small" | "ocr-medium"),
+                "invalid OCR demo tier"
+            );
+            futures::executor::block_on(core.install_extension_from_dev(
+                &id,
+                "0.0.0-dev",
+                kwikpaste_core::extensions::OCR_PROTOCOL,
+            ))?;
+        }
+    }
+    if mode == "fresh" {
+        futures::executor::block_on(core.clear_ocr_data())?;
+    }
+    if core.installed_extensions().contains_key("ocr") {
+        futures::executor::block_on(core.set_extension_enabled("ocr", enabled))?;
+    }
     for path in paths {
         let bytes = std::fs::read(&path)?;
         let (width, height) = image::image_dimensions(&path)?;
@@ -134,23 +163,6 @@ fn seed_ocr_demo(core: &Core) -> anyhow::Result<()> {
         if let Some(item) = core.build_item(&payload)? {
             futures::executor::block_on(core.store_item(item, None))?;
         }
-    }
-    // `KP_OCR_DEMO_MODE=off` 关掉识别；`fresh` 先清掉识别结果再开启，内存对比时让每次都真的识别一遍。
-    let mode = std::env::var("KP_OCR_DEMO_MODE").unwrap_or_default();
-    if mode == "fresh" {
-        futures::executor::block_on(core.clear_ocr_data())?;
-    }
-    let enabled = mode != "off";
-    #[cfg(debug_assertions)]
-    if enabled {
-        futures::executor::block_on(core.install_extension_from_dev(
-            "ocr",
-            "1.0.0",
-            kwikpaste_core::extensions::OCR_PROTOCOL,
-        ))?;
-    }
-    if core.installed_extensions().contains_key("ocr") {
-        futures::executor::block_on(core.set_extension_enabled("ocr", enabled))?;
     }
     Ok(())
 }

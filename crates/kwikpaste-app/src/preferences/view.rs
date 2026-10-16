@@ -56,6 +56,7 @@ mod custom_rules;
 mod extensions;
 mod feedback;
 mod image_text;
+mod ocr_engine;
 mod overview;
 mod wetype;
 

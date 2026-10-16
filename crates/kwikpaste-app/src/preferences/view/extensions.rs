@@ -12,14 +12,17 @@ use kwikpaste_ui::{
 };
 use kwikpaste_updater::extensions::{ExtensionStatus, OperationState};
 
+use super::ocr_engine::TIERS;
 use super::{Preferences, row_frame, section_block, setting_row, text};
 use crate::{i18n, platform::updater};
 
 #[derive(Clone, Copy)]
-enum Action {
+pub(super) enum Action {
     Refresh,
     Install,
     Uninstall,
+    /// 不确认直接卸载：切回系统识别时移除已装的 PP-OCRv6 档位。
+    Remove,
     Enable(bool),
 }
 
@@ -54,7 +57,7 @@ impl Preferences {
     }
 
     /// 卸载先确认；所有管理器操作都在窗口任务里执行，失败显示原始根因。
-    fn run_extension_action(
+    pub(super) fn run_extension_action(
         &self,
         id: String,
         action: Action,
@@ -105,7 +108,7 @@ impl Preferences {
                 let result = match action {
                     Action::Refresh => manager.refresh().await.map(|_| ()),
                     Action::Install => manager.install(id).await,
-                    Action::Uninstall => manager.uninstall(id).await,
+                    Action::Uninstall | Action::Remove => manager.uninstall(id).await,
                     Action::Enable(enabled) => manager.set_enabled(id, enabled).await,
                 };
                 if let Err(error) = result {
@@ -122,7 +125,13 @@ impl Preferences {
         let tokens = theme::semantic(cx);
         let entity = cx.entity().downgrade();
         let mut cards = Vec::new();
-        for status in statuses(cx) {
+        let all = statuses(cx);
+        // PP-OCRv6 各档不单独成卡，在图片文字识别的设置里选。
+        for status in all
+            .iter()
+            .filter(|status| !TIERS.contains(&status.id.as_str()))
+        {
+            let status = status.clone();
             let busy = matches!(
                 status.operation,
                 OperationState::Downloading { .. } | OperationState::Installing
@@ -275,7 +284,12 @@ impl Preferences {
                     .as_ref()
                     .is_some_and(|installed| installed.enabled);
                 match status.id.as_str() {
-                    "ocr" if enabled => rows.push(self.render_image_text_status(false, cx)),
+                    "ocr" if enabled => {
+                        rows.push(self.render_image_text_status(false, cx));
+                        if cfg!(target_os = "windows") {
+                            rows.extend(self.render_ocr_engines(&all, cx));
+                        }
+                    }
                     "wetype" if enabled => rows.extend(self.render_wetype(cx)),
                     id => rows.push(details(id, tokens)),
                 }
@@ -293,7 +307,7 @@ impl Preferences {
 }
 
 /// 自动更新始终开启；状态行只展示操作进度、错误或不可用状态。
-fn status_text(status: &ExtensionStatus) -> Option<SharedString> {
+pub(super) fn status_text(status: &ExtensionStatus) -> Option<SharedString> {
     match &status.operation {
         OperationState::Downloading { progress } => {
             let percent = (progress.progress.unwrap_or(0.0).clamp(0.0, 1.0) * 100.0)

@@ -354,9 +354,10 @@ fn run_jobs(
             }
         }
         if helper.is_none() {
-            let Some(exe) = core.extensions.resolve("ocr") else {
+            let Some(exe) = core.extensions.resolve_ocr() else {
                 break;
             };
+            log::info!("OCR engine: {}", exe.display());
             match client::Client::start(&exe) {
                 Ok(client) => {
                     let mut state = core.ocr.state();
@@ -466,7 +467,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let _serial = core.0.ocr.probe_lock.lock().await;
-            let Some(exe) = core.resolve_extension("ocr") else {
+            let Some(exe) = core.0.extensions.resolve_ocr() else {
                 return Ok(match core.installed_extensions().get("ocr") {
                     None => OcrSupport::NotInstalled,
                     Some(entry) if !entry.enabled => OcrSupport::Disabled,

@@ -117,9 +117,9 @@
     "install": "Install",
     "installing": "Installing…",
     "ocr": {
-      "description": "Recognizes text in images for search and copying, using the system's built-in recognition.",
+      "description": "Recognizes text in images for search and copying.",
       "feature": "Recognizes the text in images you copy. You can then find an image by its text, use “Copy Text in Image” from the context menu, or switch the preview to Text to pick and copy part of it.",
-      "how": "Uses the system's built-in text recognition: Windows.Media.Ocr on Windows and the Vision framework on macOS. Recognition runs in a separate background process that starts only when there are new images and exits when it is done, so it doesn't stay in memory. Supported languages depend on the language packs installed on the system.",
+      "how": "Uses the system's built-in text recognition: Windows.Media.Ocr on Windows and the Vision framework on macOS. Recognition runs in a separate background process that starts only when there are new images and exits when it is done, so it doesn't stay in memory. Supported languages depend on the language packs installed on the system. On Windows you can also download a more accurate PP-OCRv6 engine.",
       "name": "Image text recognition",
       "privacy": "Recognition happens entirely on this device. Neither images nor recognized text are uploaded.",
       "uninstallContent": "New images will no longer be recognized; recognized text is kept."
@@ -289,6 +289,30 @@
       "noAddress": "No network connection",
       "title": "This Device"
     }
+  },
+  "ocrEngine": {
+    "description": "Measured on 41 test images with a Ryzen 7 9850X3D. An engine uses memory only while recognizing and exits when done; switching affects images copied afterwards.",
+    "download": "Download · {{size}}",
+    "inUse": "In use",
+    "medium": {
+      "description": "Reads blurry and low-contrast images too, but is the slowest and heaviest: about 710 MB peak memory while recognizing, about 1.3 s per image, about 0.3% character errors. Not recommended on PCs with less than 8 GB of memory.",
+      "name": "PP-OCRv6 High accuracy"
+    },
+    "small": {
+      "description": "More accurate on small text, code and URLs: about 320 MB peak memory while recognizing, about 0.4 s per image, about 0.5% character errors.",
+      "name": "PP-OCRv6 Standard"
+    },
+    "system": {
+      "description": "Built into Windows: no download, almost no memory, fastest (about 0.02 s per image). Often misses or misreads small text, code and blurry images; about 22% character errors in testing.",
+      "name": "System"
+    },
+    "tiny": {
+      "description": "Good for most screenshots: about 210 MB peak memory while recognizing, about 0.2 s per image, about 1% character errors.",
+      "name": "PP-OCRv6 Light"
+    },
+    "title": "Recognition engine",
+    "unavailable": "Not available yet",
+    "use": "Use"
   },
   "overview": {
     "categories": {

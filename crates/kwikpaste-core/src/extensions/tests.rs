@@ -292,3 +292,82 @@ fn real_ocr_install_disable_reinstall_and_uninstall_take_effect_without_restart(
     assert!(block_on(core.image_text(&item.id)).unwrap().is_some());
     block_on(core.shutdown()).unwrap();
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn ocr_engine_resolution_keeps_feature_gate_and_falls_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = ExtensionStore::load(temp.path().join("extensions"));
+    let source = staged(&temp, "tiny", b"tiny");
+    store
+        .install("ocr-tiny", "1.0.0", OCR_PROTOCOL, &source)
+        .unwrap();
+    assert!(store.resolve_ocr().is_none());
+    let source = staged(&temp, "system", b"system");
+    store
+        .install("ocr", "1.0.0", OCR_PROTOCOL, &source)
+        .unwrap();
+    let system = store.resolve("ocr").unwrap();
+    let tiny = store.resolve("ocr-tiny").unwrap();
+    assert_eq!(store.resolve_ocr(), Some(tiny.clone()));
+    store.set_enabled("ocr", false).unwrap();
+    assert!(store.resolve_ocr().is_none());
+    store.set_enabled("ocr", true).unwrap();
+    store.set_enabled("ocr-tiny", false).unwrap();
+    assert_eq!(store.resolve_ocr(), Some(system.clone()));
+    store.set_enabled("ocr-tiny", true).unwrap();
+    let mut entries = store.list();
+    entries.get_mut("ocr-tiny").unwrap().protocol += 1;
+    store.save(entries).unwrap();
+    assert_eq!(store.resolve_ocr(), Some(system.clone()));
+    let mut entries = store.list();
+    entries.get_mut("ocr-tiny").unwrap().protocol = OCR_PROTOCOL;
+    store.save(entries).unwrap();
+    fs::remove_file(tiny).unwrap();
+    assert_eq!(store.resolve_ocr(), Some(system));
+    store.uninstall("ocr").unwrap();
+    assert!(store.resolve_ocr().is_none());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn installing_a_tier_replaces_even_disabled_tiers_but_not_system_ocr() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = ExtensionStore::load(temp.path().join("extensions"));
+    let source = staged(&temp, "system", b"system");
+    store
+        .install("ocr", "1.0.0", OCR_PROTOCOL, &source)
+        .unwrap();
+    for id in OCR_TIERS {
+        let source = staged(&temp, "tier", id.as_bytes());
+        store.install(id, "1.0.0", OCR_PROTOCOL, &source).unwrap();
+        let installed = ExtensionStore::load(store.dir.clone()).list();
+        assert_eq!(installed.len(), 2);
+        assert!(installed.contains_key("ocr"));
+        assert!(installed.contains_key(id));
+        for other in OCR_TIERS.into_iter().filter(|other| *other != id) {
+            assert!(!store.dir.join(other).exists());
+        }
+        assert_eq!(store.resolve_ocr(), store.resolve(id));
+        store.set_enabled(id, false).unwrap();
+        assert_eq!(store.resolve_ocr(), store.resolve("ocr"));
+        let missing = temp.path().join("missing");
+        assert!(store
+            .install("ocr-tiny", "2.0.0", OCR_PROTOCOL, &missing)
+            .is_err());
+        assert_eq!(
+            store.list(),
+            installed
+                .into_iter()
+                .map(|(key, mut value)| {
+                    if key == id {
+                        value.enabled = false;
+                    }
+                    (key, value)
+                })
+                .collect()
+        );
+    }
+    store.uninstall("ocr-medium").unwrap();
+    assert_eq!(store.resolve_ocr(), store.resolve("ocr"));
+}
