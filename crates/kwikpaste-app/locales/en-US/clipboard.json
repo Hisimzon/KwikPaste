@@ -111,7 +111,8 @@
     "sendEmail": "Send Email",
     "splitWords": "Split Words",
     "unfavorite": "Unfavorite",
-    "unpinItem": "Unpin from Top"
+    "unpinItem": "Unpin from Top",
+    "viewImage": "View Full Size"
   },
   "note": {
     "placeholder": "Add a note for this item...",
@@ -172,7 +173,8 @@
     "switchCategory": "Switch category",
     "switchCustomGroup": "Switch custom group",
     "title": "Keyboard shortcuts",
-    "toggleRange": "Toggle all / favorites"
+    "toggleRange": "Toggle all / favorites",
+    "viewImage": "View image full size"
   },
   "types": {
     "color": "Color",

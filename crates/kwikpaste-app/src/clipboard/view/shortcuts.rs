@@ -13,11 +13,12 @@ use crate::{clipboard::model::shortcut, core_host, i18n::t};
 use kwikpaste_core::settings::{PanelAction, Settings, effective_panel_keys};
 
 /// 说明里的显示顺序。
-const ORDER: [PanelAction; 23] = [
+const ORDER: [PanelAction; 24] = [
     PanelAction::PasteSelected,
     PanelAction::PasteSelectedPlain,
     PanelAction::PasteNth,
     PanelAction::PreviewSelected,
+    PanelAction::ViewImage,
     PanelAction::CopySelected,
     PanelAction::SplitSelected,
     PanelAction::OpenSelected,

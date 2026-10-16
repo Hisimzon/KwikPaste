@@ -6,7 +6,8 @@
 
 use std::sync::Arc;
 
-use gpui::{Context, Window};
+use futures::future::BoxFuture;
+use gpui::{App, Context, Window};
 use kwikpaste_ui::{
     MenuEntry, MenuItem, Submenu,
     toast::{self, Toast},
@@ -21,6 +22,7 @@ use crate::{
             menu::{MenuAction, menu_groups},
             shortcut,
         },
+        source::ImageSave,
         view::pin,
     },
     i18n::t,
@@ -128,9 +130,10 @@ impl ClipboardList {
             MenuAction::PasteAsPlainText | MenuAction::PasteAsPath => self.paste_item(id, true, cx),
             MenuAction::Copy => self.copy(id, false, None, window, cx),
             MenuAction::CopyImageText => self.copy_image_text(id, window, cx),
+            MenuAction::ViewImage => self.view_image(id, cx),
             MenuAction::SaveImage => {
                 self.close_preview_of(&id, cx);
-                self.save_image(id, window, cx);
+                save_image(self.source.image_save(id), window, cx);
             }
             MenuAction::SplitWords => self.split(&item, cx),
             MenuAction::OpenLink => self.open(id, OpenTarget::Link, window, cx),
@@ -198,13 +201,17 @@ impl ClipboardList {
         })
         .detach();
     }
+}
 
-    /// 图片另存为（1.x `save_clipboard_image_to_file`）：默认放在下载文件夹，文件名是复制时间。
-    /// 系统对话框打开期间点它不会让面板隐藏（见 [`pin`]）。
-    fn save_image(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
-        let future = self.source.image_save(id);
-
-        cx.spawn_in(window, async move |_, cx| {
+/// 图片另存为（1.x `save_clipboard_image_to_file`）：默认放在下载文件夹，文件名是复制时间。
+/// 系统对话框打开期间点它不会让面板隐藏（见 [`pin`]）。提示显示在 `window` 里。
+pub(in crate::clipboard::view) fn save_image(
+    future: BoxFuture<'static, anyhow::Result<ImageSave>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window
+        .spawn(cx, async move |cx| {
             let save = match future.await {
                 Ok(save) => save,
                 Err(err) => {
@@ -245,5 +252,4 @@ impl ClipboardList {
             .ok();
         })
         .detach();
-    }
 }

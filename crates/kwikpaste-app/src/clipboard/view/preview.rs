@@ -64,6 +64,8 @@ pub enum PreviewEvent {
     Open(OpenTarget),
     /// 点了文件记录里的一行：在文件管理器中定位这个文件。
     Reveal(Arc<str>),
+    /// 点了图片：在大图预览窗里看。
+    ViewImage,
 }
 
 /// 有识别文字的图片记录正在看的那一面。
@@ -438,8 +440,11 @@ impl PreviewPanel {
             .justify_center()
             .p(space((16.) / 4.))
             .child(match state {
-                // 同列表缩略图：圆角，叠一圈不占位置的细描边。
+                // 同列表缩略图：圆角，叠一圈不占位置的细描边。点图片看大图。
                 ImageState::Ready(image) => div()
+                    .id("preview-image")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(PreviewEvent::ViewImage)))
                     .relative()
                     .flex_none()
                     .w(px(width))

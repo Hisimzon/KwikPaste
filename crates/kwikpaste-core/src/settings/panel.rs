@@ -24,6 +24,8 @@ pub enum PanelAction {
     ToggleRange,
     CreateGroup,
     PreviewSelected,
+    /// 当前图片在独立窗口里看大图。
+    ViewImage,
     PinWindow,
     ShowShortcuts,
     OpenPreference,
@@ -31,7 +33,7 @@ pub enum PanelAction {
 }
 
 impl PanelAction {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::PasteSelected,
         Self::PasteSelectedPlain,
         Self::PasteNth,
@@ -51,6 +53,7 @@ impl PanelAction {
         Self::ToggleRange,
         Self::CreateGroup,
         Self::PreviewSelected,
+        Self::ViewImage,
         Self::PinWindow,
         Self::ShowShortcuts,
         Self::OpenPreference,
@@ -78,6 +81,7 @@ impl PanelAction {
             Self::ToggleRange => "toggleRange",
             Self::CreateGroup => "createGroup",
             Self::PreviewSelected => "previewSelected",
+            Self::ViewImage => "viewImage",
             Self::PinWindow => "pinWindow",
             Self::ShowShortcuts => "showShortcuts",
             Self::OpenPreference => "openPreference",
@@ -96,6 +100,7 @@ impl PanelAction {
                 | Self::SwitchCategory
                 | Self::SwitchCustomGroup
                 | Self::PreviewSelected
+                | Self::ViewImage
                 | Self::ClosePreviewFilterWindow
         )
     }
@@ -125,6 +130,8 @@ impl PanelAction {
             Self::ToggleRange => &["secondary-q"],
             Self::CreateGroup => &["secondary-n"],
             Self::PreviewSelected => &["space"],
+            // 固定键：可改键位只能是 Mod 组合或 Enter / Delete / F 键，用户覆盖不会与它重复。
+            Self::ViewImage => &["shift-space"],
             Self::PinWindow => &["secondary-p"],
             Self::ShowShortcuts => &["secondary-k"],
             Self::OpenPreference => &["secondary-,"],

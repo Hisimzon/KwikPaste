@@ -12,6 +12,7 @@ pub enum MenuAction {
     PasteAsPlainText,
     PasteAsPath,
     Copy,
+    ViewImage,
     SaveImage,
     CopyImageText,
     SplitWords,
@@ -37,6 +38,7 @@ const GROUPS: [&[MenuAction]; 4] = [
         MenuAction::PasteAsPlainText,
         MenuAction::PasteAsPath,
         MenuAction::Copy,
+        MenuAction::ViewImage,
         MenuAction::SaveImage,
         MenuAction::CopyImageText,
         MenuAction::SplitWords,
@@ -79,7 +81,9 @@ impl MenuAction {
             Self::RestoreOriginal => ItemAction::RestoreOriginal,
             Self::Select => ItemAction::Select,
             Self::Delete => ItemAction::Delete,
-            Self::PasteImageAsFile | Self::MoveToGroup | Self::EditContent => return None,
+            Self::PasteImageAsFile | Self::MoveToGroup | Self::EditContent | Self::ViewImage => {
+                return None;
+            }
         })
     }
 
@@ -98,6 +102,7 @@ impl MenuAction {
             Self::TogglePinned => PanelAction::PinSelected,
             Self::EditNote => PanelAction::NoteSelected,
             Self::EditContent => PanelAction::EditContent,
+            Self::ViewImage => PanelAction::ViewImage,
             Self::Delete => PanelAction::DeleteSelected,
             Self::PasteImageAsFile
             | Self::SaveImage
@@ -119,6 +124,7 @@ impl MenuAction {
             Self::PasteAsPlainText => "clipboard:menu.pasteAsPlainText",
             Self::PasteAsPath => "clipboard:menu.pasteAsPath",
             Self::Copy => "clipboard:menu.copy",
+            Self::ViewImage => "clipboard:menu.viewImage",
             Self::SaveImage => "clipboard:menu.saveImage",
             Self::CopyImageText => "clipboard:menu.copyImageText",
             Self::SplitWords => "clipboard:menu.splitWords",
@@ -148,6 +154,11 @@ pub fn menu_groups(item: &ListItem, can_delete: bool, has_groups: bool) -> Vec<V
         MenuAction::PasteImageAsFile => {
             item.kind == super::item::ItemKind::Image
                 && item.available_actions.contains(&ItemAction::Paste)
+        }
+        // 原图还在才能另存，也才能看大图。
+        MenuAction::ViewImage => {
+            item.kind == super::item::ItemKind::Image
+                && item.available_actions.contains(&ItemAction::SaveImage)
         }
         _ => match action.item_action() {
             Some(ItemAction::Delete) if !can_delete => false,

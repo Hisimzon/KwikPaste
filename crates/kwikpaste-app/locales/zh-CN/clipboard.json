@@ -111,7 +111,8 @@
     "sendEmail": "发送邮件",
     "splitWords": "拆词",
     "unfavorite": "取消收藏",
-    "unpinItem": "取消置顶"
+    "unpinItem": "取消置顶",
+    "viewImage": "查看大图"
   },
   "note": {
     "placeholder": "为这条记录添加备注...",
@@ -172,7 +173,8 @@
     "switchCategory": "切换分类",
     "switchCustomGroup": "切换自定义分组",
     "title": "键盘快捷键",
-    "toggleRange": "切换全部 / 收藏"
+    "toggleRange": "切换全部 / 收藏",
+    "viewImage": "查看大图"
   },
   "types": {
     "color": "颜色",

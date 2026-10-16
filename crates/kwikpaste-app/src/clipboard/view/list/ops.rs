@@ -28,14 +28,17 @@ use crate::{
             actions::{DeletePolicy, OpenTarget, QuickAction, is_available, is_copy, open_target},
             filter::ListFilter,
             freshness::Activation,
-            item::{ListItem, SubKind},
+            item::{ItemKind, ListItem, SubKind},
             layout::LayoutSpec,
         },
         source::{Group, core_source::item_query},
-        view::editing::{self, EditTarget},
+        view::{
+            editing::{self, EditTarget},
+            viewer::{self, ViewerImage},
+        },
     },
     i18n::{t, t_args},
-    platform::EditTrigger,
+    platform::{EditTrigger, PanelCommand, Trigger, TriggerSource},
 };
 
 /// 弹框里的多行输入框。打开时没拿到编辑态（面板仍不可激活，没有光标）的话，点它再按鼠标触发请求一次。
@@ -57,7 +60,12 @@ const COPIED_FEEDBACK: Duration = Duration::from_secs(1);
 const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// 失败提示：“{动作}失败：{原因}”（1.x `commands:error`）。
-pub(super) fn error_toast(label: &str, err: &anyhow::Error, window: &mut Window, cx: &mut App) {
+pub(in crate::clipboard::view) fn error_toast(
+    label: &str,
+    err: &anyhow::Error,
+    window: &mut Window,
+    cx: &mut App,
+) {
     log::warn!("{label} failed: {err:#}");
     let message = t_args(
         "commands:error",
@@ -333,6 +341,32 @@ impl ClipboardList {
             });
         }
         cx.notify();
+    }
+
+    // ------------------------------------------------------------ 大图
+
+    /// 在大图预览窗里看这张图：已加载的图片记录按列表顺序做快照，面板按点外部处理（固定时留着）。
+    pub fn view_image(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
+        let images: Vec<ViewerImage> = (0..self.model.total())
+            .filter_map(|index| self.model.get(index))
+            .filter(|item| item.kind == ItemKind::Image)
+            .map(|item| ViewerImage {
+                id: item.id.clone(),
+                size: item.width.zip(item.height),
+            })
+            .collect();
+        let Some(index) = images.iter().position(|image| image.id == id) else {
+            return;
+        };
+
+        self.close_preview(cx);
+        editing::request_panel(
+            cx,
+            PanelCommand::Hide(Trigger::now(TriggerSource::OutsideClick)),
+        );
+        if let Err(err) = viewer::open(self.source.clone(), self.host.clone(), images, index, cx) {
+            log::error!("could not open the image viewer: {err:#}");
+        }
     }
 
     // ------------------------------------------------------------ 复制

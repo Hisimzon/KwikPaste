@@ -206,6 +206,11 @@ impl ClipboardList {
             PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
             PreviewEvent::Snippet(text) => self.copy_preview_snippet(text.clone(), cx),
             PreviewEvent::Open(target) => self.open_preview_target(*target, cx),
+            PreviewEvent::ViewImage => {
+                if let Some((id, _)) = self.previewing.session.clone() {
+                    self.view_image(id, cx);
+                }
+            }
             PreviewEvent::Reveal(path) => {
                 self.close_preview(cx);
                 cx.reveal_path(Path::new(path.as_ref()));

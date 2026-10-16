@@ -12,7 +12,8 @@
 //! - [`shortcut`]：快捷键的显示文案；
 //! - [`selection`]：多选；
 //! - [`layout`]：密度换算、图片显示尺寸预测；
-//! - [`time_label`]：卡片时间标签。
+//! - [`time_label`]：卡片时间标签；
+//! - [`viewer`]：大图预览的缩放、平移与解码尺寸。
 
 pub mod actions;
 pub mod controller;
@@ -27,3 +28,4 @@ pub mod preview;
 pub mod selection;
 pub mod shortcut;
 pub mod time_label;
+pub mod viewer;

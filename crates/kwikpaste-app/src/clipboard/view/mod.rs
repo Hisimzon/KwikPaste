@@ -20,6 +20,7 @@ pub mod pin;
 mod preview;
 pub mod selftest;
 mod shortcuts;
+mod viewer;
 
 use gpui::{Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, actions};
 use kwikpaste_core::settings::{PanelAction, Shortcuts, effective_panel_keys};
@@ -137,7 +138,8 @@ fn bindings(shortcuts: &Shortcuts) -> anyhow::Result<Vec<KeyBinding>> {
                 PanelAction::FocusSearch => Box::new(FocusSearch),
                 PanelAction::ToggleRange => Box::new(ToggleRange),
                 PanelAction::CreateGroup => Box::new(NewGroup),
-                PanelAction::PreviewSelected => continue, // 按住预览由按下、松开监听处理。
+                // 按住预览、Shift+空格看大图由列表的按下、松开监听处理：绑成动作会吞掉搜索框里的输入。
+                PanelAction::PreviewSelected | PanelAction::ViewImage => continue,
                 PanelAction::PinWindow => Box::new(PinWindow),
                 PanelAction::ShowShortcuts => Box::new(ShowShortcuts),
                 PanelAction::OpenPreference => Box::new(OpenPreferences),
@@ -298,7 +300,7 @@ mod tests {
             .collect();
 
         for combo in kwikpaste_os::hook_keys::HookKeys::from_shortcuts(shortcuts).keystrokes() {
-            if combo == "space" {
+            if combo == "space" || combo == "shift-space" {
                 continue;
             }
             // Windows 的 Ctrl 在 macOS 绑定里对应 secondary（⌘），其余修饰键仍须精确一致。

@@ -268,6 +268,7 @@ const PANEL_GROUPS: [(&str, &[PanelAction]); 4] = [
         "window",
         &[
             PanelAction::PreviewSelected,
+            PanelAction::ViewImage,
             PanelAction::PinWindow,
             PanelAction::ShowShortcuts,
             PanelAction::OpenPreference,

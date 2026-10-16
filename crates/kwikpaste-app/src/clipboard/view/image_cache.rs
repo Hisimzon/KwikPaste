@@ -222,6 +222,28 @@ pub fn decode(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImag
     Ok(RenderImage::new(vec![image::Frame::new(pixels)]))
 }
 
+/// 解码、缩放到 `width`×`height`（转之前的方向），再顺时针转 `turns` 个直角；大图预览用。
+/// 同时返回有没有不透明度不满的像素（要不要垫棋盘格）。
+pub fn decode_rotated(
+    path: &Path,
+    width: u32,
+    height: u32,
+    turns: u8,
+) -> anyhow::Result<(RenderImage, bool)> {
+    let pixels = decode_pixels(path, width, height, ResizeMode::Exact)?;
+    let transparent = pixels.pixels().any(|pixel| pixel.0[3] < u8::MAX);
+    let pixels = match turns % 4 {
+        1 => image::imageops::rotate90(&pixels),
+        2 => image::imageops::rotate180(&pixels),
+        3 => image::imageops::rotate270(&pixels),
+        _ => pixels,
+    };
+    Ok((
+        RenderImage::new(vec![image::Frame::new(pixels)]),
+        transparent,
+    ))
+}
+
 /// 解码并等比缩放到目标方框内，供图标使用。
 pub fn decode_contained(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImage> {
     let pixels = decode_pixels(path, width, height, ResizeMode::Contain)?;

@@ -13,6 +13,8 @@
 
 mod menu;
 mod ops;
+pub(super) use menu::save_image;
+pub(super) use ops::error_toast;
 mod parts;
 pub(crate) use parts::quick_action_glyph;
 mod previewing;
@@ -2167,15 +2169,27 @@ impl Render for ClipboardList {
                     }
                 }),
             )
-            // 按住空格预览当前项（钩子转来的空格按下、松开）。
+            // 按住空格预览当前项、Shift+空格看大图（钩子转来的空格按下、松开）。
             .on_key_down(cx.listener(|list, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && list.reorder.is_some() {
                     list.cancel_reorder(cx);
                     cx.stop_propagation();
                     return;
                 }
-                if event.keystroke.key == "space" && !event.keystroke.modifiers.modified() {
+                if event.keystroke.key != "space" {
+                    return;
+                }
+                let modifiers = event.keystroke.modifiers;
+                if !modifiers.modified() {
                     list.preview_space(true, cx);
+                    cx.stop_propagation();
+                } else if modifiers == gpui::Modifiers::shift() {
+                    if let Some(item) = list
+                        .active_item()
+                        .filter(|item| item.kind == ItemKind::Image)
+                    {
+                        list.view_image(item.id.clone(), cx);
+                    }
                     cx.stop_propagation();
                 }
             }))

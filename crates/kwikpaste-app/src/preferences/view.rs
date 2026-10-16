@@ -223,7 +223,7 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
 /// 取前台会同步收到窗口消息；放到任务里，等调用方的 GPUI 借用（窗口 update、托盘 dispatch）结束后再做，
 /// 否则这些消息回调拿不到 App / 窗口，日志里会是 `RefCell already borrowed` / `window not found`。
 #[cfg(target_os = "windows")]
-pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
+pub(crate) fn bring_window_to_front(window: &Window, cx: &App) {
     use kwikpaste_os::win::foreground::bring_to_front;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -241,7 +241,7 @@ pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
+pub(crate) fn bring_window_to_front(window: &Window, cx: &App) {
     use kwikpaste_os::mac::window::OrdinaryWindow;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 

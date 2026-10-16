@@ -17,6 +17,9 @@ pub enum IconName {
     AppWindow,
     Check,
     ChevronDown,
+    /// `lucide:chevron-left` / `chevron-right`：大图预览换图。
+    ChevronLeft,
+    ChevronRight,
     /// 1.x `i-lucide:circle-check`：复制成功。
     CircleCheck,
     /// 1.x `i-lucide:clipboard-paste`：粘贴。
@@ -30,6 +33,8 @@ pub enum IconName {
     /// 1.x `i-lucide:copy-check`：复制为纯文本。
     CopyCheck,
     Delete,
+    /// `lucide:download`：大图预览另存为。
+    Download,
     Ellipsis,
     ExternalLink,
     Eye,
@@ -89,6 +94,8 @@ pub enum IconName {
     /// 1.x `i-ph:push-pin-bold`：置顶标记。
     PushPin,
     Plus,
+    /// `lucide:rotate-cw`：大图预览向右旋转。
+    RotateCw,
     /// `i-lucide:scan-text`：图片里识别出的文字。
     ScanText,
     Search,
@@ -99,6 +106,8 @@ pub enum IconName {
     SettingLine,
     /// `lucide:shapes`：搜索框筛选的类型。
     Shapes,
+    /// `lucide:shrink`：大图预览适应窗口。
+    Shrink,
     /// 1.x `i-lucide:square-arrow-out-up-right`：打开链接。
     SquareArrowOutUpRight,
     Star,
@@ -119,6 +128,9 @@ pub enum IconName {
     WindowMaximize,
     WindowMinimize,
     WindowRestore,
+    /// `lucide:zoom-in` / `zoom-out`：大图预览缩放。
+    ZoomIn,
+    ZoomOut,
 }
 
 impl IconName {
@@ -127,6 +139,13 @@ impl IconName {
         Some(match self {
             Self::AppWindow => "lucide-app-window.svg",
             Self::Clock => "lucide-clock.svg",
+            Self::ChevronLeft => "lucide-chevron-left.svg",
+            Self::ChevronRight => "lucide-chevron-right.svg",
+            Self::Download => "lucide-download.svg",
+            Self::RotateCw => "lucide-rotate-cw.svg",
+            Self::Shrink => "lucide-shrink.svg",
+            Self::ZoomIn => "lucide-zoom-in.svg",
+            Self::ZoomOut => "lucide-zoom-out.svg",
             Self::FilterX => "lucide-filter-x.svg",
             Self::Link => "lucide-link.svg",
             Self::ListFilter => "lucide-list-filter.svg",
