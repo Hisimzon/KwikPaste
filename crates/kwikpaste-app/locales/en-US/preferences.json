@@ -1079,6 +1079,18 @@
           },
           "title": "Hover Delay"
         },
+        "gap": {
+          "description": "Distance between the preview window and the record in the main window.",
+          "options": {
+            "0": "0 px",
+            "8": "8 px",
+            "16": "16 px",
+            "28": "28 px",
+            "40": "40 px",
+            "56": "56 px"
+          },
+          "title": "Preview Gap"
+        },
         "hover": {
           "title": "Hover Preview"
         },

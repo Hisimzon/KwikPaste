@@ -693,6 +693,7 @@ impl ClipboardList {
             measured_metrics.as_ref(),
             snippets_height,
             prefer_left,
+            f64::from(self.settings.clipboard.preview.gap),
             text_scale,
         );
         let image_box = preview

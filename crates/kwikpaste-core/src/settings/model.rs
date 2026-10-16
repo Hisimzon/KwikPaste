@@ -680,6 +680,8 @@ pub struct Preview {
     /// 新装默认选词；早于 v1.3.2 的设置文件没有这个字段，读取时按原文，保持升级前的样子。
     #[serde(default)]
     pub text_view: PreviewTextView,
+    /// 预览窗与卡片之间的距离（逻辑 px，随文本缩放放大）。
+    pub gap: u8,
 }
 
 impl Default for Preview {
@@ -689,6 +691,7 @@ impl Default for Preview {
             hover_delay_ms: PreviewHoverDelayMs::Ms500,
             space_enabled: false,
             text_view: PreviewTextView::Words,
+            gap: 28,
         }
     }
 }

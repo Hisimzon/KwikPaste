@@ -271,6 +271,8 @@ const OPEN_RANGES: &[&str] = &["preserve", "all", "favorite"];
 const OPEN_CATEGORIES: &[&str] = &["preserve", "all", "text", "image", "files"];
 const HOVER_DELAYS: &[&str] = &["ms300", "ms500", "ms1000"];
 const TEXT_VIEWS: &[&str] = &["plain", "words"];
+/// 预览窗与卡片之间可选的距离（px）。
+const PREVIEW_GAPS: &[u64] = &[0, 8, 16, 28, 40, 56];
 #[cfg(target_os = "windows")]
 const DOUBLE_TAP_KEYS: &[&str] = &["disabled", "control", "shift", "alt"];
 #[cfg(target_os = "macos")]
@@ -832,6 +834,13 @@ fn window_sections() -> Vec<Section> {
                 )
                 .path("clipboard.preview.textView")
                 .keywords(&["preview", "text", "words", "split"])
+                .advanced(),
+                Setting::new(
+                    "preview.gap",
+                    Control::Select(Options::Numbers(PREVIEW_GAPS)),
+                )
+                .path("clipboard.preview.gap")
+                .keywords(&["preview", "gap", "spacing", "distance", "margin"])
                 .advanced(),
                 Setting::new("appearance.showOriginalPreview", Control::Switch)
                     .path("clipboard.content.showOriginalPreview")
