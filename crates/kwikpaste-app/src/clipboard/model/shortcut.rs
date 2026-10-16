@@ -1,12 +1,37 @@
 //! 快捷键的显示文案，移植自 1.x `utils/shortcut.ts` 的 `formatShortcutDisplay`：按 `+` 拆开，
 //! 每个键换成平台写法，再用 ` + ` 连起来（`CmdOrCtrl+Backspace` → Windows `Ctrl + ⌫`、macOS `⌘ + ⌫`）。
 
-/// 删除选中记录的主快捷键：Windows 单按 Delete；macOS 笔记本没有 ⌦，沿用 ⌘⌫。
-pub const DELETE_SELECTED: &str = if cfg!(target_os = "macos") {
-    "CmdOrCtrl+Backspace"
-} else {
-    "Delete"
-};
+use kwikpaste_core::settings::{PanelAction, Shortcuts, effective_panel_keys};
+
+/// 面板的主显示键位；解绑时不显示提示，macOS 删除键的优先顺序由 core 决定。
+pub fn panel_display(shortcuts: &Shortcuts, action: PanelAction) -> Option<String> {
+    effective_panel_keys(shortcuts, action)
+        .first()
+        .map(|key| display_keystroke(key))
+}
+
+/// 按住平台修饰键时的提示，只省略已经按住的 secondary，保留 Shift 等剩余键。
+pub fn panel_hint(shortcuts: &Shortcuts, action: PanelAction) -> Option<String> {
+    effective_panel_keys(shortcuts, action)
+        .first()
+        .map(|key| display_keystroke(key.strip_prefix("secondary-").unwrap_or(key)))
+}
+
+/// 可移植 GPUI 单键显示；逐个取修饰键前缀，不能把减号键也按分隔符拆掉。
+pub fn display_keystroke(key: &str) -> String {
+    let mut parts = Vec::new();
+    let mut key = key;
+    if let Some(rest) = key.strip_prefix("secondary-") {
+        parts.push("CmdOrCtrl");
+        key = rest;
+    }
+    if let Some(rest) = key.strip_prefix("shift-") {
+        parts.push("Shift");
+        key = rest;
+    }
+    parts.push(key);
+    display(&parts.join("+"))
+}
 
 /// 当前平台的显示文案。
 pub fn display(pattern: &str) -> String {
@@ -31,16 +56,23 @@ fn key_display(key: &str, mac: bool) -> String {
         "Command" | "Meta" | "Super" => pick("⌘", "Win"),
         "Control" | "Ctrl" => pick("⌃", "Ctrl"),
         "Shift" => pick("⇧", "Shift"),
-        "Enter" | "Return" => pick("⏎", "Enter"),
-        "Esc" | "Escape" => pick("⎋", "Esc"),
-        "Delete" => pick("⌦", "Del"),
-        "Space" => pick("␣", "Space"),
-        "Tab" => pick("⇥", "Tab"),
-        "Backspace" => "⌫".to_owned(),
-        "ArrowDown" | "Down" => "↓".to_owned(),
-        "ArrowLeft" | "Left" => "←".to_owned(),
-        "ArrowRight" | "Right" => "→".to_owned(),
-        "ArrowUp" | "Up" => "↑".to_owned(),
+        "Enter" | "Return" | "enter" => pick("⏎", "Enter"),
+        "Esc" | "Escape" | "escape" => pick("⎋", "Esc"),
+        "Delete" | "delete" => pick("⌦", "Del"),
+        "Space" | "space" => pick("␣", "Space"),
+        "Tab" | "tab" => pick("⇥", "Tab"),
+        "Backspace" | "backspace" => "⌫".to_owned(),
+        "ArrowDown" | "Down" | "down" => "↓".to_owned(),
+        "ArrowLeft" | "Left" | "left" => "←".to_owned(),
+        "ArrowRight" | "Right" | "right" => "→".to_owned(),
+        "ArrowUp" | "Up" | "up" => "↑".to_owned(),
+        key if key.starts_with('f')
+            && key
+                .get(1..)
+                .is_some_and(|number| number.parse::<u8>().is_ok()) =>
+        {
+            key.to_ascii_uppercase()
+        }
         _ => {
             let mut chars = key.chars();
             match (chars.next(), chars.next()) {

@@ -91,6 +91,12 @@ pub(super) fn parse(content: &str) -> (Settings, SettingsLoadReport) {
         return unreadable();
     };
 
+    // 动态字典的键不在默认结构里，不能按固定字段递归，否则其它字段损坏时会丢掉覆盖。
+    let panel = fields
+        .get_mut("shortcuts")
+        .and_then(Value::as_object_mut)
+        .and_then(|shortcuts| shortcuts.remove("panel"));
+
     // 清理规则单独处理：按字段回落会把窄规则放宽，见 [`lenient_rules`]。
     let rules = fields
         .get_mut("clipboard")
@@ -101,6 +107,23 @@ pub(super) fn parse(content: &str) -> (Settings, SettingsLoadReport) {
     let mut merger = Merger::<Settings>::new("");
     merger.fallbacks = custom_fallbacks;
     merger.merge(&mut Vec::new(), Value::Object(fields));
+
+    if let Some(panel) = panel {
+        // 默认值不写空字典，先补上槽位才能整体放进去。
+        if let Some(shortcuts) = merger
+            .accepted
+            .get_mut("shortcuts")
+            .and_then(Value::as_object_mut)
+        {
+            shortcuts
+                .entry("panel")
+                .or_insert_with(|| Value::Object(Default::default()));
+        }
+        let path = path_of(&["shortcuts", "panel"]);
+        if !merger.try_set(&path, panel) {
+            merger.fallbacks.push(render("", &path));
+        }
+    }
 
     if let Some(rules) = rules {
         let path = path_of(&["clipboard", "history", "rules"]);
@@ -317,6 +340,31 @@ impl<T: DeserializeOwned + Serialize + Default> Merger<T> {
 mod tests {
     use super::*;
     use crate::settings::{CaptureKind, ItemAction, RetentionUnit, Theme};
+
+    #[test]
+    fn panel_overrides_survive_unrelated_field_fallback() {
+        let (settings, report) = parse(
+            r#"{"general":{"autoStart":"bad"},"shortcuts":{"panel":{"favoriteSelected":"secondary-b","copySelected":"","futureAction":"future-key"}}}"#,
+        );
+        assert_eq!(
+            settings
+                .shortcuts
+                .panel
+                .get("favoriteSelected")
+                .map(String::as_str),
+            Some("secondary-b")
+        );
+        assert_eq!(
+            settings
+                .shortcuts
+                .panel
+                .get("copySelected")
+                .map(String::as_str),
+            Some("")
+        );
+        assert!(settings.shortcuts.panel.contains_key("futureAction"));
+        assert_eq!(report.fallbacks, ["general.autoStart"]);
+    }
 
     /// 回落路径按字典序比较：工作区里 gpui 打开了 serde_json 的 `preserve_order`，
     /// 对象键的遍历顺序随构建方式不同。

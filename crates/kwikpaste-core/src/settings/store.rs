@@ -288,6 +288,7 @@ fn validate_settings(settings: &Settings) -> Result<()> {
         AppError::Other(anyhow::anyhow!(error.message(settings.appearance.language)))
     })?;
     validate_lan_sync(&settings.sync.lan)?;
+    super::panel::validate_panel_shortcuts(&settings.shortcuts)?;
 
     let mut shortcuts = std::collections::HashSet::new();
     for value in [
@@ -375,22 +376,25 @@ fn normalize_shortcut_value(value: &str) -> String {
     keys.join("+")
 }
 
+/// JSON merge-patch：对象递归合并，null 删除成员，数组与其它值整体替换。
 fn deep_merge(base: &mut serde_json::Value, patch: serde_json::Value) {
-    match (base, patch) {
-        (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
-            for (k, v) in patch_map {
-                match base_map.get_mut(&k) {
-                    Some(existing) if existing.is_object() && v.is_object() => {
-                        deep_merge(existing, v);
-                    }
-                    _ => {
-                        base_map.insert(k, v);
-                    }
-                }
+    let serde_json::Value::Object(patch_map) = patch else {
+        *base = patch;
+        return;
+    };
+    if !base.is_object() {
+        *base = serde_json::json!({});
+    }
+    if let serde_json::Value::Object(base_map) = base {
+        for (key, value) in patch_map {
+            if value.is_null() {
+                base_map.remove(&key);
+            } else {
+                deep_merge(
+                    base_map.entry(key).or_insert(serde_json::Value::Null),
+                    value,
+                );
             }
-        }
-        (slot, patch) => {
-            *slot = patch;
         }
     }
 }
@@ -398,6 +402,37 @@ fn deep_merge(base: &mut serde_json::Value, patch: serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_patch_resets_one_panel_override_without_touching_others() {
+        use super::super::{effective_panel_keys, PanelAction};
+        let mut base = serde_json::json!({"shortcuts":{"panel":{
+            "favoriteSelected":"secondary-b", "copySelected":""
+        }}});
+        deep_merge(
+            &mut base,
+            serde_json::json!({"shortcuts":{"panel":{
+                "favoriteSelected":null, "unknown":null
+            }}}),
+        );
+        assert_eq!(
+            base,
+            serde_json::json!({"shortcuts":{"panel":{"copySelected":""}}})
+        );
+        let mut settings: Settings = serde_json::from_value(base).unwrap();
+        assert_eq!(
+            effective_panel_keys(&settings.shortcuts, PanelAction::FavoriteSelected),
+            ["secondary-d"]
+        );
+        assert!(effective_panel_keys(&settings.shortcuts, PanelAction::CopySelected).is_empty());
+        settings.shortcuts.open_clipboard = "Control+D".into();
+        assert!(validate_settings(&settings).is_ok());
+        settings
+            .shortcuts
+            .panel
+            .insert("favoriteSelected".into(), "secondary-t".into());
+        assert!(validate_settings(&settings).is_err());
+    }
 
     #[test]
     fn custom_rule_patch_rejection_keeps_settings_and_disk_unchanged() -> anyhow::Result<()> {

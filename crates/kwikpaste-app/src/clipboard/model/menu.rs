@@ -78,23 +78,27 @@ impl MenuAction {
         })
     }
 
-    /// 快捷键提示（1.x `accelerator`，`CmdOrCtrl` 写法，显示时经 `shortcut::display` 换成平台写法）。
-    pub fn accelerator(self) -> Option<&'static str> {
-        match self {
-            Self::Paste => Some("Enter"),
-            Self::PasteAsPlainText | Self::PasteAsPath => Some("CmdOrCtrl+Enter"),
-            Self::Copy => Some("CmdOrCtrl+C"),
-            Self::SplitWords => Some("CmdOrCtrl+S"),
+    /// 右键菜单读取有效的面板主键位；解绑后不再显示提示。
+    pub fn accelerator(self, shortcuts: &kwikpaste_core::settings::Shortcuts) -> Option<String> {
+        use kwikpaste_core::settings::{PanelAction, effective_panel_keys};
+        let action = match self {
+            Self::Paste => PanelAction::PasteSelected,
+            Self::PasteAsPlainText | Self::PasteAsPath => PanelAction::PasteSelectedPlain,
+            Self::Copy => PanelAction::CopySelected,
+            Self::SplitWords => PanelAction::SplitSelected,
             Self::OpenLink | Self::SendEmail | Self::RevealInFinder | Self::RevealInExplorer => {
-                Some("CmdOrCtrl+O")
+                PanelAction::OpenSelected
             }
-            Self::ToggleFavorite => Some("CmdOrCtrl+D"),
-            Self::TogglePinned => Some("CmdOrCtrl+T"),
-            Self::EditNote => Some("CmdOrCtrl+M"),
-            Self::EditContent => Some("CmdOrCtrl+E"),
-            Self::Delete => Some(super::shortcut::DELETE_SELECTED),
-            Self::SaveImage | Self::CopyImageText | Self::MoveToGroup | Self::Select => None,
-        }
+            Self::ToggleFavorite => PanelAction::FavoriteSelected,
+            Self::TogglePinned => PanelAction::PinSelected,
+            Self::EditNote => PanelAction::NoteSelected,
+            Self::EditContent => PanelAction::EditContent,
+            Self::Delete => PanelAction::DeleteSelected,
+            Self::SaveImage | Self::CopyImageText | Self::MoveToGroup | Self::Select => {
+                return None;
+            }
+        };
+        effective_panel_keys(shortcuts, action).into_iter().next()
     }
 
     /// 文案的 i18n key；收藏、置顶、备注按记录当前状态翻转。
@@ -216,7 +220,12 @@ mod tests {
             menu_groups(&item, true, false),
             vec![vec![MenuAction::EditNote, MenuAction::EditContent]]
         );
-        assert_eq!(MenuAction::EditContent.accelerator(), Some("CmdOrCtrl+E"));
+        assert_eq!(
+            MenuAction::EditContent
+                .accelerator(&kwikpaste_core::settings::Shortcuts::default())
+                .as_deref(),
+            Some("secondary-e")
+        );
         for kind in [
             super::super::item::ItemKind::Image,
             super::super::item::ItemKind::Files,

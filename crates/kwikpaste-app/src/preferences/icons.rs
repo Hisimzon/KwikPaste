@@ -61,6 +61,9 @@ pub enum PrefIcon {
     Inbox,
     PanelLeftClose,
     PanelLeftOpen,
+    Mouse,
+    ChevronRight,
+    ArrowLeft,
 }
 
 impl PrefIcon {
@@ -119,6 +122,9 @@ impl PrefIcon {
             Self::Inbox => include_str!("icons/lucide-inbox.svg"),
             Self::PanelLeftClose => include_str!("icons/lucide-panel-left-close.svg"),
             Self::PanelLeftOpen => include_str!("icons/lucide-panel-left-open.svg"),
+            Self::Mouse => include_str!("icons/lucide-mouse.svg"),
+            Self::ChevronRight => include_str!("icons/lucide-chevron-right.svg"),
+            Self::ArrowLeft => include_str!("icons/lucide-arrow-left.svg"),
         }
     }
 

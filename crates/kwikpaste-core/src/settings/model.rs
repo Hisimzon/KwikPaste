@@ -2,6 +2,8 @@
 //!
 //! 每个字段都 `#[serde(default)]`，缺字段时回落到 `Default`，这样新增字段不破坏旧配置文件。
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::db::models::ClipboardItemSort;
@@ -130,6 +132,9 @@ impl Language {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Shortcuts {
+    /// 面板按键覆盖：缺项沿用默认键，空字符串表示解绑；未知动作留给后续版本。没有覆盖时不写进文件。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub panel: BTreeMap<String, String>,
     /// 全局：唤起剪贴板窗口。
     pub open_clipboard: String,
     /// 全局：打开偏好设置窗口。
@@ -155,6 +160,7 @@ pub struct Shortcuts {
 impl Default for Shortcuts {
     fn default() -> Self {
         Self {
+            panel: BTreeMap::new(),
             open_clipboard: "Alt+C".into(),
             open_preference: "Alt+X".into(),
             paste_plain: String::new(),

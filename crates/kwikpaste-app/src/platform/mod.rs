@@ -13,7 +13,7 @@
 //! - 面板显示 / 隐藏、编辑态进出：订阅 [`Panel::events`] 发出的 [`PanelEvent`]（面板窗口打开之前
 //!   就已挂上，UI 在 `build_panel` 里构造视图时即可订阅）。收到 `Shown` 时把 GPUI 焦点放到列表
 //!   （带 key context 的元素）上，钩子转来的按键才会命中列表的绑定。
-//! - 非编辑态的键盘（Windows）：表 `kwikpaste_os::hook_keys::HOOK_KEYS` 里的键由钩子截下，
+//! - 非编辑态的键盘（Windows）：表 `kwikpaste_os::hook_keys::HookKeys` 里的键由钩子截下，
 //!   以普通 GPUI 按键派发给面板（`window.dispatch_keystroke`），UI 照常 `bind_keys` 即可；
 //!   空格另有 `KeyUp`，Ctrl 的按下松开以 `ModifiersChanged` 送达。[`hook_keystrokes`] 列出全部组合。
 //! - 编辑态：输入框外层 `capture_any_mouse_down` 里 [`request`] `BeginEditing(EditTrigger::Mouse)`，
@@ -474,5 +474,12 @@ pub fn request(cx: &App, command: PanelCommand) {
 
 /// 钩子会派发给面板的全部按键组合（GPUI keystroke 字符串），供 UI 核对绑定。
 pub fn hook_keystrokes() -> Vec<String> {
-    kwikpaste_os::hook_keys::keystrokes()
+    #[cfg(target_os = "windows")]
+    {
+        kwikpaste_os::hook_keys::keystrokes()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Vec::new()
+    }
 }

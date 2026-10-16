@@ -73,6 +73,10 @@ const ICONS = [
   // 侧栏收起、展开。
   "lucide:panel-left-close",
   "lucide:panel-left-open",
+  // 快捷键页：触发方式、进入二级页、返回。
+  "lucide:mouse",
+  "lucide:chevron-right",
+  "lucide:arrow-left",
 ];
 
 /** 取图标数据；别名取它指向的图标，带变换的别名不支持。 */

@@ -4337,6 +4337,7 @@ name = "kwikpaste-os"
 version = "2.0.5"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "auto-launch",
  "block2 0.6.2",
  "dispatch2",

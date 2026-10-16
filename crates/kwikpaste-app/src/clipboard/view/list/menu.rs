@@ -97,8 +97,8 @@ impl ClipboardList {
                         })
                         .ok();
                 });
-                if let Some(accelerator) = action.accelerator() {
-                    entry = entry.shortcut(shortcut::display(accelerator));
+                if let Some(accelerator) = action.accelerator(&self.settings.shortcuts) {
+                    entry = entry.shortcut(shortcut::display_keystroke(&accelerator));
                 }
                 if action == MenuAction::Delete {
                     entry = entry.danger();

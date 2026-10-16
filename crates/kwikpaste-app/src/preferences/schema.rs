@@ -142,6 +142,10 @@ pub enum Control {
     /// 图片文字识别的进度、结果和系统能力（开关下面的一行，按状态换标题和按钮）。
     ImageTextStatus,
     ShortcutRecorder,
+    /// 一个全局功能的全部触发方式：行内列出，点进二级页增删。
+    ShortcutEntry,
+    /// 剪贴板窗口内的按键表，点按键重新录制。
+    PanelShortcuts,
 }
 
 impl Control {
@@ -156,6 +160,7 @@ impl Control {
                 | Self::CustomRules
                 | Self::LanSync
                 | Self::Extensions
+                | Self::PanelShortcuts
         )
     }
 }
@@ -311,10 +316,7 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
             id: TabId::Shortcuts,
             group: Group::App,
             icon: PrefIcon::Keyboard,
-            sections: vec![Section {
-                id: "globalShortcuts",
-                settings: shortcut_settings(),
-            }],
+            sections: shortcut_sections(),
         },
         Tab {
             id: TabId::Appearance,
@@ -501,6 +503,65 @@ const PAUSE_KEYWORDS: &[&str] = &[
     "exclude",
     "pause",
 ];
+
+/// 快捷键页：每个全局功能一行（点进去管理触发方式）、停用规则、剪贴板窗口内的按键。
+/// 双击按键、鼠标按键、Win+V 的设置都在「打开剪贴板窗口」的二级页里，关键词挂在这一行上。
+fn shortcut_sections() -> Vec<Section> {
+    vec![
+        Section {
+            id: "globalShortcuts",
+            settings: vec![
+                Setting::new("shortcuts.openClipboard", Control::ShortcutEntry)
+                    .path("shortcuts.openClipboard")
+                    .keywords(&[
+                        "shortcut",
+                        "hotkey",
+                        "open",
+                        "double tap",
+                        "双击",
+                        "mouse",
+                        "middle click",
+                        "side button",
+                        "鼠标",
+                        "win",
+                        "winv",
+                        "clipboard history",
+                    ]),
+                Setting::new("shortcuts.pastePlain", Control::ShortcutEntry)
+                    .path("shortcuts.pastePlain")
+                    .keywords(&["shortcut", "hotkey", "plain", "text", "paste", "纯文本"]),
+                Setting::new("shortcuts.quickPaste", Control::ShortcutEntry)
+                    .path("shortcuts.quickPaste")
+                    .keywords(&["quick paste", "number", "digit", "paste", "modifier"]),
+                Setting::new("shortcuts.openPreference", Control::ShortcutEntry)
+                    .path("shortcuts.openPreference")
+                    .keywords(&["shortcut", "hotkey", "preference"]),
+            ],
+        },
+        Section {
+            id: "shortcutPause",
+            settings: vec![
+                // TODO: macOS 还没有全屏判断（见 `kwikpaste_os::mac::trigger_pause`），先只在 Windows 显示。
+                #[cfg(target_os = "windows")]
+                Setting::new("shortcuts.pauseInFullscreen", Control::Switch)
+                    .path("shortcuts.pauseInFullscreen")
+                    .keywords(PAUSE_KEYWORDS),
+                Setting::new("shortcuts.pauseApps", Control::AppExclusion)
+                    .path("shortcuts.pauseAppIds")
+                    .keywords(PAUSE_KEYWORDS),
+            ],
+        },
+        Section {
+            id: "panelShortcuts",
+            settings: vec![
+                Setting::new("shortcuts.panel", Control::PanelShortcuts).keywords(&[
+                    "shortcut", "hotkey", "key", "window", "favorite", "pin", "copy", "delete",
+                    "收藏", "置顶", "复制", "删除", "按键",
+                ]),
+            ],
+        },
+    ]
+}
 
 /// 首次引导使用完整列表，不按 advanced 标记折叠。
 pub(super) fn shortcut_settings() -> Vec<Setting> {

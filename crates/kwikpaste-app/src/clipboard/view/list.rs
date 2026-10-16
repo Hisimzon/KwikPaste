@@ -39,7 +39,7 @@ use gpui::{
 use kwikpaste_core::{
     CoreEvent,
     ops::{ReorderAnchor, ReorderSection},
-    settings::{AutoPaste, MiddleClickAction, Settings},
+    settings::{AutoPaste, MiddleClickAction, PanelAction, Settings, effective_panel_keys},
 };
 use kwikpaste_ui::{
     ListScrollbar, TextAreaInput, close_dialog, context_menu, dismiss_menu,
@@ -1559,7 +1559,18 @@ impl ClipboardList {
         let hint = self
             .key_hints
             .then(|| self.controller.hint_key(index, selecting))
-            .flatten();
+            .flatten()
+            .and_then(|digit| {
+                effective_panel_keys(&self.settings.shortcuts, PanelAction::PasteNth)
+                    .into_iter()
+                    .find(|key| key.ends_with(digit))
+            })
+            .map(|key| {
+                crate::clipboard::model::shortcut::display_keystroke(
+                    key.strip_prefix("secondary-").unwrap_or(&key),
+                )
+                .into()
+            });
         let actions = (hovered && !selecting)
             .then(|| {
                 visible_actions(

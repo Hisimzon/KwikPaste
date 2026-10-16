@@ -630,6 +630,9 @@
       "overview": {
         "title": "Overview"
       },
+      "panelShortcuts": {
+        "title": "In the clipboard window"
+      },
       "performance": {
         "title": "Performance"
       },
@@ -641,6 +644,9 @@
       },
       "sensitive": {
         "title": "Privacy"
+      },
+      "shortcutPause": {
+        "title": "Pause rules"
       },
       "sort": {
         "title": "Sorting"
@@ -1157,6 +1163,10 @@
           "placeholder": "Alt+X",
           "title": "Open Preferences Window"
         },
+        "panel": {
+          "description": "Keys inside the clipboard window, such as paste, favorite and pin.",
+          "title": "Clipboard window shortcuts"
+        },
         "pastePlain": {
           "description": "Paste what's on the clipboard without formatting, without opening the clipboard window.",
           "title": "Paste as plain text"
@@ -1318,6 +1328,62 @@
     "openTab": "Open {{tab}}",
     "placeholder": "Search settings",
     "title": "Search Results"
+  },
+  "shortcutsPage": {
+    "added": "Added",
+    "addTrigger": "Add trigger",
+    "anyTrigger": "Any of the triggers below works.",
+    "chips": {
+      "doubleTap": "Double {{key}}",
+      "mouse": "Mouse {{button}}",
+      "quickPasteOff": "Off"
+    },
+    "conflict": "{{key}} is already used by “{{name}}”.",
+    "conflictPanel": "{{key}} is already used by “{{name}}” in the clipboard window.",
+    "kinds": {
+      "combo": {
+        "description": "Works in any app",
+        "title": "Key combination"
+      },
+      "doubleTap": {
+        "description": "Press it twice quickly. Shift may also switch your input method.",
+        "title": "Double-tap a key"
+      },
+      "mouse": {
+        "description": "Click the middle or a side button; its usual click action stops working",
+        "title": "Mouse button"
+      },
+      "winV": {
+        "description": "Replaces the Windows clipboard history panel",
+        "title": "Take over Win+V"
+      }
+    },
+    "panel": {
+      "cardClick": "Mouse clicks on cards are set in “{{tab}}”",
+      "fixed": "Fixed key, can't be changed",
+      "groups": {
+        "navigate": "Navigate",
+        "organize": "Organize",
+        "paste": "Paste & copy",
+        "window": "Window"
+      },
+      "hint": "Only works in the clipboard window. Click a key to record a new one.",
+      "invalid": "Window shortcuts need {{mod}} plus a key, optionally with Shift",
+      "recording": "Press the new key…",
+      "reset": "Reset to default",
+      "resetAll": "Reset all"
+    },
+    "quickPaste": {
+      "enable": "Enable quick paste",
+      "hold": "Hold {{mods}} and press:",
+      "nth": "Item {{n}}"
+    },
+    "recording": "Press the new shortcut…",
+    "recordingHelp": "Other shortcuts are paused while recording · Esc to cancel · Backspace to clear",
+    "remove": "Remove",
+    "rerecord": "Record again",
+    "takeOver": "Use it here",
+    "triggers": "Triggers"
   },
   "sidebar": {
     "collapse": "Collapse Sidebar",

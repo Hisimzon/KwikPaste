@@ -76,7 +76,7 @@ pub struct CardState {
     /// 指针在卡片上：有备注且开了“悬停显示原文”时显示原文。
     pub show_original: bool,
     /// 按住修饰键时来源图标上的数字角标（1–9、0）。
-    pub hint: Option<char>,
+    pub hint: Option<SharedString>,
     /// 多选时已勾上：卡片铺一层淡主色。
     pub checked: bool,
     /// 上一行铺了底色（当前项、悬停或勾选）：这一行上方的分隔线不画，免得贴着色块多出一道线。
@@ -399,7 +399,7 @@ fn is_wetype_origin(item: &ListItem) -> bool {
 fn meta(
     env: &CardEnv<'_>,
     item: &ListItem,
-    hint: Option<char>,
+    hint: Option<SharedString>,
     app_icon_state: Option<Visual>,
     actions: Option<AnyElement>,
     checkbox: Option<AnyElement>,
@@ -460,7 +460,7 @@ fn meta(
 fn hinted_icon(
     env: &CardEnv<'_>,
     item: &ListItem,
-    hint: Option<char>,
+    hint: Option<SharedString>,
     app_icon_state: Option<Visual>,
 ) -> AnyElement {
     let icon = app_icon(env, item, app_icon_state);
@@ -482,7 +482,7 @@ fn hinted_icon(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(KeyHint::new(SharedString::from(key.to_string()))),
+                .child(KeyHint::new(key)),
         )
         .into_any_element()
 }

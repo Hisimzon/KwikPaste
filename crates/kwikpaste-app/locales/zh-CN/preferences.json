@@ -620,6 +620,9 @@
       "overview": {
         "title": "数据概览"
       },
+      "panelShortcuts": {
+        "title": "剪贴板窗口内"
+      },
       "performance": {
         "title": "性能"
       },
@@ -631,6 +634,9 @@
       },
       "sensitive": {
         "title": "隐私保护"
+      },
+      "shortcutPause": {
+        "title": "停用规则"
       },
       "sort": {
         "title": "列表排序"
@@ -1147,6 +1153,10 @@
           "placeholder": "Alt+X",
           "title": "打开偏好设置窗口"
         },
+        "panel": {
+          "description": "剪贴板窗口里的按键，如粘贴、收藏、置顶。",
+          "title": "剪贴板窗口内快捷键"
+        },
         "pastePlain": {
           "description": "不打开剪贴板窗口，把当前剪贴板内容去掉格式后直接粘贴。",
           "title": "粘贴为纯文本"
@@ -1307,6 +1317,62 @@
     "openTab": "打开{{tab}}",
     "placeholder": "搜索配置项",
     "title": "搜索结果"
+  },
+  "shortcutsPage": {
+    "added": "已添加",
+    "addTrigger": "添加触发方式",
+    "anyTrigger": "下面任意一种方式都能触发。",
+    "chips": {
+      "doubleTap": "双击 {{key}}",
+      "mouse": "鼠标{{button}}",
+      "quickPasteOff": "已关闭"
+    },
+    "conflict": "{{key}} 已用于「{{name}}」。",
+    "conflictPanel": "{{key}} 已用于剪贴板窗口内的「{{name}}」。",
+    "kinds": {
+      "combo": {
+        "description": "任何应用中按下即可",
+        "title": "组合键"
+      },
+      "doubleTap": {
+        "description": "快速连按两次。Shift 可能同时切换输入法中英文。",
+        "title": "双击按键"
+      },
+      "mouse": {
+        "description": "单击中键或侧键唤起；该键原来的单击功能会停用",
+        "title": "鼠标按键"
+      },
+      "winV": {
+        "description": "替代 Windows 系统剪贴板历史面板",
+        "title": "接管 Win+V"
+      }
+    },
+    "panel": {
+      "cardClick": "卡片的鼠标点击行为在「{{tab}}」里设置",
+      "fixed": "固定按键，不能修改",
+      "groups": {
+        "navigate": "导航",
+        "organize": "整理",
+        "paste": "粘贴与复制",
+        "window": "窗口"
+      },
+      "hint": "只在剪贴板窗口里生效，点击按键即可重新录制。",
+      "invalid": "窗口内快捷键需要 {{mod}} 加一个按键，可以再加 Shift",
+      "recording": "请按下新按键…",
+      "reset": "恢复默认",
+      "resetAll": "全部恢复默认"
+    },
+    "quickPaste": {
+      "enable": "启用快速粘贴",
+      "hold": "按住 {{mods}} 再按：",
+      "nth": "第 {{n}} 条"
+    },
+    "recording": "请按下新的组合键…",
+    "recordingHelp": "录制时其他快捷键暂停 · Esc 取消 · Backspace 清除",
+    "remove": "移除",
+    "rerecord": "重新录制",
+    "takeOver": "改用到这里",
+    "triggers": "触发方式"
   },
   "sidebar": {
     "collapse": "收起侧栏",

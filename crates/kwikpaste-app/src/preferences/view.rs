@@ -58,6 +58,7 @@ mod feedback;
 mod image_text;
 mod ocr_engine;
 mod overview;
+mod shortcut_page;
 mod wetype;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(640.), px(480.));
@@ -291,6 +292,12 @@ struct Preferences {
     scroll: ScrollHandle,
     focus: FocusHandle,
     recording: Option<&'static str>,
+    /// 快捷键页打开的二级页（设置项 id）。
+    shortcut_detail: Option<&'static str>,
+    /// 正在录制的剪贴板窗口内按键。
+    recording_panel: Option<kwikpaste_core::settings::PanelAction>,
+    /// 录到的按键已被占用，等用户选择取消或改用到这里。
+    shortcut_conflict: Option<shortcut_page::ShortcutConflict>,
     storage_overview: Option<StorageOverview>,
     storage_location: Option<StorageLocation>,
     storage_migrating: bool,
@@ -734,6 +741,9 @@ impl Preferences {
             scroll,
             focus,
             recording: None,
+            shortcut_detail: None,
+            recording_panel: None,
+            shortcut_conflict: None,
             storage_overview: None,
             storage_location,
             storage_migrating: false,
@@ -786,6 +796,10 @@ impl Preferences {
     }
 
     fn begin_recording(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recording_panel.is_some() {
+            self.finish_panel_recording(cx);
+        }
+        self.shortcut_conflict = None;
         self.recording = Some(id);
         hotkey::suspend(cx);
         window.focus(&self.focus, cx);
@@ -826,10 +840,13 @@ impl Preferences {
         let Some(shortcut) = shortcut_from_keystroke(&event.keystroke) else {
             return;
         };
-        if let Some(other) = shortcut_conflicts_with_settings(id, &shortcut, &self.settings) {
-            log::warn!("shortcut {shortcut:?} conflicts with an existing preference shortcut");
-            toast::show(Toast::error(shortcut_conflict_message(other)), window, cx);
-            self.finish_recording(cx);
+        if let Some(user) = shortcut_page::global_shortcut_user(id, &shortcut, &self.settings) {
+            self.hold_conflict(
+                shortcut_page::ShortcutTarget::Global(id),
+                shortcut,
+                user,
+                cx,
+            );
             return;
         }
         self.save_recorded_shortcut(id, shortcut, window, cx);
@@ -2944,6 +2961,11 @@ impl Preferences {
     ) {
         let opening = self.tab != tab;
         self.tab = tab;
+        self.shortcut_detail = None;
+        self.shortcut_conflict = None;
+        if self.recording_panel.is_some() {
+            self.finish_panel_recording(cx);
+        }
         self.search.set_value("", window, cx);
         self.scroll.set_offset(gpui::point(px(0.), px(0.)));
         if let Some(id) = setting_id {
@@ -2997,6 +3019,9 @@ impl Preferences {
     ) -> gpui::AnyElement {
         if setting.id == "ocr.status" {
             return self.render_image_text_status(first, cx);
+        }
+        if matches!(setting.control, Control::ShortcutEntry) {
+            return self.render_shortcut_entry(setting, first, cx);
         }
         let title = text::setting_title(setting);
         if setting.id == "localData.dataDirectory" {
@@ -3189,6 +3214,7 @@ impl Preferences {
             Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
             Control::CustomRules => self.render_custom_rules(cx),
+            Control::PanelShortcuts => self.render_panel_shortcuts(cx),
             Control::AppExclusion => self.render_app_exclusion(setting.id, value, cx),
             Control::Action { danger } => self.render_action(setting.id, danger, cx),
             _ => self.render_action(setting.id, false, cx),
@@ -3221,8 +3247,15 @@ impl Preferences {
         let searching = !query.trim().is_empty();
         let tokens = theme::semantic(cx);
         let mut blocks: Vec<gpui::AnyElement> = Vec::new();
+        let detail = self
+            .shortcut_detail
+            .filter(|_| self.tab == TabId::Shortcuts && !searching);
+        if let Some(id) = detail {
+            blocks.push(self.render_shortcut_detail(id, cx));
+        }
         for tab in tabs
             .iter()
+            .filter(|_| detail.is_none())
             .filter(|tab| page_in_scope(tab.id, self.tab, &query))
         {
             // 默认区只剩一个分组时，标题和页面标题重复，不显示。
@@ -3323,6 +3356,26 @@ impl Preferences {
                                         self.setting_anchors.get("sync.lan.devices").cloned(),
                                     )
                                     .child(self.render_lan_sync(cx))
+                                    .into_any_element(),
+                            );
+                            continue;
+                        }
+                        if visible
+                            .iter()
+                            .any(|setting| matches!(setting.control, Control::PanelShortcuts))
+                        {
+                            blocks.push(
+                                div()
+                                    .id("preferences-panel-shortcuts-anchor")
+                                    .anchor_scroll(
+                                        self.setting_anchors.get("shortcuts.panel").cloned(),
+                                    )
+                                    .child(section_block(
+                                        Some(text::section_title(section)),
+                                        self.render_panel_reset_all(cx),
+                                        vec![self.render_panel_shortcuts(cx)],
+                                        tokens,
+                                    ))
                                     .into_any_element(),
                             );
                             continue;
@@ -5269,12 +5322,23 @@ impl Render for Preferences {
             .size_full()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                // 下拉框、弹框自己处理的 Esc 不会传到这里；录制快捷键时 Esc 只取消录制。
+                // 下拉框、弹框自己处理的 Esc 不会传到这里；录制快捷键时 Esc 只取消录制，
+                // 快捷键二级页里 Esc 先关掉冲突提示，再回到列表。
+                if this.recording_panel.is_some() {
+                    this.capture_panel_shortcut(event, window, cx);
+                    return;
+                }
                 if this.recording.is_none()
                     && event.keystroke.key.eq_ignore_ascii_case("escape")
                     && !event.keystroke.modifiers.modified()
                 {
-                    window.remove_window();
+                    if this.shortcut_conflict.take().is_some() {
+                        cx.notify();
+                    } else if this.shortcut_detail.is_some() {
+                        this.close_shortcut_detail(cx);
+                    } else {
+                        window.remove_window();
+                    }
                     return;
                 }
                 this.capture_shortcut(event, window, cx);
