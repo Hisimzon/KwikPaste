@@ -218,17 +218,63 @@ impl KpImageCache {
 /// 解码并缩放到 `width`×`height`（物理像素），转成 GPUI 要的 BGRA。在后台线程上运行。
 /// 解码按 core 的上限（图片可能来自同步或备份导入），超限返回错误。
 pub fn decode(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImage> {
+    let pixels = decode_pixels(path, width, height, ResizeMode::Exact)?;
+    Ok(RenderImage::new(vec![image::Frame::new(pixels)]))
+}
+
+/// 解码并等比缩放到目标方框内，供图标使用。
+pub fn decode_contained(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImage> {
+    let pixels = decode_pixels(path, width, height, ResizeMode::Contain)?;
+    Ok(RenderImage::new(vec![image::Frame::new(pixels)]))
+}
+
+/// Windows 走 WIC 按目标尺寸解码；WebP（WIC 要可选系统扩展）和 ICO（多帧选取规则不同）与 macOS 一样走 crate。
+fn decode_pixels(
+    path: &Path,
+    width: u32,
+    height: u32,
+    resize: ResizeMode,
+) -> anyhow::Result<image::RgbaImage> {
     // 目标尺寸由显示设置推出来，设置文件里的离谱数值不能变成一次超大的缩放分配。
     anyhow::ensure!(
         width > 0 && height > 0,
         "empty target size {width}x{height}"
     );
     kwikpaste_core::imaging::check_rgba_size(width, height)?;
-    let image = kwikpaste_core::imaging::open(path)?.decode()?;
-    let image = if image.width() == width && image.height() == height {
-        image
-    } else {
-        image.resize_exact(width, height, image::imageops::FilterType::Triangle)
+    let reader = kwikpaste_core::imaging::open(path)?;
+
+    #[cfg(target_os = "windows")]
+    if !matches!(
+        reader.format(),
+        Some(image::ImageFormat::WebP | image::ImageFormat::Ico)
+    ) {
+        let (source_width, source_height) = reader.into_dimensions()?;
+        kwikpaste_core::imaging::check_rgba_size(source_width, source_height)?;
+        anyhow::ensure!(source_width > 0 && source_height > 0, "empty source image");
+        let (width, height) = match resize {
+            ResizeMode::Exact => (width, height),
+            ResizeMode::Contain => {
+                // 与 image::resize 一样四舍五入，并允许把小图放大。
+                let ratio = (f64::from(width) / f64::from(source_width))
+                    .min(f64::from(height) / f64::from(source_height));
+                (
+                    (f64::from(source_width) * ratio).round().max(1.) as u32,
+                    (f64::from(source_height) * ratio).round().max(1.) as u32,
+                )
+            }
+        };
+        let pixels = kwikpaste_os::win::imaging::decode_bgra(path, width, height)?;
+        return image::RgbaImage::from_raw(width, height, pixels)
+            .ok_or_else(|| anyhow::anyhow!("invalid WIC pixel buffer"));
+    }
+
+    let image = reader.decode()?;
+    let image = match resize {
+        ResizeMode::Exact if image.width() == width && image.height() == height => image,
+        ResizeMode::Exact => {
+            image.resize_exact(width, height, image::imageops::FilterType::Triangle)
+        }
+        ResizeMode::Contain => image.resize(width, height, image::imageops::FilterType::Triangle),
     };
 
     let mut pixels = image.into_rgba8();
@@ -236,25 +282,7 @@ pub fn decode(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImag
         pixel.0.swap(0, 2);
     }
 
-    Ok(RenderImage::new(vec![image::Frame::new(pixels)]))
-}
-
-/// 解码并等比缩放到目标方框内，供图标使用。
-pub fn decode_contained(path: &Path, width: u32, height: u32) -> anyhow::Result<RenderImage> {
-    anyhow::ensure!(
-        width > 0 && height > 0,
-        "empty target size {width}x{height}"
-    );
-    kwikpaste_core::imaging::check_rgba_size(width, height)?;
-    let image = kwikpaste_core::imaging::open(path)?.decode()?;
-    let image = image.resize(width, height, image::imageops::FilterType::Triangle);
-
-    let mut pixels = image.into_rgba8();
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-
-    Ok(RenderImage::new(vec![image::Frame::new(pixels)]))
+    Ok(pixels)
 }
 
 /// 文件路径转缓存键里的 `Arc<Path>`。
@@ -268,9 +296,8 @@ mod tests {
 
     #[test]
     fn decode_resizes_and_swaps_to_bgra() {
-        let dir = std::env::temp_dir().join(format!("kp-image-cache-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join("red.png");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("red.png");
         image::RgbaImage::from_pixel(40, 20, image::Rgba([255, 0, 0, 255]))
             .save(&path)
             .expect("write png");
@@ -281,7 +308,63 @@ mod tests {
         let bytes = image.as_bytes(0).expect("frame");
         assert_eq!(bytes.get(..4), Some(&[0, 0, 255, 255][..]), "BGRA order");
 
-        assert!(decode(&dir.join("missing.png"), 10, 5).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(decode(&dir.path().join("missing.png"), 10, 5).is_err());
+    }
+
+    #[test]
+    fn decode_contained_preserves_aspect_rounding_alpha_and_upscaling() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transparent.png");
+        image::RgbaImage::from_pixel(40, 20, image::Rgba([255, 0, 0, 128]))
+            .save(&path)
+            .expect("write png");
+
+        for (width, height, expected) in [(10, 10, (10, 5)), (7, 7, (7, 4)), (80, 80, (80, 40))] {
+            let image = decode_contained(&path, width, height).expect("contained");
+            assert_eq!((image.size(0).width.0, image.size(0).height.0), expected);
+            assert!(
+                image
+                    .as_bytes(0)
+                    .expect("frame")
+                    .chunks_exact(4)
+                    .all(|pixel| pixel == [0, 0, 255, 128]),
+                "straight BGRA, not premultiplied"
+            );
+        }
+        let image = decode(&path, 10, 10).expect("exact");
+        assert_eq!((image.size(0).width.0, image.size(0).height.0), (10, 10));
+    }
+
+    #[test]
+    fn decode_supported_formats_by_content() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            40,
+            20,
+            image::Rgba([255, 0, 0, 255]),
+        ));
+        for format in [
+            image::ImageFormat::Bmp,
+            image::ImageFormat::Gif,
+            image::ImageFormat::Ico,
+            image::ImageFormat::Jpeg,
+            image::ImageFormat::Png,
+            image::ImageFormat::Tiff,
+            image::ImageFormat::WebP,
+        ] {
+            let path = dir.path().join(format!("{format:?}.data"));
+            image.save_with_format(&path, format).expect("write image");
+            let output = decode_contained(&path, 10, 10).expect("decode by content");
+            assert_eq!(
+                (output.size(0).width.0, output.size(0).height.0),
+                (10, 5),
+                "{format:?}"
+            );
+            let pixel = &output.as_bytes(0).expect("frame")[..4];
+            assert!(
+                pixel[0] < 3 && pixel[1] < 3 && pixel[2] > 252 && pixel[3] == 255,
+                "{format:?}: {pixel:?}"
+            );
+        }
     }
 }
