@@ -53,6 +53,22 @@ pub fn paste(cx: &mut App, id: String, plain: bool, keep_visible: bool) -> Task<
     })
 }
 
+/// 把图片原文件写成文件列表，复用普通粘贴的前台交接与按键注入。
+pub fn paste_image_as_file(cx: &mut App, id: String, keep_visible: bool) -> Task<Result<()>> {
+    let Some(core) = core_host::core(cx).cloned() else {
+        return Task::ready(Err(core_missing()));
+    };
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let _phase = super::enter_phase(crate::health::Phase::Paste);
+        let started = Instant::now();
+        core.prepare_paste_image_as_file(&id).await?;
+        let report = yield_and_inject(cx, keep_visible).await?;
+        probe::pasted("image-file", &id, false, report, started.elapsed());
+        Ok(())
+    })
+}
+
 /// 粘贴一条记录里的片段，流程同 [`paste`]。
 pub fn paste_fragment(
     cx: &mut App,

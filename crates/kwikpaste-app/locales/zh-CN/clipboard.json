@@ -99,6 +99,7 @@
     "moveToGroup": "移动到分组",
     "openLink": "打开链接",
     "paste": "粘贴",
+    "pasteAsFile": "粘贴为文件",
     "pasteAsPath": "粘贴为路径",
     "pasteAsPlainText": "粘贴为纯文本",
     "pinItem": "置顶",

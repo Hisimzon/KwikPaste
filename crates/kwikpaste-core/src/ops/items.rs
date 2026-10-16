@@ -225,6 +225,22 @@ fn write_fragment(core: &CoreInner, text: &str) -> Result<()> {
     clipboard::write_text_fragment(&*backend, &core.guard, text)
 }
 
+/// 图片另存与文件粘贴共用的原图校验和路径解析。
+fn original_image_path(core: &CoreInner, item: &ClipboardItem) -> Result<PathBuf> {
+    if item.kind != ClipboardKind::Image {
+        return Err(AppError::Clipboard(
+            "selected item is not an image".to_owned(),
+        ));
+    }
+    validate_image_file_name(&item.content)?;
+
+    let source = core.images.origin_path(&item.content);
+    if !source.is_file() {
+        return Err(AppError::Clipboard("image file does not exist".to_owned()));
+    }
+    Ok(source)
+}
+
 /// 按设置决定是否把复制 / 粘贴历史记录计为一次复用：计入时累加次数、刷新 `updated_at` 并通知宿主；
 /// 不计入时也记下最后使用时间，自动清理按它判断。
 pub(crate) async fn mark_item_reused_if_enabled(
@@ -351,6 +367,29 @@ impl Core {
             );
 
             write_item(&core.0, &item, write_plain)?;
+            mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await
+        })
+        .await
+    }
+
+    /// 把已存原图作为文件列表写回并记一次使用；宿主随后走普通粘贴的隐藏与按键注入流程。
+    pub async fn prepare_paste_image_as_file(&self, id: &str) -> Result<()> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            let item = find_required(&pool, &id).await?;
+            let path = original_image_path(&core.0, &item)?
+                .to_string_lossy()
+                .into_owned();
+
+            {
+                let backend = core.0.clipboard()?;
+                core.0
+                    .guard
+                    .suppress(crate::db::items::content_hash(ClipboardKind::Files, &path));
+                backend.set_files(vec![path])?;
+            }
             mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await
         })
         .await
@@ -769,17 +808,7 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let item = find_required(&core.0.db.pool().await, &id).await?;
-            if item.kind != ClipboardKind::Image {
-                return Err(AppError::Clipboard(
-                    "selected item is not an image".to_owned(),
-                ));
-            }
-            validate_image_file_name(&item.content)?;
-
-            let source = core.0.images.origin_path(&item.content);
-            if !source.is_file() {
-                return Err(AppError::Clipboard("image file does not exist".to_owned()));
-            }
+            let source = original_image_path(&core.0, &item)?;
             Ok(ImageSave {
                 source,
                 default_file_name: default_saved_image_file_name(&item.created_at, &Local),

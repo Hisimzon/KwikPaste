@@ -336,6 +336,52 @@ fn copy_and_paste_follow_plain_text_settings_and_reuse() {
 }
 
 #[test]
+fn paste_image_as_file_uses_original_and_suppresses_writeback() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let png = sample_png(3, 3);
+    let image = copy_in(
+        &core,
+        MemoryState {
+            png: Some(png.clone()),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+    let source = block_on(core.prepare_image_save(&image)).unwrap().source;
+    block_on(core.update_settings(json!({"clipboard": {"content": {
+        "pasteFilesAsPath": true, "updateOnReuse": true
+    }}})))
+    .unwrap();
+
+    block_on(core.prepare_paste_image_as_file(&image)).unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot(),
+        MemoryState {
+            files: Some(vec![source.to_string_lossy().into_owned()]),
+            ..MemoryState::default()
+        }
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), png);
+    assert_eq!(use_count(&core, &image), 2);
+    assert!(copy_in(&core, fixture.clipboard.snapshot()).is_none());
+
+    let text_id = copy_in(&core, text("not an image")).unwrap();
+    for (id, message) in [
+        (&text_id, "selected item is not an image"),
+        (&image, "image file does not exist"),
+    ] {
+        if id == &image {
+            std::fs::remove_file(&source).unwrap();
+        }
+        let before = fixture.clipboard.snapshot();
+        let error = block_on(core.prepare_paste_image_as_file(id)).unwrap_err();
+        assert!(matches!(error, crate::AppError::Clipboard(ref value) if value == message));
+        assert_eq!(fixture.clipboard.snapshot(), before);
+    }
+}
+
+#[test]
 fn fragments_and_word_split_follow_the_record() {
     let fixture = Fixture::new();
     let core = fixture.start();

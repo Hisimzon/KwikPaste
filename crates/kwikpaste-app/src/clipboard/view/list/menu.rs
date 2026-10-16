@@ -124,6 +124,7 @@ impl ClipboardList {
 
         match action {
             MenuAction::Paste => self.paste_item(id, false, cx),
+            MenuAction::PasteImageAsFile => self.paste_image_file(id, cx),
             MenuAction::PasteAsPlainText | MenuAction::PasteAsPath => self.paste_item(id, true, cx),
             MenuAction::Copy => self.copy(id, false, None, window, cx),
             MenuAction::CopyImageText => self.copy_image_text(id, window, cx),

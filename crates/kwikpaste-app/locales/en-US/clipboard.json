@@ -99,6 +99,7 @@
     "moveToGroup": "Move to Group",
     "openLink": "Open Link",
     "paste": "Paste",
+    "pasteAsFile": "Paste as File",
     "pasteAsPath": "Paste as Path",
     "pasteAsPlainText": "Paste as Plain Text",
     "pinItem": "Pin to Top",

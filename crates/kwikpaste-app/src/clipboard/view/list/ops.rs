@@ -193,6 +193,15 @@ impl ClipboardList {
         cx.emit(ListIntent::Paste { id, plain });
     }
 
+    /// 右键菜单“粘贴为文件”：把图片原文件作为文件列表粘贴，其余同 [`Self::paste_item`]。
+    pub fn paste_image_file(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
+        log::info!("image-file paste requested for {id}");
+        self.close_preview(cx);
+        let task = self.host.paste_image_as_file(id.clone(), cx);
+        self.report_host_failure("commands:labels.paste", task, cx);
+        cx.emit(ListIntent::Paste { id, plain: false });
+    }
+
     /// Enter / Mod+Enter：粘贴当前项。数据还没追上 core 时先挂起，第一页落地后按那时的第一行执行。
     pub fn paste_active(&mut self, plain: bool, cx: &mut Context<Self>) {
         self.activate(Activation::Paste { plain }, cx);

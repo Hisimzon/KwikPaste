@@ -21,6 +21,8 @@ use crate::{
 pub trait ItemHost {
     fn paste(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>>;
 
+    fn paste_image_as_file(&self, id: Arc<str>, cx: &mut App) -> Task<anyhow::Result<()>>;
+
     fn paste_fragment(
         &self,
         id: Arc<str>,
@@ -59,6 +61,11 @@ fn ok_or_anyhow<T: 'static>(
 impl ItemHost for PlatformHost {
     fn paste(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>> {
         let task = platform::paste::paste(cx, id.to_string(), plain, pin::pinned(cx));
+        ok_or_anyhow(task, cx)
+    }
+
+    fn paste_image_as_file(&self, id: Arc<str>, cx: &mut App) -> Task<anyhow::Result<()>> {
+        let task = platform::paste::paste_image_as_file(cx, id.to_string(), pin::pinned(cx));
         ok_or_anyhow(task, cx)
     }
 
@@ -118,6 +125,11 @@ impl SourceHost {
 impl ItemHost for SourceHost {
     fn paste(&self, id: Arc<str>, plain: bool, _: &mut App) -> Task<anyhow::Result<()>> {
         log::info!("no paste chain for {id} (plain: {plain}): the data is not the host core's");
+        Task::ready(Ok(()))
+    }
+
+    fn paste_image_as_file(&self, id: Arc<str>, _: &mut App) -> Task<anyhow::Result<()>> {
+        log::info!("no image-file paste chain for {id}: the data is not the host core's");
         Task::ready(Ok(()))
     }
 

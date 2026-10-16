@@ -8,6 +8,7 @@ use super::item::{ItemAction, ListItem};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Paste,
+    PasteImageAsFile,
     PasteAsPlainText,
     PasteAsPath,
     Copy,
@@ -31,6 +32,7 @@ pub enum MenuAction {
 const GROUPS: [&[MenuAction]; 4] = [
     &[
         MenuAction::Paste,
+        MenuAction::PasteImageAsFile,
         MenuAction::PasteAsPlainText,
         MenuAction::PasteAsPath,
         MenuAction::Copy,
@@ -74,7 +76,7 @@ impl MenuAction {
             Self::EditNote => ItemAction::EditNote,
             Self::Select => ItemAction::Select,
             Self::Delete => ItemAction::Delete,
-            Self::MoveToGroup | Self::EditContent => return None,
+            Self::PasteImageAsFile | Self::MoveToGroup | Self::EditContent => return None,
         })
     }
 
@@ -94,7 +96,11 @@ impl MenuAction {
             Self::EditNote => PanelAction::NoteSelected,
             Self::EditContent => PanelAction::EditContent,
             Self::Delete => PanelAction::DeleteSelected,
-            Self::SaveImage | Self::CopyImageText | Self::MoveToGroup | Self::Select => {
+            Self::PasteImageAsFile
+            | Self::SaveImage
+            | Self::CopyImageText
+            | Self::MoveToGroup
+            | Self::Select => {
                 return None;
             }
         };
@@ -105,6 +111,7 @@ impl MenuAction {
     pub fn label_key(self, item: &ListItem) -> &'static str {
         match self {
             Self::Paste => "clipboard:menu.paste",
+            Self::PasteImageAsFile => "clipboard:menu.pasteAsFile",
             Self::PasteAsPlainText => "clipboard:menu.pasteAsPlainText",
             Self::PasteAsPath => "clipboard:menu.pasteAsPath",
             Self::Copy => "clipboard:menu.copy",
@@ -133,6 +140,10 @@ impl MenuAction {
 pub fn menu_groups(item: &ListItem, can_delete: bool, has_groups: bool) -> Vec<Vec<MenuAction>> {
     let available = |action: MenuAction| match action {
         MenuAction::EditContent => item.kind == super::item::ItemKind::Text,
+        MenuAction::PasteImageAsFile => {
+            item.kind == super::item::ItemKind::Image
+                && item.available_actions.contains(&ItemAction::Paste)
+        }
         _ => match action.item_action() {
             Some(ItemAction::Delete) if !can_delete => false,
             Some(wanted) => item.available_actions.contains(&wanted),
@@ -236,6 +247,20 @@ mod tests {
                 vec![vec![MenuAction::EditNote]]
             );
         }
+    }
+
+    #[test]
+    fn images_can_be_pasted_as_files() {
+        let mut item = with_actions(&[ItemAction::Paste, ItemAction::Copy]);
+        item.kind = super::super::item::ItemKind::Image;
+        assert_eq!(
+            menu_groups(&item, true, false),
+            vec![vec![
+                MenuAction::Paste,
+                MenuAction::PasteImageAsFile,
+                MenuAction::Copy
+            ]]
+        );
     }
 
     #[test]
