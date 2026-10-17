@@ -202,7 +202,8 @@ jobs:
           root=target
           if [[ "${EXT_ID}" == wetype ]]; then root=extensions/wetype/target; fi
           if [[ "${EXT_ID}" == ppocr ]]; then root=extensions/ppocr/target; fi
-          for id in $(jq -r '.[]' <<< "${EXT_IDS}"); do
+          # Windows 上的 jq 输出 CRLF。
+          for id in $(jq -r '.[]' <<< "${EXT_IDS}" | tr -d '\r'); do
             name="KwikPaste-ext-${id}_${VERSION}_${EXT_TARGET}${suffix}"
             cp "${root}/${TRIPLE}/release/kwikpaste-ext-${id}${suffix}" "dist/${name}"
             # 交叉编译的 x86_64 没有链接器的 ad-hoc 签名；统一补签，必须在 minisign 之前。
