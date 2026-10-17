@@ -557,7 +557,7 @@ fn image_text_preview_words_share_text_record_metrics_and_limits() {
 }
 
 #[test]
-fn image_words_copy_and_paste_use_memory_clipboard_and_normal_reuse_rules() {
+fn image_words_copy_is_recorded_and_paste_follows_reuse_rules() {
     use crate::clipboard::ClipboardFragment;
 
     let fixture = Fixture::new();
@@ -586,6 +586,11 @@ fn image_words_copy_and_paste_use_memory_clipboard_and_normal_reuse_rules() {
         fixture.clipboard.snapshot().text.as_deref(),
         Some("hello  world")
     );
+    // 复制出来的文字不登记回环：监听会把它当普通复制记成文字记录。
+    assert!(!core
+        .0
+        .guard
+        .should_skip(&items::content_hash(ClipboardKind::Text, "hello  world")));
     block_on(core.prepare_paste_fragment(
         &image.id,
         ClipboardFragment::ImageWords {
@@ -598,7 +603,7 @@ fn image_words_copy_and_paste_use_memory_clipboard_and_normal_reuse_rules() {
         Some("20260924 again")
     );
     let reused = block_on(core.find_item(&image.id)).unwrap().unwrap();
-    assert_eq!(reused.use_count, image.use_count + 2);
+    assert_eq!(reused.use_count, image.use_count + 1);
     assert_eq!(reused.kind, ClipboardKind::Image);
     assert_eq!(reused.content, image.content);
     assert_eq!(
@@ -847,7 +852,7 @@ fn ocr_search_matches_rows_totals_select_all_and_flags_with_same_predicate() {
 }
 
 #[test]
-fn copy_image_text_uses_memory_clipboard_and_existing_reuse_rules() {
+fn copy_image_text_is_recorded_as_a_new_copy() {
     let fixture = Fixture::new();
     let core = fixture.start();
     let image = seed(&fixture, &core, "copy", 1_800_000_001);
@@ -881,13 +886,17 @@ fn copy_image_text_uses_memory_clipboard_and_existing_reuse_rules() {
         fixture.clipboard.snapshot().text.as_deref(),
         Some("中文\nEnglish text")
     );
-    let reused = fixture.runtime.handle().block_on(async {
+    assert!(!core.0.guard.should_skip(&items::content_hash(
+        ClipboardKind::Text,
+        "中文\nEnglish text"
+    )));
+    let after = fixture.runtime.handle().block_on(async {
         items::find_item_by_id(&core.0.db.pool().await, &image.id)
             .await
             .unwrap()
             .unwrap()
     });
-    assert_eq!(reused.use_count, image.use_count + 1);
+    assert_eq!(after.use_count, image.use_count);
     block_on(core.shutdown()).unwrap();
 }
 

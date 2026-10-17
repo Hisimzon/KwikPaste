@@ -226,6 +226,11 @@ fn write_fragment(core: &CoreInner, text: &str) -> Result<()> {
     clipboard::write_text_fragment(&*backend, &core.guard, text)
 }
 
+/// 复制图片里识别出的文字：这是新内容，不登记回环，由监听当作一次普通复制记成文字记录；原图不算复用。
+fn write_recognized_text(core: &CoreInner, text: &str) -> Result<()> {
+    core.clipboard()?.set_text(text.to_owned())
+}
+
 /// 图片另存与文件粘贴共用的原图校验和路径解析。
 fn original_image_path(core: &CoreInner, item: &ClipboardItem) -> Result<PathBuf> {
     if item.kind != ClipboardKind::Image {
@@ -397,8 +402,7 @@ impl Core {
                 .await?
                 .filter(|text| !text.is_empty())
                 .ok_or_else(|| AppError::Clipboard("no recognized image text".into()))?;
-            write_fragment(&core.0, &text)?;
-            mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await?;
+            write_recognized_text(&core.0, &text)?;
             Ok(CopyOutcome {
                 hide_window: settings.content.copy_then_hide_window,
             })
@@ -495,8 +499,12 @@ impl Core {
             let pool = core.0.db.pool().await;
             let (kind, text) = load_fragment_text(&core.0, &pool, &id, &fragment).await?;
 
-            write_fragment(&core.0, &text)?;
-            mark_item_reused_if_enabled(&core.0, &pool, &id, kind).await?;
+            if kind == ClipboardKind::Image {
+                write_recognized_text(&core.0, &text)?;
+            } else {
+                write_fragment(&core.0, &text)?;
+                mark_item_reused_if_enabled(&core.0, &pool, &id, kind).await?;
+            }
             Ok(CopyOutcome {
                 hide_window: core
                     .0
