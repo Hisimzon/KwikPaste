@@ -31,6 +31,14 @@ PaddleOCR notices; ordinary startup keeps stdout protocol-only.
 The release workflow uses the same recipe and an ORT/model cache keyed by ORT
 version, target, operator configuration, recipe and model manifest.
 
+Release all three engines with one `ext-ppocr-v<version>` tag, where `<version>`
+matches this workspace's `Cargo.toml` package version. CI builds the three bins
+in one Windows x64 job, signs each executable, uploads each under its unchanged
+`ocr-tiny`, `ocr-small` or `ocr-medium` id, and registers three backend drafts
+with the shared version. Publish those drafts in the admin site. Per-engine tags
+are not accepted. For a signing-only dry run, dispatch `extension-release.yml`
+with `tag_name=ext-ppocr-v<version>` and `dry_run=true`; nothing is published.
+
 `models.json` pins official PaddlePaddle Hugging Face revisions, sizes and SHA-256
 for all model/config bytes. `fetch_models.py` checks cached files too. Optional
 `--prototype-cache PATH` seeds this cache from the existing prototype, with the
