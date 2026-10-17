@@ -13,6 +13,7 @@ use kwikpaste_core::{
         ClipboardGroup, ClipboardItemQuery, ClipboardKind, ClipboardSubKind,
         Platform as CorePlatform,
     },
+    ocr::ImageTextLine,
     ops::{ClipboardGroupInput, ClipboardGroupLayoutInput},
     presenter::{ClipboardAction, ClipboardItemView, FileEntry, FilesPreviewKind},
     settings::Settings,
@@ -449,6 +450,15 @@ impl ClipboardSource for CoreSource {
                 .map(|(payload, metrics)| Preview { payload, metrics }))
         }
         .boxed()
+    }
+
+    fn image_text_lines(
+        &self,
+        id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<Option<Vec<ImageTextLine>>>> {
+        let core = self.core.clone();
+
+        async move { Ok(core.image_text_lines(&id).await?) }.boxed()
     }
 
     fn set_preview_text_view(

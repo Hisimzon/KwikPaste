@@ -189,6 +189,13 @@ pub struct CaptionButtonTokens {
     pub close_foreground: Hsla,
 }
 
+/// 大图预览文字层：标出的文字区域和选中的文字，叠在图片上所以是半透明的。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageTextTokens {
+    pub region: Hsla,
+    pub selection: Hsla,
+}
+
 /// 淡色底跟着文字色走，材质窗口上也不会变成一块实色。
 fn kind_tag(foreground: Hsla) -> KindTag {
     KindTag {
@@ -243,6 +250,7 @@ pub struct ComponentTokens {
     pub switch: SwitchTokens,
     pub scrollbar: ScrollbarTokens,
     pub caption_button: CaptionButtonTokens,
+    pub image_text: ImageTextTokens,
 }
 
 impl ComponentTokens {
@@ -376,6 +384,10 @@ impl ComponentTokens {
                 close_hover: s.status.danger.solid,
                 close_pressed: s.status.danger.active,
                 close_foreground: s.white,
+            },
+            image_text: ImageTextTokens {
+                region: s.accent.solid.opacity(0.16),
+                selection: s.accent.solid.opacity(0.38),
             },
         }
     }

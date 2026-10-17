@@ -5,19 +5,22 @@
 //!   之间切换；
 //! - 位图按显示尺寸解码（不超过原图、最长边 8192），缩放停下 [`SETTLE`] 后再按需重解码；旋转在解码时
 //!   做；换下来的位图立刻从窗口图集里删掉，关窗时随窗口释放。
+//! - 文字层：图片有识别文字时，各行按识别出的位置隐形地铺在图上，在文字上按住拖动跨行选字（双击
+//!   选一整行），Ctrl+C 复制选中的文字；`T` 标出全部文字区域。还没识别过的图由 core 优先识别。
 
-use std::{path::PathBuf, rc::Rc, sync::Arc, time::Duration};
+use std::{ops::Range, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Bounds, Context, CursorStyle, Entity, FocusHandle,
-    Global, ImageSource, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollDelta,
-    ScrollWheelEvent, Styled as _, Task, Window, WindowBounds, WindowOptions, canvas, div, fill,
-    img, point, prelude::FluentBuilder as _, px, size,
+    Global, Hsla, ImageSource, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, ParentElement as _, PathBuilder, Pixels, Render, RenderImage,
+    ScrollDelta, ScrollWheelEvent, Styled as _, Subscription, Task, TextRun, Window, WindowBounds,
+    WindowOptions, canvas, div, fill, font, img, point, prelude::FluentBuilder as _, px, size,
 };
+use kwikpaste_core::{CoreEvent, clipboard::ClipboardFragment, ocr::ImageTextLine};
 use kwikpaste_ui::{
     Button, Icon, IconName, KpStyled as _, TITLE_BAR_HEIGHT, TitleBar,
-    theme::{self, TextSize, radius, space},
+    theme::{self, TextSize, fonts, radius, space},
     toast::{self, Toast},
 };
 
@@ -32,6 +35,7 @@ use crate::{
             preview::format_bytes,
             shortcut,
             viewer::{self, Camera, decode_size, decoded_fits, rotated},
+            viewer_text::{Placement, Point, TextLayer},
         },
         source::ClipboardSource,
     },
@@ -45,6 +49,8 @@ const CHECKER: f32 = 12.;
 /// 窗口初始大小的上下限（逻辑像素）。
 const MIN_WINDOW: (f32, f32) = (560., 420.);
 const MAX_WINDOW: (f32, f32) = (1280., 860.);
+/// 量识别行里字符位置用的字号：只取比例，具体多大无所谓。
+const MEASURE_FONT_SIZE: f32 = 16.;
 
 /// 快照里的一张图：列表载荷里的原图尺寸只用来定窗口初始大小，真实尺寸读文件头。
 #[derive(Clone, Debug)]
@@ -156,8 +162,22 @@ pub struct ImageViewer {
     decoding: Option<Task<()>>,
     settle: Option<Task<()>>,
     drag: Option<Drag>,
+    /// 当前图的文字层；没有识别文字（或还没识别好）时为 `None`。
+    text: Option<TextLayer>,
+    /// 在等 core 识别当前图：收到 `OcrChanged` 再取一次。
+    text_pending: bool,
+    text_loading: Option<Task<()>>,
+    /// 选区的起点和终点（整段识别文字里的字符序号），终点跟着指针走。
+    selection: Option<(usize, usize)>,
+    /// 正在拖选文字。
+    selecting: bool,
+    /// 指针停在文字上。
+    over_text: bool,
+    /// 标出全部文字区域。
+    reveal: bool,
     title: String,
     focus: FocusHandle,
+    _subscription: Option<Subscription>,
 }
 
 impl ImageViewer {
@@ -169,6 +189,22 @@ impl ImageViewer {
     ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let subscription = crate::platform::core_events(cx).map(|events| {
+            cx.subscribe_in(
+                &events,
+                window,
+                |viewer, _, event: &CoreEvent, window, cx| {
+                    match event {
+                        CoreEvent::OcrChanged if viewer.text_pending => {
+                            viewer.load_text(window, cx)
+                        }
+                        // 识别扩展装上、停用或卸载：文字层跟着出现或消失。
+                        CoreEvent::ExtensionsChanged => viewer.load_text(window, cx),
+                        _ => {}
+                    }
+                },
+            )
+        });
         Self {
             source,
             host,
@@ -186,8 +222,16 @@ impl ImageViewer {
             decoding: None,
             settle: None,
             drag: None,
+            text: None,
+            text_pending: false,
+            text_loading: None,
+            selection: None,
+            selecting: false,
+            over_text: false,
+            reveal: false,
             title: String::new(),
             focus,
+            _subscription: subscription,
         }
     }
 
@@ -219,7 +263,12 @@ impl ImageViewer {
         self.drag = None;
         self.decoding = None;
         self.settle = None;
+        self.text = None;
+        self.selection = None;
+        self.selecting = false;
+        self.over_text = false;
         self.release_bitmap(window, cx);
+        self.load_text(window, cx);
 
         let generation = self.generation;
         let save = self.source.image_save(id);
@@ -262,6 +311,75 @@ impl ImageViewer {
                 .ok();
         }));
         cx.notify();
+    }
+
+    /// 取当前图的识别行；还没识别好就等 `OcrChanged`。
+    fn load_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.current_id() else {
+            return;
+        };
+        let lines = self.source.image_text_lines(id.clone());
+        self.text_loading = Some(cx.spawn_in(window, async move |viewer, cx| {
+            let result = lines.await;
+            viewer
+                .update_in(cx, |viewer, window, cx| {
+                    if viewer.current_id().as_ref() != Some(&id) {
+                        return;
+                    }
+                    let (text, pending) = match result {
+                        Ok(Some(lines)) => (Some(text_layer(lines, window)), false),
+                        Ok(None) => (None, true),
+                        Err(err) => {
+                            log::warn!("image viewer could not read the recognized text: {err:#}");
+                            (None, false)
+                        }
+                    };
+                    viewer.text_pending = pending;
+                    if text != viewer.text {
+                        viewer.text = text;
+                        viewer.selection = None;
+                        viewer.selecting = false;
+                        cx.notify();
+                    }
+                })
+                .ok();
+        }));
+    }
+
+    /// 选中的文字区间；没有选区或选区为空时为 `None`。
+    fn selected(&self) -> Option<Range<usize>> {
+        let (anchor, focus) = self.selection?;
+        let range = anchor.min(focus)..anchor.max(focus);
+        (!range.is_empty()).then_some(range)
+    }
+
+    /// 有识别文字的话返回文字层。
+    fn text_layer(&self) -> Option<&TextLayer> {
+        self.text.as_ref().filter(|text| !text.is_empty())
+    }
+
+    /// 原图归一化坐标在舞台上的位置。
+    fn placement(&self) -> Placement {
+        let (width, height) = self.image_size();
+        Placement {
+            origin: (self.camera.x, self.camera.y),
+            size: (width * self.camera.scale, height * self.camera.scale),
+            turns: self.turns,
+        }
+    }
+
+    fn select_all(&mut self, cx: &mut Context<Self>) {
+        if let Some(all) = self.text_layer().map(TextLayer::all) {
+            self.selection = Some((all.start, all.end));
+            cx.notify();
+        }
+    }
+
+    fn toggle_reveal(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.text_layer().is_some() {
+            self.reveal = !self.reveal;
+            cx.notify();
+        }
     }
 
     fn release_bitmap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -415,6 +533,23 @@ impl ImageViewer {
             return;
         };
         let task = self.host.copy(id, false, None, cx);
+        Self::report_copy(task, window, cx);
+    }
+
+    /// 复制选中的文字。
+    fn copy_text(&mut self, range: Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.current_id() else {
+            return;
+        };
+        let fragment = ClipboardFragment::ImageTextRange {
+            start: range.start,
+            end: range.end,
+        };
+        let task = self.host.copy_fragment(id, fragment, cx);
+        Self::report_copy(task, window, cx);
+    }
+
+    fn report_copy(task: Task<anyhow::Result<()>>, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |_, cx| {
             let result = task.await;
             cx.update(|window, cx| match result {
@@ -489,6 +624,29 @@ impl ImageViewer {
             return;
         }
         let pointer = Self::stage_point(event.position);
+        let placement = self.placement();
+        if let Some(text) = self.text_layer() {
+            if event.click_count >= 2
+                && let Some(line) = text.line_at(&placement, pointer)
+            {
+                let range = text.line_range(line);
+                self.selection = Some((range.start, range.end));
+                self.selecting = false;
+                cx.notify();
+                return;
+            }
+            if event.click_count == 1
+                && let Some(caret) = text.caret_at(&placement, pointer)
+            {
+                self.selection = Some((caret, caret));
+                self.selecting = true;
+                cx.notify();
+                return;
+            }
+        }
+        if self.selection.take().is_some() {
+            cx.notify();
+        }
         if event.click_count >= 2 {
             self.drag = None;
             if self.camera.fitted {
@@ -508,6 +666,33 @@ impl ImageViewer {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let pointer = Self::stage_point(event.position);
+        let placement = self.placement();
+        if self.selecting {
+            if event.pressed_button != Some(MouseButton::Left) {
+                self.selecting = false;
+                return;
+            }
+            let caret = self
+                .text_layer()
+                .and_then(|text| text.nearest_caret(&placement, pointer));
+            if let (Some(caret), Some((_, focus))) = (caret, self.selection.as_mut())
+                && *focus != caret
+            {
+                *focus = caret;
+                cx.notify();
+            }
+            return;
+        }
+        let over_text = self.drag.is_none()
+            && self
+                .text_layer()
+                .is_some_and(|text| text.line_at(&placement, pointer).is_some());
+        if over_text != self.over_text {
+            self.over_text = over_text;
+            cx.notify();
+        }
+
         let Some(drag) = &self.drag else {
             return;
         };
@@ -516,7 +701,6 @@ impl ImageViewer {
             cx.notify();
             return;
         }
-        let pointer = Self::stage_point(event.position);
         let (dx, dy) = (pointer.0 - drag.pointer.0, pointer.1 - drag.pointer.1);
         self.camera.x = drag.from.0;
         self.camera.y = drag.from.1;
@@ -525,6 +709,7 @@ impl ImageViewer {
     }
 
     fn end_drag(&mut self, cx: &mut Context<Self>) {
+        self.selecting = false;
         if self.drag.take().is_some() {
             cx.notify();
         }
@@ -535,6 +720,10 @@ impl ImageViewer {
         let modifiers = keystroke.modifiers;
         let plain = !modifiers.secondary() && !modifiers.alt;
         match keystroke.key.as_str() {
+            "escape" if self.selected().is_some() => {
+                self.selection = None;
+                cx.notify();
+            }
             "escape" => window.remove_window(),
             "left" if plain => self.switch(false, window, cx),
             "right" if plain => self.switch(true, window, cx),
@@ -543,7 +732,12 @@ impl ImageViewer {
             "0" if plain => self.fit(window, cx),
             "1" if plain => self.actual_size(window, cx),
             "r" if plain => self.rotate(window, cx),
-            "c" if modifiers.secondary() => self.copy(window, cx),
+            "t" if plain => self.toggle_reveal(window, cx),
+            "a" if modifiers.secondary() => self.select_all(cx),
+            "c" if modifiers.secondary() => match self.selected() {
+                Some(range) => self.copy_text(range, window, cx),
+                None => self.copy(window, cx),
+            },
             "s" if modifiers.secondary() => self.save(window, cx),
             _ => return,
         }
@@ -594,6 +788,7 @@ impl ImageViewer {
         let visible = bounds.intersect(&stage);
         let tokens = theme::semantic(cx);
         let (light, dark) = (tokens.surface.raised, tokens.fill.default);
+        let marks = self.text_marks(cx);
 
         Some(
             div()
@@ -641,8 +836,57 @@ impl ImageViewer {
                         .w(bounds.size.width)
                         .h(bounds.size.height),
                 )
+                .when(!marks.is_empty(), |layer| {
+                    layer.child(
+                        canvas(
+                            |_, _, _| {},
+                            move |origin, _, window, _| {
+                                for (quad, color) in &marks {
+                                    if let Some(path) = quad_path(quad, origin.origin) {
+                                        window.paint_path(path, *color);
+                                    }
+                                }
+                            },
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                    )
+                })
                 .into_any_element(),
         )
+    }
+
+    /// 文字层要画的块（舞台坐标）：标出的文字区域在下，选区在上；舞台外的不画。
+    fn text_marks(&self, cx: &App) -> Vec<([Point; 4], Hsla)> {
+        let Some(text) = self.text_layer() else {
+            return Vec::new();
+        };
+        let colors = theme::components(cx).image_text;
+        let placement = self.placement();
+        let regions = if self.reveal {
+            text.regions(&placement)
+        } else {
+            Vec::new()
+        };
+        let regions = regions.into_iter().map(|quad| (quad, colors.region));
+        let selection = self
+            .selected()
+            .map(|range| text.highlights(&placement, &range))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|quad| (quad, colors.selection));
+        let stage = self.stage;
+        regions
+            .chain(selection)
+            .filter(|(quad, _)| {
+                quad.iter().any(|corner| corner.0 >= 0.)
+                    && quad.iter().any(|corner| corner.0 <= stage.0)
+                    && quad.iter().any(|corner| corner.1 >= 0.)
+                    && quad.iter().any(|corner| corner.1 <= stage.1)
+            })
+            .collect()
     }
 
     fn icon_button(
@@ -747,6 +991,19 @@ impl ImageViewer {
                 Self::rotate,
                 cx,
             ))
+            .when(self.text_layer().is_some(), |toolbar| {
+                toolbar.child(
+                    self.icon_button(
+                        "viewer-text",
+                        IconName::ScanText,
+                        "preview:viewer.showText",
+                        Some("t"),
+                        Self::toggle_reveal,
+                        cx,
+                    )
+                    .selected(self.reveal),
+                )
+            })
             .child(separator())
             .child(self.icon_button(
                 "viewer-copy",
@@ -872,6 +1129,8 @@ impl Render for ImageViewer {
         let tokens = theme::semantic(cx);
         let cursor = if self.drag.is_some() {
             CursorStyle::ClosedHand
+        } else if self.selecting || self.over_text {
+            CursorStyle::IBeam
         } else if self.camera.pannable(self.image_size(), self.stage) {
             CursorStyle::OpenHand
         } else {
@@ -933,4 +1192,42 @@ impl Render for ImageViewer {
                     ),
             )
     }
+}
+
+/// 按界面字体量出每行字符的位置，排成文字层。
+fn text_layer(lines: Vec<ImageTextLine>, window: &Window) -> TextLayer {
+    let mut ui_font = font(fonts::UI_FAMILY);
+    ui_font.fallbacks = Some(fonts::ui_fallbacks());
+    TextLayer::new(
+        lines
+            .into_iter()
+            .map(|line| (line.text, line.quad.map(|[x, y]| (x, y)))),
+        |text| {
+            let run = TextRun {
+                len: text.len(),
+                font: ui_font.clone(),
+                ..TextRun::default()
+            };
+            let layout =
+                window
+                    .text_system()
+                    .layout_line(text, px(MEASURE_FONT_SIZE), &[run], None);
+            text.char_indices()
+                .map(|(index, _)| layout.x_for_index(index).as_f32())
+                .chain(std::iter::once(layout.width.as_f32()))
+                .collect()
+        },
+    )
+}
+
+/// 舞台坐标的四边形，`origin` 是舞台在窗口里的左上角。
+fn quad_path(quad: &[Point; 4], origin: gpui::Point<Pixels>) -> Option<gpui::Path<Pixels>> {
+    let corner = |(x, y): Point| origin + point(px(x), px(y));
+    let mut builder = PathBuilder::fill();
+    builder.move_to(corner(quad[0]));
+    for &next in &quad[1..] {
+        builder.line_to(corner(next));
+    }
+    builder.close();
+    builder.build().ok()
 }
