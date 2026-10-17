@@ -46,7 +46,16 @@ fn enable(core: &Core) {
 
 fn done(text: &str) -> Outcome {
     Outcome::Done {
-        text: text.into(),
+        lines: if text.is_empty() {
+            vec![]
+        } else {
+            text.split('\n')
+                .map(|text| ImageTextLine {
+                    text: text.into(),
+                    quad: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                })
+                .collect()
+        },
         language: "zh-Hans-CN".into(),
     }
 }
@@ -60,6 +69,328 @@ fn save_outcome(fixture: &Fixture, core: &Core, item: &ClipboardItem, outcome: &
             .unwrap();
         connection.close().await.unwrap();
     });
+}
+
+#[test]
+fn stored_lines_match_text_including_truncation_and_empty_result() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let item = seed(&fixture, &core, "layout", 1_800_000_001);
+    enable(&core);
+    let text = format!("{}\n尾行\n丢弃", "字".repeat(protocol::MAX_TEXT_CHARS - 2));
+    save_outcome(&fixture, &core, &item, &done(&text));
+    let lines = block_on(core.image_text_lines(&item.id)).unwrap().unwrap();
+    let stored = block_on(core.image_text(&item.id)).unwrap().unwrap();
+    assert_eq!(stored.chars().count(), protocol::MAX_TEXT_CHARS);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[1].text, "尾");
+    assert_eq!(
+        stored,
+        lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    save_outcome(&fixture, &core, &item, &done(""));
+    assert_eq!(
+        block_on(core.image_text_lines(&item.id)).unwrap(),
+        Some(vec![])
+    );
+    assert_eq!(
+        block_on(core.image_text(&item.id)).unwrap().as_deref(),
+        Some("")
+    );
+    block_on(core.shutdown()).unwrap();
+}
+
+/// 暂停真实会话，只观察 API 对单个优先槽的影响。
+fn enable_paused(core: &Core) {
+    enable(core);
+    let mut state = core.0.ocr.state();
+    state.suspended = 1;
+    state.stopped = false;
+}
+
+#[test]
+fn image_lines_disabled_missing_and_non_image_do_not_schedule() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let item = seed(&fixture, &core, "disabled-layout", 1_800_000_001);
+    save_outcome(&fixture, &core, &item, &done("text"));
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+    assert!(core.0.ocr.state().priority.is_none());
+    enable_paused(&core);
+    assert!(block_on(core.image_text_lines("missing"))
+        .unwrap()
+        .is_none());
+    let text = core
+        .build_item(&ClipboardPayload::Text(crate::clipboard::TextPayload {
+            text: "not an image".into(),
+            html: None,
+            rtf: None,
+        }))
+        .unwrap()
+        .unwrap();
+    block_on(core.store_item(text.clone(), None)).unwrap();
+    assert!(block_on(core.image_text_lines(&text.id)).unwrap().is_none());
+    assert!(core.0.ocr.state().priority.is_none());
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn pending_layout_replaces_priority_and_returns_saved_lines() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let first = seed(&fixture, &core, "first-layout", 1_800_000_001);
+    let second = seed(&fixture, &core, "second-layout", 1_800_000_002);
+    enable_paused(&core);
+    assert!(block_on(core.image_text_lines(&first.id))
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        core.0.ocr.state().priority.as_deref(),
+        Some(first.id.as_str())
+    );
+    assert!(block_on(core.image_text_lines(&second.id))
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        core.0.ocr.state().priority.as_deref(),
+        Some(second.id.as_str())
+    );
+    save_outcome(&fixture, &core, &second, &done("new layout"));
+    finish_priority(&core.0, &first.id);
+    assert_eq!(
+        core.0.ocr.state().priority.as_deref(),
+        Some(second.id.as_str())
+    );
+    finish_priority(&core.0, &second.id);
+    assert_eq!(
+        block_on(core.image_text_lines(&second.id))
+            .unwrap()
+            .unwrap()[0]
+            .text,
+        "new layout"
+    );
+    assert!(core.0.ocr.state().priority.is_none());
+    block_on(core.shutdown()).unwrap();
+}
+
+/// 构造协议 1 的已完成行，保留原文但没有布局。
+fn legacy_layout(fixture: &Fixture, core: &Core, item: &ClipboardItem) {
+    save_outcome(fixture, core, item, &done("legacy searchable text"));
+    fixture.runtime.handle().block_on(async {
+        sqlx::query("UPDATE image_texts SET lines = NULL WHERE item_id = ?")
+            .bind(&item.id)
+            .execute(&core.0.db.pool().await)
+            .await
+            .unwrap();
+    });
+}
+
+#[test]
+fn legacy_layout_is_priority_only_and_failed_rerun_keeps_text() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let item = seed(&fixture, &core, "legacy-layout", 1_800_000_001);
+    legacy_layout(&fixture, &core, &item);
+    enable_paused(&core);
+    fixture.runtime.handle().block_on(async {
+        let mut connection = connect(&core.0).await.unwrap();
+        assert!(sqlx::query_as::<_, (String, String, String)>(db::NEXT_JOB)
+            .fetch_optional(&mut connection)
+            .await
+            .unwrap()
+            .is_none());
+        connection.close().await.unwrap();
+    });
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+    assert_eq!(
+        core.0.ocr.state().priority.as_deref(),
+        Some(item.id.as_str())
+    );
+    save_outcome(
+        &fixture,
+        &core,
+        &item,
+        &Outcome::Failed {
+            reason: "rerun failed".into(),
+        },
+    );
+    finish_priority(&core.0, &item.id);
+    assert_eq!(
+        block_on(core.image_text(&item.id)).unwrap().as_deref(),
+        Some("legacy searchable text")
+    );
+    assert_eq!(
+        block_on(core.list_items(ClipboardItemQuery {
+            keyword: Some("searchable".into()),
+            ..Default::default()
+        }))
+        .unwrap()
+        .total,
+        1
+    );
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+    assert_eq!(
+        core.0.ocr.state().priority.as_deref(),
+        Some(item.id.as_str())
+    );
+    save_outcome(&fixture, &core, &item, &done("layout recovered"));
+    finish_priority(&core.0, &item.id);
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_some());
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn terminal_layout_rows_do_not_schedule() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let item = seed(&fixture, &core, "terminal-layout", 1_800_000_001);
+    enable_paused(&core);
+    let failed = Outcome::Failed {
+        reason: "failure".into(),
+    };
+    save_outcome(&fixture, &core, &item, &failed);
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+    assert!(core.0.ocr.state().priority.take().is_some());
+    save_outcome(&fixture, &core, &item, &failed);
+    save_outcome(&fixture, &core, &item, &failed);
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+    assert!(core.0.ocr.state().priority.is_none());
+    save_outcome(
+        &fixture,
+        &core,
+        &item,
+        &Outcome::Skipped {
+            reason: "large".into(),
+        },
+    );
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+    assert!(core.0.ocr.state().priority.is_none());
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn image_text_range_copies_unicode_scalars_and_rejects_invalid_ranges() {
+    use crate::clipboard::ClipboardFragment::ImageTextRange;
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let item = seed(&fixture, &core, "range", 1_800_000_001);
+    save_outcome(&fixture, &core, &item, &done("中😀\ntext"));
+    enable(&core);
+    block_on(core.copy_fragment(&item.id, ImageTextRange { start: 1, end: 4 })).unwrap();
+    assert_eq!(fixture.clipboard.snapshot().text.as_deref(), Some("😀\nt"));
+    block_on(core.prepare_paste_fragment(&item.id, ImageTextRange { start: 0, end: 7 })).unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot().text.as_deref(),
+        Some("中😀\ntext")
+    );
+    for (start, end) in [(1, 1), (3, 1), (0, 8), (usize::MAX, usize::MAX)] {
+        assert!(block_on(core.copy_fragment(&item.id, ImageTextRange { start, end })).is_err());
+        assert!(
+            block_on(core.prepare_paste_fragment(&item.id, ImageTextRange { start, end })).is_err()
+        );
+    }
+    block_on(core.set_extension_enabled("ocr", false)).unwrap();
+    assert!(block_on(core.copy_fragment(&item.id, ImageTextRange { start: 0, end: 1 })).is_err());
+    block_on(core.shutdown()).unwrap();
+}
+
+/// 真实 helper 使用当前测试 profile 的产物；安装期间暂停调度，避免提前消费队列。
+fn install_real_paused(fixture: &Fixture, core: &Core) {
+    core.0.ocr.state().suspended = 1;
+    let test = std::env::current_exe().unwrap();
+    let profile = test.parent().unwrap().parent().unwrap();
+    let source = profile.join(if cfg!(target_os = "windows") {
+        "kwikpaste-ext-ocr.exe"
+    } else {
+        "kwikpaste-ext-ocr"
+    });
+    let staged = fixture.root().join("real-ocr-staged");
+    std::fs::copy(source, &staged).expect("build kwikpaste-ext-ocr before core tests");
+    block_on(core.install_extension("ocr", "1.0.0", protocol::OCR_PROTOCOL, &staged)).unwrap();
+}
+
+/// 等到会话真正释放连接和 helper，避免测试清理与子进程争用临时文件。
+fn wait_idle(core: &Core) {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while core.0.ocr.state().running {
+        assert!(Instant::now() < deadline, "OCR session did not become idle");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn priority_starts_idle_session_before_background_queue() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    install_real_paused(&fixture, &core);
+    let priority = seed(&fixture, &core, "priority-old", 1_800_000_001);
+    let normal = seed(&fixture, &core, "normal-new", 1_800_000_002);
+    fixture.events.lock().unwrap().clear();
+    core.0.ocr.state().suspended = 0;
+    assert!(block_on(core.image_text_lines(&priority.id))
+        .unwrap()
+        .is_none());
+    wait_idle(&core);
+    assert_eq!(
+        block_on(core.image_text_lines(&priority.id)).unwrap(),
+        Some(vec![])
+    );
+    assert_eq!(
+        block_on(core.image_text_lines(&normal.id)).unwrap(),
+        Some(vec![])
+    );
+    fixture.runtime.handle().block_on(async {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT item_id, updated_at FROM image_texts ORDER BY updated_at, rowid",
+        )
+        .fetch_all(&core.0.db.pool().await)
+        .await
+        .unwrap();
+        assert_eq!(rows[0].0, priority.id);
+    });
+    assert!(
+        fixture
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, CoreEvent::OcrChanged))
+            .count()
+            >= 3
+    );
+    assert!(core.0.ocr.state().priority.is_none());
+    assert!(core.0.ocr.state().child.is_none());
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn real_priority_reruns_legacy_layout_and_retains_failed_text() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    install_real_paused(&fixture, &core);
+    let item = seed(&fixture, &core, "real-legacy", 1_800_000_001);
+    legacy_layout(&fixture, &core, &item);
+    core.0.ocr.state().suspended = 0;
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+    wait_idle(&core);
+    assert_eq!(
+        block_on(core.image_text_lines(&item.id)).unwrap(),
+        Some(vec![])
+    );
+    legacy_layout(&fixture, &core, &item);
+    std::fs::remove_file(core.0.images.origin_path(&item.content)).unwrap();
+    assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+    wait_idle(&core);
+    assert_eq!(
+        block_on(core.image_text(&item.id)).unwrap().as_deref(),
+        Some("legacy searchable text")
+    );
+    assert!(core.0.ocr.state().priority.is_none());
+    block_on(core.shutdown()).unwrap();
 }
 
 #[test]

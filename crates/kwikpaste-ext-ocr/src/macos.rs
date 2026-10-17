@@ -1,5 +1,5 @@
 //! Vision 仅在 helper 中使用；保持 macOS 10.15 可用的 selector 集合。
-use kwikpaste_ext_protocol::{MAX_TEXT_CHARS, OcrSupport, Outcome};
+use kwikpaste_ext_protocol::{MAX_TEXT_CHARS, OcrSupport, Outcome, TextLine};
 use objc2::{AnyThread, rc::autoreleasepool, runtime::AnyClass};
 use objc2_core_foundation::CFURL;
 use objc2_core_graphics::CGImage;
@@ -101,15 +101,36 @@ impl Engine {
                 .performRequests_error(&requests)
                 .map_err(|err| anyhow::anyhow!("{err}"))?;
             let mut lines = Vec::new();
+            let mut chars = 0;
             if let Some(results) = request.results() {
                 for observation in results.iter() {
                     if let Some(text) = observation.topCandidates(1).firstObject() {
-                        lines.push(text.string().to_string());
+                        let separator = usize::from(!lines.is_empty());
+                        let remaining = MAX_TEXT_CHARS.saturating_sub(chars + separator);
+                        if remaining == 0 {
+                            break;
+                        }
+                        let text: String =
+                            text.string().to_string().chars().take(remaining).collect();
+                        if text.is_empty() {
+                            continue;
+                        }
+                        chars += text.chars().count() + separator;
+                        let quad = unsafe {
+                            [
+                                observation.topLeft(),
+                                observation.topRight(),
+                                observation.bottomRight(),
+                                observation.bottomLeft(),
+                            ]
+                        }
+                        .map(|point| [point.x as f32, (1.0 - point.y) as f32]);
+                        lines.push(TextLine { text, quad });
                     }
                 }
             }
             Ok(Outcome::Done {
-                text: lines.join("\n").chars().take(MAX_TEXT_CHARS).collect(),
+                lines,
                 language: self.languages.join(","),
             })
         })

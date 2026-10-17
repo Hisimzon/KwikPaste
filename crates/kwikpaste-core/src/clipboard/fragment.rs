@@ -99,6 +99,8 @@ pub enum ClipboardFragment {
     Words { indices: Vec<usize> },
     /// 图片文字预览里选中的词序号，对应识别文本的 [`split_words`] 结果。
     ImageWords { indices: Vec<usize> },
+    /// 图片识别原文的字符区间，按 Unicode 标量计数，包含起点但不包含终点。
+    ImageTextRange { start: usize, end: usize },
 }
 
 /// 拆词面板里的一个词。
@@ -433,7 +435,7 @@ pub fn resolve_fragment(item: &ClipboardItem, fragment: &ClipboardFragment) -> O
         }
         ClipboardFragment::Words { indices } => select_words(source, indices),
         // 图片识别文本来自派生表，由 core 的片段加载入口读取后拆词。
-        ClipboardFragment::ImageWords { .. } => None,
+        ClipboardFragment::ImageWords { .. } | ClipboardFragment::ImageTextRange { .. } => None,
     }
 }
 

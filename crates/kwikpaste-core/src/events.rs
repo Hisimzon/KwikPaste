@@ -36,7 +36,7 @@ pub enum CoreEvent {
     ExtensionsChanged,
     /// 微信输入法的进程、配对、设备或错误状态变化。
     WeTypeChanged,
-    /// 图片文字识别状态变化，运行中进度最多每秒两次。
+    /// 图片文字识别状态变化；后台进度最多每秒两次，按需识别落库后立即通知。
     OcrChanged,
     /// 一条记录入库或命中已有内容（1.x `clipboard://updated` 的 `{ id, kind, deduplicated }`）。
     ClipboardUpserted {

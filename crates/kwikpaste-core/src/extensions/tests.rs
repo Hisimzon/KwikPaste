@@ -26,7 +26,7 @@ fn installed_json_roundtrip() {
         serde_json::from_slice(&fs::read(store.dir.join("installed.json")).unwrap()).unwrap();
     assert_eq!(
         json,
-        serde_json::json!({"ocr":{"version":"1.0.0","protocol":1,"enabled":true}})
+        serde_json::json!({"ocr":{"version":"1.0.0","protocol":OCR_PROTOCOL,"enabled":true}})
     );
 }
 

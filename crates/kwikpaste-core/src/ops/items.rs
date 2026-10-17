@@ -275,7 +275,7 @@ async fn load_fragment_text(
 ) -> Result<(ClipboardKind, String)> {
     let item = find_required(pool, id).await?;
     let text = match fragment {
-        ClipboardFragment::ImageWords { indices }
+        ClipboardFragment::ImageWords { .. } | ClipboardFragment::ImageTextRange { .. }
             if item.kind == ClipboardKind::Image && core.extensions.resolve("ocr").is_some() =>
         {
             let recognized: Option<String> = sqlx::query_scalar(
@@ -285,7 +285,16 @@ async fn load_fragment_text(
             .fetch_optional(pool)
             .await
             .map_err(anyhow::Error::from)?;
-            recognized.and_then(|text| select_words(&text, indices))
+            recognized.and_then(|text| match fragment {
+                ClipboardFragment::ImageWords { indices } => select_words(&text, indices),
+                ClipboardFragment::ImageTextRange { start, end } => {
+                    if start >= end || *end > text.chars().count() {
+                        return None;
+                    }
+                    Some(text.chars().skip(*start).take(end - start).collect())
+                }
+                _ => None,
+            })
         }
         ClipboardFragment::Snippet { .. } | ClipboardFragment::Words { .. }
             if item.kind == ClipboardKind::Text =>

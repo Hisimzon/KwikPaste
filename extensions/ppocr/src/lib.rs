@@ -9,7 +9,7 @@ use imageproc::{
     geometry::convex_hull, point::Point,
 };
 use kwikpaste_ext_protocol::{
-    self as protocol, MAX_TEXT_CHARS, OcrSupport, Outcome, Request, Response,
+    self as protocol, MAX_TEXT_CHARS, OcrSupport, Outcome, Request, Response, TextLine,
 };
 use ort::{
     environment::Environment,
@@ -183,8 +183,9 @@ impl Engine {
             }
         }
         let mut lines = Vec::new();
+        let mut chars = 0;
         for q in boxes {
-            let crop = crop_quad(&image, q)?;
+            let (crop, reading_quad) = crop_quad(&image, q)?;
             let height = self.rec_h;
             let width = ((height as f64 * (crop.width() as f64 / crop.height() as f64))
                 .max(self.rec_w as f64) as usize)
@@ -216,11 +217,29 @@ impl Engine {
                 eprintln!("{}", serde_json::json!({"box":q,"text":text,"score":score}));
             }
             if !text.is_empty() {
-                lines.push(text);
+                let separator = usize::from(!lines.is_empty());
+                let remaining = MAX_TEXT_CHARS.saturating_sub(chars + separator);
+                if remaining == 0 {
+                    break;
+                }
+                let text: String = text.chars().take(remaining).collect();
+                chars += text.chars().count() + separator;
+                lines.push(TextLine {
+                    text,
+                    quad: reading_quad.map(|(x, y)| {
+                        [
+                            (x / w as f64).clamp(0.0, 1.0) as f32,
+                            (y / h as f64).clamp(0.0, 1.0) as f32,
+                        ]
+                    }),
+                });
+                if chars >= MAX_TEXT_CHARS {
+                    break;
+                }
             }
         }
         Ok(Outcome::Done {
-            text: lines.join("\n").chars().take(MAX_TEXT_CHARS).collect(),
+            lines,
             language: "zh-Hans".into(),
         })
     }
@@ -464,8 +483,8 @@ fn cubic(x: f64) -> f64 {
         0.
     }
 }
-/// Perspective-warp a box with cubic interpolation and replicated image edges.
-fn crop_quad(src: &RgbImage, q: Quad) -> Result<RgbImage> {
+/// 透视裁剪并返回与裁剪阅读方向一致的四角；竖排旋转时同步调整角点顺序。
+fn crop_quad(src: &RgbImage, q: Quad) -> Result<(RgbImage, Quad)> {
     let (q, _) = min_box(&q.map(|(x, y)| Point::new(x as i32, y as i32)));
     let w = dist(q[0], q[1]).max(dist(q[2], q[3])) as u32;
     let h = dist(q[0], q[3]).max(dist(q[1], q[2])) as u32;
@@ -502,9 +521,10 @@ fn crop_quad(src: &RgbImage, q: Quad) -> Result<RgbImage> {
         Rgb(rgb.map(|v| v.round().clamp(0., 255.) as u8))
     });
     Ok(if h as f64 / w as f64 >= 1.5 {
-        image::imageops::rotate270(&image)
+        // 逆时针旋转后，原右上角成为阅读起点，原右下角成为终点。
+        (image::imageops::rotate270(&image), [q[1], q[2], q[3], q[0]])
     } else {
-        image
+        (image, q)
     })
 }
 
@@ -611,6 +631,18 @@ pub fn run(model: Models) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn crop_reading_frame_follows_vertical_rotation() {
+        let source = RgbImage::new(40, 40);
+        let horizontal = [(2., 3.), (22., 3.), (22., 13.), (2., 13.)];
+        let (crop, quad) = crop_quad(&source, horizontal).unwrap();
+        assert_eq!(crop.dimensions(), (20, 10));
+        assert_eq!(quad, horizontal);
+        let vertical = [(2., 3.), (12., 3.), (12., 33.), (2., 33.)];
+        let (crop, quad) = crop_quad(&source, vertical).unwrap();
+        assert_eq!(crop.dimensions(), (30, 10));
+        assert_eq!(quad, [vertical[1], vertical[2], vertical[3], vertical[0]]);
+    }
     #[test]
     fn ctc_blank_repeat() {
         let dict = vec!["".into(), "a".into(), "中".into()];

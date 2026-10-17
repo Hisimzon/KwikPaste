@@ -2,7 +2,7 @@
 mod client;
 mod db;
 pub use kwikpaste_ext_protocol as protocol;
-pub use protocol::OcrSupport;
+pub use protocol::{OcrSupport, TextLine as ImageTextLine};
 #[cfg(test)]
 mod tests;
 
@@ -91,6 +91,7 @@ struct State {
     generation: u64,
     running: bool,
     dirty: bool,
+    priority: Option<String>,
     suspended: usize,
     stopped: bool,
     child: Option<client::ChildHandle>,
@@ -211,6 +212,18 @@ impl Scheduler {
         }
     }
 
+    /// 只保留最新的按需请求，空闲时立即启动会话。
+    fn prioritize(&self, id: String) {
+        {
+            let mut state = self.state();
+            if state.stopped {
+                return;
+            }
+            state.priority = Some(id);
+        }
+        self.nudge();
+    }
+
     /// 设置变化立即废弃在途结果；关闭后不会重新启动。
     pub(crate) fn settings_changed(&self) {
         self.invalidate();
@@ -320,9 +333,22 @@ fn run_jobs(
         if !core.ocr.valid(generation) || core.extensions.resolve("ocr").is_none() {
             break;
         }
-        let job: Option<(String, String, String)> = core
-            .rt
-            .block_on(sqlx::query_as(db::NEXT_JOB).fetch_optional(&mut *connection))?;
+        let priority = core.ocr.state().priority.clone();
+        let job: Option<(String, String, String)> = if let Some(id) = &priority {
+            core.rt.block_on(sqlx::query_as("SELECT i.id, i.content, i.content_hash FROM clipboard_items i LEFT JOIN image_texts t ON t.item_id = i.id WHERE i.id = ? AND i.kind = 'image' AND (t.item_id IS NULL OR (t.status = 'done' AND t.lines IS NULL) OR (t.status = 'failed' AND t.attempts < 3))").bind(id).fetch_optional(&mut *connection))?
+        } else {
+            core.rt
+                .block_on(sqlx::query_as(db::NEXT_JOB).fetch_optional(&mut *connection))?
+        };
+        if job.is_none() {
+            if let Some(id) = &priority {
+                let mut state = core.ocr.state();
+                if state.priority.as_ref() == Some(id) {
+                    state.priority = None;
+                }
+                continue;
+            }
+        }
         let Some((id, name, hash)) = job else {
             let mut state = core.ocr.state();
             if state.dirty && state.generation == generation {
@@ -332,7 +358,7 @@ fn run_jobs(
             break;
         };
         if let Err(err) = crate::clipboard::validate_image_file_name(&name) {
-            core.rt.block_on(write_if_current(
+            let saved = core.rt.block_on(write_if_current(
                 core,
                 generation,
                 connection,
@@ -342,6 +368,9 @@ fn run_jobs(
                     reason: err.to_string(),
                 },
             ))?;
+            if saved && priority.is_some() {
+                finish_priority(core, &id);
+            }
             continue;
         }
         if helper.is_none() && failures != 0 {
@@ -392,13 +421,7 @@ fn run_jobs(
         let outcome = match response {
             Some(Ok(Response::Recognize { job_id, outcome })) if job_id == id => {
                 failures = 0;
-                match outcome {
-                    Outcome::Done { text, language } => Outcome::Done {
-                        text: text.chars().take(protocol::MAX_TEXT_CHARS).collect(),
-                        language,
-                    },
-                    other => other,
-                }
+                outcome
             }
             other => {
                 if let Some(client) = helper.take() {
@@ -412,9 +435,13 @@ fn run_jobs(
                 }
             }
         };
-        core.rt.block_on(write_if_current(
+        let saved = core.rt.block_on(write_if_current(
             core, generation, connection, &id, &hash, &outcome,
         ))?;
+        if saved && priority.is_some() {
+            finish_priority(core, &id);
+            last_event = Instant::now();
+        }
         if last_event.elapsed() >= Duration::from_millis(500) {
             core.events.emit(CoreEvent::OcrChanged);
             last_event = Instant::now();
@@ -423,6 +450,16 @@ fn run_jobs(
     drop(helper);
     core.ocr.state().child = None;
     Ok(())
+}
+
+/// 优先结果落库后立即通知；在途请求不能清除后来替换的新请求。
+fn finish_priority(core: &CoreInner, id: &str) {
+    let mut state = core.ocr.state();
+    if state.priority.as_deref() == Some(id) {
+        state.priority = None;
+    }
+    drop(state);
+    core.events.emit(CoreEvent::OcrChanged);
 }
 
 /// 与换库/清空共用 generation 栅栏和入库串行锁，旧结果不能写入新对象。
@@ -523,6 +560,35 @@ impl Core {
             Ok(())
         })
         .await
+    }
+
+    /// 返回原图上的识别行；未完成或缺少布局时优先识别这一条记录。
+    pub async fn image_text_lines(&self, id: &str) -> Result<Option<Vec<ImageTextLine>>> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            if core.0.extensions.resolve("ocr").is_none() {
+                return Ok(None);
+            }
+            let row: Option<(Option<String>, Option<i64>, Option<String>)> = sqlx::query_as(
+                "SELECT t.status, t.attempts, t.lines FROM clipboard_items i LEFT JOIN image_texts t ON t.item_id = i.id WHERE i.id = ? AND i.kind = 'image'"
+            ).bind(&id).fetch_optional(&core.0.db.pool().await).await.map_err(anyhow::Error::from)?;
+            let Some((status, attempts, lines)) = row else {
+                return Ok(None);
+            };
+            if status.as_deref() == Some("done") {
+                if let Some(lines) = lines {
+                    return Ok(Some(serde_json::from_str(&lines).map_err(anyhow::Error::from)?));
+                }
+            }
+            if status.as_deref() == Some("skipped")
+                || (status.as_deref() == Some("failed") && attempts.unwrap_or(0) >= 3)
+            {
+                return Ok(None);
+            }
+            core.0.ocr.prioritize(id);
+            Ok(None)
+        }).await
     }
 
     /// 返回已完成的识别文本（包括空文本），不改变历史记录。
