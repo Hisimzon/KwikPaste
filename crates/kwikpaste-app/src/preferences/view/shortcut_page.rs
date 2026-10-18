@@ -303,7 +303,7 @@ fn chip(
             tokens.text.primary,
         ),
         ChipLook::Unset | ChipLook::Fixed => (
-            gpui::transparent_black(),
+            theme::transparent(),
             tokens.border.default,
             tokens.text.muted,
         ),

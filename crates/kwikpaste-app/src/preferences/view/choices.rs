@@ -12,7 +12,7 @@ use gpui::{
 };
 use kwikpaste_ui::{
     Icon, IconName, KpStyled as _,
-    theme::{self, Appearance, SemanticTokens, TextSize, space},
+    theme::{self, Appearance, SemanticTokens, TextSize, components::PreferencesTokens, space},
 };
 
 use super::super::{icons::PrefIcon, schema::TilesKind};
@@ -48,7 +48,9 @@ pub(in crate::preferences) fn segmented(
         .p(space(0.5))
         .rounded(theme::radius::MD)
         .bg(tokens.fill.subtle)
-        .when(disabled, |track| track.opacity(0.5))
+        .when(disabled, |track| {
+            track.opacity(theme::components(cx).preferences.choice_disabled_opacity)
+        })
         .children(
             options
                 .into_iter()
@@ -186,7 +188,11 @@ fn illustration(kind: TilesKind, value: &str, cx: &App) -> AnyElement {
     let tokens = theme::semantic_for(theme::appearance(cx));
     match kind {
         TilesKind::Theme => theme_scene(value),
-        TilesKind::Material => material_scene(value, tokens),
+        TilesKind::Material => material_scene(
+            value,
+            tokens,
+            &theme::components_for(theme::appearance(cx)).preferences,
+        ),
         TilesKind::ListStyle => list_style_scene(value, tokens),
         TilesKind::PanelLayout => panel_layout_scene(value, tokens),
         TilesKind::WindowPosition => window_position_scene(value, tokens),
@@ -275,25 +281,21 @@ fn theme_scene(value: &str) -> AnyElement {
 }
 
 /// 同一张壁纸上的窗口：默认不透明；云母只取壁纸的色调；磨砂透出背后模糊的色块。
-fn material_scene(value: &str, tokens: &SemanticTokens) -> AnyElement {
+fn material_scene(value: &str, tokens: &SemanticTokens, tints: &PreferencesTokens) -> AnyElement {
     const WINDOW: (f32, f32, f32, f32) = (0.15, 0.2, 0.75, 0.6);
     // 色块的左、上（磁贴比例）和直径（rem）。
     const BLOB: (f32, f32, f32) = (0.05, 0.14, 2.5);
     let (left, top, width, height) = WINDOW;
     let (blob_left, blob_top, blob_size) = BLOB;
-    let blob = tokens.hues.orange_6;
-    // 暗色的色阶带透明度，先压到窗口底上，壁纸才是不透明的。
-    let wallpaper = tokens
-        .surface
-        .window
-        .blend(tokens.hues.blue_6.opacity(0.35));
+    let blob = tints.material_blob;
+    let wallpaper = tints.material_wallpaper;
 
     // 各平台的真实材质透明度差别很大（Windows 磨砂靠整体缩放表面），示意图用自己的固定比例。
     let mut backdrop = div().absolute().inset_0();
     let surface = match value {
         "mica" => {
-            backdrop = backdrop.bg(wallpaper.blend(blob.opacity(0.2)));
-            tokens.surface.panel.opacity(0.55)
+            backdrop = backdrop.bg(tints.material_mica_backdrop);
+            tints.material_mica_panel
         }
         "acrylic" => {
             // 盖住清晰的色块，再把色块换到窗口坐标里，用大半径阴影画成模糊的样子。
@@ -312,7 +314,7 @@ fn material_scene(value: &str, tokens: &SemanticTokens) -> AnyElement {
                         inset: false,
                     }]),
             );
-            tokens.surface.panel.opacity(0.45)
+            tints.material_frosted_panel
         }
         _ => tokens.surface.panel,
     };

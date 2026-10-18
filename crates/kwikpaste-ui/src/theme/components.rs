@@ -40,11 +40,17 @@ pub struct OnboardingTokens {
     pub done_background: Hsla,
 }
 
-/// 偏好设置导航的常态、悬停和选中状态。
+/// 偏好设置导航的常态、悬停和选中状态，禁用的分段控件，以及材质磁贴示意图的着色。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PreferencesTokens {
     pub nav_selected: Hsla,
     pub nav_hover: Hsla,
+    pub choice_disabled_opacity: f32,
+    pub material_wallpaper: Hsla,
+    pub material_blob: Hsla,
+    pub material_mica_backdrop: Hsla,
+    pub material_mica_panel: Hsla,
+    pub material_frosted_panel: Hsla,
 }
 
 /// 输入和选择器的表面、边框、聚焦边框及占位符颜色。
@@ -197,6 +203,11 @@ pub struct ImageTextTokens {
 }
 
 /// 淡色底跟着文字色走，材质窗口上也不会变成一块实色。
+/// 材质示意图的壁纸：暗色的色阶带透明度，先压到窗口底上，壁纸才是不透明的。
+fn material_wallpaper(s: &super::semantic::SemanticTokens) -> Hsla {
+    s.surface.window.blend(s.hues.blue_6.opacity(0.35))
+}
+
 fn kind_tag(foreground: Hsla) -> KindTag {
     KindTag {
         background: foreground.opacity(0.12),
@@ -274,6 +285,12 @@ impl ComponentTokens {
             preferences: PreferencesTokens {
                 nav_selected: s.fill.default,
                 nav_hover: s.fill.subtle,
+                choice_disabled_opacity: 0.5,
+                material_wallpaper: material_wallpaper(s),
+                material_blob: s.hues.orange_6,
+                material_mica_backdrop: material_wallpaper(s).blend(s.hues.orange_6.opacity(0.2)),
+                material_mica_panel: s.surface.panel.opacity(0.55),
+                material_frosted_panel: s.surface.panel.opacity(0.45),
             },
             input: input(s),
             group_chip: GroupChipTokens {
