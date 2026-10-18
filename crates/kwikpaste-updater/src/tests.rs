@@ -310,6 +310,16 @@ fn silent_nsis_parameters_and_hidden_restart_arguments_preserve_manual_mode() {
         vec![OsString::from(AUTO_LAUNCH_ARG)]
     );
     assert_eq!(restart_args(original.clone(), false), original);
+    #[cfg(target_os = "windows")]
+    assert_eq!(
+        restart_args(
+            vec![OsString::from(
+                kwikpaste_os::win::admin::ADMIN_RESTARTED_ARG
+            )],
+            false
+        ),
+        Vec::<OsString>::new()
+    );
     assert_eq!(nsis::parameters(&[], false), "/P /R /UPDATE /ARGS");
     assert_eq!(scheduler::IDLE_POLL, Duration::from_secs(60));
 }

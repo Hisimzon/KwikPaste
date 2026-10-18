@@ -583,7 +583,11 @@ impl Inner {
 }
 
 /// 静默重启保留参数并补上托盘启动标记；手动更新保持原参数不变。
+///
+/// Windows 去掉提权重启标记：安装器拉起的新进程不带管理员令牌，带着标记它就不再按设置提权。
 fn restart_args(mut args: Vec<OsString>, silent: bool) -> Vec<OsString> {
+    #[cfg(target_os = "windows")]
+    args.retain(|arg| arg != kwikpaste_os::win::admin::ADMIN_RESTARTED_ARG);
     if silent
         && !args
             .iter()
