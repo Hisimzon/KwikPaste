@@ -2,6 +2,12 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.7 - 2026-10-18
+
+- Fixed screenshots from tools such as Snowshot sometimes not being recorded.
+- Fixed Run as administrator being lost after an automatic update, which left KwikPaste running without administrator rights.
+- Fixed the system file picker sometimes hanging once images had been shown in the list.
+
 ## 2.0.6 - 2026-10-18
 
 - Added a full-size image viewer, opened from the preview, the View Full Size menu item or Shift+Space. Recognized text sits over the image where it appears: drag to select, double-click a line, press Ctrl/Cmd+A and Ctrl/Cmd+C to copy, and press T to highlight text regions. Copied text is recorded as a new item.
