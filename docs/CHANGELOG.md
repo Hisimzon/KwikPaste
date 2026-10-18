@@ -2,6 +2,25 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.6 - 2026-10-18
+
+- Added a full-size image viewer, opened from the preview, the View Full Size menu item or Shift+Space. Recognized text sits over the image where it appears: drag to select, double-click a line, press Ctrl/Cmd+A and Ctrl/Cmd+C to copy, and press T to highlight text regions. Copied text is recorded as a new item.
+- Added PP-OCRv6 text recognition engines on Windows in three tiers (Light, Standard, High accuracy), downloaded and switched in the image text recognition card on the Extensions page. They read small text, code and URLs far more accurately; after switching, Recognize all again updates older images.
+- Added Text matching rules: match copied text with a regular expression to show it as a quick snippet, mark it sensitive or skip recording it, with templates for mainland ID numbers, tracking numbers, IPv4 and MAC addresses.
+- Added Report a Problem in Preferences, which sends a description to the developer along with logs and diagnostics. Clipboard contents are never uploaded.
+- Edited items keep their original content, restored with Restore Original in the context menu; image items can be pasted as a file with Paste as File; several selected text items can be pasted or copied as one merged text.
+- HTML items are shown as a structured document in the preview, clicking a file row in the preview reveals it in the file manager, and the gap between the preview and the item can be set.
+- The copy sound has a choice of tones: Classic, Chirp, Bubble, Chime and Tick.
+- Updates now download in the background and install automatically once the computer has been idle for 10 minutes with no KwikPaste window open.
+- All shortcuts are on one page, and the keys inside the clipboard window can be rebound; Ctrl/Cmd+E opens the content editor.
+- Dropdowns in Preferences are replaced by picture tiles and segmented buttons.
+- The Acrylic material is replaced by Frosted, which makes the whole window translucent; on Windows, windows with a title bar draw their own so the title bar and content are one frosted surface.
+- On Windows the source app is taken from the clipboard's actual writer, so it is more accurate; thumbnails and previews are decoded at display size, which is faster and uses less memory.
+- Multi-line notes are shown on one line on the card, separated by " / ".
+- Fixed the start of the copy sound being cut off and stuttering on Windows.
+- Fixed the mouse wheel not scrolling in dialogs, and the split-words preview not closing when the pointer leaves it.
+- Fixed dropdowns, toasts and dialogs turning transparent and cards getting a dark ring under the Frosted material.
+
 ## 2.0.5 - 2026-10-15
 
 - Added Double-tap to open: quickly press Ctrl, Alt or Shift twice (and Command on macOS) to show or hide the clipboard window. It can be limited to the left or right key, and is turned on in Preferences under shortcuts.
