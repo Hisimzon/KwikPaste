@@ -118,6 +118,7 @@ pub(crate) fn swap_bundle(
     bundle: &Path,
     new_bundle: &Path,
     launcher: &dyn Launcher,
+    allow_elevation: bool,
 ) -> anyhow::Result<()> {
     let backup = previous_path(bundle);
     if backup.exists() {
@@ -135,7 +136,7 @@ pub(crate) fn swap_bundle(
                 log::warn!("remove previous app {backup:?} failed: {err}");
             }
         }
-        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+        Err(err) if allow_elevation && err.kind() == std::io::ErrorKind::PermissionDenied => {
             log::info!("replacing {bundle:?} needs administrator privileges");
             launcher
                 .run(
@@ -185,21 +186,25 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// 本进程退出后用 LaunchServices 重新打开新包，原参数经 `--args` 带过去。
+/// 本进程退出后用 LaunchServices 重新打开新包，原参数经 `--args` 带过去；静默交接用 -g -j 隐藏且不激活。
 /// 参数走 `sh -c` 的位置参数，不拼进脚本文本，路径里有空格或引号也不会出错。
 pub(crate) fn relaunch_command(
     pid: u32,
     bundle: &Path,
     args: &[OsString],
+    silent: bool,
 ) -> (PathBuf, Vec<OsString>) {
     const SCRIPT: &str = "pid=$1; app=$2; shift 2; \
         while kill -0 \"$pid\" 2>/dev/null; do sleep 0.05; done; \
         if [ \"$#\" -gt 0 ]; then exec /usr/bin/open \"$app\" --args \"$@\"; \
         else exec /usr/bin/open \"$app\"; fi";
+    const SILENT_SCRIPT: &str = "pid=$1; app=$2; shift 2; \
+        while kill -0 \"$pid\" 2>/dev/null; do sleep 0.05; done; \
+        exec /usr/bin/open -g -j \"$app\" --args \"$@\"";
 
     let mut command = vec![
         OsString::from("-c"),
-        OsString::from(SCRIPT),
+        OsString::from(if silent { SILENT_SCRIPT } else { SCRIPT }),
         OsString::from("kwikpaste-relaunch"),
         OsString::from(pid.to_string()),
         bundle.as_os_str().to_owned(),
@@ -337,7 +342,12 @@ mod tests {
     }
 
     impl Launcher for Recorder {
-        fn shell_execute(&self, _file: &Path, _parameters: &str) -> anyhow::Result<()> {
+        fn launch_installer(
+            &self,
+            _file: &Path,
+            _parameters: &str,
+            _silent: bool,
+        ) -> anyhow::Result<()> {
             unreachable!("macOS never runs installers")
         }
 
@@ -365,7 +375,7 @@ mod tests {
         fs::write(new_bundle.join("Contents/version"), b"new").unwrap();
         let launcher = Recorder::default();
 
-        swap_bundle(&bundle, &new_bundle, &launcher).unwrap();
+        swap_bundle(&bundle, &new_bundle, &launcher, true).unwrap();
 
         assert_eq!(fs::read(bundle.join("Contents/version")).unwrap(), b"new");
         assert!(!previous_path(&bundle).exists());
@@ -382,7 +392,7 @@ mod tests {
         fs::write(bundle.join("marker"), b"current").unwrap();
 
         let missing = temp.path().join("work").join("missing.app");
-        assert!(swap_bundle(&bundle, &missing, &Recorder::default()).is_err());
+        assert!(swap_bundle(&bundle, &missing, &Recorder::default(), true).is_err());
         assert_eq!(fs::read(bundle.join("marker")).unwrap(), b"current");
     }
 
@@ -405,6 +415,7 @@ mod tests {
             4242,
             Path::new("/Applications/Kwik Paste.app"),
             &[OsString::from("--auto-launch")],
+            false,
         );
 
         assert_eq!(program, PathBuf::from("/bin/sh"));

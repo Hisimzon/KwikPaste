@@ -11,7 +11,7 @@ use gpui::{
 };
 use kwikpaste_core::{OcrStatus, OcrSupport};
 use kwikpaste_ui::{
-    Button, Icon, IconName, KpStyled as _,
+    Button, DialogSpec, Icon, IconName, KpStyled as _, form_dialog,
     theme::{self, SemanticTokens, TextSize, space},
     toast::{self, Toast},
 };
@@ -178,6 +178,22 @@ impl Preferences {
                 })
                 .into_any_element(),
             ),
+            Row::Done(_) => {
+                let entity = cx.entity().downgrade();
+                Some(
+                    Button::new(
+                        "image-text-recognize-all",
+                        i18n::t("preferences:imageText.recognizeAll.action"),
+                    )
+                    .on_click(move |_, window, cx| {
+                        let Some(entity) = entity.upgrade() else {
+                            return;
+                        };
+                        entity.update(cx, |this, cx| this.recognize_all(window, cx));
+                    })
+                    .into_any_element(),
+                )
+            }
             Row::Saved { .. } => {
                 let entity = cx.entity().downgrade();
                 Some(
@@ -303,6 +319,60 @@ impl Preferences {
             "preferences:imageText.language",
             &[("languages", &names.join(&separator))],
         ))
+    }
+
+    /// 先确认，再清掉全部识别结果：core 随即用当前引擎把所有图片排队重新识别。
+    fn recognize_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let count = self
+            .ocr_status
+            .as_ref()
+            .map_or(0, |status| status.total_images)
+            .to_string();
+        let content = i18n::t_args(
+            "preferences:imageText.recognizeAll.content",
+            &[("count", &count)],
+        );
+        let answer = form_dialog(
+            DialogSpec::new(i18n::t("preferences:imageText.recognizeAll.title"))
+                .ok_text(i18n::t("preferences:imageText.recognizeAll.ok"))
+                .cancel_text(i18n::t("common:actions.cancel")),
+            move |_, _| {
+                div()
+                    .kp_text(TextSize::Sm)
+                    .child(content.clone())
+                    .into_any_element()
+            },
+            window,
+            cx,
+        );
+
+        cx.spawn_in(window, async move |this, cx| {
+            if !answer.await.unwrap_or(false) {
+                return;
+            }
+            let result = core.clear_ocr_data().await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Err(error) = result {
+                    log::warn!("image text could not be reset: {error:#}");
+                    let message = i18n::t_args(
+                        "commands:error",
+                        &[
+                            (
+                                "label",
+                                &i18n::t("preferences:imageText.recognizeAll.title"),
+                            ),
+                            ("message", &error.to_string()),
+                        ],
+                    );
+                    toast::show(Toast::error(message), window, cx);
+                }
+                this.refresh_image_text(cx);
+            });
+        })
+        .detach();
     }
 
     /// 删掉关闭识别后留下的文字；图片本身不受影响，重新开启时会再识别。

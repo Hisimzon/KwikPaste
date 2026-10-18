@@ -16,6 +16,7 @@ use std::{path::PathBuf, sync::Arc};
 use futures::future::BoxFuture;
 use kwikpaste_core::{
     db::models::ClipboardItemSort,
+    ocr::ImageTextLine,
     ops::{ReorderAnchor, ReorderSection},
     settings::Settings,
 };
@@ -143,6 +144,12 @@ pub trait ClipboardSource: Send + Sync + 'static {
         content: String,
     ) -> BoxFuture<'static, anyhow::Result<super::model::item::ListItem>>;
 
+    /// 恢复首次编辑前的原文并返回重新计算后的列表载荷。
+    fn restore_original_content(
+        &self,
+        id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<super::model::item::ListItem>>;
+
     fn delete(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>>;
 
     /// 批量删除，返回实际删除条数。
@@ -200,6 +207,15 @@ pub trait ClipboardSource: Send + Sync + 'static {
         &self,
         _id: Arc<str>,
     ) -> BoxFuture<'static, anyhow::Result<Option<Preview>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// 图片识别出的各行文字和位置，给大图预览的文字层。还没识别好时为 `None`：core 会先识别这张图，
+    /// 识别完发 `OcrChanged`。夹具没有识别文字。
+    fn image_text_lines(
+        &self,
+        _id: Arc<str>,
+    ) -> BoxFuture<'static, anyhow::Result<Option<Vec<ImageTextLine>>>> {
         Box::pin(async { Ok(None) })
     }
 

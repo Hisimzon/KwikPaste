@@ -1,11 +1,12 @@
 //! KwikPaste 2.x 自带的更新器：读 v2 清单、minisign 验签、流式下载、按安装形态交接，
 //! 外加随检查更新附带的使用统计与应用内公告。
 //!
-//! 只依赖 `kwikpaste-core`，不依赖 Tauri 与 GPUI；1.x 的 `src-tauri` 不依赖它。所有网络与文件操作都在
+//! 依赖 `kwikpaste-core` 与 `kwikpaste-os`，不依赖 Tauri 与 GPUI；1.x 的 `src-tauri` 不依赖它。所有网络与文件操作都在
 //! core 的 tokio runtime 上执行，宿主（GPUI）在任何执行器里都可以直接 await 公开的 async 方法。
 //!
 //! 宿主要接的两个接口：
-//! - [`UpdaterUi`]（UI 线）：检查后记录更新状态，自动检查第一次发现某个版本时弹更新窗，显示公告对话框并返回用户的选择，打开链接；
+//! - [`UpdaterUi`]（UI 线）：可静默更新时后台下载、等空闲后安装，不弹窗或显示更新提示；否则每版本提示一次；
+//!   宿主提供无可见窗口时的系统空闲时长，并处理公告与链接；
 //! - [`HandoffHost`]（平台线）：安装交接时停输入、删托盘、释放单实例、退出进程。
 //!
 //! 与附录 E §5 相比按 v2 路线精简：没有分桶 / 灰度、闸门、canary 与演练渠道，没有自动降级、
@@ -15,6 +16,7 @@ mod announcement;
 mod channel;
 mod download;
 pub mod extensions;
+pub mod feedback;
 mod handoff;
 mod http;
 mod manifest;
@@ -29,7 +31,9 @@ mod verify;
 mod testing;
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use chrono::Utc;
@@ -54,15 +58,20 @@ use usage::UsageState;
 /// 发行说明页。
 const RELEASE_NOTES_URL: &str = "https://github.com/ManSanDADADA/KwikPaste/releases/tag/v";
 
-/// 更新器需要 UI（更新窗、公告对话框）做的事。
+/// 更新器需要宿主做的事：静默更新的空闲查询，以及非静默更新与公告的 UI。
 pub trait UpdaterUi: Send + Sync + 'static {
+    /// 所有应用窗口（含原生对话框）均不可见时返回系统空闲时长；有窗口或查询失败返回 None。
+    fn idle_duration(&self) -> HostFuture<'_, Option<Duration>> {
+        Box::pin(async { None })
+    }
+
     /// 扩展状态变化；在后台线程回调，由宿主送进已有 UI 消息队列。
     fn extensions_changed(&self, _status: Vec<extensions::ExtensionStatus>) {}
 
-    /// 检查成功后发布当前更新状态（含没有更新），由宿主刷新持久提示，不自动打开更新窗。
+    /// 发布面板提示状态（静默候选隐藏 update 字段），不自动打开更新窗。
     fn update_available(&self, status: UpdateStatus);
 
-    /// 自动检查第一次发现这个版本：弹出更新窗。关掉后只留面板徽标，同一版本不再弹。
+    /// 不可静默更新时，首次发现该版本弹更新窗；关掉后只留徽标，同版本不再弹。
     fn prompt_update(&self, _status: UpdateStatus) {}
 
     /// 显示一条公告并等用户响应。按 [`AnnouncementPrompt::buttons`] 的顺序摆按钮，点哪个按钮就返回
@@ -110,12 +119,15 @@ struct Inner {
     handoff: Arc<dyn HandoffHost>,
     launcher: Box<dyn Launcher>,
     kind: InstallKind,
+    exe: PathBuf,
     client: reqwest::Client,
     /// 清单地址；测试换成本机地址。
     endpoints: EndpointSource,
     /// 验签公钥；测试换成一次性密钥。
     public_key: String,
     pending: Mutex<Option<Pending>>,
+    failed_silent_version: Mutex<Option<String>>,
+    installing: tokio::sync::Mutex<()>,
     usage: Arc<UsageState>,
     announcements: Arc<AnnouncementState>,
     scheduler: Mutex<Option<JoinHandle<()>>>,
@@ -124,6 +136,7 @@ struct Inner {
 struct Pending {
     candidate: Candidate,
     package: Option<Package>,
+    silent: bool,
 }
 
 type EndpointSource = Box<dyn Fn() -> anyhow::Result<Vec<url::Url>> + Send + Sync>;
@@ -131,6 +144,7 @@ type EndpointSource = Box<dyn Fn() -> anyhow::Result<Vec<url::Url>> + Send + Syn
 /// 正式运行时从环境里取的部分；测试换成假的。
 struct Parts {
     kind: InstallKind,
+    exe: PathBuf,
     launcher: Box<dyn Launcher>,
     endpoints: EndpointSource,
     public_key: String,
@@ -139,12 +153,14 @@ struct Parts {
 impl Updater {
     /// 按当前 exe 的位置判定安装形态，建好更新器。不发任何请求，[`Updater::start`] 之后才开始调度。
     pub fn new(core: Core, ui: Arc<dyn UpdaterUi>, handoff: Arc<dyn HandoffHost>) -> Result<Self> {
+        let exe = std::env::current_exe().context("failed to resolve current executable")?;
         Self::with_parts(
             core,
             ui,
             handoff,
             Parts {
-                kind: InstallKind::detect(),
+                kind: InstallKind::for_exe(&exe),
+                exe,
                 launcher: Box::new(SystemLauncher),
                 endpoints: Box::new(channel::endpoints),
                 public_key: verify::public_key(),
@@ -160,6 +176,7 @@ impl Updater {
     ) -> Result<Self> {
         let Parts {
             kind,
+            exe,
             launcher,
             endpoints,
             public_key,
@@ -179,10 +196,13 @@ impl Updater {
             handoff,
             launcher,
             kind,
+            exe,
             client,
             endpoints,
             public_key,
             pending: Mutex::new(None),
+            failed_silent_version: Mutex::new(None),
+            installing: tokio::sync::Mutex::new(()),
             usage: Arc::default(),
             announcements: Arc::default(),
             scheduler: Mutex::new(None),
@@ -193,13 +213,24 @@ impl Updater {
         &self.0.kind
     }
 
+    /// 启动时消费交接结果；失败版本只在本进程内禁用静默安装，不显示任何完成通知。
+    pub fn record_handoff(&self, record: HandoffRecord) {
+        if !record.succeeded(&self.0.core.info().version) {
+            log::warn!(
+                "update to {} did not take; requiring manual confirmation",
+                record.to
+            );
+            *lock(&self.0.failed_silent_version) = Some(record.to);
+        }
+    }
+
     /// 扩展页使用的管理器；与应用更新器共用运行时、HTTP 客户端及 UI 宿主。
     pub fn extensions(&self) -> &extensions::ExtensionManager {
         &self.0.extensions
     }
 
     /// 开始后台调度（重复调用无效）：清理上次更新留下的临时文件，8 秒后检查并发布状态（顺带拉公告），
-    /// 之后每小时看一次扩展、当天使用统计和是否到了下次检查（见 [`scheduler`]）。
+    /// 之后每小时维护扩展、统计与检查；已下载的静默更新每分钟等一次空闲（见 [`scheduler`]）。
     pub fn start(&self) {
         let mut scheduler = lock(&self.0.scheduler);
         if scheduler.is_some() {
@@ -211,16 +242,35 @@ impl Updater {
             updater.clean_leftovers();
             tokio::time::sleep(scheduler::INITIAL_DELAY).await;
             let mut last_success = None;
+            let mut checks = tokio::time::interval(scheduler::TICK);
+            let mut idle = tokio::time::interval(scheduler::IDLE_POLL);
+            checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                updater.0.extensions.schedule_daily();
-                if scheduler::check_due(last_success, Utc::now()) {
-                    if updater.run_auto_check().await {
-                        last_success = Some(Utc::now());
+                tokio::select! {
+                    _ = checks.tick() => {
+                        updater.0.extensions.schedule_daily();
+                        if scheduler::check_due(last_success, Utc::now()) {
+                            if updater.run_auto_check().await {
+                                last_success = Some(Utc::now());
+                            }
+                        } else {
+                            usage::schedule(&updater.0.core, &updater.0.usage);
+                        }
                     }
-                } else {
-                    usage::schedule(&updater.0.core, &updater.0.usage);
+                    _ = idle.tick(), if updater.silent_ready_version().is_some() => {
+                        // 交接会 stop() 调度器，另起任务避免把交接自身取消在关库中途。
+                        let installer = updater.clone();
+                        if let Err(err) = hop(updater.0.core.runtime(), async move {
+                            if let Err(err) = installer.install_when_idle().await {
+                                log::warn!("silent update install failed: {err}");
+                            }
+                            Ok(())
+                        }).await {
+                            log::warn!("silent update task failed: {err}");
+                        }
+                    }
                 }
-                tokio::time::sleep(scheduler::TICK).await;
             }
         }));
     }
@@ -239,10 +289,9 @@ impl Updater {
     /// 检查更新：读 v2 清单（只有一个渠道），顺带上报统计、拉公告。
     pub async fn check(&self) -> Result<UpdateStatus> {
         let updater = self.clone();
-        hop(
-            self.0.core.runtime(),
-            async move { updater.check_inner().await },
-        )
+        hop(self.0.core.runtime(), async move {
+            updater.check_inner(false).await
+        })
         .await
     }
 
@@ -263,12 +312,12 @@ impl Updater {
     pub async fn install(&self, version: String) -> Result<()> {
         let updater = self.clone();
         hop(self.0.core.runtime(), async move {
-            updater.install_inner(&version).await
+            updater.install_inner(&version, false).await
         })
         .await
     }
 
-    async fn check_inner(&self) -> Result<UpdateStatus> {
+    async fn check_inner(&self, automatic: bool) -> Result<UpdateStatus> {
         let inner = &self.0;
         usage::schedule(&inner.core, &inner.usage);
         announcement::schedule(&inner.core, &inner.announcements, &inner.ui);
@@ -284,13 +333,22 @@ impl Updater {
             inner.set_candidate(found);
         }
 
+        if automatic {
+            let silent = inner.kind.can_update_silently(&inner.exe);
+            let failed = lock(&inner.failed_silent_version);
+            if let Some(pending) = lock(&inner.pending).as_mut() {
+                pending.silent = silent
+                    && failed.as_deref() != Some(pending.candidate.version.to_string().as_str());
+            }
+        }
+
         let checked_at =
             serde_json::json!({ "update": { "lastCheckedAt": Utc::now().to_rfc3339() } });
         if let Err(err) = inner.core.update_settings(checked_at).await {
             log::warn!("persist update check timestamp failed: {err}");
         }
         let status = inner.status();
-        inner.ui.update_available(status.clone());
+        inner.publish_status();
         Ok(status)
     }
 
@@ -322,8 +380,30 @@ impl Updater {
         Ok(inner.metadata(current))
     }
 
-    async fn install_inner(&self, version: &str) -> Result<()> {
+    async fn install_inner(&self, version: &str, silent: bool) -> Result<()> {
         let inner = &self.0;
+        let _installing = inner.installing.lock().await;
+        if silent {
+            if self.silent_ready_version().as_deref() != Some(version) {
+                return Ok(());
+            }
+            if !inner.kind.can_update_silently(&inner.exe) {
+                if let Some(pending) = lock(&inner.pending).as_mut() {
+                    pending.silent = false;
+                }
+                inner.publish_status();
+                self.prompt_once(inner.status()).await;
+                return Ok(());
+            }
+            if inner
+                .ui
+                .idle_duration()
+                .await
+                .is_none_or(|idle| idle < scheduler::INSTALL_IDLE)
+            {
+                return Ok(());
+            }
+        }
         let package = {
             let pending = lock(&inner.pending);
             let current = pending
@@ -336,13 +416,13 @@ impl Updater {
                 .ok_or_else(|| other("update is not downloaded"))?
         };
 
-        let exe = std::env::current_exe().context("failed to resolve current executable")?;
         let handoff = Handoff {
             core: &inner.core,
             host: inner.handoff.as_ref(),
             launcher: inner.launcher.as_ref(),
-            exe,
-            args: std::env::args_os().skip(1).collect::<Vec<OsString>>(),
+            exe: inner.exe.clone(),
+            args: restart_args(std::env::args_os().skip(1).collect(), silent),
+            silent,
             from: inner.core.info().version.to_string(),
             to: version.to_owned(),
         };
@@ -363,15 +443,34 @@ impl Updater {
         installed.map_err(AppError::Other)
     }
 
-    /// 自动检查，成功返回 true；第一次发现某个版本时记下它并弹更新窗。
+    /// 自动检查成功返回 true：可静默更新就后台下载验签，不记录提示版本或显示徽标；否则沿用每版本提示一次。
     async fn run_auto_check(&self) -> bool {
-        let status = match self.check_inner().await {
+        let status = match self.check_inner(true).await {
             Ok(status) => status,
             Err(err) => {
                 log::warn!("automatic update check failed: {err}");
                 return false;
             }
         };
+        let silent = lock(&self.0.pending)
+            .as_ref()
+            .is_some_and(|pending| pending.silent);
+        if let Some(update) = &status.update
+            && silent
+        {
+            if !update.downloaded
+                && let Err(err) = self.download_inner(&update.version, &|_| {}).await
+            {
+                log::warn!("silent update download failed: {err}");
+            }
+            return true;
+        }
+        self.prompt_once(status).await;
+        true
+    }
+
+    /// 非静默路径沿用持久化的每版本提示标记。
+    async fn prompt_once(&self, status: UpdateStatus) {
         let inner = &self.0;
         if let Some(update) = &status.update
             && inner.core.settings().update.prompted_version.as_deref()
@@ -383,7 +482,21 @@ impl Updater {
             }
             inner.ui.prompt_update(status);
         }
-        true
+    }
+
+    fn silent_ready_version(&self) -> Option<String> {
+        lock(&self.0.pending)
+            .as_ref()
+            .filter(|pending| pending.silent && pending.package.is_some())
+            .map(|pending| pending.candidate.version.to_string())
+    }
+
+    /// 下载后轮询；只有宿主确认所有窗口不可见且连续十分钟没有输入才交接。
+    async fn install_when_idle(&self) -> Result<()> {
+        if let Some(version) = self.silent_ready_version() {
+            self.install_inner(&version, true).await?;
+        }
+        Ok(())
     }
 
     /// 上次更新留下的临时目录（一天以前的）和便携版的 `.old` / `.new`。
@@ -403,6 +516,18 @@ impl Updater {
 }
 
 impl Inner {
+    /// 手动查询仍能取得候选；仅发给面板的快照隐藏静默更新。
+    fn publish_status(&self) {
+        let mut status = self.status();
+        if lock(&self.pending)
+            .as_ref()
+            .is_some_and(|pending| pending.silent)
+        {
+            status.update = None;
+        }
+        self.ui.update_available(status);
+    }
+
     fn status(&self) -> UpdateStatus {
         let pending = lock(&self.pending);
         UpdateStatus {
@@ -437,10 +562,12 @@ impl Inner {
             (Some(current), Some(next)) if keep(&current, &next) => Some(Pending {
                 candidate: next,
                 package: current.package,
+                silent: current.silent,
             }),
             (_, Some(next)) => Some(Pending {
                 candidate: next,
                 package: None,
+                silent: false,
             }),
             (_, None) => None,
         };
@@ -453,6 +580,22 @@ impl Inner {
             .map(|pending| pending.candidate.clone())
             .ok_or_else(|| other("the selected update is no longer current"))
     }
+}
+
+/// 静默重启保留参数并补上托盘启动标记；手动更新保持原参数不变。
+///
+/// Windows 去掉提权重启标记：安装器拉起的新进程不带管理员令牌，带着标记它就不再按设置提权。
+fn restart_args(mut args: Vec<OsString>, silent: bool) -> Vec<OsString> {
+    #[cfg(target_os = "windows")]
+    args.retain(|arg| arg != kwikpaste_os::win::admin::ADMIN_RESTARTED_ARG);
+    if silent
+        && !args
+            .iter()
+            .any(|arg| arg == kwikpaste_os::autostart::AUTO_LAUNCH_ARG)
+    {
+        args.push(kwikpaste_os::autostart::AUTO_LAUNCH_ARG.into());
+    }
+    args
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

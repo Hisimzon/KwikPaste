@@ -7,6 +7,7 @@ pub mod autostart;
 pub mod crash;
 pub mod drag_out;
 pub mod foreground;
+pub mod imaging;
 pub mod ime;
 pub mod keyboard;
 pub mod keystroke;

@@ -50,7 +50,7 @@ pub enum KeyPhase {
 pub enum HookEvent {
     /// 一个被吞下的键。
     Key {
-        /// GPUI `Keystroke` 的 key 名，见 [`crate::hook_keys::HOOK_KEYS`]。
+        /// GPUI `Keystroke` 的 key 名，见 [`crate::hook_keys::HookKeys`]。
         key: &'static str,
         phase: KeyPhase,
         ctrl: bool,
@@ -310,7 +310,7 @@ fn handle_key(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
     let captured = navigation && capture_allows_input();
 
     if up && SWALLOWED[usize::from(vk)].swap(false, Ordering::SeqCst) {
-        if let Some(entry) = hook_keys::HOOK_KEYS.iter().find(|entry| entry.vk == vk)
+        if let Some(entry) = hook_keys::physical_key(vk)
             && entry.kind == HookKeyKind::Hold
         {
             emit_key(entry.key, KeyPhase::Up);
@@ -367,9 +367,9 @@ fn key_down_entry(
     alt: bool,
     win: bool,
     already_swallowed: bool,
-) -> Option<&'static hook_keys::HookKey> {
+) -> Option<hook_keys::HookKey> {
     if already_swallowed {
-        return hook_keys::HOOK_KEYS.iter().find(|entry| entry.vk == vk);
+        return hook_keys::physical_key(vk);
     }
     if alt || win {
         return None;
@@ -478,11 +478,20 @@ mod tests {
 
     #[test]
     fn first_key_down_requires_an_exact_combo_without_alt_or_win() {
+        hook_keys::apply(&kwikpaste_core::settings::Shortcuts::default());
         assert!(key_down_entry(0x41, true, false, false, false, false).is_some());
         assert!(key_down_entry(0x41, true, true, false, false, false).is_none());
         assert!(key_down_entry(0x20, true, false, false, false, false).is_none());
         assert!(key_down_entry(0x26, false, false, true, false, false).is_none());
         assert!(key_down_entry(0x26, false, false, false, true, false).is_none());
+        let mut shortcuts = kwikpaste_core::settings::Shortcuts::default();
+        shortcuts
+            .panel
+            .insert("selectAll".into(), "secondary-shift-b".into());
+        hook_keys::apply(&shortcuts);
+        assert!(key_down_entry(0x41, true, false, false, false, false).is_none());
+        assert!(key_down_entry(0x42, true, true, false, false, false).is_some());
+        assert!(key_down_entry(0x41, true, false, false, false, true).is_some());
     }
 
     #[test]

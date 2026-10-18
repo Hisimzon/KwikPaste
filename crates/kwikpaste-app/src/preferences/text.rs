@@ -74,9 +74,9 @@ pub fn setting_key(setting: &Setting, field: &str) -> String {
     format!("preferences:schema.settings.{}.{field}", setting.id)
 }
 
-/// 下拉选项的 `(值, 文案)`。
+/// 下拉或分段选项的 `(值, 文案)`。
 pub fn options(setting: &Setting) -> Vec<(SharedString, SharedString)> {
-    let Control::Select(options) = setting.control else {
+    let (Control::Select(options) | Control::Segmented(options)) = setting.control else {
         return Vec::new();
     };
     let label = |value: &str| {

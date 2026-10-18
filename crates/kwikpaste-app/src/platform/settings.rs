@@ -40,6 +40,9 @@ pub fn serve(cx: &mut App, events: Receiver<CoreEvent>) {
     .detach();
 
     apply_appearance(cx);
+    if let Some(core) = core_host::core(cx) {
+        crate::clipboard::view::rebind(&core.settings().shortcuts, cx);
+    }
     cx.on_app_quit(|cx| {
         let core = core_host::core(cx)
             .filter(|_| !core_host::is_shut_down())
@@ -64,6 +67,9 @@ pub fn follow(cx: &mut App) {
         let CoreEvent::SettingsUpdated { settings, delta } = event else {
             return;
         };
+        if delta.touches("shortcuts.panel") {
+            crate::clipboard::view::rebind(&settings.shortcuts, cx);
+        }
         if delta.touches(kwikpaste_core::settings::paths::LAYOUT)
             && let Some(panel) = cx.try_global::<Panel>()
         {

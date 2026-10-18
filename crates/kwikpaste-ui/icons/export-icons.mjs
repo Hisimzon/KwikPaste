@@ -48,6 +48,14 @@ const ICONS = [
   "lucide:shapes",
   "lucide:link",
   "lucide:type",
+  // 大图预览。
+  "lucide:chevron-left",
+  "lucide:chevron-right",
+  "lucide:download",
+  "lucide:rotate-cw",
+  "lucide:shrink",
+  "lucide:zoom-in",
+  "lucide:zoom-out",
   // 主窗口头部与分组栏。
   "lets-icons:file-dock",
   "lets-icons:folder-file-alt",

@@ -8,9 +8,11 @@ use super::item::{ItemAction, ListItem};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Paste,
+    PasteImageAsFile,
     PasteAsPlainText,
     PasteAsPath,
     Copy,
+    ViewImage,
     SaveImage,
     CopyImageText,
     SplitWords,
@@ -23,6 +25,7 @@ pub enum MenuAction {
     MoveToGroup,
     EditNote,
     EditContent,
+    RestoreOriginal,
     Select,
     Delete,
 }
@@ -31,9 +34,11 @@ pub enum MenuAction {
 const GROUPS: [&[MenuAction]; 4] = [
     &[
         MenuAction::Paste,
+        MenuAction::PasteImageAsFile,
         MenuAction::PasteAsPlainText,
         MenuAction::PasteAsPath,
         MenuAction::Copy,
+        MenuAction::ViewImage,
         MenuAction::SaveImage,
         MenuAction::CopyImageText,
         MenuAction::SplitWords,
@@ -50,6 +55,7 @@ const GROUPS: [&[MenuAction]; 4] = [
         MenuAction::MoveToGroup,
         MenuAction::EditNote,
         MenuAction::EditContent,
+        MenuAction::RestoreOriginal,
     ],
     &[MenuAction::Select, MenuAction::Delete],
 ];
@@ -72,41 +78,53 @@ impl MenuAction {
             Self::ToggleFavorite => ItemAction::ToggleFavorite,
             Self::TogglePinned => ItemAction::TogglePinned,
             Self::EditNote => ItemAction::EditNote,
+            Self::RestoreOriginal => ItemAction::RestoreOriginal,
             Self::Select => ItemAction::Select,
             Self::Delete => ItemAction::Delete,
-            Self::MoveToGroup | Self::EditContent => return None,
+            Self::PasteImageAsFile | Self::MoveToGroup | Self::EditContent | Self::ViewImage => {
+                return None;
+            }
         })
     }
 
-    /// 快捷键提示（1.x `accelerator`，`CmdOrCtrl` 写法，显示时经 `shortcut::display` 换成平台写法）。
-    pub fn accelerator(self) -> Option<&'static str> {
-        match self {
-            Self::Paste => Some("Enter"),
-            Self::PasteAsPlainText | Self::PasteAsPath => Some("CmdOrCtrl+Enter"),
-            Self::Copy => Some("CmdOrCtrl+C"),
-            Self::SplitWords => Some("CmdOrCtrl+S"),
+    /// 右键菜单读取有效的面板主键位；解绑后不再显示提示。
+    pub fn accelerator(self, shortcuts: &kwikpaste_core::settings::Shortcuts) -> Option<String> {
+        use kwikpaste_core::settings::{PanelAction, effective_panel_keys};
+        let action = match self {
+            Self::Paste => PanelAction::PasteSelected,
+            Self::PasteAsPlainText | Self::PasteAsPath => PanelAction::PasteSelectedPlain,
+            Self::Copy => PanelAction::CopySelected,
+            Self::SplitWords => PanelAction::SplitSelected,
             Self::OpenLink | Self::SendEmail | Self::RevealInFinder | Self::RevealInExplorer => {
-                Some("CmdOrCtrl+O")
+                PanelAction::OpenSelected
             }
-            Self::ToggleFavorite => Some("CmdOrCtrl+D"),
-            Self::TogglePinned => Some("CmdOrCtrl+T"),
-            Self::EditNote => Some("CmdOrCtrl+M"),
-            Self::Delete => Some(super::shortcut::DELETE_SELECTED),
-            Self::SaveImage
+            Self::ToggleFavorite => PanelAction::FavoriteSelected,
+            Self::TogglePinned => PanelAction::PinSelected,
+            Self::EditNote => PanelAction::NoteSelected,
+            Self::EditContent => PanelAction::EditContent,
+            Self::ViewImage => PanelAction::ViewImage,
+            Self::Delete => PanelAction::DeleteSelected,
+            Self::PasteImageAsFile
+            | Self::SaveImage
             | Self::CopyImageText
             | Self::MoveToGroup
-            | Self::Select
-            | Self::EditContent => None,
-        }
+            | Self::RestoreOriginal
+            | Self::Select => {
+                return None;
+            }
+        };
+        effective_panel_keys(shortcuts, action).into_iter().next()
     }
 
     /// 文案的 i18n key；收藏、置顶、备注按记录当前状态翻转。
     pub fn label_key(self, item: &ListItem) -> &'static str {
         match self {
             Self::Paste => "clipboard:menu.paste",
+            Self::PasteImageAsFile => "clipboard:menu.pasteAsFile",
             Self::PasteAsPlainText => "clipboard:menu.pasteAsPlainText",
             Self::PasteAsPath => "clipboard:menu.pasteAsPath",
             Self::Copy => "clipboard:menu.copy",
+            Self::ViewImage => "clipboard:menu.viewImage",
             Self::SaveImage => "clipboard:menu.saveImage",
             Self::CopyImageText => "clipboard:menu.copyImageText",
             Self::SplitWords => "clipboard:menu.splitWords",
@@ -122,6 +140,7 @@ impl MenuAction {
             Self::EditNote if item.note.is_some() => "clipboard:menu.editNote",
             Self::EditNote => "clipboard:menu.addNote",
             Self::EditContent => "clipboard:menu.editContent",
+            Self::RestoreOriginal => "clipboard:menu.restoreOriginal",
             Self::Select => "clipboard:menu.select",
             Self::Delete => "clipboard:menu.delete",
         }
@@ -132,6 +151,15 @@ impl MenuAction {
 pub fn menu_groups(item: &ListItem, can_delete: bool, has_groups: bool) -> Vec<Vec<MenuAction>> {
     let available = |action: MenuAction| match action {
         MenuAction::EditContent => item.kind == super::item::ItemKind::Text,
+        MenuAction::PasteImageAsFile => {
+            item.kind == super::item::ItemKind::Image
+                && item.available_actions.contains(&ItemAction::Paste)
+        }
+        // 原图还在才能另存，也才能看大图。
+        MenuAction::ViewImage => {
+            item.kind == super::item::ItemKind::Image
+                && item.available_actions.contains(&ItemAction::SaveImage)
+        }
         _ => match action.item_action() {
             Some(ItemAction::Delete) if !can_delete => false,
             Some(wanted) => item.available_actions.contains(&wanted),
@@ -213,13 +241,18 @@ mod tests {
     }
 
     #[test]
-    fn content_editor_is_text_only_and_has_no_shortcut() {
+    fn content_editor_is_text_only_and_has_edit_shortcut() {
         let mut item = with_actions(&[ItemAction::EditNote]);
         assert_eq!(
             menu_groups(&item, true, false),
             vec![vec![MenuAction::EditNote, MenuAction::EditContent]]
         );
-        assert_eq!(MenuAction::EditContent.accelerator(), None);
+        assert_eq!(
+            MenuAction::EditContent
+                .accelerator(&kwikpaste_core::settings::Shortcuts::default())
+                .as_deref(),
+            Some("secondary-e")
+        );
         for kind in [
             super::super::item::ItemKind::Image,
             super::super::item::ItemKind::Files,
@@ -230,6 +263,20 @@ mod tests {
                 vec![vec![MenuAction::EditNote]]
             );
         }
+    }
+
+    #[test]
+    fn images_can_be_pasted_as_files() {
+        let mut item = with_actions(&[ItemAction::Paste, ItemAction::Copy]);
+        item.kind = super::super::item::ItemKind::Image;
+        assert_eq!(
+            menu_groups(&item, true, false),
+            vec![vec![
+                MenuAction::Paste,
+                MenuAction::PasteImageAsFile,
+                MenuAction::Copy
+            ]]
+        );
     }
 
     #[test]

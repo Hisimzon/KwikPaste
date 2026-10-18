@@ -14,7 +14,7 @@ use std::path::Path;
 
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 
-/// 自启时带的参数：第二实例带它时静默退出（单实例回调里识别）。
+/// 自启及静默更新重启的参数：首实例隐藏进托盘，第二实例不唤起窗口。
 pub const AUTO_LAUNCH_ARG: &str = "--auto-launch";
 
 /// 一个启动项。

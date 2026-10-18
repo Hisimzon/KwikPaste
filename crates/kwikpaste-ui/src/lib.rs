@@ -31,6 +31,7 @@ mod strings;
 mod styled;
 mod tag;
 pub mod theme;
+mod title_bar;
 pub mod toast;
 mod toggle;
 mod tooltip;
@@ -58,6 +59,7 @@ pub use slider::{Slider, SliderState};
 pub use strings::{UiLocale, UiStrings, set_ui_strings, ui_strings};
 pub use styled::KpStyled;
 pub use tag::{Kbd, KeyHint, Shortcut, Tag, TagColor};
+pub use title_bar::{DRAWS_TITLE_BAR, TITLE_BAR_HEIGHT, TitleBar, titlebar_options};
 pub use toggle::{Checkbox, Switch};
 pub use tooltip::{TooltipBubble, TooltipExt};
 
@@ -95,7 +97,7 @@ pub fn open_window<V: Render>(
     Ok((window.into(), view))
 }
 
-/// 窗口有系统材质（Mica / Acrylic）时让 `Root` 不画底色：gpui-component 的 Root 插件默认铺一层
+/// 窗口有系统材质（Mica / 磨砂）时让 `Root` 不画底色：gpui-component 的 Root 插件默认铺一层
 /// 不透明的主题 `background`，会把材质整个盖住。半透明底色由应用的根视图自己画。
 pub fn set_root_translucent(window: &mut Window, translucent: bool, cx: &mut App) {
     let Some(root) = window.root::<gpui_base::Root>().flatten() else {

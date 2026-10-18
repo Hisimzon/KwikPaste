@@ -478,6 +478,19 @@ fn effective(configured: &str, default: &str, development: &str) -> String {
     development.to_owned()
 }
 
+/// 反馈读取实际注册句柄；空配置为 null，暂停或录制时不误报已经注册。
+pub(super) fn feedback_status(cx: &App, shortcuts: &Shortcuts) -> serde_json::Value {
+    let status = registration_status(cx);
+    let hotkeys = cx.try_global::<Hotkeys>();
+    let entry = |accelerator: &str, registered: Option<bool>| serde_json::json!({"accelerator": accelerator, "registered": if accelerator.trim().is_empty() { None } else { registered }});
+    serde_json::json!({
+        "openClipboard": entry(&shortcuts.open_clipboard, hotkeys.map(|h| h.toggle.is_some() && !status.open_clipboard_failed)),
+        "openPreference": entry(&shortcuts.open_preference, hotkeys.map(|h| h.preference.is_some() && !status.open_preference_failed)),
+        "pastePlain": entry(&shortcuts.paste_plain, hotkeys.map(|h| h.paste_plain.is_some() && !status.paste_plain_failed)),
+        "quickPasteFailed": hotkeys.map(|_| status.quick_paste_failed.iter().map(ToString::to_string).collect::<Vec<_>>())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use global_hotkey::hotkey::{Code, Modifiers};

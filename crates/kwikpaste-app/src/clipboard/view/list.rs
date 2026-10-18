@@ -13,6 +13,8 @@
 
 mod menu;
 mod ops;
+pub(super) use menu::save_image;
+pub(super) use ops::error_toast;
 mod parts;
 pub(crate) use parts::quick_action_glyph;
 mod previewing;
@@ -39,7 +41,7 @@ use gpui::{
 use kwikpaste_core::{
     CoreEvent,
     ops::{ReorderAnchor, ReorderSection},
-    settings::{AutoPaste, MiddleClickAction, Settings},
+    settings::{AutoPaste, MiddleClickAction, PanelAction, Settings, effective_panel_keys},
 };
 use kwikpaste_ui::{
     ListScrollbar, TextAreaInput, close_dialog, context_menu, dismiss_menu,
@@ -1559,7 +1561,18 @@ impl ClipboardList {
         let hint = self
             .key_hints
             .then(|| self.controller.hint_key(index, selecting))
-            .flatten();
+            .flatten()
+            .and_then(|digit| {
+                effective_panel_keys(&self.settings.shortcuts, PanelAction::PasteNth)
+                    .into_iter()
+                    .find(|key| key.ends_with(digit))
+            })
+            .map(|key| {
+                crate::clipboard::model::shortcut::display_keystroke(
+                    key.strip_prefix("secondary-").unwrap_or(&key),
+                )
+                .into()
+            });
         let actions = (hovered && !selecting)
             .then(|| {
                 visible_actions(
@@ -1832,8 +1845,11 @@ impl Render for ClipboardList {
             let wheel = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
-                        if phase != DispatchPhase::Capture || !bounds.contains(&event.position) {
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Capture
+                            || !bounds.contains(&event.position)
+                            || kwikpaste_ui::has_dialog(window, cx)
+                        {
                             return;
                         }
                         // 只接管鼠标滚轮的“行”增量；触控板的像素增量（自带惯性）交给列表自己处理。
@@ -2153,15 +2169,27 @@ impl Render for ClipboardList {
                     }
                 }),
             )
-            // 按住空格预览当前项（钩子转来的空格按下、松开）。
+            // 按住空格预览当前项、Shift+空格看大图（钩子转来的空格按下、松开）。
             .on_key_down(cx.listener(|list, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && list.reorder.is_some() {
                     list.cancel_reorder(cx);
                     cx.stop_propagation();
                     return;
                 }
-                if event.keystroke.key == "space" && !event.keystroke.modifiers.modified() {
+                if event.keystroke.key != "space" {
+                    return;
+                }
+                let modifiers = event.keystroke.modifiers;
+                if !modifiers.modified() {
                     list.preview_space(true, cx);
+                    cx.stop_propagation();
+                } else if modifiers == gpui::Modifiers::shift() {
+                    if let Some(item) = list
+                        .active_item()
+                        .filter(|item| item.kind == ItemKind::Image)
+                    {
+                        list.view_image(item.id.clone(), cx);
+                    }
                     cx.stop_propagation();
                 }
             }))

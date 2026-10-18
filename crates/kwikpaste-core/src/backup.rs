@@ -1268,6 +1268,7 @@ async fn import_ecopaste_history(
                 &settings.clipboard.capture,
                 &settings.clipboard.sensitive,
                 settings.clipboard.content.copy_plain,
+                settings.clipboard.compiled_rules(),
             )?
             else {
                 skipped_items += 1;
@@ -1746,14 +1747,11 @@ async fn merge_items(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     backup: &SqlitePool,
 ) -> Result<MergeOutcome> {
-    let rows = sqlx::query_as::<_, BackupItemRow>(
-        "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-         created_at, updated_at FROM clipboard_items ORDER BY created_at ASC",
-    )
-    .fetch_all(backup)
-    .await
-    .context("failed to read backup items")?;
+    let rows =
+        sqlx::query_as::<_, BackupItemRow>("SELECT * FROM clipboard_items ORDER BY created_at ASC")
+            .fetch_all(backup)
+            .await
+            .context("failed to read backup items")?;
 
     let mut imported_items = 0;
     let mut skipped_items = 0;
@@ -1776,11 +1774,11 @@ async fn merge_items(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
               summary, file_types, size, width, height, use_count, is_favorite, is_pinned, favorite_order, pin_order, is_sensitive, platform, note, \
-              created_at, updated_at, last_used_at) \
+              created_at, updated_at, last_used_at, original_content) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                      CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(favorite_order) FROM clipboard_items), 0) END,
                      CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(pin_order) FROM clipboard_items), 0) END,
-                     ?, ?, ?, ?, ?, ?)",
+                     ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id)
         .bind(row.kind)
@@ -1806,6 +1804,7 @@ async fn merge_items(
         .bind(row.created_at)
         .bind(row.updated_at)
         .bind(row.updated_at)
+        .bind(row.original_content)
         .execute(&mut **tx)
         .await
         .context("failed to import item")?;
@@ -1841,6 +1840,9 @@ struct BackupItemRow {
     note: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    /// 已发布的旧备份没有此列；SELECT * 配合缺列默认值保留旧库合并能力。
+    #[sqlx(default)]
+    original_content: Option<String>,
 }
 
 /// 导入后从数据库重建来源应用内存缓存。

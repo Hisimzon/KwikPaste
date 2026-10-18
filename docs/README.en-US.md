@@ -27,7 +27,7 @@ KwikPaste 2.0 is rewritten from scratch as a pure Rust native app: the interface
 
 - **Tiny memory footprint**: under 20 MB in the background on Windows (measured in Task Manager), versus about 370 MB for 1.x — roughly a twentieth.
 - **Opens instantly**: the window appears the moment you press the shortcut, with no web engine to start.
-- **Native on both platforms**: Direct3D 11 rendering with Mica / Acrylic on Windows, Metal rendering with a native panel on macOS, and it never steals focus from the app you are in.
+- **Native on both platforms**: Direct3D 11 rendering with Mica / frosted glass on Windows, Metal rendering with a native panel on macOS, and it never steals focus from the app you are in.
 
 ## Download
 

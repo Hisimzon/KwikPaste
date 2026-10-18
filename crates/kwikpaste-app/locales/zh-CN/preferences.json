@@ -81,6 +81,31 @@
     "shortcutInUse": "已被其他程序占用",
     "shortcutNotSet": "未设置"
   },
+  "customRules": {
+    "action": "动作",
+    "actions": {
+      "ignore": "不记录",
+      "sensitive": "敏感内容",
+      "snippet": "快捷信息"
+    },
+    "add": "添加规则",
+    "delete": "删除",
+    "edit": "编辑规则",
+    "empty": "还没有文本匹配规则",
+    "fromTemplate": "从模板添加",
+    "matches": "匹配 {{count}} 处",
+    "name": "名称",
+    "pattern": "正则表达式",
+    "templates": {
+      "identity": "身份证号",
+      "ipv4": "IPv4 地址",
+      "mac": "MAC 地址",
+      "new": "新规则",
+      "ticket": "工单号",
+      "tracking": "快递单号"
+    },
+    "test": "测试文本"
+  },
   "extensions": {
     "details": {
       "feature": "功能",
@@ -92,9 +117,9 @@
     "install": "安装",
     "installing": "正在安装…",
     "ocr": {
-      "description": "识别图片里的文字，用于搜索和复制，使用系统自带的识别能力。",
+      "description": "识别图片里的文字，用于搜索和复制。",
       "feature": "复制图片后自动识别其中的文字。之后可以用文字搜到这张图片，在右键菜单里「复制图中文字」，或在预览里切换到「文字」挑选部分文字复制。",
-      "how": "使用系统自带的文字识别：Windows 上是 Windows.Media.Ocr，macOS 上是 Vision 框架。识别在单独的后台进程里进行，有新图片时才启动，处理完自动退出，不常驻内存。能识别哪些语言取决于系统安装的语言包。",
+      "how": "使用系统自带的文字识别：Windows 上是 Windows.Media.Ocr，macOS 上是 Vision 框架。识别在单独的后台进程里进行，有新图片时才启动，处理完自动退出，不常驻内存。能识别哪些语言取决于系统安装的语言包。Windows 上还可以另外下载 PP-OCRv6 识别引擎，准确率更高。",
       "name": "图片文字识别",
       "privacy": "识别全部在本机完成，图片和识别出的文字都不会上传。",
       "uninstallContent": "卸载后不再识别新图片，已识别的文字会保留。"
@@ -133,6 +158,39 @@
       "writeClipboard": "收到的内容写入剪贴板"
     }
   },
+  "feedback": {
+    "attachments": "附带内容",
+    "close": "关闭",
+    "description": "问题描述",
+    "descriptionPlaceholder": "遇到了什么问题？比如：按快捷键面板不弹出",
+    "errors": {
+      "badResponse": "反馈服务返回了意外的响应。",
+      "collect": "无法收集诊断信息。",
+      "descriptionLength": "请填写问题描述，最多 5000 个字符。",
+      "noEndpoint": "开发构建没有配置反馈服务地址。",
+      "offline": "无法连接反馈服务，请检查网络。",
+      "rateLimited": "今天提交的反馈太多了，请明天再试。",
+      "rejected": "反馈服务没有接受这份内容。",
+      "save": "无法写入所选文件，请检查目录权限和磁盘空间。",
+      "timeout": "连接反馈服务超时，请稍后重试。",
+      "tooLarge": "附带内容格式不正确或体积过大。",
+      "unavailable": "反馈服务暂时不可用，请稍后重试。"
+    },
+    "failedContent": "{{reason}}可以先保存为文件，再通过其他方式发给开发者。",
+    "failedTitle": "发送失败",
+    "loading": "正在收集诊断信息…",
+    "noClipboard": "不会上传剪贴板里的内容。",
+    "notReady": "诊断信息还没准备好",
+    "saveAsFile": "保存为文件",
+    "saved": "反馈已保存为文件",
+    "send": "发送",
+    "sendFailed": "反馈没有发出去",
+    "sending": "正在发送反馈…",
+    "sent": "反馈已发送",
+    "sentContent": "反馈编号：{{code}}。联系开发者时提供这个编号。",
+    "sentTitle": "已收到，谢谢反馈",
+    "title": "上报问题"
+  },
   "imageText": {
     "checking": "正在检查系统的文字识别能力…",
     "deleted": "已删除识别文字",
@@ -161,6 +219,12 @@
     },
     "queued": {
       "title": "{{count}} 张图片等待识别"
+    },
+    "recognizeAll": {
+      "action": "全部重新识别",
+      "content": "用当前的识别引擎把 {{count}} 张图片重新识别一遍。识别完成前，这些图片暂时搜不到图中文字。",
+      "ok": "重新识别",
+      "title": "全部重新识别"
     },
     "running": {
       "description": "识别在单独的后台进程里进行，完成后自动退出，不增加常驻内存。",
@@ -230,6 +294,47 @@
       "noAddress": "没有可用的网络连接",
       "title": "本机"
     }
+  },
+  "ocrEngine": {
+    "columns": {
+      "errors": "错字率",
+      "memory": "内存",
+      "speed": "每张"
+    },
+    "description": "引擎只在识别时运行，识别完立即退出并释放全部内存。切换后只影响之后复制的图片，旧图片可以点「全部重新识别」。",
+    "download": "下载 {{size}}",
+    "footnote": "数据为实测参考：41 张测试图，Ryzen 7 9850X3D。识别时内存为峰值。",
+    "medium": {
+      "errors": "0.3%",
+      "memory": "710 MB",
+      "name": "PP-OCRv6 高精度",
+      "speed": "1.3 秒",
+      "summary": "最准，模糊图片也能认对；内存小于 8 GB 不建议"
+    },
+    "recommended": "推荐",
+    "small": {
+      "errors": "0.5%",
+      "memory": "320 MB",
+      "name": "PP-OCRv6 标准",
+      "speed": "0.4 秒",
+      "summary": "小字、代码和网址更准"
+    },
+    "system": {
+      "errors": "22%",
+      "memory": "约 20 MB",
+      "name": "系统识别",
+      "speed": "0.02 秒",
+      "summary": "Windows 自带，无需下载；小字和代码容易认错"
+    },
+    "tiny": {
+      "errors": "1%",
+      "memory": "210 MB",
+      "name": "PP-OCRv6 轻量",
+      "speed": "0.2 秒",
+      "summary": "适合大多数截图"
+    },
+    "title": "识别引擎",
+    "unavailable": "暂不可用"
   },
   "overview": {
     "categories": {
@@ -482,6 +587,9 @@
       "click": {
         "title": "点击行为"
       },
+      "customRules": {
+        "title": "文本匹配规则"
+      },
       "deleteProtection": {
         "title": "删除保护"
       },
@@ -518,6 +626,9 @@
       "overview": {
         "title": "数据概览"
       },
+      "panelShortcuts": {
+        "title": "剪贴板窗口内"
+      },
       "performance": {
         "title": "性能"
       },
@@ -529,6 +640,9 @@
       },
       "sensitive": {
         "title": "隐私保护"
+      },
+      "shortcutPause": {
+        "title": "停用规则"
       },
       "sort": {
         "title": "列表排序"
@@ -648,7 +762,7 @@
         "material": {
           "description": "系统不支持或开启了减少透明度时使用纯色。",
           "options": {
-            "acrylic": "亚克力",
+            "acrylic": "磨砂",
             "default": "默认",
             "mica": "云母"
           },
@@ -761,11 +875,18 @@
           "title": "默认复制为纯文本"
         },
         "sound": {
-          "preview": {
-            "controlLabel": "试听",
-            "title": "试听提示音"
-          },
           "title": "复制成功提示音",
+          "tone": {
+            "description": "点一下音色即可试听。",
+            "options": {
+              "bubble": "气泡",
+              "chime": "叮咚",
+              "chirp": "啾啾",
+              "classic": "经典",
+              "tick": "轻敲"
+            },
+            "title": "提示音音色"
+          },
           "volume": {
             "description": "拖动调整音量，松开后保存；0% 为静音。",
             "title": "提示音音量"
@@ -776,7 +897,16 @@
           "title": "复用时更新记录"
         }
       },
+      "customRules": {
+        "description": "用正则匹配复制的文字：提取为快捷信息、标记为敏感内容，或不记录。敏感与不记录只对之后复制的内容生效。",
+        "title": "文本匹配规则"
+      },
       "diagnostics": {
+        "reportProblem": {
+          "controlLabel": "上报",
+          "description": "把问题描述连同日志和诊断信息发给开发者。",
+          "title": "上报问题"
+        },
         "resetPreferences": {
           "confirmContent": "这会恢复所有偏好默认值，但不会删除剪贴板历史记录。",
           "confirmTitle": "重置所有偏好？",
@@ -936,6 +1066,18 @@
           },
           "title": "悬停延迟"
         },
+        "gap": {
+          "description": "预览窗与主窗口中记录之间的距离。",
+          "options": {
+            "0": "0 px",
+            "8": "8 px",
+            "16": "16 px",
+            "28": "28 px",
+            "40": "40 px",
+            "56": "56 px"
+          },
+          "title": "预览窗间距"
+        },
         "hover": {
           "title": "悬停预览"
         },
@@ -1025,6 +1167,10 @@
           "description": "打开或隐藏偏好设置窗口。",
           "placeholder": "Alt+X",
           "title": "打开偏好设置窗口"
+        },
+        "panel": {
+          "description": "剪贴板窗口里的按键，如粘贴、收藏、置顶。",
+          "title": "剪贴板窗口内快捷键"
         },
         "pastePlain": {
           "description": "不打开剪贴板窗口，把当前剪贴板内容去掉格式后直接粘贴。",
@@ -1186,6 +1332,62 @@
     "openTab": "打开{{tab}}",
     "placeholder": "搜索配置项",
     "title": "搜索结果"
+  },
+  "shortcutsPage": {
+    "added": "已添加",
+    "addTrigger": "添加触发方式",
+    "anyTrigger": "下面任意一种方式都能触发。",
+    "chips": {
+      "doubleTap": "双击 {{key}}",
+      "mouse": "鼠标{{button}}",
+      "quickPasteOff": "已关闭"
+    },
+    "conflict": "{{key}} 已用于「{{name}}」。",
+    "conflictPanel": "{{key}} 已用于剪贴板窗口内的「{{name}}」。",
+    "kinds": {
+      "combo": {
+        "description": "任何应用中按下即可",
+        "title": "组合键"
+      },
+      "doubleTap": {
+        "description": "快速连按两次。Shift 可能同时切换输入法中英文。",
+        "title": "双击按键"
+      },
+      "mouse": {
+        "description": "单击中键或侧键唤起；该键原来的单击功能会停用",
+        "title": "鼠标按键"
+      },
+      "winV": {
+        "description": "替代 Windows 系统剪贴板历史面板",
+        "title": "接管 Win+V"
+      }
+    },
+    "panel": {
+      "cardClick": "卡片的鼠标点击行为在「{{tab}}」里设置",
+      "fixed": "固定按键，不能修改",
+      "groups": {
+        "navigate": "导航",
+        "organize": "整理",
+        "paste": "粘贴与复制",
+        "window": "窗口"
+      },
+      "hint": "只在剪贴板窗口里生效，点击按键即可重新录制。",
+      "invalid": "窗口内快捷键需要 {{mod}} 加一个按键，可以再加 Shift",
+      "recording": "请按下新按键…",
+      "reset": "恢复默认",
+      "resetAll": "全部恢复默认"
+    },
+    "quickPaste": {
+      "enable": "启用快速粘贴",
+      "hold": "按住 {{mods}} 再按：",
+      "nth": "第 {{n}} 条"
+    },
+    "recording": "请按下新的组合键…",
+    "recordingHelp": "录制时其他快捷键暂停 · Esc 取消 · Backspace 清除",
+    "remove": "移除",
+    "rerecord": "重新录制",
+    "takeOver": "改用到这里",
+    "triggers": "触发方式"
   },
   "sidebar": {
     "collapse": "收起侧栏",

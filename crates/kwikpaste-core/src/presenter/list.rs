@@ -6,7 +6,6 @@ use sqlx::SqlitePool;
 
 use super::files::{is_image_path, resolve_file_icon_path};
 use super::image_display_size;
-use super::text::mask_sensitive_text;
 use super::view::{ClipboardAction, ClipboardItemView, FileEntry, FilesPreviewKind};
 use crate::clipboard::{
     detect_text_sub_kind, image_file_dimensions, quick_snippets, sanitize_css_color,
@@ -28,6 +27,7 @@ pub(crate) struct ListContext<'a, Tz: TimeZone> {
     pub image_max_height: u16,
     pub redact_sensitive: bool,
     pub quick_snippets: bool,
+    pub rules: crate::clipboard::rules::CompiledRules,
     /// 已配对（含已移除）设备，同步收到的记录据此显示「来自 xxx」。
     pub devices: Option<&'a PeerStore>,
     pub wetype_devices: Option<&'a crate::wetype::DeviceNames>,
@@ -53,6 +53,7 @@ impl<'a, Tz: TimeZone> ListContext<'a, Tz> {
             image_max_height: clipboard.display.image_max_height,
             redact_sensitive: clipboard.sensitive.redact_secrets,
             quick_snippets: clipboard.display.quick_snippets,
+            rules: clipboard.compiled_rules().clone(),
             devices: None,
             wetype_devices: None,
         }
@@ -86,8 +87,36 @@ where
     attach_file_entries(ctx.pool, ctx.file_icons, &mut view, ctx.file_entry_limit).await?;
     attach_color_preview(&mut view);
     attach_display_created_at(&mut view, &ctx.now);
-    attach_quick_snippets(&mut view, ctx.quick_snippets, ctx.redact_sensitive);
-    redact_sensitive_list_item(&mut view, ctx.redact_sensitive);
+    attach_quick_snippets(
+        &mut view,
+        ctx.quick_snippets,
+        ctx.redact_sensitive,
+        &ctx.rules,
+    );
+    let mut span_masked = false;
+    if ctx.redact_sensitive
+        && view.item.is_sensitive
+        && view.item.kind == ClipboardKind::Text
+        && ctx
+            .rules
+            .has_action(crate::clipboard::rules::RuleAction::Sensitive)
+    {
+        // 列表查询没有完整正文；只为需要区间遮罩的敏感项读取，避免截断匹配漏出前缀。
+        if let Some(full) = crate::db::items::find_item_by_id(ctx.pool, &view.item.id).await? {
+            let source = crate::clipboard::fragment_source(&full);
+            let masked = (!crate::clipboard::contains_secret(source))
+                .then(|| ctx.rules.mask(source))
+                .flatten();
+            if let Some(masked) = masked {
+                view.item.summary = Some(masked.trim().chars().take(SUMMARY_MAX_CHARS).collect());
+                view.color_preview = None;
+                span_masked = true;
+            }
+        }
+    }
+    if !span_masked {
+        redact_sensitive_list_item(&mut view, ctx.redact_sensitive);
+    }
     view.available_actions = compute_available_actions(&view.item, ctx.redact_sensitive);
     attach_image_display_size(&mut view, ctx.image_max_height);
     attach_file_image_preview(ctx.images, &mut view, ctx.image_max_height);
@@ -153,12 +182,17 @@ fn attach_color_preview(view: &mut ClipboardItemView) {
 }
 
 /// 按设置为文本列表项提取快捷信息；脱敏展示的敏感条目不提取，片段会绕过遮罩露出凭据。
-fn attach_quick_snippets(view: &mut ClipboardItemView, enabled: bool, redact_sensitive: bool) {
+fn attach_quick_snippets(
+    view: &mut ClipboardItemView,
+    enabled: bool,
+    redact_sensitive: bool,
+    rules: &crate::clipboard::rules::CompiledRules,
+) {
     if !enabled || redact_sensitive && view.item.is_sensitive {
         return;
     }
 
-    view.quick_snippets = quick_snippets(&view.item);
+    view.quick_snippets = quick_snippets(&view.item, rules);
 }
 
 /// 按当前设置对敏感文本列表项返回脱敏摘要，避免列表暴露完整凭据。
@@ -169,7 +203,7 @@ fn redact_sensitive_list_item(view: &mut ClipboardItemView, redact_sensitive: bo
     }
 
     if let Some(summary) = item.summary.as_mut() {
-        *summary = mask_sensitive_text(summary);
+        *summary = super::text::mask_sensitive_text(summary);
     }
     view.color_preview = None;
 }
@@ -311,6 +345,9 @@ pub(crate) fn compute_available_actions(
     actions.push(ClipboardAction::ToggleFavorite);
     actions.push(ClipboardAction::TogglePinned);
     actions.push(ClipboardAction::EditNote);
+    if item.kind == ClipboardKind::Text && item.has_original {
+        actions.push(ClipboardAction::RestoreOriginal);
+    }
     actions.push(ClipboardAction::Select);
     actions.push(ClipboardAction::Delete);
 
@@ -403,6 +440,25 @@ mod tests {
     }
 
     #[test]
+    fn restore_original_requires_a_text_snapshot() {
+        let mut item = text_item(None, false);
+        assert!(
+            !compute_available_actions(&item, false).contains(&ClipboardAction::RestoreOriginal)
+        );
+        item.has_original = true;
+        assert!(compute_available_actions(&item, false).contains(&ClipboardAction::RestoreOriginal));
+        for kind in [ClipboardKind::Image, ClipboardKind::Files] {
+            item.kind = kind;
+            assert!(!compute_available_actions(&item, false)
+                .contains(&ClipboardAction::RestoreOriginal));
+        }
+        assert_eq!(
+            serde_json::to_value(ClipboardAction::RestoreOriginal).unwrap(),
+            "restoreOriginal"
+        );
+    }
+
+    #[test]
     fn rich_text_link_actions_use_only_complete_plain_summaries() {
         for sub_kind in [ClipboardSubKind::Html, ClipboardSubKind::Rtf] {
             let mut item = text_item(Some(sub_kind), false);
@@ -454,13 +510,28 @@ mod tests {
         item.summary = Some("订单 20260924 已发货".to_owned());
         let mut item = view(item);
 
-        attach_quick_snippets(&mut item, true, true);
+        attach_quick_snippets(
+            &mut item,
+            true,
+            true,
+            &crate::clipboard::rules::CompiledRules::default(),
+        );
         assert!(item.quick_snippets.is_empty());
 
-        attach_quick_snippets(&mut item, false, false);
+        attach_quick_snippets(
+            &mut item,
+            false,
+            false,
+            &crate::clipboard::rules::CompiledRules::default(),
+        );
         assert!(item.quick_snippets.is_empty());
 
-        attach_quick_snippets(&mut item, true, false);
+        attach_quick_snippets(
+            &mut item,
+            true,
+            false,
+            &crate::clipboard::rules::CompiledRules::default(),
+        );
         assert_eq!(item.quick_snippets.len(), 1);
         assert_eq!(item.quick_snippets[0].text, "20260924");
         assert_eq!(

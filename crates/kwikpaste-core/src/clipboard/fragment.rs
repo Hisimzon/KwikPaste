@@ -69,6 +69,7 @@ pub enum SnippetKind {
     Phone,
     Time,
     Number,
+    Custom,
 }
 
 /// 列表卡片可单独使用的快捷信息，包含片段原文及其识别类型。
@@ -81,6 +82,8 @@ pub struct QuickSnippet {
 /// 完整文本预览的快捷信息，区间是原始纯文本中的 UTF-8 字节偏移。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PreviewSnippet {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub text: String,
     pub kind: SnippetKind,
     pub range: Range<usize>,
@@ -96,6 +99,8 @@ pub enum ClipboardFragment {
     Words { indices: Vec<usize> },
     /// 图片文字预览里选中的词序号，对应识别文本的 [`split_words`] 结果。
     ImageWords { indices: Vec<usize> },
+    /// 图片识别原文的字符区间，按 Unicode 标量计数，包含起点但不包含终点。
+    ImageTextRange { start: usize, end: usize },
 }
 
 /// 拆词面板里的一个词。
@@ -134,8 +139,11 @@ pub fn fragment_source(item: &ClipboardItem) -> &str {
 }
 
 /// 列表卡片展示的快捷信息。整条记录本身就是链接 / 邮箱 / 颜色 / 路径时不再拆出片段。
-pub fn quick_snippets(item: &ClipboardItem) -> Vec<QuickSnippet> {
-    if !can_extract_snippets(item) {
+pub fn quick_snippets(
+    item: &ClipboardItem,
+    rules: &super::rules::CompiledRules,
+) -> Vec<QuickSnippet> {
+    if item.kind != ClipboardKind::Text {
         return Vec::new();
     }
 
@@ -144,8 +152,9 @@ pub fn quick_snippets(item: &ClipboardItem) -> Vec<QuickSnippet> {
     };
     let may_be_cut = summary.chars().count() >= SUMMARY_MAX_CHARS;
 
-    extract_snippets(summary, may_be_cut, MAX_QUICK_SNIPPETS)
+    extract_snippets(summary, may_be_cut, MAX_QUICK_SNIPPETS, rules)
         .into_iter()
+        .filter(|snippet| can_extract_snippets(item) || snippet.kind == SnippetKind::Custom)
         .map(|snippet| QuickSnippet {
             text: snippet.text,
             kind: snippet.kind,
@@ -154,12 +163,18 @@ pub fn quick_snippets(item: &ClipboardItem) -> Vec<QuickSnippet> {
 }
 
 /// 从完整纯文本的开头提取预览快捷信息，区间与 [`fragment_source`] 的字节偏移一致。
-pub fn preview_quick_snippets(item: &ClipboardItem) -> Vec<PreviewSnippet> {
-    if !can_extract_snippets(item) {
+pub fn preview_quick_snippets(
+    item: &ClipboardItem,
+    rules: &super::rules::CompiledRules,
+) -> Vec<PreviewSnippet> {
+    if item.kind != ClipboardKind::Text {
         return Vec::new();
     }
     let (text, truncated) = take_chars(fragment_source(item), MAX_SPLIT_CHARS);
-    extract_snippets(text, truncated, MAX_PREVIEW_SNIPPETS)
+    extract_snippets(text, truncated, MAX_PREVIEW_SNIPPETS, rules)
+        .into_iter()
+        .filter(|snippet| can_extract_snippets(item) || snippet.kind == SnippetKind::Custom)
+        .collect()
 }
 
 /// 独立链接、邮箱、颜色和路径卡片不再重复拆出快捷信息。
@@ -187,9 +202,20 @@ fn can_extract_snippets(item: &ClipboardItem) -> bool {
 ///
 /// `may_be_cut` 表示文本可能在末尾被截断，贴着末尾的片段可能只是半截，这种片段不给出。
 /// 与整段文本相同的片段也不给出，那样直接粘贴整条记录就行。
-fn extract_snippets(text: &str, may_be_cut: bool, limit: usize) -> Vec<PreviewSnippet> {
+fn extract_snippets(
+    text: &str,
+    may_be_cut: bool,
+    limit: usize,
+    rules: &super::rules::CompiledRules,
+) -> Vec<PreviewSnippet> {
     let mut spans: Vec<(Range<usize>, SnippetKind)> = Vec::new();
 
+    let custom: Vec<_> = rules
+        .spans(super::rules::RuleAction::Snippet, text)
+        .collect();
+    for (range, _) in &custom {
+        push_span(&mut spans, range.clone(), SnippetKind::Custom);
+    }
     for found in URL_RE.find_iter(text) {
         let end = found.start() + trim_url_tail(found.as_str()).len();
         push_span(&mut spans, found.start()..end, SnippetKind::Link);
@@ -242,7 +268,16 @@ fn extract_snippets(text: &str, may_be_cut: bool, limit: usize) -> Vec<PreviewSn
             continue;
         }
 
+        let label = (kind == SnippetKind::Custom)
+            .then(|| {
+                custom
+                    .iter()
+                    .find(|(range, _)| *range == span)
+                    .map(|(_, name)| (*name).to_owned())
+            })
+            .flatten();
         snippets.push(PreviewSnippet {
+            label,
             text: snippet.to_owned(),
             kind,
             range: span,
@@ -400,7 +435,7 @@ pub fn resolve_fragment(item: &ClipboardItem, fragment: &ClipboardFragment) -> O
         }
         ClipboardFragment::Words { indices } => select_words(source, indices),
         // 图片识别文本来自派生表，由 core 的片段加载入口读取后拆词。
-        ClipboardFragment::ImageWords { .. } => None,
+        ClipboardFragment::ImageWords { .. } | ClipboardFragment::ImageTextRange { .. } => None,
     }
 }
 
@@ -480,12 +515,40 @@ mod tests {
     use crate::presenter::tests::text_item;
 
     #[test]
+    fn custom_snippets_win_over_builtin_overlaps_and_keep_limits() {
+        use super::super::rules::{tests::rule, CompiledRules, RuleAction};
+        let rules = CompiledRules::new(&[rule("ABC-[0-9]+|[0-9]{11}", RuleAction::Snippet)]);
+        let text = "工单ABC-12345，电话13800138000，时间14:00。";
+        let mut item = text_item(None, false);
+        item.content = text.into();
+        item.summary = Some(text.into());
+        let snippets = preview_quick_snippets(&item, &rules);
+        assert_eq!(
+            snippets
+                .iter()
+                .filter(|s| s.kind == SnippetKind::Custom)
+                .count(),
+            2
+        );
+        assert_eq!(snippets[0].label.as_deref(), Some("Example"));
+        assert_eq!(&text[snippets[0].range.clone()], "ABC-12345");
+        assert!(!snippets.iter().any(|s| s.kind == SnippetKind::Phone));
+        assert_eq!(quick_snippets(&item, &rules).len(), snippets.len());
+        assert!(extract_snippets("前ABC-12345", true, 8, &rules).is_empty());
+        assert!(extract_snippets("ABC-12345", false, 8, &rules).is_empty());
+        let many = (0..40).map(|i| format!("ABC-{i:05} ")).collect::<String>();
+        assert_eq!(extract_snippets(&many, false, 8, &rules).len(), 8);
+        assert_eq!(extract_snippets(&many, false, 32, &rules).len(), 32);
+    }
+
+    #[test]
     fn issue_snippets_keep_their_kinds_and_source_byte_ranges() {
         let text = "王工，快递单号 SF1234567890123 明天到，收货电话 138 0013 8000；发票抬头发到你邮箱 wang@example.com 了。周四 14:00 前确认一下，新版在 https://paste.fastthree.com 。";
         let mut item = text_item(None, false);
         item.content = text.to_owned();
         item.summary = Some(text.to_owned());
-        let snippets = preview_quick_snippets(&item);
+        let snippets =
+            preview_quick_snippets(&item, &super::super::rules::CompiledRules::default());
         let expected = [
             ("SF1234567890123", SnippetKind::Number),
             ("138 0013 8000", SnippetKind::Phone),
@@ -502,7 +565,7 @@ mod tests {
             assert_eq!(snippet.range, start..start + value.len());
             assert_eq!(text.get(snippet.range.clone()), Some(value));
         }
-        let card = quick_snippets(&item);
+        let card = quick_snippets(&item, &super::super::rules::CompiledRules::default());
         assert_eq!(card.len(), snippets.len());
         for (card, preview) in card.iter().zip(&snippets) {
             assert_eq!((&card.text, card.kind), (&preview.text, preview.kind));
@@ -512,7 +575,12 @@ mod tests {
     #[test]
     fn kinds_follow_the_matching_number_alternative() {
         let text = "电话 +86-138-1234-5678 日期 2026年9月24日 9月24号 2026/9/24 2026.9.24 时间 14:30:05 编号 010-12345678 SF-2026-0924；会议号 881 234 5678；型号 9140BT";
-        let snippets = extract_snippets(text, false, MAX_PREVIEW_SNIPPETS);
+        let snippets = extract_snippets(
+            text,
+            false,
+            MAX_PREVIEW_SNIPPETS,
+            &super::super::rules::CompiledRules::default(),
+        );
         assert_eq!(
             snippets
                 .iter()
@@ -547,8 +615,9 @@ mod tests {
             .join(" ");
         item.search_text = Some(plain.clone());
 
-        assert!(quick_snippets(&item).is_empty());
-        let snippets = preview_quick_snippets(&item);
+        assert!(quick_snippets(&item, &super::super::rules::CompiledRules::default()).is_empty());
+        let snippets =
+            preview_quick_snippets(&item, &super::super::rules::CompiledRules::default());
         assert_eq!(snippets.len(), MAX_PREVIEW_SNIPPETS);
         assert!(snippets.len() > MAX_QUICK_SNIPPETS);
         for snippet in snippets {
@@ -561,7 +630,8 @@ mod tests {
         let mut item = text_item(None, false);
         let prefix = format!("编号 12345 {}", "字".repeat(MAX_SPLIT_CHARS - 12));
         item.content = format!("{prefix} 6789012345 末尾 99999");
-        let snippets = preview_quick_snippets(&item);
+        let snippets =
+            preview_quick_snippets(&item, &super::super::rules::CompiledRules::default());
 
         assert_eq!(snippets.len(), 1);
         assert_eq!(snippets[0].text, "12345");
@@ -573,18 +643,29 @@ mod tests {
             ClipboardSubKind::Path,
         ] {
             item.sub_kind = Some(sub_kind);
-            assert!(preview_quick_snippets(&item).is_empty());
+            assert!(
+                preview_quick_snippets(&item, &super::super::rules::CompiledRules::default())
+                    .is_empty()
+            );
         }
         item.kind = ClipboardKind::Image;
         item.sub_kind = None;
-        assert!(preview_quick_snippets(&item).is_empty());
+        assert!(
+            preview_quick_snippets(&item, &super::super::rules::CompiledRules::default())
+                .is_empty()
+        );
     }
 
     fn snippet_texts(text: &str, may_be_cut: bool) -> Vec<String> {
-        extract_snippets(text, may_be_cut, MAX_QUICK_SNIPPETS)
-            .into_iter()
-            .map(|snippet| snippet.text)
-            .collect()
+        extract_snippets(
+            text,
+            may_be_cut,
+            MAX_QUICK_SNIPPETS,
+            &super::super::rules::CompiledRules::default(),
+        )
+        .into_iter()
+        .map(|snippet| snippet.text)
+        .collect()
     }
 
     fn token_texts(text: &str) -> Vec<String> {

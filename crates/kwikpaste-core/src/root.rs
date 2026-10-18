@@ -72,6 +72,7 @@ pub(crate) struct CoreInner {
     clipboard_provider: RwLock<Arc<dyn ClipboardProvider>>,
     cleanup_task: Mutex<Option<JoinHandle<()>>>,
     watcher: Mutex<Option<WatcherShutdown>>,
+    pub(crate) watcher_running: Arc<AtomicBool>,
 }
 
 impl Core {
@@ -124,6 +125,7 @@ impl Core {
                 clipboard_provider: RwLock::new(default_clipboard_provider()),
                 cleanup_task: Mutex::new(None),
                 watcher: Mutex::new(None),
+                watcher_running: Arc::new(AtomicBool::new(false)),
             });
 
             inner.sync.bind(Arc::downgrade(&inner));
@@ -238,9 +240,34 @@ impl Core {
         self.0.watcher_pause.set_paused(paused);
     }
 
+    /// 反馈只读取监听状态，不打开或读取系统剪贴板。
+    pub fn watcher_status(&self) -> (bool, bool) {
+        (
+            self.0
+                .watcher_running
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.0.watcher_pause.is_paused(),
+        )
+    }
+
+    /// 反馈只统计条数，SQL 不选择任何剪贴板内容字段。
+    pub async fn diagnostic_item_count(&self) -> Result<i64> {
+        let core = self.clone();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM clipboard_items")
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| crate::AppError::Other(err.into()))
+        })
+        .await
+    }
+
     /// 播放一次复制提示音（偏好页试听）。
-    pub fn play_copy_sound(&self, volume_percent: u8) {
-        self.0.platform().play_copy_sound(volume_percent.min(100));
+    pub fn play_copy_sound(&self, tone: crate::settings::CopySoundTone, volume_percent: u8) {
+        self.0
+            .platform()
+            .play_copy_sound(tone, volume_percent.min(100));
     }
 
     pub fn info(&self) -> &AppInfo {
@@ -345,6 +372,7 @@ impl Core {
             &settings.clipboard.capture,
             &settings.clipboard.sensitive,
             settings.clipboard.content.copy_plain,
+            settings.clipboard.compiled_rules(),
         )
     }
 
@@ -709,6 +737,61 @@ mod tests {
     use crate::clipboard::{MemoryClipboard, MemoryState};
     use crate::db::models::ClipboardKind;
     use crate::testing::{block_on, sample_png, Fixture};
+
+    #[test]
+    fn custom_rules_update_presentation_without_rescanning_history() {
+        use crate::clipboard::{
+            rules::{tests::rule, RuleAction},
+            TextPayload,
+        };
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let payload = ClipboardPayload::Text(TextPayload {
+            text: "订单ABC-12345已发出".into(),
+            html: None,
+            rtf: None,
+        });
+        let original = core.build_item(&payload).unwrap().unwrap();
+        let id = block_on(core.store_item(original, None)).unwrap().id;
+        let mut sensitive = rule("ABC-[0-9]+", RuleAction::Sensitive);
+        sensitive.name = "订单".into();
+        block_on(core.update_settings(json!({"clipboard":{"customRules":[sensitive]}}))).unwrap();
+        // 旧记录不被重新标记；新复制内容才使用敏感规则。
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().is_sensitive);
+        let new = core.build_item(&payload).unwrap().unwrap();
+        assert!(new.is_sensitive);
+        let copied = block_on(core.store_item(new, None)).unwrap();
+        assert!(copied.deduplicated);
+        assert_eq!(copied.id, id);
+        let card = block_on(core.list_item(&id)).unwrap().unwrap();
+        assert_eq!(card.item.summary.as_deref(), Some("订单ABC**2345已发出"));
+        assert!(card.quick_snippets.is_empty());
+        let preview = block_on(core.preview_payload(&id)).unwrap().unwrap();
+        assert_eq!(preview.text.as_deref(), card.item.summary.as_deref());
+        assert!(preview.snippets.is_empty());
+        let snippet = rule("ABC-[0-9]+", RuleAction::Snippet);
+        block_on(core.update_settings(
+            json!({"clipboard":{"customRules":[snippet],"sensitive":{"redactSecrets":false}}}),
+        ))
+        .unwrap();
+        let preview = block_on(core.preview_payload(&id)).unwrap().unwrap();
+        assert_eq!(preview.snippets[0].label.as_deref(), Some("Example"));
+        assert_eq!(
+            preview.snippets[0].kind,
+            crate::clipboard::SnippetKind::Custom
+        );
+        block_on(core.update_settings(
+            json!({"clipboard":{"customRules":[],"sensitive":{"redactSecrets":true}}}),
+        ))
+        .unwrap();
+        let preview = block_on(core.preview_payload(&id)).unwrap().unwrap();
+        assert_eq!(
+            preview.text.as_deref(),
+            Some(crate::presenter::mask_sensitive_text("订单ABC-12345已发出").as_str())
+        );
+        assert!(block_on(core.find_item(&id)).unwrap().unwrap().is_sensitive);
+        block_on(core.shutdown()).unwrap();
+    }
 
     /// 测试线程上没有 tokio 上下文，每个公开方法都直接在自制执行器里 await。
     #[test]

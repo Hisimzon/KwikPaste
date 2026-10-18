@@ -1,13 +1,13 @@
 //! 首次启动引导窗：步骤和设置契约与 1.x `src/pages/Onboarding` 保持一致。
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, Div, Entity, FocusHandle, Global, ImageSource,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Pixels, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _,
-    px, rems, size,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
+    WindowBounds, WindowOptions, div, img, prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::app_ids;
 use kwikpaste_core::settings::Settings;
@@ -54,10 +54,9 @@ pub fn open(cx: &mut App) -> anyhow::Result<()> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(WINDOW_SIZE, cx)),
         window_min_size: Some(WINDOW_MIN_SIZE),
-        titlebar: Some(TitlebarOptions {
-            title: Some(i18n::t("onboarding:welcome.title")),
-            ..Default::default()
-        }),
+        titlebar: Some(kwikpaste_ui::titlebar_options(i18n::t(
+            "onboarding:welcome.title",
+        ))),
         focus: false,
         ..Default::default()
     };
@@ -730,6 +729,26 @@ impl Onboarding {
                             })
                             .into_any_element()
                     }
+                    Control::Segmented(options) => {
+                        let entity = cx.entity().downgrade();
+                        let numeric = matches!(options, schema::Options::Numbers(_));
+                        view::choices::segmented(
+                            id,
+                            text::setting_title(&setting),
+                            text::options(&setting),
+                            values::get_choice(&settings_json, path).as_deref(),
+                            setting.is_disabled(&self.settings),
+                            Rc::new(move |value, _, cx| {
+                                let _ = entity.update(cx, |this, cx| {
+                                    this.update_settings(
+                                        values::choice_patch(path, value, numeric),
+                                        cx,
+                                    );
+                                });
+                            }),
+                            cx,
+                        )
+                    }
                     Control::Select(_) => match self.selects.get(id) {
                         Some(state) => Select::new(state)
                             .width(rems(12.))
@@ -1039,6 +1058,7 @@ impl Render for Onboarding {
                 theme::semantic(cx).surface.panel,
             ))
             .text_color(theme::semantic(cx).text.primary)
+            .child(kwikpaste_ui::TitleBar::new().title(i18n::t("onboarding:welcome.title")))
             .child(self.render_header(cx))
             .child(
                 ScrollArea::new("onboarding-scroll", &self.scroll)

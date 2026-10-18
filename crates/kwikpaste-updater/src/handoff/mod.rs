@@ -4,8 +4,8 @@
 //!
 //! - **NSIS**：写 `update-handoff.json` → 宿主停输入（钩子、全局快捷键）→ core 关停（停剪贴板监听、
 //!   WAL checkpoint 并关库，最多等 3 秒）→ `ShellExecuteW` 拉起安装包并**检查返回值** →
-//!   成功：删托盘 → 释放单实例 → 退出；失败（如拒绝 UAC）：删掉交接文件 → 删托盘 → 释放单实例 →
-//!   用原参数重新启动自己 → 退出。
+//!   成功：删托盘 → 释放单实例 → 退出；失败：删托盘 → 释放单实例 → 重启当前版本 → 退出。
+//!   静默交接失败保留记录，让新进程对该版本退回手动确认；手动交接失败仍删除记录。
 //! - **便携版**：先换 exe（失败就回滚并报错，什么都不关）→ 写交接文件 → 停输入 → core 关停 → 删托盘 →
 //!   **先释放单实例**再启动新 exe（否则新进程会把自己当成第二实例退出）→ 退出。
 //! - **macOS**：解包、换 `.app`（失败回滚）→ 写交接文件 → 停输入（Carbon 热键、轮询）→ core 关停 →
@@ -62,9 +62,9 @@ pub trait HandoffHost: Send + Sync + 'static {
 
 /// 拉起外部程序。正式运行用系统实现；测试换成只记录、什么都不执行的假实现。
 pub(crate) trait Launcher: Send + Sync {
-    /// Windows：`ShellExecuteW("open", file, parameters)`，失败（含用户拒绝 UAC）返回错误。
+    /// Windows：静默时以当前权限启动，手动时 ShellExecuteW；失败（含拒绝 UAC）返回错误。
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    fn shell_execute(&self, file: &Path, parameters: &str) -> anyhow::Result<()>;
+    fn launch_installer(&self, file: &Path, parameters: &str, silent: bool) -> anyhow::Result<()>;
     /// 启动后不等待。
     fn spawn(&self, program: &Path, args: &[OsString]) -> anyhow::Result<()>;
     /// 启动并等待结束，退出码非 0 算失败。macOS 换包时用（`touch`、`osascript`）。
@@ -75,14 +75,14 @@ pub(crate) trait Launcher: Send + Sync {
 pub(crate) struct SystemLauncher;
 
 impl Launcher for SystemLauncher {
-    fn shell_execute(&self, file: &Path, parameters: &str) -> anyhow::Result<()> {
+    fn launch_installer(&self, file: &Path, parameters: &str, silent: bool) -> anyhow::Result<()> {
         #[cfg(target_os = "windows")]
         {
-            nsis::shell_execute(file, parameters)
+            nsis::launch(file, parameters, silent)
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (file, parameters);
+            let _ = (file, parameters, silent);
             anyhow::bail!("installers are only run on Windows")
         }
     }
@@ -108,7 +108,7 @@ impl Launcher for SystemLauncher {
     }
 }
 
-/// 交接文件：新进程据此提示「已更新到 X」。旧版本会忽略这个文件。
+/// 交接文件：新进程静默消费，只用于阻止失败版本在同次运行中再次自动安装，不显示更新通知。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandoffRecord {
     pub version: u16,
@@ -147,6 +147,7 @@ pub(crate) struct Handoff<'a> {
     #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
     pub exe: PathBuf,
     pub args: Vec<OsString>,
+    pub silent: bool,
     pub from: String,
     pub to: String,
 }
@@ -167,16 +168,21 @@ impl Handoff<'_> {
         self.write_record("nsis")?;
         self.shutdown().await;
 
-        let parameters = nsis::parameters(&self.args);
+        let parameters = nsis::parameters(&self.args, self.silent);
         log::info!("starting installer {installer:?} {parameters}");
-        match self.launcher.shell_execute(installer, &parameters) {
+        match self
+            .launcher
+            .launch_installer(installer, &parameters, self.silent)
+        {
             Ok(()) => {
                 self.leave().await;
                 Ok(())
             }
             Err(err) => {
                 log::error!("installer did not start, restarting the current version: {err:#}");
-                self.remove_record();
+                if !self.silent {
+                    self.remove_record();
+                }
                 self.host.remove_tray().await;
                 self.host.release_single_instance().await;
                 if let Err(err) = self.launcher.spawn(&self.exe, &self.args) {
@@ -221,14 +227,15 @@ impl Handoff<'_> {
             fs::remove_dir_all(&extracted).ok();
         }
         macos::extract_app(&bytes, &extracted)?;
-        macos::swap_bundle(bundle, &extracted, self.launcher)?;
+        macos::swap_bundle(bundle, &extracted, self.launcher, !self.silent)?;
         log::info!("replaced {bundle:?} with {}", self.to);
 
         self.write_record("app")?;
         self.shutdown().await;
         self.host.remove_tray().await;
         self.host.release_single_instance().await;
-        let (program, args) = macos::relaunch_command(std::process::id(), bundle, &self.args);
+        let (program, args) =
+            macos::relaunch_command(std::process::id(), bundle, &self.args, self.silent);
         if let Err(err) = self.launcher.spawn(&program, &args) {
             log::error!("schedule relaunch failed: {err:#}");
         }
@@ -342,7 +349,13 @@ pub(crate) mod testing {
     }
 
     impl Launcher for FakeLauncher {
-        fn shell_execute(&self, file: &Path, parameters: &str) -> anyhow::Result<()> {
+        fn launch_installer(
+            &self,
+            file: &Path,
+            parameters: &str,
+            silent: bool,
+        ) -> anyhow::Result<()> {
+            assert_eq!(parameters.starts_with("/S "), silent);
             self.push(format!(
                 "shell_execute {} {parameters}",
                 file.file_name().unwrap().to_string_lossy()

@@ -2,6 +2,8 @@
 //!
 //! 每个字段都 `#[serde(default)]`，缺字段时回落到 `Default`，这样新增字段不破坏旧配置文件。
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::db::models::ClipboardItemSort;
@@ -102,7 +104,9 @@ pub enum Material {
     #[default]
     Default,
     Mica,
-    Acrylic,
+    /// 磨砂。设置值沿用已发布的 `acrylic`。
+    #[serde(rename = "acrylic")]
+    Frosted,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -130,6 +134,9 @@ impl Language {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Shortcuts {
+    /// 面板按键覆盖：缺项沿用默认键，空字符串表示解绑；未知动作留给后续版本。没有覆盖时不写进文件。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub panel: BTreeMap<String, String>,
     /// 全局：唤起剪贴板窗口。
     pub open_clipboard: String,
     /// 全局：打开偏好设置窗口。
@@ -155,6 +162,7 @@ pub struct Shortcuts {
 impl Default for Shortcuts {
     fn default() -> Self {
         Self {
+            panel: BTreeMap::new(),
             open_clipboard: "Alt+C".into(),
             open_preference: "Alt+X".into(),
             paste_plain: String::new(),
@@ -246,6 +254,9 @@ impl QuickPasteModifiers {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Clipboard {
+    pub custom_rules: Vec<crate::clipboard::rules::CustomRule>,
+    #[serde(skip)]
+    pub rule_cache: crate::clipboard::rules::RuleCache,
     pub capture: Capture,
     pub content: Content,
     pub display: Display,
@@ -256,6 +267,13 @@ pub struct Clipboard {
     pub preview: Preview,
     pub feedback: Feedback,
     pub filters: Filters,
+}
+
+impl Clipboard {
+    /// 所有同修订的设置快照共享已编译规则。
+    pub fn compiled_rules(&self) -> &crate::clipboard::rules::CompiledRules {
+        self.rule_cache.get(&self.custom_rules)
+    }
 }
 
 /// 剪贴板内容类型采集开关。关闭后监听与手动读取都不入库对应类型。
@@ -664,6 +682,8 @@ pub struct Preview {
     /// 新装默认选词；早于 v1.3.2 的设置文件没有这个字段，读取时按原文，保持升级前的样子。
     #[serde(default)]
     pub text_view: PreviewTextView,
+    /// 预览窗与卡片之间的距离（逻辑 px，随文本缩放放大）。
+    pub gap: u8,
 }
 
 impl Default for Preview {
@@ -673,6 +693,7 @@ impl Default for Preview {
             hover_delay_ms: PreviewHoverDelayMs::Ms500,
             space_enabled: false,
             text_view: PreviewTextView::Words,
+            gap: 28,
         }
     }
 }
@@ -949,6 +970,7 @@ pub struct Feedback {
     pub copy_sound: bool,
     /// 复制提示音的音量百分比；手改文件超出 100 的值在播放时夹取。
     pub copy_sound_volume: u8,
+    pub copy_sound_tone: CopySoundTone,
 }
 
 impl Default for Feedback {
@@ -956,8 +978,21 @@ impl Default for Feedback {
         Self {
             copy_sound: false,
             copy_sound_volume: 100,
+            copy_sound_tone: CopySoundTone::Classic,
         }
     }
+}
+
+/// 复制提示音的音色；不认识的值按宽松读取退回默认的经典音。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CopySoundTone {
+    #[default]
+    Classic,
+    Chirp,
+    Bubble,
+    Chime,
+    Tick,
 }
 
 /// 更新检查状态；旧文件中的自动检查、频率、跳过版本与渠道开关由 serde 忽略，保存时不再写出。

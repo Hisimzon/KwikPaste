@@ -70,6 +70,7 @@ pub enum ItemAction {
     ToggleFavorite,
     TogglePinned,
     EditNote,
+    RestoreOriginal,
     Select,
     Delete,
     #[serde(other)]

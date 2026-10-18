@@ -64,7 +64,7 @@ impl ClipboardList {
     }
 
     /// 当前视图的查询（全选、跨页连选向数据源要完整顺序时用）。
-    fn view_query(&self) -> ListQuery {
+    pub(super) fn view_query(&self) -> ListQuery {
         ListQuery {
             offset: 0,
             limit: 0,

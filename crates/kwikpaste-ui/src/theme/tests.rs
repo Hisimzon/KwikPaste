@@ -123,6 +123,36 @@ fn type_scale_matches_wind4() {
 }
 
 #[test]
+fn frosted_scales_surfaces_and_keeps_borders_looking_the_same() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let plain = &intern(appearance, false).semantic;
+        let frosted = &intern(appearance, true).semantic;
+        let alpha = plain.materials.frosted_surface_alpha;
+        assert_eq!(frosted.surface.panel.a, plain.surface.panel.a * alpha);
+        assert_eq!(frosted.surface.raised, plain.surface.raised);
+        assert_eq!(frosted.text, plain.text);
+        assert_eq!(frosted.fill, plain.fill);
+        if alpha < 1. {
+            // 半透明的边框叠在原面板色上，与原来的不透明边框一样。
+            for (border, original) in [
+                (frosted.border.subtle, plain.border.subtle),
+                (frosted.border.default, plain.border.default),
+            ] {
+                assert!(border.a < 1.);
+                let shown = composite(border, plain.surface.panel);
+                let expected = rgb(original);
+                for (shown, expected) in shown.iter().zip(expected) {
+                    assert!(
+                        (shown - expected).abs() < 0.02,
+                        "{appearance:?}: {shown} vs {expected}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn token_sets_are_interned() {
     for appearance in [Appearance::Light, Appearance::Dark] {
         assert!(std::ptr::eq(

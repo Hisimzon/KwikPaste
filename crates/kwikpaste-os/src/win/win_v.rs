@@ -132,7 +132,8 @@ pub fn is_active() -> bool {
     THREAD
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_some()
+        .as_ref()
+        .is_some_and(|thread| !thread.join.is_finished())
 }
 
 fn spawn_hook_thread() -> io::Result<HookThread> {

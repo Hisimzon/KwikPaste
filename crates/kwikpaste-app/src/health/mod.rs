@@ -266,6 +266,7 @@ pub fn clean_exit() {
         crash::clean_exit(running_file);
     }
     crash::stop_watchdog();
+    log::logger().flush();
 }
 
 /// 这是第几次崩溃重启（普通启动为 0）。

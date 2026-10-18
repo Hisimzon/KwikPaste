@@ -1,5 +1,6 @@
 //! 自动检查始终开启：启动 8 秒后首次检查，之后每小时醒一次，距上次成功检查满 6 小时（按墙钟）才再查；
 //! 失败的检查不算，下一小时重试。墙钟比较让系统睡眠的时间也计入间隔（单调时钟在 macOS 睡眠时不走）。
+//! 可静默更新时先后台下载，等待期间每分钟检查一次宿主空闲状态，不弹窗、不显示徽标。
 
 use std::time::Duration;
 
@@ -7,6 +8,8 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 pub(crate) const INITIAL_DELAY: Duration = Duration::from_secs(8);
 pub(crate) const TICK: Duration = Duration::from_secs(60 * 60);
+pub(crate) const IDLE_POLL: Duration = Duration::from_secs(60);
+pub(crate) const INSTALL_IDLE: Duration = Duration::from_secs(10 * 60);
 const CHECK_INTERVAL: TimeDelta = TimeDelta::hours(6);
 
 /// 本次运行还没成功检查过，或距上次成功检查已满间隔（时钟倒退也算到期）。

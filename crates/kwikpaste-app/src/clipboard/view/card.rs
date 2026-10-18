@@ -76,7 +76,7 @@ pub struct CardState {
     /// 指针在卡片上：有备注且开了“悬停显示原文”时显示原文。
     pub show_original: bool,
     /// 按住修饰键时来源图标上的数字角标（1–9、0）。
-    pub hint: Option<char>,
+    pub hint: Option<SharedString>,
     /// 多选时已勾上：卡片铺一层淡主色。
     pub checked: bool,
     /// 上一行铺了底色（当前项、悬停或勾选）：这一行上方的分隔线不画，免得贴着色块多出一道线。
@@ -399,7 +399,7 @@ fn is_wetype_origin(item: &ListItem) -> bool {
 fn meta(
     env: &CardEnv<'_>,
     item: &ListItem,
-    hint: Option<char>,
+    hint: Option<SharedString>,
     app_icon_state: Option<Visual>,
     actions: Option<AnyElement>,
     checkbox: Option<AnyElement>,
@@ -460,7 +460,7 @@ fn meta(
 fn hinted_icon(
     env: &CardEnv<'_>,
     item: &ListItem,
-    hint: Option<char>,
+    hint: Option<SharedString>,
     app_icon_state: Option<Visual>,
 ) -> AnyElement {
     let icon = app_icon(env, item, app_icon_state);
@@ -482,7 +482,7 @@ fn hinted_icon(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(KeyHint::new(SharedString::from(key.to_string()))),
+                .child(KeyHint::new(key)),
         )
         .into_any_element()
 }
@@ -717,8 +717,24 @@ fn note_annotation(env: &CardEnv<'_>, note: &Arc<str>) -> AnyElement {
                     .color(env.tokens.accent.solid),
             ),
         )
-        .child(div().flex_1().min_w_0().child(shared(note)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .line_clamp(env.layout.text_max_lines)
+                .text_ellipsis()
+                .child(shared(&Arc::from(note_line(note)))),
+        )
         .into_any_element()
+}
+
+/// 多行备注在卡片上并成一行，用 ` / ` 隔开（如 `ty / tongyi`），跳过空行。
+fn note_line(note: &str) -> String {
+    note.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
 fn image_body(
@@ -971,6 +987,7 @@ fn snippets(
 /// 快捷信息类型对应的颜色。
 pub fn snippet_color(colors: &SnippetTokens, kind: SnippetKind) -> KindTag {
     match kind {
+        SnippetKind::Custom => colors.custom,
         SnippetKind::Number => colors.number,
         SnippetKind::Phone => colors.phone,
         SnippetKind::Email => colors.email,
@@ -1017,5 +1034,16 @@ fn status_marks(tokens: &SemanticTokens, pinned: bool, sensitive: bool, inline: 
             .right(space((8.) / 4.))
             .bottom(space((8.) / 4.))
             .items_end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::note_line;
+
+    #[test]
+    fn multi_line_notes_join_into_one_line() {
+        assert_eq!(note_line("ty\n tongyi \n\n"), "ty / tongyi");
+        assert_eq!(note_line("备注"), "备注");
     }
 }

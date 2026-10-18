@@ -19,7 +19,7 @@
 
 use std::cell::Cell;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -77,6 +77,12 @@ static OUTSIDE_CLICK: AtomicBool = AtomicBool::new(false);
 /// 选中的唤起按键（[`TriggerButton`] 的编码），0 表示关闭。
 static TRIGGER: AtomicU8 = AtomicU8::new(0);
 static THREAD: Mutex<Option<u32>> = Mutex::new(None);
+static RUNNING: AtomicU32 = AtomicU32::new(0);
+
+/// 反馈读取实际消息循环状态，而非配置开关。
+pub fn is_running() -> bool {
+    RUNNING.load(Ordering::SeqCst) != 0
+}
 
 thread_local! {
     /// 唤起按键按下后的状态；钩子回调总在钩子线程执行，线程退出即重置。
@@ -195,6 +201,8 @@ fn run_hook_thread(ready: mpsc::SyncSender<io::Result<u32>>) {
         )));
         return;
     }
+    let thread_id = unsafe { GetCurrentThreadId() };
+    RUNNING.store(thread_id, Ordering::SeqCst);
     let _ = ready.send(Ok(unsafe { GetCurrentThreadId() }));
     let timer = unsafe { SetTimer(None, 0, HOOK_REFRESH_MS, None) };
 
@@ -208,6 +216,7 @@ fn run_hook_thread(ready: mpsc::SyncSender<io::Result<u32>>) {
         }
     }
 
+    let _ = RUNNING.compare_exchange(thread_id, 0, Ordering::SeqCst, Ordering::SeqCst);
     let _ = unsafe { KillTimer(None, timer) };
     let _ = unsafe { UnhookWinEvent(foreground) };
     let _ = unsafe { UnhookWindowsHookEx(hook) };

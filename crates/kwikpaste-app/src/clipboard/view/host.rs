@@ -10,6 +10,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use gpui::{App, Task, Window};
 use kwikpaste_core::clipboard::ClipboardFragment;
+use kwikpaste_core::db::models::ClipboardItemQuery;
 
 use super::{pin, request_panel};
 use crate::{
@@ -19,7 +20,15 @@ use crate::{
 
 /// 宿主动作。返回的任务在 UI 线程上 await，错误消息是给提示用的根因。
 pub trait ItemHost {
-    fn paste(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>>;
+    fn paste(
+        &self,
+        id: Arc<str>,
+        plain: bool,
+        selection: Option<(Vec<String>, ClipboardItemQuery)>,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>>;
+
+    fn paste_image_as_file(&self, id: Arc<str>, cx: &mut App) -> Task<anyhow::Result<()>>;
 
     fn paste_fragment(
         &self,
@@ -28,7 +37,13 @@ pub trait ItemHost {
         cx: &mut App,
     ) -> Task<anyhow::Result<()>>;
 
-    fn copy(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>>;
+    fn copy(
+        &self,
+        id: Arc<str>,
+        plain: bool,
+        selection: Option<(Vec<String>, ClipboardItemQuery)>,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>>;
 
     /// 把图片识别出的文字写回剪贴板，隐藏规则同 [`ItemHost::copy`]。
     fn copy_image_text(&self, id: Arc<str>, cx: &mut App) -> Task<anyhow::Result<()>>;
@@ -57,8 +72,20 @@ fn ok_or_anyhow<T: 'static>(
 }
 
 impl ItemHost for PlatformHost {
-    fn paste(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>> {
-        let task = platform::paste::paste(cx, id.to_string(), plain, pin::pinned(cx));
+    fn paste(
+        &self,
+        id: Arc<str>,
+        plain: bool,
+        selection: Option<(Vec<String>, ClipboardItemQuery)>,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>> {
+        let task =
+            platform::paste::paste_selection(cx, id.to_string(), plain, selection, pin::pinned(cx));
+        ok_or_anyhow(task, cx)
+    }
+
+    fn paste_image_as_file(&self, id: Arc<str>, cx: &mut App) -> Task<anyhow::Result<()>> {
+        let task = platform::paste::paste_image_as_file(cx, id.to_string(), pin::pinned(cx));
         ok_or_anyhow(task, cx)
     }
 
@@ -73,8 +100,15 @@ impl ItemHost for PlatformHost {
         ok_or_anyhow(task, cx)
     }
 
-    fn copy(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>> {
-        let task = platform::paste::copy(cx, id.to_string(), plain, pin::pinned(cx));
+    fn copy(
+        &self,
+        id: Arc<str>,
+        plain: bool,
+        selection: Option<(Vec<String>, ClipboardItemQuery)>,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>> {
+        let task =
+            platform::paste::copy_selection(cx, id.to_string(), plain, selection, pin::pinned(cx));
         ok_or_anyhow(task, cx)
     }
 
@@ -116,8 +150,19 @@ impl SourceHost {
 }
 
 impl ItemHost for SourceHost {
-    fn paste(&self, id: Arc<str>, plain: bool, _: &mut App) -> Task<anyhow::Result<()>> {
+    fn paste(
+        &self,
+        id: Arc<str>,
+        plain: bool,
+        _: Option<(Vec<String>, ClipboardItemQuery)>,
+        _: &mut App,
+    ) -> Task<anyhow::Result<()>> {
         log::info!("no paste chain for {id} (plain: {plain}): the data is not the host core's");
+        Task::ready(Ok(()))
+    }
+
+    fn paste_image_as_file(&self, id: Arc<str>, _: &mut App) -> Task<anyhow::Result<()>> {
+        log::info!("no image-file paste chain for {id}: the data is not the host core's");
         Task::ready(Ok(()))
     }
 
@@ -131,7 +176,13 @@ impl ItemHost for SourceHost {
         Task::ready(Ok(()))
     }
 
-    fn copy(&self, id: Arc<str>, plain: bool, cx: &mut App) -> Task<anyhow::Result<()>> {
+    fn copy(
+        &self,
+        id: Arc<str>,
+        plain: bool,
+        _: Option<(Vec<String>, ClipboardItemQuery)>,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>> {
         self.copy_with(self.source.copy(id, plain), cx)
     }
 

@@ -67,6 +67,27 @@ impl InstallKind {
         *self != Self::Unmanaged
     }
 
+    /// 实际创建并删除临时文件，确认当前进程无需提权即可写入安装位置。
+    pub(crate) fn can_update_silently(&self, exe: &Path) -> bool {
+        let directory = match self {
+            Self::Nsis | Self::Portable => exe.parent(),
+            Self::MacApp { bundle } => bundle.parent(),
+            Self::Unmanaged => return false,
+        };
+        let Some(directory) = directory else {
+            return false;
+        };
+        let probe = tempfile::Builder::new()
+            .prefix(".kwikpaste-update-probe-")
+            .tempfile_in(directory)
+            .and_then(|file| file.close());
+        if let Err(err) = probe {
+            log::info!("silent update is unavailable in {directory:?}: {err}");
+            return false;
+        }
+        true
+    }
+
     /// 清单里依次查找的平台键。
     pub fn platform_keys(&self) -> Vec<String> {
         let arch = arch();

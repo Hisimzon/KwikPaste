@@ -16,8 +16,8 @@ use futures::channel::oneshot;
 use gpui::{
     Animation, AnimationExt as _, App, AppContext as _, AsyncApp, Context, Entity, Global,
     ImageSource, InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, img, prelude::FluentBuilder as _, pulsating_between, px, relative, size,
+    StatefulInteractiveElement as _, Styled as _, Window, WindowBounds, WindowOptions, div, img,
+    prelude::FluentBuilder as _, pulsating_between, px, relative, size,
 };
 use kwikpaste_ui::theme::TextSize;
 use kwikpaste_ui::{Button, KpStyled as _, theme};
@@ -247,6 +247,7 @@ pub fn start(cx: &mut App) {
     });
     cx.set_global(HandoffRequests(requests.clone()));
     let host = Arc::new(Handoff { requests });
+    let handoff_record = kwikpaste_updater::take_handoff(core.paths());
 
     let created = match Updater::new(
         core,
@@ -261,6 +262,9 @@ pub fn start(cx: &mut App) {
             return;
         }
     };
+    if let Some(record) = handoff_record {
+        created.record_handoff(record);
+    }
     let extension_state = cx.new(|_| ExtensionState(created.extensions().status()));
     cx.set_global(ExtensionStateHost(extension_state));
     let update_state = cx.new(|_| UpdateState(created.status()));
@@ -486,6 +490,7 @@ struct Ui {
 }
 
 enum UiRequest {
+    IdleDuration(oneshot::Sender<Option<Duration>>),
     Extensions(Vec<ExtensionStatus>),
     Update(Box<UpdateStatus>),
     Prompt(Box<UpdateStatus>),
@@ -493,6 +498,21 @@ enum UiRequest {
 }
 
 impl UpdaterUi for Ui {
+    fn idle_duration(&self) -> HostFuture<'_, Option<Duration>> {
+        Box::pin(async move {
+            let (reply, result) = oneshot::channel();
+            if self
+                .requests
+                .send(UiRequest::IdleDuration(reply))
+                .await
+                .is_err()
+            {
+                return None;
+            }
+            result.await.unwrap_or(None)
+        })
+    }
+
     fn extensions_changed(&self, status: Vec<ExtensionStatus>) {
         if self
             .requests
@@ -560,6 +580,20 @@ impl Global for UpdateWindowHost {}
 
 fn serve_ui(request: UiRequest, cx: &mut App) {
     match request {
+        UiRequest::IdleDuration(reply) => {
+            let idle = if any_app_window_visible() {
+                None
+            } else {
+                match kwikpaste_os::idle::duration() {
+                    Ok(duration) => Some(duration),
+                    Err(err) => {
+                        log::warn!("system idle time is unavailable: {err}");
+                        None
+                    }
+                }
+            };
+            let _ = reply.send(idle);
+        }
         UiRequest::Extensions(status) => {
             if let Some(state) = cx
                 .try_global::<ExtensionStateHost>()
@@ -601,6 +635,56 @@ fn serve_ui(request: UiRequest, cx: &mut App) {
     }
 }
 
+/// 枚举本进程的原生顶层窗口，覆盖 GPUI 窗口以及后台线程打开的系统对话框。
+#[cfg(target_os = "windows")]
+fn any_app_window_visible() -> bool {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+    };
+
+    unsafe extern "system" fn visit(window: HWND, data: LPARAM) -> i32 {
+        let mut process = 0;
+        // SAFETY: EnumWindows 提供有效窗口，输出指针指向栈上的 u32。
+        unsafe { GetWindowThreadProcessId(window, &mut process) };
+        if process == std::process::id() && unsafe { IsWindowVisible(window) } != 0 {
+            // SAFETY: data 指向本次同步枚举期间存活的 bool。
+            unsafe { *(data as *mut bool) = true };
+        }
+        1
+    }
+
+    let mut visible = false;
+    // SAFETY: 回调不保留指针，visible 在同步枚举完成前一直有效。
+    if unsafe { EnumWindows(Some(visit), (&mut visible as *mut bool) as LPARAM) } == 0 {
+        log::warn!(
+            "could not enumerate application windows: {}",
+            std::io::Error::last_os_error()
+        );
+        return true;
+    }
+    visible
+}
+
+/// 在主线程查询 NSApplication 的全部窗口，包含 NSAlert、面板及编辑器；状态栏图标自己的
+/// `NSStatusBarWindow` 一直可见，不算。
+#[cfg(target_os = "macos")]
+fn any_app_window_visible() -> bool {
+    use objc2::runtime::{AnyClass, NSObjectProtocol};
+
+    let Some(main_thread) = objc2::MainThreadMarker::new() else {
+        log::warn!("application visibility was queried off the main thread");
+        return true;
+    };
+    let status_bar = AnyClass::get(c"NSStatusBarWindow");
+    objc2_app_kit::NSApplication::sharedApplication(main_thread)
+        .windows()
+        .iter()
+        .any(|window| {
+            window.isVisible() && status_bar.is_none_or(|class| !window.isKindOfClass(class))
+        })
+}
+
 fn open_update_window(status: UpdateStatus, cx: &mut App) {
     if let Some((view, handle)) = cx
         .try_global::<UpdateWindowHost>()
@@ -635,13 +719,13 @@ fn open_new_update_window(status: UpdateStatus, cx: &mut App) {
     let height = update_window_height(&status, i18n::language());
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(
-            size(px(520.), px(update_window_height_px(height))),
+            size(
+                px(520.),
+                px(update_window_height_px(height)) + kwikpaste_ui::TITLE_BAR_HEIGHT,
+            ),
             cx,
         )),
-        titlebar: Some(TitlebarOptions {
-            title: Some(t("common:update.title")),
-            ..Default::default()
-        }),
+        titlebar: Some(kwikpaste_ui::titlebar_options(t("common:update.title"))),
         focus: false,
         ..Default::default()
     };
@@ -971,201 +1055,207 @@ impl Render for UpdateWindow {
             window.set_window_title(&window_title);
             self.window_title = window_title.to_string();
         }
+        let body =
+            div()
+                .flex_1()
+                .min_h_0()
+                .relative()
+                .flex()
+                .gap(px(20.))
+                .p(px(20.))
+                .child(div().flex_none().w(px(56.)).child(
+                    img(ImageSource::Image(crate::clipboard::view::app_logo())).size(px(56.)),
+                ))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .pb(px(64.))
+                        .overflow_hidden()
+                        .child(div().kp_text(TextSize::Lg).child(title))
+                        .child(
+                            div()
+                                .kp_text(TextSize::Sm)
+                                .text_color(tokens.text.secondary)
+                                .child(description),
+                        )
+                        .when_some(release_notes, |element, notes| {
+                            let lines = notes.lines().map(|line| {
+                                div()
+                                    .w_full()
+                                    .kp_text(TextSize::Sm)
+                                    .text_color(tokens.text.secondary)
+                                    .child(line.to_owned())
+                            });
+                            element.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_none()
+                                    .gap(px(4.))
+                                    .h(px(RELEASE_NOTES_BLOCK_HEIGHT))
+                                    .max_h(px(RELEASE_NOTES_BLOCK_HEIGHT))
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .rounded(px(6.))
+                                    .border_1()
+                                    .border_color(tokens.border.subtle)
+                                    .bg(tokens.fill.subtle)
+                                    .p(px(8.))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .kp_text(TextSize::Sm)
+                                            .text_color(tokens.text.secondary)
+                                            .child(t("common:update.notes")),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("update-notes-scroll")
+                                            .flex_none()
+                                            .h(px(120.))
+                                            .min_h_0()
+                                            .overflow_y_scroll()
+                                            .track_scroll(&self.notes_scroll)
+                                            .child(div().flex().flex_col().children(lines)),
+                                    ),
+                            )
+                        })
+                        .when(show_release_notes, |element| {
+                            // 纯文字链接，左边缘与说明文字对齐（链接按钮自带左右内边距，会缩进一截）。
+                            let label = t("common:update.releaseNotes");
+                            element.child(
+                                div().flex().child(
+                                    div()
+                                        .id("update-release-notes")
+                                        .role(gpui::Role::Link)
+                                        .aria_label(label.clone())
+                                        .kp_text(TextSize::Sm)
+                                        .text_color(tokens.accent.solid)
+                                        .cursor_pointer()
+                                        .hover(|style| {
+                                            style.text_color(tokens.accent.hover).underline()
+                                        })
+                                        .child(label)
+                                        .on_click(
+                                            cx.listener(|view, _, _, _| view.open_release_notes()),
+                                        ),
+                                ),
+                            )
+                        })
+                        .when(show_progress, |element| {
+                            element.child(
+                                div()
+                                    .mt(px(6.))
+                                    .h(px(6.))
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .rounded_full()
+                                    .bg(tokens.fill.default)
+                                    .child(progress_fill),
+                            )
+                        })
+                        .when_some(progress_text, |element, progress| {
+                            element.child(
+                                div()
+                                    .kp_text(TextSize::Sm)
+                                    .text_color(tokens.text.secondary)
+                                    .child(t_args(
+                                        "common:update.progress",
+                                        &[("progress", &progress)],
+                                    )),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(20.))
+                        .right(px(20.))
+                        .bottom(px(16.))
+                        .flex()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(div().flex_1())
+                        .when(
+                            update.is_some()
+                                && !self.downloading
+                                && !self.installing
+                                && !downloaded
+                                && self.error.is_none(),
+                            |element| {
+                                element.child(
+                                    Button::new("update-later", t("common:update.later"))
+                                        .on_click(|_, window, _| window.remove_window()),
+                                )
+                            },
+                        )
+                        .when(self.checking || self.downloading, |element| {
+                            element.child(
+                                Button::new("update-cancel", t("common:update.cancel"))
+                                    .on_click(|_, window, _| window.remove_window()),
+                            )
+                        })
+                        .when(self.check_failed, |element| {
+                            element.child(
+                                Button::new("update-check-again", t("common:update.checkAgain"))
+                                    .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
+                            )
+                        })
+                        .when(
+                            (update.is_none() && !self.checking) || self.error.is_some(),
+                            |element| {
+                                element.child(
+                                    Button::new("update-ok", t("common:update.ok"))
+                                        .primary()
+                                        .on_click(|_, window, _| window.remove_window()),
+                                )
+                            },
+                        )
+                        .when(
+                            update.is_some()
+                                && !self.downloading
+                                && !self.installing
+                                && self.error.is_none()
+                                && downloaded,
+                            |element| {
+                                element.child(
+                                    Button::new("update-install", t("common:update.install"))
+                                        .primary()
+                                        .on_click(cx.listener(|view, _, _, cx| view.install(cx))),
+                                )
+                            },
+                        )
+                        .when(
+                            update.is_some()
+                                && !self.downloading
+                                && !self.installing
+                                && !downloaded
+                                && self.error.is_none(),
+                            |element| {
+                                element.child(
+                                    Button::new("update-download", t("common:update.download"))
+                                        .primary()
+                                        .on_click(cx.listener(|view, _, _, cx| view.download(cx))),
+                                )
+                            },
+                        ),
+                );
         div()
             .size_full()
-            .relative()
             .flex()
-            .gap(px(20.))
-            .p(px(20.))
+            .flex_col()
             .bg(crate::platform::material::shell_surface(
                 cx,
                 tokens.surface.panel,
             ))
             .text_color(tokens.text.primary)
-            .child(
-                div().flex_none().w(px(56.)).child(
-                    img(ImageSource::Image(crate::clipboard::view::app_logo())).size(px(56.)),
-                ),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .pb(px(64.))
-                    .overflow_hidden()
-                    .child(div().kp_text(TextSize::Lg).child(title))
-                    .child(
-                        div()
-                            .kp_text(TextSize::Sm)
-                            .text_color(tokens.text.secondary)
-                            .child(description),
-                    )
-                    .when_some(release_notes, |element, notes| {
-                        let lines = notes.lines().map(|line| {
-                            div()
-                                .w_full()
-                                .kp_text(TextSize::Sm)
-                                .text_color(tokens.text.secondary)
-                                .child(line.to_owned())
-                        });
-                        element.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_none()
-                                .gap(px(4.))
-                                .h(px(RELEASE_NOTES_BLOCK_HEIGHT))
-                                .max_h(px(RELEASE_NOTES_BLOCK_HEIGHT))
-                                .min_h_0()
-                                .overflow_hidden()
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(tokens.border.subtle)
-                                .bg(tokens.surface.raised)
-                                .p(px(8.))
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .kp_text(TextSize::Sm)
-                                        .text_color(tokens.text.secondary)
-                                        .child(t("common:update.notes")),
-                                )
-                                .child(
-                                    div()
-                                        .id("update-notes-scroll")
-                                        .flex_none()
-                                        .h(px(120.))
-                                        .min_h_0()
-                                        .overflow_y_scroll()
-                                        .track_scroll(&self.notes_scroll)
-                                        .child(div().flex().flex_col().children(lines)),
-                                ),
-                        )
-                    })
-                    .when(show_release_notes, |element| {
-                        // 纯文字链接，左边缘与说明文字对齐（链接按钮自带左右内边距，会缩进一截）。
-                        let label = t("common:update.releaseNotes");
-                        element.child(
-                            div().flex().child(
-                                div()
-                                    .id("update-release-notes")
-                                    .role(gpui::Role::Link)
-                                    .aria_label(label.clone())
-                                    .kp_text(TextSize::Sm)
-                                    .text_color(tokens.accent.solid)
-                                    .cursor_pointer()
-                                    .hover(|style| {
-                                        style.text_color(tokens.accent.hover).underline()
-                                    })
-                                    .child(label)
-                                    .on_click(
-                                        cx.listener(|view, _, _, _| view.open_release_notes()),
-                                    ),
-                            ),
-                        )
-                    })
-                    .when(show_progress, |element| {
-                        element.child(
-                            div()
-                                .mt(px(6.))
-                                .h(px(6.))
-                                .w_full()
-                                .overflow_hidden()
-                                .rounded_full()
-                                .bg(tokens.fill.default)
-                                .child(progress_fill),
-                        )
-                    })
-                    .when_some(progress_text, |element, progress| {
-                        element.child(
-                            div()
-                                .kp_text(TextSize::Sm)
-                                .text_color(tokens.text.secondary)
-                                .child(t_args(
-                                    "common:update.progress",
-                                    &[("progress", &progress)],
-                                )),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(20.))
-                    .right(px(20.))
-                    .bottom(px(16.))
-                    .flex()
-                    .justify_between()
-                    .gap(px(8.))
-                    .child(div().flex_1())
-                    .when(
-                        update.is_some()
-                            && !self.downloading
-                            && !self.installing
-                            && !downloaded
-                            && self.error.is_none(),
-                        |element| {
-                            element.child(
-                                Button::new("update-later", t("common:update.later"))
-                                    .on_click(|_, window, _| window.remove_window()),
-                            )
-                        },
-                    )
-                    .when(self.checking || self.downloading, |element| {
-                        element.child(
-                            Button::new("update-cancel", t("common:update.cancel"))
-                                .on_click(|_, window, _| window.remove_window()),
-                        )
-                    })
-                    .when(self.check_failed, |element| {
-                        element.child(
-                            Button::new("update-check-again", t("common:update.checkAgain"))
-                                .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
-                        )
-                    })
-                    .when(
-                        (update.is_none() && !self.checking) || self.error.is_some(),
-                        |element| {
-                            element.child(
-                                Button::new("update-ok", t("common:update.ok"))
-                                    .primary()
-                                    .on_click(|_, window, _| window.remove_window()),
-                            )
-                        },
-                    )
-                    .when(
-                        update.is_some()
-                            && !self.downloading
-                            && !self.installing
-                            && self.error.is_none()
-                            && downloaded,
-                        |element| {
-                            element.child(
-                                Button::new("update-install", t("common:update.install"))
-                                    .primary()
-                                    .on_click(cx.listener(|view, _, _, cx| view.install(cx))),
-                            )
-                        },
-                    )
-                    .when(
-                        update.is_some()
-                            && !self.downloading
-                            && !self.installing
-                            && !downloaded
-                            && self.error.is_none(),
-                        |element| {
-                            element.child(
-                                Button::new("update-download", t("common:update.download"))
-                                    .primary()
-                                    .on_click(cx.listener(|view, _, _, cx| view.download(cx))),
-                            )
-                        },
-                    ),
-            )
+            .child(kwikpaste_ui::TitleBar::new().title(window_title))
+            .child(body)
     }
 }
 

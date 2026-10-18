@@ -29,9 +29,29 @@ pub(crate) struct ExtensionStore {
     operations: tokio::sync::Mutex<()>,
 }
 
+#[cfg(target_os = "windows")]
+const OCR_TIERS: [&str; 3] = ["ocr-tiny", "ocr-small", "ocr-medium"];
+
+fn is_ocr(id: &str) -> bool {
+    id == "ocr" || is_ocr_tier(id)
+}
+
+fn is_ocr_tier(id: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        OCR_TIERS.contains(&id)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = id;
+        false
+    }
+}
+
 fn known(id: &str) -> anyhow::Result<u32> {
     match id {
         "ocr" => Ok(OCR_PROTOCOL),
+        id if is_ocr_tier(id) => Ok(OCR_PROTOCOL),
         "wetype" => Ok(WETYPE_PROTOCOL),
         _ => anyhow::bail!("unknown extension: {id}"),
     }
@@ -114,6 +134,18 @@ impl ExtensionStore {
         exe.is_file().then_some(exe)
     }
 
+    /// Tiers choose the engine, but never enable the OCR feature themselves.
+    pub(crate) fn resolve_ocr(&self) -> Option<PathBuf> {
+        let system = self.resolve("ocr")?;
+        #[cfg(target_os = "windows")]
+        for id in OCR_TIERS {
+            if let Some(exe) = self.resolve(id) {
+                return Some(exe);
+            }
+        }
+        Some(system)
+    }
+
     /// 先刷新同目录临时文件，再原子替换 installed.json。
     fn save(&self, installed: InstalledExtensions) -> anyhow::Result<()> {
         fs::create_dir_all(&self.dir)?;
@@ -156,7 +188,22 @@ impl ExtensionStore {
                 enabled,
             },
         );
+        // Publish the new choice in the same registry transaction, before cleanup.
+        let replaced: Vec<String> = installed
+            .keys()
+            .filter(|other| is_ocr_tier(id) && other.as_str() != id && is_ocr_tier(other))
+            .cloned()
+            .collect();
+        for other in &replaced {
+            installed.remove(other);
+        }
         self.save(installed)?;
+        for other in replaced {
+            let old = self.dir.join(other);
+            if old.exists() {
+                fs::remove_dir_all(old)?;
+            }
+        }
         fs::remove_file(staged)?;
         if let Some(previous) = previous.filter(|previous| previous.version != version) {
             let old = self.dir.join(id).join(previous.version);
@@ -220,12 +267,12 @@ impl Core {
             (id.to_owned(), version.to_owned(), staged_path.to_owned());
         self.hop(async move {
             let _operation = core.0.extensions.operations.lock().await;
-            let _probe = if id == "ocr" {
+            let _probe = if is_ocr(&id) {
                 Some(core.0.ocr.probe_lock.lock().await)
             } else {
                 None
             };
-            let pause = if id == "ocr" {
+            let pause = if is_ocr(&id) {
                 Some(core.0.ocr.suspend().await)
             } else {
                 None
@@ -237,12 +284,12 @@ impl Core {
                 .0
                 .extensions
                 .install(&id, &version, protocol, &staged_path);
-            if id == "ocr" {
+            if is_ocr(&id) {
                 core.0.ocr.clear_support();
             }
             drop(pause);
             core.0.events.emit(CoreEvent::ExtensionsChanged);
-            if id == "ocr" {
+            if is_ocr(&id) {
                 core.0.ocr.nudge();
             }
             if id == "wetype" {
@@ -260,12 +307,12 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let _operation = core.0.extensions.operations.lock().await;
-            let _probe = if id == "ocr" {
+            let _probe = if is_ocr(&id) {
                 Some(core.0.ocr.probe_lock.lock().await)
             } else {
                 None
             };
-            let pause = if id == "ocr" {
+            let pause = if is_ocr(&id) {
                 Some(core.0.ocr.suspend().await)
             } else {
                 None
@@ -278,11 +325,14 @@ impl Core {
                 core.0.wetype.uninstalled();
                 core.0.events.emit(CoreEvent::WeTypeChanged);
             }
-            if id == "ocr" {
+            if is_ocr(&id) {
                 core.0.ocr.clear_support();
             }
             drop(pause);
             core.0.events.emit(CoreEvent::ExtensionsChanged);
+            if is_ocr(&id) {
+                core.0.ocr.nudge();
+            }
             if id == "wetype" {
                 core.0.wetype.apply(&core.0).await;
             }
@@ -298,12 +348,12 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let _operation = core.0.extensions.operations.lock().await;
-            let _probe = if id == "ocr" {
+            let _probe = if is_ocr(&id) {
                 Some(core.0.ocr.probe_lock.lock().await)
             } else {
                 None
             };
-            let pause = if id == "ocr" {
+            let pause = if is_ocr(&id) {
                 Some(core.0.ocr.suspend().await)
             } else {
                 None
@@ -312,12 +362,12 @@ impl Core {
                 core.0.wetype.stop().await;
             }
             let result = core.0.extensions.set_enabled(&id, enabled);
-            if id == "ocr" {
+            if is_ocr(&id) {
                 core.0.ocr.clear_support();
             }
             drop(pause);
             core.0.events.emit(CoreEvent::ExtensionsChanged);
-            if id == "ocr" {
+            if is_ocr(&id) {
                 core.0.ocr.nudge();
             }
             if id == "wetype" {

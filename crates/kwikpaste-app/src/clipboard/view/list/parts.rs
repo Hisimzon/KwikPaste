@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use kwikpaste_core::settings::PanelAction;
+
 use gpui::{
     AnyElement, App, Context, ElementId, InteractiveElement as _, IntoElement, MouseButton,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, div,
@@ -243,7 +245,12 @@ impl ClipboardList {
 
         let tokens = theme::semantic(cx);
         let total = i64::try_from(self.model.total()).unwrap_or(i64::MAX);
-        let hint = |key: &str| self.key_hints.then(|| SharedString::from(key.to_owned()));
+        let hint = |action| {
+            self.key_hints
+                .then(|| shortcut::panel_hint(&self.settings.shortcuts, action))
+                .flatten()
+                .map(SharedString::from)
+        };
         let empty = total == 0;
         let status = if empty {
             t_count("clipboard:footer.total", total, &[])
@@ -283,7 +290,7 @@ impl ClipboardList {
                             "footer-select",
                             Glyph::Icon(IconName::ListChecks),
                             t("clipboard:footer.select"),
-                            hint("A"),
+                            hint(PanelAction::SelectAll),
                             Look::Text,
                         )
                         .when(empty, |button| {
@@ -306,7 +313,7 @@ impl ClipboardList {
                                     "footer-shortcuts",
                                     Glyph::Icon(IconName::Keyboard),
                                     t("clipboard:footer.shortcuts"),
-                                    hint("K"),
+                                    hint(PanelAction::ShowShortcuts),
                                     Look::Text,
                                 )
                                 .on_click(cx.listener(
@@ -321,7 +328,7 @@ impl ClipboardList {
                                     "footer-preferences",
                                     Glyph::Icon(IconName::SettingLine),
                                     t("clipboard:footer.preferences"),
-                                    hint(","),
+                                    hint(PanelAction::OpenPreference),
                                     Look::Text,
                                 )
                                 .on_click(cx.listener(
@@ -382,7 +389,13 @@ impl ClipboardList {
                             .small()
                             .ghost()
                             .disabled(busy)
-                            .tooltip(shortcut::display("CmdOrCtrl+A"))
+                            .when_some(
+                                shortcut::panel_display(
+                                    &self.settings.shortcuts,
+                                    PanelAction::SelectAll,
+                                ),
+                                |button, hint| button.tooltip(hint),
+                            )
                             .on_click(cx.listener(|list, _, window, cx| {
                                 list.toggle_all(window, cx);
                             })),
@@ -392,7 +405,13 @@ impl ClipboardList {
                             .small()
                             .danger_outline()
                             .disabled(busy || count == 0)
-                            .tooltip(shortcut::display(shortcut::DELETE_SELECTED))
+                            .when_some(
+                                shortcut::panel_display(
+                                    &self.settings.shortcuts,
+                                    PanelAction::DeleteSelected,
+                                ),
+                                |button, hint| button.tooltip(hint),
+                            )
                             .on_click(cx.listener(|list, _, window, cx| {
                                 list.delete_checked(window, cx);
                             })),
@@ -401,7 +420,13 @@ impl ClipboardList {
                         Button::new("selection-exit", t("clipboard:selection.exit"))
                             .small()
                             .ghost()
-                            .tooltip(shortcut::display("Escape"))
+                            .when_some(
+                                shortcut::panel_display(
+                                    &self.settings.shortcuts,
+                                    PanelAction::ClosePreviewFilterWindow,
+                                ),
+                                |button, hint| button.tooltip(hint),
+                            )
                             .on_click(cx.listener(|list, _, _, cx| list.exit_selection(cx))),
                     ),
             )

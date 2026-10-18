@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 
 use crate::db::models::Platform;
 use crate::error::{AppError, Result};
+use crate::settings::CopySoundTone;
 
-/// 这次剪贴板变更来自的前台应用。必须在剪贴板变化回调里**同步**探测，延后再问前台早就切走了。
+/// 前台应用或剪贴板来源应用。必须在剪贴板变化回调里**同步**探测，避免延后时来源已经变了。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrontmostApp {
     /// 稳定主键。macOS = bundle id（如 `com.apple.Safari`），Windows = exe 绝对路径。
@@ -32,13 +33,18 @@ pub struct ScannedApp {
 }
 
 /// 平台层提供给 core 的能力。方法可能在任意线程上调用，实现必须线程安全；
-/// 除 [`PlatformServices::frontmost_app`] 与非阻塞的 [`PlatformServices::play_copy_sound`] 外
-/// 都可能较慢，core 会放到阻塞线程池里调用。
+/// 应用来源与剪贴板所有者在监听线程同步探测；其它查询可能较慢，core 放到阻塞线程池里调用。
+/// [`PlatformServices::play_copy_sound`] 不阻塞调用方。
 pub trait PlatformServices: Send + Sync + 'static {
     /// 当前前台应用；失败、没有前台应用或拿不到稳定 id 时返回 `None`。
     /// 1.x 实现：macOS `NSWorkspace.frontmostApplication`（无 bundle id 的进程返回 `None`），
     /// Windows `GetForegroundWindow` + `QueryFullProcessImageNameW`。
     fn frontmost_app(&self) -> Option<FrontmostApp>;
+
+    /// 剪贴板来源应用；Windows 优先使用本次采样的所有者路径，其它平台沿用前台应用。
+    fn clipboard_source_app(&self, _owner: Option<&Path>) -> Option<FrontmostApp> {
+        self.frontmost_app()
+    }
 
     /// 剪贴板当前所有者进程的 exe（Windows `GetClipboardOwner`）；macOS 没有这个概念，返回 `None`。
     fn clipboard_owner(&self) -> Option<PathBuf> {
@@ -63,7 +69,7 @@ pub trait PlatformServices: Send + Sync + 'static {
     fn app_from_id(&self, id: &str) -> Option<ScannedApp>;
 
     /// 异步播放一次复制提示音，不阻塞调用方；音量为 0 时静音，超过 100 时夹到 100。
-    fn play_copy_sound(&self, volume_percent: u8);
+    fn play_copy_sound(&self, tone: CopySoundTone, volume_percent: u8);
 }
 
 /// 没接平台层时的默认实现：识别不到前台应用、没有运行中应用、不播放提示音。
@@ -89,5 +95,5 @@ impl PlatformServices for NoPlatformServices {
         None
     }
 
-    fn play_copy_sound(&self, _volume_percent: u8) {}
+    fn play_copy_sound(&self, _tone: CopySoundTone, _volume_percent: u8) {}
 }

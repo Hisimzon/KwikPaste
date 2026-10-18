@@ -10,7 +10,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use kwikpaste_core::settings::{ListLayout, Settings, SettingsStore};
+use kwikpaste_core::settings::{CopySoundTone, ListLayout, Settings, SettingsStore};
 use kwikpaste_core::{AppEnv, CorePaths};
 use serde_json::Value;
 
@@ -114,6 +114,21 @@ fn missing_copy_sound_volume_preserves_old_feedback_and_defaults_to_full_volume(
     }
     let settings: Settings = serde_json::from_str("{}").unwrap();
     assert_eq!(settings.clipboard.feedback.copy_sound_volume, 100);
+    assert_eq!(
+        settings.clipboard.feedback.copy_sound_tone,
+        CopySoundTone::Classic
+    );
+}
+
+#[test]
+fn unknown_copy_sound_tone_falls_back_to_classic_and_keeps_the_rest() {
+    let (_temp, _paths, store) = load(
+        r#"{"clipboard":{"feedback":{"copySound":true,"copySoundVolume":40,"copySoundTone":"future"}}}"#,
+    );
+    let feedback = store.snapshot().clipboard.feedback;
+    assert!(feedback.copy_sound);
+    assert_eq!(feedback.copy_sound_volume, 40);
+    assert_eq!(feedback.copy_sound_tone, CopySoundTone::Classic);
 }
 
 #[test]
@@ -210,8 +225,11 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
     expected["shortcuts"]["doubleTap"] = serde_json::json!({"key": "disabled", "side": "any"});
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
+    expected["clipboard"]["feedback"]["copySoundTone"] = Value::from("classic");
     expected["clipboard"]["display"]["layout"] = Value::from("single");
     expected["clipboard"]["display"]["quickSnippetColors"] = Value::Bool(true);
+    expected["clipboard"]["customRules"] = Value::Array(Vec::new());
+    expected["clipboard"]["preview"]["gap"] = Value::from(28);
     expected["appearance"]["preferencesSidebarCollapsed"] = Value::from(false);
     expected["extensions"] =
         serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});

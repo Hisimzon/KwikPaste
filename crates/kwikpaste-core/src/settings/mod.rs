@@ -5,11 +5,13 @@
 mod delta;
 mod lenient;
 mod model;
+mod panel;
 pub mod paths;
 mod store;
 
 pub use delta::SettingsDelta;
 pub use lenient::SettingsLoadReport;
 pub use model::*;
+pub use panel::*;
 pub(crate) use store::read_replacement;
 pub use store::SettingsStore;

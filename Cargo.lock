@@ -4233,7 +4233,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-app"
-version = "2.0.5"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4252,6 +4252,7 @@ dependencies = [
  "kwikpaste-updater",
  "libc",
  "log",
+ "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "raw-window-handle",
  "semver",
@@ -4264,7 +4265,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-core"
-version = "2.0.5"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4276,11 +4277,13 @@ dependencies = [
  "dirs 6.0.0",
  "file_icon_provider",
  "flate2",
+ "html5ever",
  "if-addrs",
  "image",
  "kwikpaste-ext-protocol",
  "libc",
  "log",
+ "markup5ever_rcdom",
  "mdns-sd",
  "rand 0.8.8",
  "regex",
@@ -4307,7 +4310,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ext-ocr"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "image",
@@ -4325,7 +4328,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ext-protocol"
-version = "2.0.5"
+version = "2.0.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -4333,9 +4336,10 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-os"
-version = "2.0.5"
+version = "2.0.7"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "auto-launch",
  "block2 0.6.2",
  "dispatch2",
@@ -4356,7 +4360,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ui"
-version = "2.0.5"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "futures",
@@ -4369,7 +4373,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-updater"
-version = "2.0.5"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4379,6 +4383,7 @@ dependencies = [
  "flate2",
  "kwikpaste-core",
  "kwikpaste-ext-protocol",
+ "kwikpaste-os",
  "log",
  "minisign-verify",
  "rand 0.8.8",
@@ -4388,6 +4393,7 @@ dependencies = [
  "serde_json",
  "tar",
  "tempfile",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "url",
@@ -5595,6 +5601,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfc194758a2d5d7540b1ad283bfb9ca318ec608991892326e95b428230b2689b"
 dependencies = [
  "objc2 0.6.4",
+ "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-image-io",

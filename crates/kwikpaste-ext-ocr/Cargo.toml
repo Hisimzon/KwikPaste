@@ -1,6 +1,6 @@
 [package]
 name = "kwikpaste-ext-ocr"
-version = "1.0.0"
+version = "2.0.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -17,7 +17,7 @@ features = ["Media_Ocr", "Graphics_Imaging", "Storage", "Storage_Streams", "Glob
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
 objc2.workspace = true
-objc2-vision = { version = "0.3", default-features = false, features = ["std", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNObservation", "VNTypes", "objc2-core-graphics", "objc2-image-io"] }
+objc2-vision = { version = "0.3", default-features = false, features = ["std", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNObservation", "VNTypes", "objc2-core-graphics", "objc2-core-foundation", "objc2-image-io"] }
 objc2-image-io = { version = "0.3", default-features = false, features = ["std", "CGImageSource", "objc2-core-graphics"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFURL", "CFString", "CFDictionary", "CFNumber"] }
 objc2-core-graphics = { workspace = true, features = ["std", "CGImage"] }
