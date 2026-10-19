@@ -76,10 +76,93 @@ pub(crate) const PUBLISHED: [(i64, &str, &str); 11] = [
     // 本地新增的拼音索引迁移从 0100 起，避开上游后续新增迁移占用的编号。
     (
         100,
-        "63f8eeed1e77b5bab3465cf299e700de730b7c098093f3f661b539b47a210b8d189b8bf4ef022d9378f32874ae580ccf",
-        "b60fd6f1f983ab282511336207747c025ab5932058315a24b8bd5e98fe634400e3d66d85203f2a022131eb8fabf9adb3",
+        "aa7f4f07fd1025a0a5bcde295839fa729d11be2030ea83d6b5e66e021c3451bb36ed1760a69444792f03e1b4fb186748",
+        "dc559c2b9265035b3c7aa8aaa4224fb7720a6f823c60265e5c43db7653ab6f188c0b975bbb8b048bea717480881389ad",
     ),
 ];
+
+const LEGACY_PINYIN_MIGRATION_VERSION: i64 = 9;
+const PINYIN_MIGRATION_VERSION: i64 = 100;
+const LEGACY_PINYIN_MIGRATION_CHECKSUMS: [&str; 2] = [
+    "ddde6370231c2ac1d0b173715b3b5818691bc043837b18a418c26e758279639fff7dfc0fb9dbbe63019d1ee0c4548441",
+    "cec0050451e7937da63e453d3559c9000cc73da6f3f2404e2bb163659d83d68bb51657ad86ee446b88ae50a4bf51a4b0",
+];
+
+/// 旧 dev 库把拼音索引记在 0009；合并后 0009 是 original_content，0100 才是拼音索引。
+/// 启动迁移前把这条账改到 0100，让 original_content 仍能正常执行，也避免重复加列。
+async fn reconcile_legacy_pinyin_migration(pool: &SqlitePool) -> Result<u64> {
+    let has_ledger: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_optional(pool)
+    .await
+    .context("failed to look up the migration ledger")?;
+    if has_ledger.is_none() {
+        return Ok(0);
+    }
+
+    let Some(pinyin_migration) = MIGRATOR
+        .iter()
+        .find(|migration| migration.version == PINYIN_MIGRATION_VERSION)
+    else {
+        return Ok(0);
+    };
+    let Some((_, stored)) = sqlx::query_as::<_, (i64, Vec<u8>)>(
+        "SELECT version, checksum FROM _sqlx_migrations WHERE version = ?",
+    )
+    .bind(LEGACY_PINYIN_MIGRATION_VERSION)
+    .fetch_optional(pool)
+    .await
+    .context("failed to read the legacy pinyin migration")?
+    else {
+        return Ok(0);
+    };
+
+    let stored_hex = hex(&stored);
+    if !LEGACY_PINYIN_MIGRATION_CHECKSUMS.contains(&stored_hex.as_str()) {
+        return Ok(0);
+    }
+
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("failed to begin the legacy pinyin migration update")?;
+    let target_exists =
+        sqlx::query_scalar::<_, i64>("SELECT 1 FROM _sqlx_migrations WHERE version = ?")
+            .bind(PINYIN_MIGRATION_VERSION)
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("failed to look up the pinyin migration")?
+            .is_some();
+
+    if !target_exists {
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             SELECT ?, description, success, ?, execution_time FROM _sqlx_migrations WHERE version = ?",
+        )
+        .bind(PINYIN_MIGRATION_VERSION)
+        .bind(&pinyin_migration.checksum[..])
+        .bind(LEGACY_PINYIN_MIGRATION_VERSION)
+        .execute(&mut *transaction)
+        .await
+        .context("failed to renumber the legacy pinyin migration")?;
+    }
+
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
+        .bind(LEGACY_PINYIN_MIGRATION_VERSION)
+        .execute(&mut *transaction)
+        .await
+        .context("failed to remove the legacy pinyin migration")?;
+    transaction
+        .commit()
+        .await
+        .context("failed to commit the legacy pinyin migration update")?;
+
+    log::info!(
+        "renumbered legacy pinyin migration {LEGACY_PINYIN_MIGRATION_VERSION} to {PINYIN_MIGRATION_VERSION}"
+    );
+    Ok(1)
+}
 
 /// 把另一个平台写下的已发布迁移校验和改成本平台的值，返回改了几条。
 ///
@@ -160,6 +243,8 @@ pub async fn init(paths: &CorePaths, max_connections: u32) -> Result<SqlitePool>
         .connect_with(options)
         .await
         .with_context(|| format!("failed to open sqlite database at {path:?}"))?;
+
+    reconcile_legacy_pinyin_migration(&pool).await?;
 
     MIGRATOR
         .run(&pool)
@@ -248,6 +333,64 @@ mod tests {
             .unwrap();
         assert_eq!(adopt_published_checksums(&pool).await.unwrap(), 0);
         assert!(MIGRATOR.run(&pool).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_pinyin_migration_is_renumbered_before_running() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let old = Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|migration| migration.version <= 8)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        };
+        old.run(&pool).await.unwrap();
+        sqlx::query("ALTER TABLE clipboard_items ADD COLUMN search_pinyin TEXT")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE clipboard_items ADD COLUMN search_pinyin_initials TEXT")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let checksum: Vec<u8> = (0..LEGACY_PINYIN_MIGRATION_CHECKSUMS[1].len())
+            .step_by(2)
+            .map(|index| {
+                u8::from_str_radix(&LEGACY_PINYIN_MIGRATION_CHECKSUMS[1][index..index + 2], 16)
+                    .unwrap()
+            })
+            .collect();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             VALUES (9, 'pinyin search index', 1, ?, 0)",
+        )
+        .bind(checksum)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(reconcile_legacy_pinyin_migration(&pool).await.unwrap(), 1);
+        MIGRATOR.run(&pool).await.unwrap();
+
+        let versions =
+            sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(versions.contains(&9));
+        assert_eq!(
+            versions.iter().filter(|version| **version == 100).count(),
+            1
+        );
     }
 
     #[tokio::test]
