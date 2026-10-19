@@ -322,6 +322,49 @@ jobs:
           echo "UPDATER_PUBKEY=crates/kwikpaste-updater/pubkey.txt" >> "${GITHUB_ENV}"
           echo "PUBKEY_ARGS=" >> "${GITHUB_ENV}"
 
+      # macOS 用固定的自签名证书签名（scripts/release/macos-signing-cert.sh）：指定要求是“标识符 + 证书”，
+      # 跨版本不变，更新后辅助功能授权仍有效（ad-hoc 签名的指定要求是 cdhash，每次更新都失效）。
+      # 干跑现生成一次性证书，不读 secrets。tauri 的 APPLE_CERTIFICATE 只认 Apple 证书，所以自己导入钥匙串。
+      - name: Generate a throwaway macOS certificate
+        if: runner.os == 'macOS' && needs.prepare.outputs.dry_run == 'true'
+        shell: bash
+        run: bash scripts/release/macos-signing-cert.sh "${RUNNER_TEMP}/macos-cert"
+
+      - name: Use the release macOS certificate
+        if: runner.os == 'macOS' && needs.prepare.outputs.dry_run != 'true'
+        shell: bash
+        env:
+          MACOS_SIGNING_CERTIFICATE: ${{ secrets.MACOS_SIGNING_CERTIFICATE }}
+          MACOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${MACOS_SIGNING_CERTIFICATE}" || -z "${MACOS_SIGNING_CERTIFICATE_PASSWORD}" ]]; then
+            echo "::error::Secrets MACOS_SIGNING_CERTIFICATE(_PASSWORD) are missing; see scripts/release/macos-signing-cert.sh."
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/macos-cert"
+          printf '%s' "${MACOS_SIGNING_CERTIFICATE}" | openssl base64 -d -A > "${RUNNER_TEMP}/macos-cert/kwikpaste-macos.p12"
+          printf '%s' "${MACOS_SIGNING_CERTIFICATE_PASSWORD}" > "${RUNNER_TEMP}/macos-cert/password.txt"
+
+      - name: Import the macOS certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cert_dir="${RUNNER_TEMP}/macos-cert"
+          keychain="${RUNNER_TEMP}/signing.keychain-db"
+          keychain_password="$(openssl rand -hex 16)"
+          security create-keychain -p "${keychain_password}" "${keychain}"
+          security set-keychain-settings -lut 21600 "${keychain}"
+          security unlock-keychain -p "${keychain_password}" "${keychain}"
+          security import "${cert_dir}/kwikpaste-macos.p12" -k "${keychain}" -P "$(cat "${cert_dir}/password.txt")" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain}" > /dev/null
+          security list-keychains -d user -s "${keychain}" $(security list-keychains -d user | tr -d '"')
+          rm -rf "${cert_dir}"
+          echo "APPLE_SIGNING_IDENTITY=KwikPaste Code Signing" >> "${GITHUB_ENV}"
+
       # macOS：CI=false 时 dmg 才做 Finder 布局（与 release.yml 一致）。
       - name: Package (dry run)
         if: needs.prepare.outputs.dry_run == 'true'
@@ -369,7 +412,16 @@ jobs:
           dmg="$(ls dist/*.dmg)"
           hdiutil imageinfo "${dmg}" | tee dmg-info.txt | grep -E '^Format: '
           grep -qx 'Format: UDZO' dmg-info.txt
-          codesign -dv --verbose=2 "target/${{ matrix.target }}/release/bundle/macos/KwikPaste.app" 2>&1 || true
+
+          app="target/${{ matrix.target }}/release/bundle/macos/KwikPaste.app"
+          codesign --verify --strict --deep "${app}"
+          codesign -dv --verbose=2 "${app}" 2>&1
+          requirement="$(codesign -d -r- "${app}" 2>&1 | grep '^designated => ')"
+          echo "${requirement}"
+          if [[ "${requirement}" != *'identifier "com.fastthree.kwikpaste" and certificate '* ]]; then
+            echo "::error::The designated requirement is not identifier + certificate; Accessibility grants would not survive updates."
+            exit 1
+          fi
 
       # 实装测试用：测试身份的安装包和系统版本闸门的负向测试包（只在 Windows x64 上做）。
       - name: Package the test identity

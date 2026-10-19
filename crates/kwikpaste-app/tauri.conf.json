@@ -21,6 +21,7 @@
     "license": "Apache-2.0",
     "licenseFile": "../../LICENSE",
     "macOS": {
+      "hardenedRuntime": false,
       "minimumSystemVersion": "10.15"
     },
     "shortDescription": "快贴 - 本地优先剪贴板管理器",
