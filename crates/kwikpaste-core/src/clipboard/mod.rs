@@ -15,6 +15,7 @@ mod ingest;
 mod payload;
 pub(crate) mod persist;
 mod read;
+pub mod rules;
 mod secrets;
 mod storage;
 pub(crate) mod watcher;

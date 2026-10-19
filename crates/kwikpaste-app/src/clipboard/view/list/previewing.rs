@@ -9,7 +9,7 @@
 //! 预览窗的几何在打开时按卡片在屏幕上的位置算（见 [`crate::clipboard::model::preview::geometry`]）：
 //! 卡片的位置由列表渲染时挂在卡片上的 canvas 记下。
 
-use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
+use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc, time::Duration};
 
 use futures::channel::oneshot;
 use gpui::{
@@ -49,7 +49,8 @@ pub enum PreviewTrigger {
     Keyboard,
     /// 松开空格时指针在预览窗里：之后与悬停一样，离开预览窗再关。
     Held,
-    /// “拆词”：不跟随悬停（菜单关上时指针下的是别的卡片），只随键盘换当前项。
+    /// “拆词”：不跟随悬停（菜单关上时指针下的是别的卡片），只随键盘换当前项；指针进过预览窗后转成
+    /// [`Self::Held`]。
     Words,
 }
 
@@ -191,6 +192,11 @@ impl ClipboardList {
                 self.previewing.pointer_inside = *inside;
                 if *inside {
                     self.previewing.hide_timer = None;
+                    // 拆词预览不跟随悬停，指针进过预览窗后与悬停一样，离开预览窗再关。
+                    if let Some((_, trigger @ PreviewTrigger::Words)) = &mut self.previewing.session
+                    {
+                        *trigger = PreviewTrigger::Held;
+                    }
                 } else {
                     self.schedule_preview_hide(cx);
                 }
@@ -200,6 +206,15 @@ impl ClipboardList {
             PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
             PreviewEvent::Snippet(text) => self.copy_preview_snippet(text.clone(), cx),
             PreviewEvent::Open(target) => self.open_preview_target(*target, cx),
+            PreviewEvent::ViewImage => {
+                if let Some((id, _)) = self.previewing.session.clone() {
+                    self.view_image(id, cx);
+                }
+            }
+            PreviewEvent::Reveal(path) => {
+                self.close_preview(cx);
+                cx.reveal_path(Path::new(path.as_ref()));
+            }
         }
     }
 
@@ -658,7 +673,11 @@ impl ClipboardList {
                     .iter()
                     .map(|snippet| {
                         preview::snippet_chip_width(
-                            &t(snippet_label(snippet.kind)),
+                            &snippet
+                                .label
+                                .clone()
+                                .map(gpui::SharedString::from)
+                                .unwrap_or_else(|| t(snippet_label(snippet.kind))),
                             &snippet.text,
                             snippet_colors,
                             text_scale,
@@ -679,6 +698,7 @@ impl ClipboardList {
             measured_metrics.as_ref(),
             snippets_height,
             prefer_left,
+            f64::from(self.settings.clipboard.preview.gap),
             text_scale,
         );
         let image_box = preview

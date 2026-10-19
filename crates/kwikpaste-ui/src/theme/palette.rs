@@ -153,9 +153,11 @@ pub struct Radii {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Materials {
     pub panel_mica_alpha: f32,
-    pub panel_acrylic_alpha: f32,
+    pub panel_frosted_alpha: f32,
     pub chrome_mica_alpha: f32,
-    pub chrome_acrylic_alpha: f32,
+    pub chrome_frosted_alpha: f32,
+    /// 磨砂下所有不透明表面（窗口、面板、浮起层、淡底）统一乘上的不透明度，边框和文字不变。
+    pub frosted_surface_alpha: f32,
 }
 
 /// 一个完整的明暗原始色板；语义层和组件 token 都只能从这里读取。
@@ -229,22 +231,25 @@ const RADII: Radii = Radii {
     md: 5.,
     lg: 6.,
 };
-/// 材质下面板色的不透明度。Windows 的 Mica 本身不透明，不再铺底色；Acrylic 背后是模糊的窗口内容，
-/// 铺一层面板色压住花色，侧栏这类框架区比内容区更透一些。
+/// 材质下面板色的不透明度。Windows 的 Mica 本身不透明，不再铺底色；磨砂的表面已经按
+/// `frosted_surface_alpha` 整体变透明（与 QcClip 的做法相同），根底色直接用它，不再二次缩放。
 #[cfg(not(target_os = "macos"))]
 const MATERIALS: Materials = Materials {
     panel_mica_alpha: 0.,
-    panel_acrylic_alpha: 0.6,
+    panel_frosted_alpha: 1.,
     chrome_mica_alpha: 0.,
-    chrome_acrylic_alpha: 0.45,
+    chrome_frosted_alpha: 1.,
+    frosted_surface_alpha: 0.3,
 };
 /// macOS 所有窗口都是系统 `NSVisualEffectView`：自带色调，但花哨的桌面仍会透出来，两种材质都要铺底色。
+/// 磨砂沿用只给根底色半透明的做法，表面不整体缩放。
 #[cfg(target_os = "macos")]
 const MATERIALS: Materials = Materials {
     panel_mica_alpha: 0.58,
-    panel_acrylic_alpha: 0.34,
+    panel_frosted_alpha: 0.34,
     chrome_mica_alpha: 0.34,
-    chrome_acrylic_alpha: 0.2,
+    chrome_frosted_alpha: 0.2,
+    frosted_surface_alpha: 1.,
 };
 const fn shadow(y: f32, blur: f32, spread: f32, color: Color) -> ShadowSpec {
     ShadowSpec {
@@ -449,14 +454,14 @@ pub const RADIUS_SM: f32 = RADII.sm;
 pub const RADIUS: f32 = RADII.md;
 pub const RADIUS_LG: f32 = RADII.lg;
 pub const MATERIAL_MICA_ALPHA: f32 = MATERIALS.panel_mica_alpha;
-pub const MATERIAL_ACRYLIC_ALPHA: f32 = MATERIALS.panel_acrylic_alpha;
+pub const MATERIAL_FROSTED_ALPHA: f32 = MATERIALS.panel_frosted_alpha;
 
 /// 材质类型；由窗口层映射到当前主题的 surface 角色。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaterialKind {
     None,
     Mica,
-    Acrylic,
+    Frosted,
 }
 pub fn material_surface(tokens: &super::semantic::SemanticTokens, kind: MaterialKind) -> Hsla {
     match kind {
@@ -465,10 +470,10 @@ pub fn material_surface(tokens: &super::semantic::SemanticTokens, kind: Material
             .surface
             .panel
             .opacity(tokens.materials.panel_mica_alpha),
-        MaterialKind::Acrylic => tokens
+        MaterialKind::Frosted => tokens
             .surface
             .panel
-            .opacity(tokens.materials.panel_acrylic_alpha),
+            .opacity(tokens.materials.panel_frosted_alpha),
     }
 }
 pub fn material_chrome_surface(
@@ -481,9 +486,9 @@ pub fn material_chrome_surface(
             .surface
             .panel
             .opacity(tokens.materials.chrome_mica_alpha),
-        MaterialKind::Acrylic => tokens
+        MaterialKind::Frosted => tokens
             .surface
             .panel
-            .opacity(tokens.materials.chrome_acrylic_alpha),
+            .opacity(tokens.materials.chrome_frosted_alpha),
     }
 }

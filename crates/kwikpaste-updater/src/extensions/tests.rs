@@ -236,9 +236,22 @@ fn debug_catalog_only_reads_sibling_binaries() {
         .path()
         .join(kwikpaste_core::extensions::executable_name("ocr").unwrap());
     std::fs::write(sibling, b"dev binary").unwrap();
+    for (id, _) in KNOWN {
+        std::fs::write(
+            temp.path()
+                .join(kwikpaste_core::extensions::executable_name(id).unwrap()),
+            b"dev binary",
+        )
+        .unwrap();
+    }
     let entries = dev_catalog(&exe).unwrap();
-    assert_eq!(entries[0].version, "0.0.0-dev");
-    assert_eq!(entries[0].size, 10);
+    assert_eq!(entries.len(), KNOWN.len());
+    for (id, protocol) in KNOWN {
+        let entry = entries.iter().find(|entry| entry.id == *id).unwrap();
+        assert_eq!(entry.version, "0.0.0-dev");
+        assert_eq!(entry.protocol, *protocol);
+        assert_eq!(entry.size, 10);
+    }
     let core = TestCore::start("2.0.0");
     let manager = ExtensionManager::new(
         core.core.clone(),

@@ -3,6 +3,9 @@
 //! 宿主收到 [`crate::CoreEvent::SettingsUpdated`] 后用 [`super::SettingsDelta::touches`] 判断要不要重排列表、
 //! 重注册快捷键等；路径写成常量，界面各处共用，不在调用处手拼字符串。
 
+/// 用户定义的文本正则规则。
+pub const CUSTOM_RULES: &str = "clipboard.customRules";
+
 /// 文本摘要最多显示行数（`Display::text_max_lines`）。
 pub const TEXT_MAX_LINES: &str = "clipboard.display.textMaxLines";
 /// 图片卡片显示高度上限（`Display::image_max_height`）。
@@ -47,7 +50,8 @@ mod tests {
     use super::*;
     use crate::settings::{Settings, SettingsDelta};
 
-    const ALL: [&str; 11] = [
+    const ALL: [&str; 12] = [
+        CUSTOM_RULES,
         LAYOUT,
         TEXT_MAX_LINES,
         IMAGE_MAX_HEIGHT,

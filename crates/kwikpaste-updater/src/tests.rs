@@ -15,9 +15,20 @@ use crate::verify::testing::TestKey;
 #[derive(Default)]
 struct NullUi {
     available: Mutex<Vec<UpdateStatus>>,
+    prompts: Mutex<Vec<UpdateStatus>>,
+    idle: Mutex<Option<Duration>>,
 }
 
 impl UpdaterUi for NullUi {
+    fn idle_duration(&self) -> HostFuture<'_, Option<Duration>> {
+        let idle = *self.idle.lock().unwrap();
+        Box::pin(async move { idle })
+    }
+
+    fn prompt_update(&self, status: UpdateStatus) {
+        self.prompts.lock().unwrap().push(status);
+    }
+
     fn update_available(&self, status: UpdateStatus) {
         self.available.lock().unwrap().push(status);
     }
@@ -67,7 +78,24 @@ struct Setup {
 }
 
 fn setup(kind: InstallKind, endpoint: Url, key: &TestKey, fails: bool) -> Setup {
+    setup_writable(kind, endpoint, key, fails, false)
+}
+
+/// 用临时安装位置测试直接写探测；不可写夹具以普通文件占住父目录，任何账户都不能在其中创建文件。
+fn setup_writable(
+    kind: InstallKind,
+    endpoint: Url,
+    key: &TestKey,
+    fails: bool,
+    writable: bool,
+) -> Setup {
     let test = TestCore::start("2.0.0");
+    let directory = test.root().join("install");
+    if writable {
+        std::fs::create_dir(&directory).unwrap();
+    } else {
+        std::fs::write(&directory, b"not a writable directory").unwrap();
+    }
     let (host, launcher, journal): (RecordingHost, FakeLauncher, Journal) = recorders(fails);
     let ui = Arc::new(NullUi::default());
     let updater = Updater::with_parts(
@@ -76,6 +104,7 @@ fn setup(kind: InstallKind, endpoint: Url, key: &TestKey, fails: bool) -> Setup 
         Arc::new(host),
         Parts {
             kind,
+            exe: directory.join("KwikPaste.exe"),
             launcher: Box::new(launcher),
             endpoints: Box::new(move || Ok(vec![endpoint.clone()])),
             public_key: key.public_key(),
@@ -88,6 +117,269 @@ fn setup(kind: InstallKind, endpoint: Url, key: &TestKey, fails: bool) -> Setup 
         journal,
         ui,
     }
+}
+
+/// 清除本用例下载的临时包，不触碰其他实例的更新目录。
+fn remove_package(updater: &Updater) {
+    if let Some(package) = lock(&updater.0.pending)
+        .as_ref()
+        .and_then(|pending| pending.package.as_ref())
+    {
+        std::fs::remove_dir_all(&package.dir).unwrap();
+    }
+}
+
+#[test]
+fn silent_update_downloads_without_prompt_or_badge_and_waits_for_idle() {
+    let key = TestKey::generate();
+    let installer = b"MZ silent installer";
+    let files = Server::start(vec![Reply::ok(installer.to_vec())]);
+    let body = manifest(
+        "2.0.1",
+        &files.url("/setup.exe"),
+        &key.sign(installer, true),
+    );
+    let manifests = Server::start(vec![Reply::ok(body.clone()), Reply::ok(body)]);
+    let Setup {
+        test,
+        updater,
+        journal,
+        ui,
+    } = setup_writable(
+        InstallKind::Nsis,
+        Url::parse(&manifests.url("/latest.json")).unwrap(),
+        &key,
+        false,
+        true,
+    );
+
+    assert!(test.block_on(updater.run_auto_check()));
+    assert!(updater.status().update.unwrap().downloaded);
+    assert!(test.block_on(updater.run_auto_check()));
+    assert_eq!(
+        files.requests().len(),
+        1,
+        "already verified package is reused"
+    );
+    assert!(ui.prompts.lock().unwrap().is_empty());
+    assert!(
+        ui.available
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|status| status.update.is_none())
+    );
+    assert!(test.core.settings().update.prompted_version.is_none());
+    assert!(
+        std::fs::read_dir(updater.0.exe.parent().unwrap())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+
+    // None 表示仍有窗口（或查询失败）；系统即使已空闲也不能安装。
+    test.block_on(updater.install_when_idle()).unwrap();
+    assert!(journal.lock().unwrap().is_empty());
+    *ui.idle.lock().unwrap() = Some(Duration::from_secs(599));
+    test.block_on(updater.install_when_idle()).unwrap();
+    assert!(journal.lock().unwrap().is_empty());
+
+    *ui.idle.lock().unwrap() = Some(Duration::from_secs(600));
+    test.block_on(updater.install_when_idle()).unwrap();
+    let events = journal.lock().unwrap();
+    assert_eq!(events[0], "host: stop_input");
+    assert!(
+        events[1].starts_with("shell_execute KwikPaste-2.0.1-installer.exe /S /R /UPDATE /ARGS")
+    );
+    assert!(events[1].contains(kwikpaste_os::autostart::AUTO_LAUNCH_ARG));
+    assert_eq!(events.last().unwrap(), "host: exit(0)");
+    assert!(ui.prompts.lock().unwrap().is_empty());
+    remove_package(&updater);
+}
+
+#[test]
+fn non_writable_install_still_prompts_once_per_version_and_keeps_badge() {
+    let key = TestKey::generate();
+    let body = manifest("2.0.1", "https://dl.example.com/setup.exe", "c2ln");
+    let server = Server::start(vec![Reply::ok(body.clone()), Reply::ok(body)]);
+    let Setup {
+        test,
+        updater,
+        journal,
+        ui,
+    } = setup(
+        InstallKind::Nsis,
+        Url::parse(&server.url("/latest.json")).unwrap(),
+        &key,
+        false,
+    );
+    assert!(!updater.0.kind.can_update_silently(&updater.0.exe));
+    for _ in 0..2 {
+        assert!(test.block_on(updater.run_auto_check()));
+    }
+    assert_eq!(ui.prompts.lock().unwrap().len(), 1);
+    assert!(
+        ui.available
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|status| status.update.is_some())
+    );
+    assert_eq!(
+        test.core.settings().update.prompted_version.as_deref(),
+        Some("2.0.1")
+    );
+    assert!(!updater.status().update.unwrap().downloaded);
+    *ui.idle.lock().unwrap() = Some(Duration::from_secs(600));
+    test.block_on(updater.install_when_idle()).unwrap();
+    assert!(journal.lock().unwrap().is_empty());
+}
+
+#[test]
+fn failed_handoff_version_falls_back_to_prompt_for_this_run() {
+    let key = TestKey::generate();
+    let installer = b"MZ installer";
+    let files = Server::start(vec![Reply::ok(installer.to_vec())]);
+    let body = manifest(
+        "2.0.1",
+        &files.url("/setup.exe"),
+        &key.sign(installer, true),
+    );
+    let server = Server::start(vec![Reply::ok(body.clone()), Reply::ok(body)]);
+    let Setup {
+        test,
+        updater,
+        journal,
+        ui,
+    } = setup_writable(
+        InstallKind::Nsis,
+        Url::parse(&server.url("/latest.json")).unwrap(),
+        &key,
+        true,
+        true,
+    );
+    assert!(test.block_on(updater.run_auto_check()));
+    *ui.idle.lock().unwrap() = Some(Duration::from_secs(600));
+    assert!(test.block_on(updater.install_when_idle()).is_err());
+    assert!(
+        journal.lock().unwrap().iter().any(
+            |event| event.starts_with("spawn KwikPaste.exe") && event.contains("--auto-launch")
+        )
+    );
+    let record = take_handoff(test.core.paths()).unwrap();
+    assert!(!record.succeeded(&test.core.info().version));
+    assert!(take_handoff(test.core.paths()).is_none());
+    remove_package(&updater);
+
+    // 新进程消费同一条交接记录，不增加任何持久化设置。
+    let Setup {
+        test,
+        updater,
+        journal,
+        ui,
+    } = setup_writable(
+        InstallKind::Nsis,
+        Url::parse(&server.url("/latest.json")).unwrap(),
+        &key,
+        false,
+        true,
+    );
+    updater.record_handoff(record);
+    assert!(test.block_on(updater.run_auto_check()));
+    assert_eq!(ui.prompts.lock().unwrap().len(), 1);
+    assert!(ui.available.lock().unwrap()[0].update.is_some());
+    assert_eq!(files.requests().len(), 1);
+    assert!(updater.silent_ready_version().is_none());
+    assert!(journal.lock().unwrap().is_empty());
+}
+
+#[test]
+fn silent_nsis_parameters_and_hidden_restart_arguments_preserve_manual_mode() {
+    use crate::handoff::nsis;
+    use kwikpaste_os::autostart::AUTO_LAUNCH_ARG;
+
+    let original = vec![OsString::from("a b"), OsString::from("/custom")];
+    let args = restart_args(original.clone(), true);
+    assert_eq!(
+        nsis::parameters(&args, true),
+        "/S /R /UPDATE /ARGS \"a b\" \"/custom\" --auto-launch"
+    );
+    assert_eq!(restart_args(args.clone(), true), args);
+    assert_eq!(
+        restart_args(Vec::new(), true),
+        vec![OsString::from(AUTO_LAUNCH_ARG)]
+    );
+    assert_eq!(restart_args(original.clone(), false), original);
+    #[cfg(target_os = "windows")]
+    assert_eq!(
+        restart_args(
+            vec![OsString::from(
+                kwikpaste_os::win::admin::ADMIN_RESTARTED_ARG
+            )],
+            false
+        ),
+        Vec::<OsString>::new()
+    );
+    assert_eq!(nsis::parameters(&[], false), "/P /R /UPDATE /ARGS");
+    assert_eq!(scheduler::IDLE_POLL, Duration::from_secs(60));
+}
+
+#[test]
+fn manual_check_on_writable_install_does_not_download_or_install_automatically() {
+    let key = TestKey::generate();
+    let server = Server::start(vec![Reply::ok(manifest(
+        "2.0.1",
+        "https://dl.example.com/setup.exe",
+        "c2ln",
+    ))]);
+    let Setup {
+        test,
+        updater,
+        journal,
+        ui,
+    } = setup_writable(
+        InstallKind::Nsis,
+        Url::parse(&server.url("/latest.json")).unwrap(),
+        &key,
+        false,
+        true,
+    );
+    let status = test.block_on(updater.check()).unwrap();
+    assert!(!status.update.unwrap().downloaded);
+    assert!(ui.available.lock().unwrap()[0].update.is_some());
+    assert!(ui.prompts.lock().unwrap().is_empty());
+    assert!(updater.silent_ready_version().is_none());
+    assert!(journal.lock().unwrap().is_empty());
+}
+
+#[test]
+fn silent_download_still_verifies_the_signature() {
+    let key = TestKey::generate();
+    let files = Server::start(vec![Reply::ok(b"MZ tampered".to_vec())]);
+    let server = Server::start(vec![Reply::ok(manifest(
+        "2.0.1",
+        &files.url("/setup.exe"),
+        &key.sign(b"MZ genuine", true),
+    ))]);
+    let Setup {
+        test,
+        updater,
+        journal,
+        ui,
+    } = setup_writable(
+        InstallKind::Nsis,
+        Url::parse(&server.url("/latest.json")).unwrap(),
+        &key,
+        false,
+        true,
+    );
+    assert!(test.block_on(updater.run_auto_check()));
+    assert!(!updater.status().update.unwrap().downloaded);
+    *ui.idle.lock().unwrap() = Some(Duration::from_secs(600));
+    test.block_on(updater.install_when_idle()).unwrap();
+    assert!(journal.lock().unwrap().is_empty());
+    assert!(ui.prompts.lock().unwrap().is_empty());
+    assert!(test.core.settings().update.prompted_version.is_none());
 }
 
 /// 检查 → 下载（带进度、验签）→ 交接给 NSIS 安装包：假启动器只记下要执行的命令。

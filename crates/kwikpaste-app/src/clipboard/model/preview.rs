@@ -8,8 +8,6 @@ use gpui::{App, FontWeight, TextRun, Window, font, px};
 use kwikpaste_core::{clipboard::WordSpan, presenter::PreviewContentMetrics};
 use kwikpaste_ui::theme::{TextSize, fonts};
 
-/// 面板与卡片之间的距离。
-const GAP: f64 = 28.;
 /// 面板离显示器边缘至少这么远。
 const MARGIN: f64 = 32.;
 const MIN_WIDTH: f64 = 288.;
@@ -126,14 +124,15 @@ pub struct Geometry {
 }
 
 /// 算预览窗的位置：`card` 是卡片、`monitor` 是显示器（同一坐标系的逻辑像素），`metrics` 为 `None`
-/// 表示记录已经不在了（只剩空状态）。`prefer_left`：指针在主窗口左半边。`scale` 是文本缩放，
-/// 面板内容随它放大，尺寸上下限和间距也跟着放大。
+/// 表示记录已经不在了（只剩空状态）。`prefer_left`：指针在主窗口左半边。`gap` 是面板与卡片的距离。
+/// `scale` 是文本缩放，面板内容随它放大，尺寸上下限和间距也跟着放大。
 pub fn geometry(
     card: RectF,
     monitor: RectF,
     metrics: Option<&PreviewContentMetrics>,
     snippets: f64,
     prefer_left: bool,
+    gap: f64,
     scale: f64,
 ) -> Geometry {
     let available = monitor.inset(MARGIN);
@@ -141,8 +140,9 @@ pub fn geometry(
         .intersect(&monitor)
         .unwrap_or_else(|| card.clamp_into(&monitor));
     let size = panel_size(metrics, snippets, &available, scale);
-    let placement = placement(&source, &available, size, prefer_left, scale);
-    let panel = raw_panel(&source, placement, size, scale).clamp_into(&available);
+    let gap = gap * scale;
+    let placement = placement(&source, &available, size, prefer_left, gap);
+    let panel = raw_panel(&source, placement, size, gap).clamp_into(&available);
 
     Geometry { panel, placement }
 }
@@ -375,9 +375,8 @@ fn placement(
     available: &RectF,
     (width, height): (f64, f64),
     prefer_left: bool,
-    scale: f64,
+    gap: f64,
 ) -> Placement {
-    let gap = GAP * scale;
     let (preferred, opposite) = if prefer_left {
         (Placement::Left, Placement::Right)
     } else {
@@ -396,13 +395,7 @@ fn placement(
         .unwrap_or(preferred)
 }
 
-fn raw_panel(
-    source: &RectF,
-    placement: Placement,
-    (width, height): (f64, f64),
-    scale: f64,
-) -> RectF {
-    let gap = GAP * scale;
+fn raw_panel(source: &RectF, placement: Placement, (width, height): (f64, f64), gap: f64) -> RectF {
     let centered_top = source.center_y() - height / 2.;
     let centered_left = source.center_x() - width / 2.;
     let (left, top) = match placement {
@@ -539,6 +532,8 @@ mod tests {
 
     use super::*;
 
+    const GAP: f64 = 28.;
+
     const MONITOR: RectF = RectF {
         left: 0.,
         top: 0.,
@@ -563,6 +558,7 @@ mod tests {
             Some(&PreviewContentMetrics::Text { rows: 3 }),
             0.,
             false,
+            GAP,
             1.,
         );
         assert_eq!(geometry.placement, Placement::Right);
@@ -580,6 +576,7 @@ mod tests {
             Some(&PreviewContentMetrics::Text { rows: 3 }),
             snippets,
             false,
+            GAP,
             1.,
         );
         assert_eq!(with_snippets.panel.height, geometry.panel.height + snippets);
@@ -588,11 +585,11 @@ mod tests {
 
     #[test]
     fn the_pointer_side_wins_and_falls_back_to_the_other_side() {
-        let left = geometry(card(800.), MONITOR, None, 0., true, 1.);
+        let left = geometry(card(800.), MONITOR, None, 0., true, GAP, 1.);
         assert_eq!(left.placement, Placement::Left);
 
         // 贴着右边缘：右边放不下，换到左边。
-        let edge = geometry(card(1500.), MONITOR, None, 0., false, 1.);
+        let edge = geometry(card(1500.), MONITOR, None, 0., false, GAP, 1.);
         assert_eq!(edge.placement, Placement::Left);
     }
 
@@ -607,6 +604,7 @@ mod tests {
             }),
             0.,
             false,
+            GAP,
             1.,
         );
         assert_eq!(geometry.panel.width, 480.);

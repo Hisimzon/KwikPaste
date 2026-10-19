@@ -17,6 +17,7 @@ use gpui::{
     Styled as _, Subscription, Task, WeakEntity, Window, div, img, prelude::FluentBuilder as _,
     radians,
 };
+use kwikpaste_core::settings::PanelAction;
 use kwikpaste_ui::{
     Glyph, Icon, IconButtonLook as Look, IconName, Input, KpStyled as _, MenuEntry, MenuItem,
     MenuTrigger, Submenu, TextInput, TextInputEvent, TooltipExt as _, icon_button,
@@ -557,7 +558,15 @@ impl Render for Header {
         let chips = self.render_chips(cx);
         let filter_button = self.render_filter_button(cx);
         let tokens = theme::semantic(cx);
-        let hint = |key: &str| self.hints.then(|| SharedString::from(key.to_owned()));
+        let shortcuts = crate::core_host::core(cx)
+            .map(|core| core.settings().shortcuts)
+            .unwrap_or_default();
+        let hint = |action| {
+            self.hints
+                .then(|| crate::clipboard::model::shortcut::panel_hint(&shortcuts, action))
+                .flatten()
+                .map(SharedString::from)
+        };
         let pin_label = if self.pinned {
             t("clipboard:header.unpin")
         } else {
@@ -631,7 +640,7 @@ impl Render for Header {
                     .child(
                         Input::search(&self.input)
                             .small()
-                            .hint_key(hint("F"))
+                            .hint_key(hint(PanelAction::FocusSearch))
                             .accessibility_label(t("clipboard:header.searchPlaceholder"))
                             .chips(chips)
                             .suffix(filter_button),
@@ -648,7 +657,7 @@ impl Render for Header {
                         Glyph::Icon(IconName::PinWindow)
                     },
                     pin_label,
-                    hint("P"),
+                    hint(PanelAction::PinWindow),
                     if self.pinned {
                         Look::Selected
                     } else {

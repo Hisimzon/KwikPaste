@@ -22,6 +22,7 @@
   },
   "snippets": {
     "kinds": {
+      "custom": "Custom",
       "email": "Email",
       "link": "Link",
       "number": "Number",
@@ -41,6 +42,20 @@
     "plain": "Default",
     "text": "Text",
     "words": "Words"
+  },
+  "viewer": {
+    "actualSize": "Actual size",
+    "copy": "Copy",
+    "fit": "Fit to window",
+    "next": "Next",
+    "openExternal": "Open with default app",
+    "previous": "Previous",
+    "rotate": "Rotate right",
+    "save": "Save as",
+    "showText": "Highlight text",
+    "title": "Image Viewer",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out"
   },
   "words": {
     "clear": "Clear",

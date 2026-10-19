@@ -118,6 +118,8 @@ pub enum ClipboardAction {
     TogglePinned,
     /// 编辑备注（恒在）。
     EditNote,
+    /// 恢复文本条目首次编辑前的原文（有快照时）。
+    RestoreOriginal,
     /// 进入列表多选并选中该条（恒在）。
     Select,
     /// 删除条目（恒在）。

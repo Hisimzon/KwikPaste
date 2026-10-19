@@ -2,24 +2,37 @@
 //!
 //! - 位置：`<日志目录>/KwikPaste.log`（`CorePaths::log_dir`：安装版 `%LOCALAPPDATA%\<id>\logs`，
 //!   便携版 `data\logs`），追加写，1.x 留下的内容接着用；
-//! - 大小与轮换：上限 40 000 字节，再写一行就会超过时删掉整个文件重新开始（`KeepOne`），打开时已经
+//! - 大小与轮换：上限 40 000 字节，再写一行就会超过时轮换到 `KwikPaste.log.1`（覆盖上一份），打开时已经
 //!   超过也一样；
 //! - 格式：`[2026-10-03][04:05:06][target][LEVEL] message`，UTC；
 //! - 级别：本 workspace 的 crate（应用、core、updater、os）记到 info，debug 构建到 debug；其余 crate
 //!   只记 warn 以上，免得 GPUI 等库的日志把 40 KB 挤满。
+//! - 普通日志有界排队，由单个后台线程写入；warn/error 与崩溃信息同步落盘。
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 const FILE_NAME: &str = "KwikPaste.log";
 /// tauri-plugin-log 的 `DEFAULT_MAX_FILE_SIZE`。
 const MAX_BYTES: u64 = 40_000;
+const QUEUE_CAPACITY: usize = 256;
+const FLUSH_TIMEOUT: Duration = Duration::from_millis(200);
 
 struct FileLogger {
     path: PathBuf,
     sink: Mutex<Sink>,
+    ordinary: SyncSender<Message>,
+    dropped: AtomicUsize,
+}
+
+enum Message {
+    Line(String),
+    Flush(mpsc::Sender<()>),
 }
 
 struct Sink {
@@ -27,7 +40,7 @@ struct Sink {
     size: u64,
 }
 
-static LOGGER: OnceLock<FileLogger> = OnceLock::new();
+static LOGGER: OnceLock<Arc<FileLogger>> = OnceLock::new();
 
 /// 打开日志文件并设为全局 logger。目录建不了、文件打不开时什么也不做（应用照常运行）。
 pub fn init(dir: PathBuf) {
@@ -39,12 +52,26 @@ pub fn init(dir: PathBuf) {
         return;
     }
     let logger = LOGGER.get_or_init(|| FileLogger::open(dir.join(FILE_NAME)));
-    if log::set_logger(logger).is_ok() {
+    if log::set_logger(logger.as_ref()).is_ok() {
         log::set_max_level(if cfg!(debug_assertions) {
             log::LevelFilter::Debug
         } else {
             log::LevelFilter::Info
         });
+    }
+}
+
+/// 仅保留上一份；改名失败时保留当前日志，下一次写入再尝试。
+fn rotate(path: &Path) {
+    let previous = path.with_file_name("KwikPaste.log.1");
+    if let Err(err) = std::fs::remove_file(&previous)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("previous log could not be replaced: {err}");
+        return;
+    }
+    if let Err(err) = std::fs::rename(path, previous) {
+        eprintln!("log could not be rotated: {err}");
     }
 }
 
@@ -73,21 +100,57 @@ fn line(target: &str, level: log::Level, message: &std::fmt::Arguments<'_>) -> S
 }
 
 impl FileLogger {
-    fn open(path: PathBuf) -> Self {
+    /// 打开文件并启动一个持有 logger 的后台写入线程。
+    fn open(path: PathBuf) -> Arc<Self> {
         let (file, size) = open_append(&path);
-        let (file, size) = if size >= MAX_BYTES {
-            // 先关掉句柄再删。
+        let (file, size) = if size > MAX_BYTES {
+            // Windows 改名前必须先关闭句柄。
             drop(file);
-            let _ = std::fs::remove_file(&path);
+            rotate(&path);
             open_append(&path)
         } else {
             (file, size)
         };
 
-        Self {
+        let (ordinary, pending) = mpsc::sync_channel(QUEUE_CAPACITY);
+        let logger = Arc::new(Self {
             path,
             sink: Mutex::new(Sink { file, size }),
+            ordinary,
+            dropped: AtomicUsize::new(0),
+        });
+        let writer = logger.clone();
+        if let Err(err) = std::thread::Builder::new()
+            .name("log-writer".to_owned())
+            .spawn(move || {
+                while let Ok(message) = pending.recv() {
+                    let Ok(mut sink) = writer.sink.lock() else {
+                        break;
+                    };
+                    let dropped = writer.dropped.swap(0, Ordering::Relaxed);
+                    if dropped != 0 {
+                        writer.append(
+                            &mut sink,
+                            &line(
+                                "KwikPaste::health",
+                                log::Level::Warn,
+                                &format_args!("dropped {dropped} ordinary log lines: queue full"),
+                            ),
+                        );
+                    }
+                    if let Message::Line(text) = &message {
+                        writer.append(&mut sink, text);
+                    }
+                    drop(sink);
+                    if let Message::Flush(done) = message {
+                        let _ = done.send(());
+                    }
+                }
+            })
+        {
+            let _ = writeln!(std::io::stderr(), "log writer could not be started: {err}");
         }
+        logger
     }
 
     fn append(&self, sink: &mut Sink, text: &str) {
@@ -95,7 +158,7 @@ impl FileLogger {
         if sink.file.is_none() || (sink.size != 0 && sink.size + len > MAX_BYTES) {
             sink.file = None;
             if sink.size != 0 {
-                let _ = std::fs::remove_file(&self.path);
+                rotate(&self.path);
             }
             (sink.file, sink.size) = open_append(&self.path);
         }
@@ -131,17 +194,24 @@ impl log::Log for FileLogger {
             return;
         }
         let text = line(record.target(), record.level(), record.args());
+        if record.level() > log::Level::Warn {
+            if let Err(TrySendError::Full(_)) = self.ordinary.try_send(Message::Line(text)) {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            return;
+        }
         if let Ok(mut sink) = self.sink.lock() {
             self.append(&mut sink, &text);
         }
     }
 
+    /// 排入刷新标记，并在短超时内等待此前排队的行写完。
     fn flush(&self) {
-        if let Ok(mut sink) = self.sink.lock()
-            && let Some(file) = &mut sink.file
-        {
-            let _ = file.flush();
+        let (done, completed) = mpsc::channel();
+        if self.ordinary.send(Message::Flush(done)).is_err() {
+            return;
         }
+        let _ = completed.recv_timeout(FLUSH_TIMEOUT);
     }
 }
 
@@ -176,7 +246,7 @@ mod tests {
 
     use super::*;
 
-    fn logger_in(name: &str) -> (FileLogger, PathBuf) {
+    fn logger_in(name: &str) -> (Arc<FileLogger>, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "kwikpaste-logger-test-{name}-{}",
             std::process::id()
@@ -202,6 +272,7 @@ mod tests {
         emit(&logger, log::Level::Info, "KwikPaste::platform", "ours");
         emit(&logger, log::Level::Info, "kwikpaste_core::db", "core");
         emit(&logger, log::Level::Info, "gpui", "theirs");
+        logger.flush();
         emit(&logger, log::Level::Warn, "gpui", "their warning");
 
         let text = std::fs::read_to_string(dir.join(FILE_NAME)).expect("log file");
@@ -213,6 +284,7 @@ mod tests {
         assert!(text.contains("[kwikpaste_core::db][INFO] core"));
         assert!(!text.contains("theirs"));
         assert!(text.contains("[gpui][WARN] their warning"));
+        drop(logger);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -230,22 +302,84 @@ mod tests {
         for _ in 0..fit {
             emit(&logger, log::Level::Info, "KwikPaste::health", &filler);
         }
+        logger.flush();
         let path = dir.join(FILE_NAME);
         assert_eq!(std::fs::metadata(&path).expect("log").len(), fit * len);
 
         emit(&logger, log::Level::Info, "KwikPaste::health", &filler);
+        logger.flush();
         let text = std::fs::read_to_string(&path).expect("log file");
         assert_eq!(text.lines().count(), 1, "the file was not started over");
+        assert_eq!(
+            std::fs::metadata(dir.join("KwikPaste.log.1"))
+                .unwrap()
+                .len(),
+            fit * len
+        );
         drop(logger);
 
         // 打开时已经超过上限：同样从头开始。
         std::fs::write(&path, vec![b'y'; 41_000]).expect("big file");
         let reopened = FileLogger::open(path.clone());
         emit(&reopened, log::Level::Info, "KwikPaste::health", "fresh");
+        reopened.flush();
         let text = std::fs::read_to_string(&path).expect("log file");
         assert!(text.ends_with("[KwikPaste::health][INFO] fresh\n"));
         assert!(!text.contains('y'));
+        assert_eq!(
+            std::fs::read(dir.join("KwikPaste.log.1")).unwrap(),
+            vec![b'y'; 41_000]
+        );
         drop(reopened);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ordinary_lines_do_not_wait_for_file_io_and_overflow_is_reported() {
+        let (logger, dir) = logger_in("queue");
+        let sink = logger.sink.lock().unwrap();
+        let producer = logger.clone();
+        let (done, completed) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            for _ in 0..QUEUE_CAPACITY + 2 {
+                emit(&producer, log::Level::Info, "KwikPaste", "ordinary");
+            }
+            done.send(()).unwrap();
+        });
+
+        completed
+            .recv_timeout(Duration::from_secs(2))
+            .expect("logging must not wait for the sink");
+        drop(sink);
+        thread.join().unwrap();
+        logger.flush();
+
+        let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(text.contains("[INFO] ordinary"));
+        assert!(text.contains("ordinary log lines: queue full"));
+        drop(logger);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn warn_and_error_bypass_a_full_queue() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let (file, size) = open_append(&path);
+        let (ordinary, _pending) = mpsc::sync_channel(1);
+        let logger = FileLogger {
+            path: path.clone(),
+            sink: Mutex::new(Sink { file, size }),
+            ordinary,
+            dropped: AtomicUsize::new(0),
+        };
+        emit(&logger, log::Level::Info, "KwikPaste", "queued");
+        emit(&logger, log::Level::Warn, "KwikPaste", "warning");
+        emit(&logger, log::Level::Error, "KwikPaste", "error");
+
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.contains("[WARN] warning"));
+        assert!(text.contains("[ERROR] error"));
+        assert!(!text.contains("queued"));
     }
 }

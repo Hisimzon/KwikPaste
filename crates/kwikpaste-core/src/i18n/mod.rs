@@ -5,6 +5,7 @@
 pub mod announcement;
 pub mod clipboard_menu;
 pub mod commands;
+pub mod custom_rules;
 mod en_us;
 mod keys;
 pub mod readable_export;

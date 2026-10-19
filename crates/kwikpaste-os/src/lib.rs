@@ -5,11 +5,13 @@
 
 pub mod autostart;
 pub mod clock;
+pub mod diagnostics;
 pub mod dialogs;
 pub mod double_tap;
 pub mod drag_out;
 pub mod geometry;
 pub mod hook_keys;
+pub mod idle;
 pub mod keystroke;
 pub mod locale;
 pub mod services;

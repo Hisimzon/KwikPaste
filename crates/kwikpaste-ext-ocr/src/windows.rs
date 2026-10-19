@@ -1,7 +1,7 @@
 //! WinRT OCR 的解码、选语言与分条识别都留在 helper 内。
 use std::path::Path;
 
-use kwikpaste_ext_protocol::{MAX_TEXT_CHARS, OcrSupport, Outcome};
+use kwikpaste_ext_protocol::{MAX_TEXT_CHARS, OcrSupport, Outcome, TextLine};
 use windows::{
     Globalization::{ApplicationLanguages, Language},
     Graphics::Imaging::{
@@ -110,7 +110,7 @@ impl Engine {
             scaled_height.min(max)
         };
         let mut y = 0;
-        let mut lines: Vec<String> = Vec::new();
+        let mut lines: Vec<TextLine> = Vec::new();
         let mut chars = 0;
         let mut overlapped = false;
         while y < scaled_height && chars < MAX_TEXT_CHARS {
@@ -136,7 +136,34 @@ impl Engine {
             for line in recognized.Lines()? {
                 let text = super::normalize_line(&line.Text()?.to_string());
                 if !text.is_empty() {
-                    chunk.push(text);
+                    let mut left = f32::INFINITY;
+                    let mut top = f32::INFINITY;
+                    let mut right = f32::NEG_INFINITY;
+                    let mut bottom = f32::NEG_INFINITY;
+                    for word in line.Words()? {
+                        let rect = word.BoundingRect()?;
+                        left = left.min(rect.X);
+                        top = top.min(rect.Y);
+                        right = right.max(rect.X + rect.Width);
+                        bottom = bottom.max(rect.Y + rect.Height);
+                    }
+                    if left.is_finite() {
+                        let point = |x: f32, row: f32| {
+                            [
+                                (x / scaled_width as f32).clamp(0.0, 1.0),
+                                ((row + y as f32) / scaled_height as f32).clamp(0.0, 1.0),
+                            ]
+                        };
+                        chunk.push(TextLine {
+                            text,
+                            quad: [
+                                point(left, top),
+                                point(right, top),
+                                point(right, bottom),
+                                point(left, bottom),
+                            ],
+                        });
+                    }
                 }
             }
             bitmap.Close()?;
@@ -144,13 +171,24 @@ impl Engine {
             let overlap = if overlapped {
                 (1..=chunk.len().min(lines.len()))
                     .rev()
-                    .find(|&count| lines[lines.len() - count..] == chunk[..count])
+                    .find(|&count| {
+                        lines[lines.len() - count..]
+                            .iter()
+                            .map(|line| &line.text)
+                            .eq(chunk[..count].iter().map(|line| &line.text))
+                    })
                     .unwrap_or(0)
             } else {
                 0
             };
-            for line in chunk.into_iter().skip(overlap) {
-                chars += line.chars().count() + 1;
+            for mut line in chunk.into_iter().skip(overlap) {
+                let separator = usize::from(!lines.is_empty());
+                let remaining = MAX_TEXT_CHARS.saturating_sub(chars + separator);
+                if remaining == 0 {
+                    break;
+                }
+                line.text = line.text.chars().take(remaining).collect();
+                chars += line.text.chars().count() + separator;
                 lines.push(line);
                 if chars >= MAX_TEXT_CHARS {
                     break;
@@ -161,7 +199,7 @@ impl Engine {
         }
         stream.Close()?;
         Ok(Outcome::Done {
-            text: lines.join("\n").chars().take(MAX_TEXT_CHARS).collect(),
+            lines,
             language: engine.RecognizerLanguage()?.LanguageTag()?.to_string(),
         })
     }
@@ -254,9 +292,14 @@ mod tests {
         let path = temp.path().join("long.png");
         page.save(&path).unwrap();
         let mut engine = Engine::new().unwrap();
-        let Outcome::Done { text, .. } = engine.recognize(&path).unwrap() else {
+        let Outcome::Done { lines, .. } = engine.recognize(&path).unwrap() else {
             panic!("OCR did not complete");
         };
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(
             text.to_ascii_lowercase().matches("kwikpaste").count(),
             8,
@@ -271,9 +314,21 @@ mod tests {
         let OcrSupport::Available { languages } = engine.support() else {
             panic!("install an OCR language to run this acceptance test");
         };
-        let Outcome::Done { text, .. } = engine.recognize(&path).unwrap() else {
+        let Outcome::Done { lines, .. } = engine.recognize(&path).unwrap() else {
             panic!("OCR did not complete");
         };
+        let line = lines
+            .iter()
+            .find(|line| line.text.to_ascii_lowercase().contains("kwikpaste"))
+            .unwrap();
+        assert!(line.quad.iter().flatten().all(|v| (0.0..=1.0).contains(v)));
+        assert!(line.quad[0][0] < line.quad[1][0]);
+        assert!(line.quad[0][1] < line.quad[3][1]);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.to_ascii_lowercase().contains("kwikpaste"), "{text}");
         // 只有装了中文识别时才认得出中文；CI 的 Windows 镜像只带英文。
         if languages.iter().any(|tag| tag.starts_with("zh")) {

@@ -1,16 +1,16 @@
-//! 窗口材质：设置 `appearance.material`（default / mica / acrylic），与 1.x 的
+//! 窗口材质：设置 `appearance.material`（default / mica / acrylic，acrylic 现在是磨砂），与 1.x 的
 //! `src-tauri/src/window/material.rs` 相同的契约和门槛，DWM 细节在 `kwikpaste_os::win::material`。
 //!
 //! 设置值先收敛成「这台机器上真正生效的材质」（[`WindowMaterial::effective`]）：
-//! - 系统不支持（Mica 要 Windows 11，Acrylic 要 Windows 10 1809）→ default，与 1.x 相同；
+//! - 系统不支持（Mica 要 Windows 11，磨砂要 Windows 10 1809）→ default，与 1.x 相同；
 //! - 系统关了「透明效果」、开了高对比度 → default（1.x 前端的 `prefers-reduced-transparency`）；
 //! - DirectComposition 被关掉（崩溃后的降级模式，或 `GPUI_DISABLE_DIRECT_COMPOSITION`）→ default：
 //!   那时交换链没有 alpha。
 //!
-//! 生效的材质套到面板上：default 用 GPUI `Opaque`（拿回 ClearType）加圆角；mica / acrylic 用
-//! `Transparent`，清掉 GPUI 的 accent 再设 DWM 背板（Windows 11 22H2 之前的 acrylic 用 GPUI
-//! `Blurred`）。窗口深浅色跟随 `appearance.theme`（auto 跟系统），与 1.x `setTheme` 相同。
-//! DWM 对非活动窗口只画背板的纯色回退，面板、预览这类从不激活的浮层因此把框架状态留在活动
+//! 生效的材质套到面板上：default 用 GPUI `Opaque`（拿回 ClearType）加圆角；mica / 磨砂用
+//! `Transparent`，mica 清掉 GPUI 的 accent 再设 DWM 背板，磨砂把 accent 换成 accent 亚克力。
+//! 窗口深浅色跟随 `appearance.theme`（auto 跟系统），与 1.x `setTheme` 相同。
+//! DWM 对非活动窗口只画 Mica 的纯色回退，面板、预览这类从不激活的浮层因此把框架状态留在活动
 //! （`kwikpaste_os::win::material::keep_popup_frame_active`）；偏好设置等普通窗口照系统惯例，
 //! 失焦时回退。
 //! 设置变化、系统设置变化（透明效果、深浅色、高对比度）时重新套。这里是全应用唯一调用
@@ -22,7 +22,8 @@
 //! [`chrome_surface`]），订阅 `cx.observe_global::<WindowMaterial>()`：
 //! - `Default`：不透明的 token 底色，窗口本身不透明；
 //! - `Mica`：不铺底色，直接露出系统 Mica（Mica 本身不透明，色调来自桌面壁纸）；
-//! - `Acrylic`：面板色按主题色板的 `materials` 比例半透明，压住背后模糊内容的花色、保证文字可读。
+//! - `Frosted`：主题换成磨砂那套 token（`theme::set_frosted`），所有不透明表面统一按
+//!   `materials.frosted_surface_alpha` 半透明，根底色就是这样的面板色。
 //!
 //! （以上是 Windows；macOS 的系统材质自带色调但不压花色，两种材质都铺底色，见色板的 `MATERIALS`。）
 //!
@@ -30,7 +31,7 @@
 //! 材质下不要用不透明的浮层盖住滚动内容：不透明底色在材质上是一块实色，模糊也盖不住下面滚过的行；
 //! 需要一直可见的东西（置顶行、表头）放在滚动容器外面。
 //!
-//! macOS：default 用不透明窗口，mica / acrylic 用 `Transparent` 加系统 `NSVisualEffectView`
+//! macOS：default 用不透明窗口，mica / 磨砂用 `Transparent` 加系统 `NSVisualEffectView`
 //! （`kwikpaste_os::mac::material`，所有窗口都一样，面板另加圆角）；系统关闭透明效果或高对比度时
 //! 回退 default。
 
@@ -57,7 +58,7 @@ pub struct WindowMaterial {
     pub requested: Material,
     /// 收敛后真正生效的材质：UI 按它选底色。
     pub effective: Material,
-    /// 窗口是否用深色外观（Mica / Acrylic 的底色深浅）。
+    /// 窗口是否用深色外观（Mica 的底色深浅、系统画的边框）。
     pub dark: bool,
 }
 
@@ -87,7 +88,7 @@ pub fn surface_alpha(cx: &App) -> Option<f32> {
     let materials = theme::semantic(cx).materials;
     match current(cx).effective {
         Material::Mica => Some(materials.panel_mica_alpha),
-        Material::Acrylic => Some(materials.panel_acrylic_alpha),
+        Material::Frosted => Some(materials.panel_frosted_alpha),
         Material::Default => None,
     }
 }
@@ -96,7 +97,7 @@ fn theme_kind(material: Material) -> theme::MaterialKind {
     match material {
         Material::Default => theme::MaterialKind::None,
         Material::Mica => theme::MaterialKind::Mica,
-        Material::Acrylic => theme::MaterialKind::Acrylic,
+        Material::Frosted => theme::MaterialKind::Frosted,
     }
 }
 
@@ -160,6 +161,7 @@ pub fn apply(cx: &mut App) {
     };
     let changed = cx.try_global::<WindowMaterial>() != Some(&material);
     cx.set_global(material);
+    theme::set_frosted(effective == Material::Frosted, cx);
     if changed {
         log::info!("window material: {material:?}");
         super::probe::material(&material);
@@ -219,7 +221,7 @@ fn supported(material: Material) -> bool {
     match material {
         Material::Default => true,
         Material::Mica => support.mica,
-        Material::Acrylic => support.acrylic,
+        Material::Frosted => support.frosted,
     }
 }
 
@@ -227,7 +229,7 @@ fn supported(material: Material) -> bool {
 fn supported(material: Material) -> bool {
     matches!(
         material,
-        Material::Default | Material::Mica | Material::Acrylic
+        Material::Default | Material::Mica | Material::Frosted
     )
 }
 
@@ -240,8 +242,7 @@ fn build() -> u32 {
 #[cfg(target_os = "windows")]
 pub(super) fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
     use kwikpaste_os::win::material::{
-        Backdrop, acrylic_uses_backdrop, keep_popup_frame_active, set_backdrop, set_dark_mode,
-        set_round_corners,
+        Backdrop, keep_popup_frame_active, set_backdrop, set_dark_mode, set_round_corners,
     };
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -253,13 +254,15 @@ pub(super) fn apply_to_window(window: &mut Window, material: &WindowMaterial) {
     let (appearance, backdrop) = match material.effective {
         Material::Default => (WindowBackgroundAppearance::Opaque, Backdrop::None),
         Material::Mica => (WindowBackgroundAppearance::Transparent, Backdrop::Mica),
-        Material::Acrylic if acrylic_uses_backdrop(build) => {
-            (WindowBackgroundAppearance::Transparent, Backdrop::Acrylic)
-        }
-        Material::Acrylic => (WindowBackgroundAppearance::Blurred, Backdrop::None),
+        Material::Frosted => (
+            WindowBackgroundAppearance::Transparent,
+            Backdrop::Frosted {
+                dark: material.dark,
+            },
+        ),
     };
 
-    // 顺序要紧：GPUI 先设 accent，再由我们清 accent、设深浅色、设背板。
+    // 顺序要紧：GPUI 先设 accent，再由我们改 accent、设深浅色、设背板。
     window.set_background_appearance(appearance);
     set_dark_mode(hwnd, material.dark);
     set_backdrop(hwnd, backdrop, build);
@@ -311,7 +314,7 @@ mod tests {
             Material::Default
         );
         assert_eq!(
-            resolve(Material::Acrylic, Some(&signals(true, true))),
+            resolve(Material::Frosted, Some(&signals(true, true))),
             Material::Default
         );
         assert_eq!(
@@ -330,8 +333,8 @@ mod tests {
                 Material::Mica
             );
             assert_eq!(
-                resolve(Material::Acrylic, Some(&signals(true, false))),
-                Material::Acrylic
+                resolve(Material::Frosted, Some(&signals(true, false))),
+                Material::Frosted
             );
         }
     }

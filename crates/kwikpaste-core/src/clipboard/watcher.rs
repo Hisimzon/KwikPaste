@@ -32,11 +32,16 @@ const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(120);
 /// 同一次复制的重复通知窗口，见 [`RepeatFilter`]。
 const REPEAT_WINDOW: Duration = Duration::from_secs(1);
 
-/// 别的剪贴板监听程序可能短暂占着 Windows 剪贴板，读取失败时在有界时间内重试。
-const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 3] = [
+/// 别的程序占着 Windows 剪贴板时读取失败，在有界时间内重试。写入方可能一直开着剪贴板直到写完：
+/// Snowshot 先放位图、再现场编码大图 PNG，变化通知先到、剪贴板却要几百毫秒后才放开，所以总共要等到 2 秒左右。
+const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 7] = [
     Duration::from_millis(15),
     Duration::from_millis(35),
     Duration::from_millis(75),
+    Duration::from_millis(150),
+    Duration::from_millis(300),
+    Duration::from_millis(600),
+    Duration::from_millis(1000),
 ];
 
 /// Windows 上收到变化通知后先等剪贴板静下来再读。Excel 拖动单元格时会先把选区放上剪贴板、紧接着自己再打开剪贴板；
@@ -143,7 +148,7 @@ impl Drop for PauseGuard {
 /// 处理一次剪贴板变化的同步部分：识别来源 → 过滤忽略的应用 → 读取（带重试）→ 转成记录
 /// （图片在这里落盘）→ 同一次复制的重复通知、自身写回则跳过 → 补齐来源应用。返回 `None` 表示这次不入库。
 ///
-/// **先**抓前台应用：等异步入库再问，前台早就切回别的窗口了。自身写回的事件会在 guard 处丢弃，
+/// **先**抓来源应用：Windows 优先用剪贴板所有者，其它情况用前台。自身写回的事件会在 guard 处丢弃，
 /// 但顺序换不得：guard 判定依赖 content_hash，必须先把内容读出来才能判，而读取期间用户可能已经切走前台。
 pub(crate) fn capture_change<B: ClipboardBackend>(
     core: &CoreInner,
@@ -155,8 +160,8 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         return None;
     }
 
-    let source = core.platform().frontmost_app();
     let owner = core.platform().clipboard_owner();
+    let source = core.platform().clipboard_source_app(owner.as_deref());
     log::debug!("clipboard change: owner {owner:?}");
     let settings = core.settings.snapshot();
 
@@ -185,6 +190,7 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         &settings.clipboard.capture,
         &settings.clipboard.sensitive,
         settings.clipboard.content.copy_plain,
+        settings.clipboard.compiled_rules(),
     ) {
         Ok(Some(item)) => item,
         Ok(None) => return None,
@@ -230,6 +236,7 @@ fn persist_captured(core: Arc<CoreInner>, item: ClipboardItem, source_app: Optio
 /// 平台句柄创建失败时返回错误，不会留下半启动的线程。
 pub(crate) fn spawn(core: &Arc<CoreInner>) -> Result<WatcherShutdown> {
     let weak = Arc::downgrade(core);
+    let running = core.watcher_running.clone();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
     std::thread::Builder::new()
@@ -259,13 +266,16 @@ pub(crate) fn spawn(core: &Arc<CoreInner>) -> Result<WatcherShutdown> {
                 #[cfg(target_os = "windows")]
                 handled_seq: None,
             });
+            running.store(true, Ordering::Relaxed);
             if ready_tx.send(Ok(watcher.get_shutdown_channel())).is_err() {
+                running.store(false, Ordering::Relaxed);
                 return;
             }
 
             log::info!("clipboard watcher started");
             // 阻塞直至停止句柄被丢弃。
             watcher.start_watch();
+            running.store(false, Ordering::Relaxed);
             log::info!("clipboard watcher stopped");
         })
         .map_err(|err| AppError::Other(anyhow!("failed to spawn clipboard watcher: {err}")))?;

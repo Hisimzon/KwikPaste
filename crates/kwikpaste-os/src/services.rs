@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use kwikpaste_core::platform::{FrontmostApp, PlatformServices, ScannedApp};
+use kwikpaste_core::settings::CopySoundTone;
 use kwikpaste_core::{AppError, Result};
 
 #[cfg(target_os = "macos")]
@@ -22,6 +23,11 @@ pub struct NativeServices;
 impl PlatformServices for NativeServices {
     fn frontmost_app(&self) -> Option<FrontmostApp> {
         native::frontmost_app()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn clipboard_source_app(&self, owner: Option<&Path>) -> Option<FrontmostApp> {
+        native::clipboard_source_app(owner)
     }
 
     fn clipboard_owner(&self) -> Option<std::path::PathBuf> {
@@ -48,8 +54,8 @@ impl PlatformServices for NativeServices {
         native::app_from_id(id)
     }
 
-    fn play_copy_sound(&self, volume_percent: u8) {
-        crate::sound::play_copy(volume_percent);
+    fn play_copy_sound(&self, tone: CopySoundTone, volume_percent: u8) {
+        crate::sound::play_copy(tone, volume_percent);
     }
 }
 

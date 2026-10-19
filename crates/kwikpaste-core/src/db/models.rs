@@ -45,6 +45,10 @@ pub struct ClipboardItem {
     /// 删除应用记录时置 NULL，不会级联删条目。
     pub source_app_id: Option<String>,
     pub content: String,
+    /// 查询时只读取快照是否存在，供 presenter 计算恢复动作；不把快照或此内部标记传出。
+    #[sqlx(default)]
+    #[serde(skip)]
+    pub has_original: bool,
     /// 去重指纹：`blake3(kind:content)`，由 `db::items::content_hash` 计算并在入库前比对。
     pub content_hash: String,
     pub search_text: Option<String>,

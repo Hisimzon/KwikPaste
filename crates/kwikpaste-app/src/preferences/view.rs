@@ -2,7 +2,7 @@ use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, FocusHandle, Global, Hsla, Image, ImageSource,
     InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Rems,
     Render, Role, ScrollAnchor, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
-    Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
+    Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowOptions, div, img,
     prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
@@ -12,7 +12,7 @@ use kwikpaste_core::{
     ops::{PreferenceDirectory, StorageOverview},
     readable_export::{ExportFormat, ExportOptions, ExportPreview},
     settings::Settings,
-    settings::{CaptureKind, Content, ItemAction, RetentionRule, RetentionUnit},
+    settings::{CaptureKind, Content, CopySoundTone, ItemAction, RetentionRule, RetentionUnit},
     sync::{LanDeviceView, LanNearbyView, LanSyncState, PairTarget},
 };
 use kwikpaste_ui::{
@@ -52,9 +52,14 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
+pub(super) mod choices;
+mod custom_rules;
 mod extensions;
+mod feedback;
 mod image_text;
+mod ocr_engine;
 mod overview;
+mod shortcut_page;
 mod wetype;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(640.), px(480.));
@@ -129,10 +134,9 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(window_size(cx), cx)),
         window_min_size: Some(WINDOW_MIN_SIZE),
-        titlebar: Some(TitlebarOptions {
-            title: Some(i18n::t("preferences:windowTitle")),
-            ..Default::default()
-        }),
+        titlebar: Some(kwikpaste_ui::titlebar_options(i18n::t(
+            "preferences:windowTitle",
+        ))),
         focus: false,
         ..Default::default()
     };
@@ -183,10 +187,9 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(window_size(cx), cx)),
         window_min_size: Some(WINDOW_MIN_SIZE),
-        titlebar: Some(TitlebarOptions {
-            title: Some(i18n::t("preferences:windowTitle")),
-            ..Default::default()
-        }),
+        titlebar: Some(kwikpaste_ui::titlebar_options(i18n::t(
+            "preferences:windowTitle",
+        ))),
         focus: false,
         ..Default::default()
     };
@@ -224,7 +227,7 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
 /// 取前台会同步收到窗口消息；放到任务里，等调用方的 GPUI 借用（窗口 update、托盘 dispatch）结束后再做，
 /// 否则这些消息回调拿不到 App / 窗口，日志里会是 `RefCell already borrowed` / `window not found`。
 #[cfg(target_os = "windows")]
-pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
+pub(crate) fn bring_window_to_front(window: &Window, cx: &App) {
     use kwikpaste_os::win::foreground::bring_to_front;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -242,7 +245,7 @@ pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn bring_window_to_front(window: &Window, cx: &App) {
+pub(crate) fn bring_window_to_front(window: &Window, cx: &App) {
     use kwikpaste_os::mac::window::OrdinaryWindow;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -284,7 +287,6 @@ struct Preferences {
     settings: Settings,
     search: TextInput,
     _subscriptions: Vec<Subscription>,
-    appearance: SelectState,
     language: SelectState,
     selects: std::collections::HashMap<&'static str, SelectState>,
     number_inputs: std::collections::HashMap<&'static str, NumberInputState>,
@@ -292,6 +294,12 @@ struct Preferences {
     scroll: ScrollHandle,
     focus: FocusHandle,
     recording: Option<&'static str>,
+    /// 快捷键页打开的二级页（设置项 id）。
+    shortcut_detail: Option<&'static str>,
+    /// 正在录制的剪贴板窗口内按键。
+    recording_panel: Option<kwikpaste_core::settings::PanelAction>,
+    /// 录到的按键已被占用，等用户选择取消或改用到这里。
+    shortcut_conflict: Option<shortcut_page::ShortcutConflict>,
     storage_overview: Option<StorageOverview>,
     storage_location: Option<StorageLocation>,
     storage_migrating: bool,
@@ -377,31 +385,7 @@ impl Preferences {
             this.scroll.set_offset(gpui::point(px(0.), px(0.)));
             cx.notify();
         });
-        let theme = settings.appearance.theme;
         let language_value = settings.appearance.language;
-        let appearance = SelectState::new(
-            vec![
-                SelectOption::new(
-                    "auto",
-                    i18n::t("preferences:schema.settings.appearance.theme.options.auto"),
-                ),
-                SelectOption::new(
-                    "light",
-                    i18n::t("preferences:schema.settings.appearance.theme.options.light"),
-                ),
-                SelectOption::new(
-                    "dark",
-                    i18n::t("preferences:schema.settings.appearance.theme.options.dark"),
-                ),
-            ],
-            Some(match theme {
-                kwikpaste_core::settings::Theme::Auto => "auto",
-                kwikpaste_core::settings::Theme::Light => "light",
-                kwikpaste_core::settings::Theme::Dark => "dark",
-            }),
-            window,
-            cx,
-        );
         let language = SelectState::new(
             vec![
                 SelectOption::new(
@@ -417,11 +401,6 @@ impl Preferences {
             window,
             cx,
         );
-        let appearance_sub = appearance.on_change(cx, |this, value, cx| {
-            if let Some(value) = value {
-                this.update("appearance.theme", json!(value.as_ref()), cx);
-            }
-        });
         let language_sub = language.on_change(cx, |this, value, cx| {
             if let Some(value) = value {
                 this.update("appearance.language", json!(value.as_ref()), cx);
@@ -473,32 +452,6 @@ impl Preferences {
                                         values::choice_patch(path, &value, numeric),
                                         cx,
                                     );
-                                }
-                            });
-                            setting_subscriptions.push(subscription);
-                            selects.insert(setting.id, state);
-                        }
-                        Control::Tiles(kind) => {
-                            let options = kind
-                                .values()
-                                .iter()
-                                .map(|value| {
-                                    SelectOption::new(
-                                        *value,
-                                        i18n::t(&format!(
-                                            "preferences:schema.settings.{}.options.{}",
-                                            setting.id, value
-                                        )),
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            let selected =
-                                values::get_choice(&settings_json, setting.path.unwrap_or(""));
-                            let state = SelectState::new(options, selected.as_deref(), window, cx);
-                            let path = setting.path;
-                            let subscription = state.on_change(cx, move |this, value, cx| {
-                                if let (Some(path), Some(value)) = (path, value) {
-                                    this.update(path, json!(value.as_ref()), cx);
                                 }
                             });
                             setting_subscriptions.push(subscription);
@@ -682,7 +635,6 @@ impl Preferences {
             .into_iter()
             .chain([
                 search_subscription,
-                appearance_sub,
                 language_sub,
                 lan_name_sub,
                 lan_max_image_sub,
@@ -720,7 +672,6 @@ impl Preferences {
             settings,
             search,
             _subscriptions: subscriptions,
-            appearance,
             language,
             selects,
             number_inputs,
@@ -728,6 +679,9 @@ impl Preferences {
             scroll,
             focus,
             recording: None,
+            shortcut_detail: None,
+            recording_panel: None,
+            shortcut_conflict: None,
             storage_overview: None,
             storage_location,
             storage_migrating: false,
@@ -780,6 +734,10 @@ impl Preferences {
     }
 
     fn begin_recording(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recording_panel.is_some() {
+            self.finish_panel_recording(cx);
+        }
+        self.shortcut_conflict = None;
         self.recording = Some(id);
         hotkey::suspend(cx);
         window.focus(&self.focus, cx);
@@ -820,10 +778,13 @@ impl Preferences {
         let Some(shortcut) = shortcut_from_keystroke(&event.keystroke) else {
             return;
         };
-        if let Some(other) = shortcut_conflicts_with_settings(id, &shortcut, &self.settings) {
-            log::warn!("shortcut {shortcut:?} conflicts with an existing preference shortcut");
-            toast::show(Toast::error(shortcut_conflict_message(other)), window, cx);
-            self.finish_recording(cx);
+        if let Some(user) = shortcut_page::global_shortcut_user(id, &shortcut, &self.settings) {
+            self.hold_conflict(
+                shortcut_page::ShortcutTarget::Global(id),
+                shortcut,
+                user,
+                cx,
+            );
             return;
         }
         self.save_recorded_shortcut(id, shortcut, window, cx);
@@ -1404,7 +1365,6 @@ impl Preferences {
                     return;
                 };
                 entity.update(cx, |this, cx| match id {
-                    "copy.sound.preview" => this.preview_copy_sound(cx),
                     "backup.export" => this.open_export(ExportKind::Backup, window, cx),
                     "backup.importHistory" => this.import_backup(window, cx),
                     "localData.cleanCache" => this.clean_resource_cache(cx),
@@ -1428,6 +1388,7 @@ impl Preferences {
                     "about.checkUpdates" => crate::platform::updater::check_now(cx),
                     "about.website" => cx.open_url(text::WEBSITE_URL),
                     "about.github" => cx.open_url(text::REPOSITORY_URL),
+                    "diagnostics.reportProblem" => this.report_problem(window, cx),
                     "diagnostics.resetPreferences" => this.reset_preferences(window, cx),
                     _ => log::info!("preferences action requested: {id}"),
                 });
@@ -1435,14 +1396,42 @@ impl Preferences {
             .into_any_element()
     }
 
-    /// 试听取滑块当前值，不等待异步落盘；平台层在工作线程播放，不阻塞偏好窗。
-    fn preview_copy_sound(&self, cx: &App) {
+    /// 分段与磁贴选定后写回设置；换音色时顺带试听，点已选中的音色也再响一次。
+    fn choice_handler(
+        &self,
+        path: Option<&'static str>,
+        numeric: bool,
+        cx: &Context<Self>,
+    ) -> choices::OnSelect {
+        let entity = cx.entity().downgrade();
+        Rc::new(move |value, _, cx| {
+            let Some(path) = path else {
+                return;
+            };
+            let _ = entity.update(cx, |this, cx| {
+                if path == "clipboard.feedback.copySoundTone"
+                    && let Ok(tone) = serde_json::from_value(json!(value))
+                {
+                    this.preview_copy_sound(tone, cx);
+                }
+                if numeric {
+                    this.apply_patch(values::choice_patch(path, value, true), cx);
+                } else {
+                    // 走 `update`：切到自定义密度时要带上当前档位的间距作起点。
+                    this.update(path, json!(value), cx);
+                }
+            });
+        })
+    }
+
+    /// 试听取滑块当前值，不等待异步落盘；平台层异步播放，不阻塞偏好窗。
+    fn preview_copy_sound(&self, tone: CopySoundTone, cx: &App) {
         let volume_percent = self.sliders.get("copy.sound.volume").map_or(
             self.settings.clipboard.feedback.copy_sound_volume.min(100),
             |state| state.value(cx),
         );
         if let Some(core) = core_host::core(cx) {
-            core.play_copy_sound(volume_percent);
+            core.play_copy_sound(tone, volume_percent);
         }
     }
 
@@ -2877,6 +2866,7 @@ impl Preferences {
             cx.notify();
         }));
         let brand = div()
+            .window_control_area(WindowControlArea::Drag)
             .flex()
             .items_center()
             .gap(space(2.))
@@ -2936,6 +2926,11 @@ impl Preferences {
     ) {
         let opening = self.tab != tab;
         self.tab = tab;
+        self.shortcut_detail = None;
+        self.shortcut_conflict = None;
+        if self.recording_panel.is_some() {
+            self.finish_panel_recording(cx);
+        }
         self.search.set_value("", window, cx);
         self.scroll.set_offset(gpui::point(px(0.), px(0.)));
         if let Some(id) = setting_id {
@@ -2989,6 +2984,9 @@ impl Preferences {
     ) -> gpui::AnyElement {
         if setting.id == "ocr.status" {
             return self.render_image_text_status(first, cx);
+        }
+        if matches!(setting.control, Control::ShortcutEntry) {
+            return self.render_shortcut_entry(setting, first, cx);
         }
         let title = text::setting_title(setting);
         if setting.id == "localData.dataDirectory" {
@@ -3053,6 +3051,7 @@ impl Preferences {
         let path = setting.path;
         let settings_json = values::to_json(&self.settings);
         let value = path.and_then(|path| values::get(&settings_json, path).cloned());
+        let choice = path.and_then(|path| values::get_choice(&settings_json, path));
         let control = match setting.control {
             Control::Switch => {
                 let configured = value
@@ -3078,7 +3077,24 @@ impl Preferences {
                     })
                     .into_any_element()
             }
-            Control::Select(_) | Control::Tiles(_) | Control::GroupSelect => {
+            Control::Segmented(options) => choices::segmented(
+                setting.id,
+                title.clone(),
+                text::options(setting),
+                choice.as_deref(),
+                setting.is_disabled(&self.settings),
+                self.choice_handler(path, matches!(options, schema::Options::Numbers(_)), cx),
+                cx,
+            ),
+            Control::Tiles(kind) => choices::tiles(
+                kind,
+                setting.id,
+                title.clone(),
+                choice.as_deref(),
+                self.choice_handler(path, false, cx),
+                cx,
+            ),
+            Control::Select(_) | Control::GroupSelect => {
                 if let Some(state) = self.selects.get(setting.id) {
                     Select::new(state)
                         .width(CONTROL_WIDTH)
@@ -3180,6 +3196,8 @@ impl Preferences {
             Control::CaptureOrder => self.render_capture_order(cx),
             Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
+            Control::CustomRules => self.render_custom_rules(cx),
+            Control::PanelShortcuts => self.render_panel_shortcuts(cx),
             Control::AppExclusion => self.render_app_exclusion(setting.id, value, cx),
             Control::Action { danger } => self.render_action(setting.id, danger, cx),
             _ => self.render_action(setting.id, false, cx),
@@ -3212,8 +3230,15 @@ impl Preferences {
         let searching = !query.trim().is_empty();
         let tokens = theme::semantic(cx);
         let mut blocks: Vec<gpui::AnyElement> = Vec::new();
+        let detail = self
+            .shortcut_detail
+            .filter(|_| self.tab == TabId::Shortcuts && !searching);
+        if let Some(id) = detail {
+            blocks.push(self.render_shortcut_detail(id, cx));
+        }
         for tab in tabs
             .iter()
+            .filter(|_| detail.is_none())
             .filter(|tab| page_in_scope(tab.id, self.tab, &query))
         {
             // 默认区只剩一个分组时，标题和页面标题重复，不显示。
@@ -3314,6 +3339,26 @@ impl Preferences {
                                         self.setting_anchors.get("sync.lan.devices").cloned(),
                                     )
                                     .child(self.render_lan_sync(cx))
+                                    .into_any_element(),
+                            );
+                            continue;
+                        }
+                        if visible
+                            .iter()
+                            .any(|setting| matches!(setting.control, Control::PanelShortcuts))
+                        {
+                            blocks.push(
+                                div()
+                                    .id("preferences-panel-shortcuts-anchor")
+                                    .anchor_scroll(
+                                        self.setting_anchors.get("shortcuts.panel").cloned(),
+                                    )
+                                    .child(section_block(
+                                        Some(text::section_title(section)),
+                                        self.render_panel_reset_all(cx),
+                                        vec![self.render_panel_shortcuts(cx)],
+                                        tokens,
+                                    ))
                                     .into_any_element(),
                             );
                             continue;
@@ -3434,13 +3479,18 @@ impl Preferences {
                 cx,
                 tokens.surface.panel,
             ))
+            .child(kwikpaste_ui::TitleBar::new())
             .child(
                 div()
                     .flex()
                     .flex_none()
                     .items_center()
                     .justify_between()
-                    .h(rems(4.))
+                    .h(rems(if kwikpaste_ui::DRAWS_TITLE_BAR {
+                        3.
+                    } else {
+                        4.
+                    }))
                     .px(space(7.))
                     .border_b_1()
                     .border_color(tokens.border.divider)
@@ -4268,7 +4318,7 @@ impl Render for ReadableExportDialog {
 
 /// 分段切换里的一段（同预览窗的文本方式切换）：选中段在亮色里是浮起的白块，暗色里亮一档。
 fn segment(
-    id: &'static str,
+    id: impl Into<gpui::ElementId>,
     label: gpui::SharedString,
     selected: bool,
     cx: &App,
@@ -5260,12 +5310,23 @@ impl Render for Preferences {
             .size_full()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                // 下拉框、弹框自己处理的 Esc 不会传到这里；录制快捷键时 Esc 只取消录制。
+                // 下拉框、弹框自己处理的 Esc 不会传到这里；录制快捷键时 Esc 只取消录制，
+                // 快捷键二级页里 Esc 先关掉冲突提示，再回到列表。
+                if this.recording_panel.is_some() {
+                    this.capture_panel_shortcut(event, window, cx);
+                    return;
+                }
                 if this.recording.is_none()
                     && event.keystroke.key.eq_ignore_ascii_case("escape")
                     && !event.keystroke.modifiers.modified()
                 {
-                    window.remove_window();
+                    if this.shortcut_conflict.take().is_some() {
+                        cx.notify();
+                    } else if this.shortcut_detail.is_some() {
+                        this.close_shortcut_detail(cx);
+                    } else {
+                        window.remove_window();
+                    }
                     return;
                 }
                 this.capture_shortcut(event, window, cx);

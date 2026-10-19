@@ -20,8 +20,10 @@ pub mod pin;
 mod preview;
 pub mod selftest;
 mod shortcuts;
+mod viewer;
 
-use gpui::{Action, App, KeyBinding, actions};
+use gpui::{Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, actions};
+use kwikpaste_core::settings::{PanelAction, Shortcuts, effective_panel_keys};
 use kwikpaste_ui::INPUT_KEY_CONTEXT;
 
 pub(crate) use card::logo as app_logo;
@@ -68,6 +70,8 @@ actions!(
         TogglePinned,
         /// Mod+M：编辑当前项的备注。
         EditNote,
+        /// Mod+E：编辑当前项的内容。
+        EditContent,
         /// Delete / Mod+Delete / Mod+Backspace：删除当前项；多选时删除已勾选的记录。
         DeleteSelected,
         /// Mod+O：打开链接 / 邮箱 / 文件位置。
@@ -94,75 +98,191 @@ pub struct QuickPaste {
     pub key: char,
 }
 
-/// 主窗口的按键绑定（GPUI keystroke 字符串，`secondary` 在 macOS 是 ⌘、其余平台是 Ctrl）。
-fn bindings() -> Vec<KeyBinding> {
-    let panel = Some(KEY_CONTEXT);
-    let search = format!("{SEARCH_CONTEXT} > {INPUT_KEY_CONTEXT}");
-    let search = Some(search.as_str());
-
-    let mut bindings = vec![
-        KeyBinding::new("up", SelectPrevious, panel),
-        KeyBinding::new("down", SelectNext, panel),
-        KeyBinding::new("enter", PasteSelected, panel),
-        KeyBinding::new("secondary-enter", PasteSelectedPlain, panel),
-        KeyBinding::new("escape", Dismiss, panel),
-        KeyBinding::new("secondary-f", FocusSearch, panel),
-        KeyBinding::new("secondary-q", ToggleRange, panel),
-        KeyBinding::new("left", PreviousCategory, panel),
-        KeyBinding::new("right", NextCategory, panel),
-        KeyBinding::new("tab", NextGroup, panel),
-        KeyBinding::new("shift-tab", PreviousGroup, panel),
-        KeyBinding::new("secondary-c", CopySelected, panel),
-        KeyBinding::new("secondary-d", ToggleFavorite, panel),
-        KeyBinding::new("secondary-t", TogglePinned, panel),
-        KeyBinding::new("secondary-m", EditNote, panel),
-        KeyBinding::new("delete", DeleteSelected, panel),
-        KeyBinding::new("secondary-backspace", DeleteSelected, panel),
-        KeyBinding::new("secondary-delete", DeleteSelected, panel),
-        KeyBinding::new("secondary-o", OpenSelected, panel),
-        KeyBinding::new("secondary-s", SplitSelected, panel),
-        KeyBinding::new("secondary-a", SelectAll, panel),
-        KeyBinding::new("secondary-p", PinWindow, panel),
-        KeyBinding::new("secondary-,", OpenPreferences, panel),
-        KeyBinding::new("secondary-k", ShowShortcuts, panel),
-        KeyBinding::new("secondary-n", NewGroup, panel),
-        // 搜索框聚焦时交给列表的键：与输入框自己的绑定同深度，这里后注册，优先。
-        // ←/→ 和 Mod+A / C / Backspace / Delete 留给输入框（1.x `EDITABLE_GLOBAL_HANDOFF_KEYS`）。
-        KeyBinding::new("up", SelectPrevious, search),
-        KeyBinding::new("down", SelectNext, search),
-        KeyBinding::new("enter", PasteSelected, search),
-        KeyBinding::new("secondary-enter", PasteSelectedPlain, search),
-        KeyBinding::new("escape", Dismiss, search),
-        KeyBinding::new("tab", NextGroup, search),
-        KeyBinding::new("shift-tab", PreviousGroup, search),
-        KeyBinding::new("secondary-f", FocusSearch, search),
-    ];
-    for key in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'] {
-        bindings.push(KeyBinding::new(
-            &format!("secondary-{key}"),
-            QuickPaste { key },
-            panel,
-        ));
+/// 从有效设置生成绑定；搜索镜像必须排在组件输入绑定之后。
+fn bindings(shortcuts: &Shortcuts) -> anyhow::Result<Vec<KeyBinding>> {
+    let panel: std::rc::Rc<KeyBindingContextPredicate> =
+        KeyBindingContextPredicate::parse(KEY_CONTEXT)?.into();
+    let search: std::rc::Rc<KeyBindingContextPredicate> =
+        KeyBindingContextPredicate::parse(&format!("{SEARCH_CONTEXT} > {INPUT_KEY_CONTEXT}"))?
+            .into();
+    let mut bindings = Vec::new();
+    for action in PanelAction::ALL {
+        for (index, key) in effective_panel_keys(shortcuts, action)
+            .into_iter()
+            .enumerate()
+        {
+            let command: Box<dyn Action> = match action {
+                PanelAction::PasteSelected => Box::new(PasteSelected),
+                PanelAction::PasteSelectedPlain => Box::new(PasteSelectedPlain),
+                PanelAction::PasteNth => {
+                    let Some(key) = key.chars().last() else {
+                        continue;
+                    };
+                    Box::new(QuickPaste { key })
+                }
+                PanelAction::CopySelected => Box::new(CopySelected),
+                PanelAction::FavoriteSelected => Box::new(ToggleFavorite),
+                PanelAction::PinSelected => Box::new(TogglePinned),
+                PanelAction::NoteSelected => Box::new(EditNote),
+                PanelAction::EditContent => Box::new(EditContent),
+                PanelAction::SplitSelected => Box::new(SplitSelected),
+                PanelAction::OpenSelected => Box::new(OpenSelected),
+                PanelAction::DeleteSelected => Box::new(DeleteSelected),
+                PanelAction::SelectAll => Box::new(SelectAll),
+                PanelAction::Navigate if index == 0 => Box::new(SelectPrevious),
+                PanelAction::Navigate => Box::new(SelectNext),
+                PanelAction::SwitchCategory if index == 0 => Box::new(PreviousCategory),
+                PanelAction::SwitchCategory => Box::new(NextCategory),
+                PanelAction::SwitchCustomGroup if index == 0 => Box::new(NextGroup),
+                PanelAction::SwitchCustomGroup => Box::new(PreviousGroup),
+                PanelAction::FocusSearch => Box::new(FocusSearch),
+                PanelAction::ToggleRange => Box::new(ToggleRange),
+                PanelAction::CreateGroup => Box::new(NewGroup),
+                // 按住预览、Shift+空格看大图由列表的按下、松开监听处理：绑成动作会吞掉搜索框里的输入。
+                PanelAction::PreviewSelected | PanelAction::ViewImage => continue,
+                PanelAction::PinWindow => Box::new(PinWindow),
+                PanelAction::ShowShortcuts => Box::new(ShowShortcuts),
+                PanelAction::OpenPreference => Box::new(OpenPreferences),
+                PanelAction::ClosePreviewFilterWindow => Box::new(Dismiss),
+            };
+            bindings.push(KeyBinding::load(
+                &key,
+                command.boxed_clone(),
+                Some(panel.clone()),
+                false,
+                None,
+                &DummyKeyboardMapper,
+            )?);
+            if matches!(
+                action,
+                PanelAction::Navigate
+                    | PanelAction::PasteSelected
+                    | PanelAction::PasteSelectedPlain
+                    | PanelAction::ClosePreviewFilterWindow
+                    | PanelAction::SwitchCustomGroup
+                    | PanelAction::FocusSearch
+            ) {
+                bindings.push(KeyBinding::load(
+                    &key,
+                    command,
+                    Some(search.clone()),
+                    false,
+                    None,
+                    &DummyKeyboardMapper,
+                )?);
+            }
+        }
     }
-
-    bindings
+    Ok(bindings)
 }
 
-/// 注册主窗口的按键绑定。在打开面板之前调用一次（在 `kwikpaste_ui::init` 之后，搜索框的改写才能
-/// 排在输入框自己的绑定后面）。
+/// 去掉面板自己的旧绑定，保留其它组件的原始注册顺序（尤其是输入框）。
+fn without_panel_bindings(bindings: impl Iterator<Item = KeyBinding>) -> Vec<KeyBinding> {
+    let search = format!("{SEARCH_CONTEXT} > {INPUT_KEY_CONTEXT}");
+    bindings
+        .filter(|binding| {
+            !binding.predicate().is_some_and(|predicate| {
+                let context = predicate.to_string();
+                context == KEY_CONTEXT || context == search
+            })
+        })
+        .collect()
+}
+
+/// 构造成功后再重绑；不重复初始化组件、主题或它们的订阅。
+pub fn rebind(shortcuts: &Shortcuts, cx: &mut App) {
+    let bindings = match bindings(shortcuts) {
+        Ok(bindings) => bindings,
+        Err(error) => {
+            log::error!("could not build panel key bindings: {error:#}");
+            return;
+        }
+    };
+    let retained = without_panel_bindings(cx.key_bindings().borrow().bindings().cloned());
+    cx.clear_key_bindings();
+    cx.bind_keys(retained);
+    cx.bind_keys(bindings);
+    #[cfg(target_os = "windows")]
+    kwikpaste_os::hook_keys::apply(shortcuts);
+}
+
+/// 组件层初始化之后注册默认面板键；core 加载后再应用用户设置。
 pub fn init(cx: &mut App) {
-    cx.bind_keys(bindings());
+    rebind(&Shortcuts::default(), cx);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn rebind_preserves_input_order_and_replaces_search_mirrors() {
+        let mut previous = vec![KeyBinding::new(
+            "enter",
+            FocusSearch,
+            Some(INPUT_KEY_CONTEXT),
+        )];
+        previous.extend(bindings(&Shortcuts::default()).unwrap());
+        let mut shortcuts = Shortcuts::default();
+        shortcuts.panel.insert("pasteSelected".into(), "f6".into());
+        shortcuts
+            .panel
+            .insert("focusSearch".into(), "secondary-shift-b".into());
+        shortcuts.panel.insert("copySelected".into(), String::new());
+        let mut rebound = without_panel_bindings(previous.into_iter());
+        assert_eq!(rebound.len(), 1);
+        assert_eq!(
+            rebound[0].predicate().unwrap().to_string(),
+            INPUT_KEY_CONTEXT
+        );
+        rebound.extend(bindings(&shortcuts).unwrap());
+        let pastes: Vec<_> = rebound
+            .iter()
+            .filter(|binding| binding.action().as_any().is::<PasteSelected>())
+            .collect();
+        assert_eq!(pastes.len(), 2);
+        assert!(
+            pastes
+                .iter()
+                .all(|binding| binding.keystrokes()[0].unparse() == "f6")
+        );
+        assert!(
+            !rebound
+                .iter()
+                .any(|binding| binding.action().as_any().is::<CopySelected>())
+        );
+        let wanted = gpui::Keystroke::parse("secondary-shift-b")
+            .unwrap()
+            .unparse();
+        assert_eq!(
+            rebound
+                .iter()
+                .filter(|binding| binding.action().as_any().is::<FocusSearch>()
+                    && binding.keystrokes()[0].unparse() == wanted)
+                .count(),
+            2
+        );
+    }
+
     /// 钩子吞下的每个精确组合都有面板绑定（不然目标应用收不到，面板也不处理）。无修饰空格是按住预览，
     /// 由列表的按下、松开监听处理，不走绑定。
     #[test]
     fn every_hooked_combo_has_an_exact_panel_binding() {
-        let bound: Vec<String> = bindings()
+        assert_hook_bindings(&Shortcuts::default());
+        let mut shortcuts = Shortcuts::default();
+        shortcuts
+            .panel
+            .insert("favoriteSelected".into(), "secondary-shift-b".into());
+        shortcuts
+            .panel
+            .insert("pasteNth".into(), "secondary-shift".into());
+        shortcuts.panel.insert("copySelected".into(), String::new());
+        assert_hook_bindings(&shortcuts);
+    }
+
+    fn assert_hook_bindings(shortcuts: &Shortcuts) {
+        let bound: Vec<String> = bindings(shortcuts)
+            .unwrap()
             .iter()
             .filter(|binding| {
                 binding
@@ -179,8 +299,8 @@ mod tests {
             })
             .collect();
 
-        for combo in kwikpaste_os::hook_keys::keystrokes() {
-            if combo == "space" {
+        for combo in kwikpaste_os::hook_keys::HookKeys::from_shortcuts(shortcuts).keystrokes() {
+            if combo == "space" || combo == "shift-space" {
                 continue;
             }
             // Windows 的 Ctrl 在 macOS 绑定里对应 secondary（⌘），其余修饰键仍须精确一致。
@@ -200,7 +320,7 @@ mod tests {
 
     #[test]
     fn delete_shortcuts_share_the_panel_action_without_overriding_inputs() {
-        let bindings = bindings();
+        let bindings = bindings(&Shortcuts::default()).unwrap();
         let delete_bindings: Vec<_> = bindings
             .iter()
             .filter(|binding| binding.action().as_any().is::<DeleteSelected>())

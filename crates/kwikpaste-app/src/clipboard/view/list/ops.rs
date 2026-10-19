@@ -13,6 +13,7 @@ use gpui::{
 };
 use kwikpaste_core::{
     clipboard::ClipboardFragment,
+    db::models::ClipboardItemQuery,
     settings::{AutoPaste, Settings},
 };
 use kwikpaste_ui::{
@@ -27,14 +28,17 @@ use crate::{
             actions::{DeletePolicy, OpenTarget, QuickAction, is_available, is_copy, open_target},
             filter::ListFilter,
             freshness::Activation,
-            item::{ListItem, SubKind},
+            item::{ItemKind, ListItem, SubKind},
             layout::LayoutSpec,
         },
-        source::Group,
-        view::editing::{self, EditTarget},
+        source::{Group, core_source::item_query},
+        view::{
+            editing::{self, EditTarget},
+            viewer::{self, ViewerImage},
+        },
     },
     i18n::{t, t_args},
-    platform::EditTrigger,
+    platform::{EditTrigger, PanelCommand, Trigger, TriggerSource},
 };
 
 /// 弹框里的多行输入框。打开时没拿到编辑态（面板仍不可激活，没有光标）的话，点它再按鼠标触发请求一次。
@@ -56,7 +60,12 @@ const COPIED_FEEDBACK: Duration = Duration::from_secs(1);
 const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// 失败提示：“{动作}失败：{原因}”（1.x `commands:error`）。
-pub(super) fn error_toast(label: &str, err: &anyhow::Error, window: &mut Window, cx: &mut App) {
+pub(in crate::clipboard::view) fn error_toast(
+    label: &str,
+    err: &anyhow::Error,
+    window: &mut Window,
+    cx: &mut App,
+) {
     log::warn!("{label} failed: {err:#}");
     let message = t_args(
         "commands:error",
@@ -94,8 +103,9 @@ impl ClipboardList {
         let old = &self.settings.clipboard;
         let new = &settings.clipboard;
         let resort = old.content.sort != new.content.sort;
-        let refresh = old.display != new.display || old.sensitive != new.sensitive;
-        let preview_changed = old.preview != new.preview;
+        let rules_changed = old.custom_rules != new.custom_rules;
+        let refresh = old.display != new.display || old.sensitive != new.sensitive || rules_changed;
+        let preview_changed = old.preview != new.preview || rules_changed;
         // 风格、密度、行数、图片高度变了：行高全变，像换排序一样整体重排。
         let layout = LayoutSpec::from_settings(&new.display);
         let relayout = layout != self.layout;
@@ -159,6 +169,7 @@ impl ClipboardList {
         let window = self.window;
         cx.spawn(async move |_, cx| {
             if let Err(err) = task.await {
+                log::warn!("{label} failed: {err:#}");
                 window
                     .update(cx, |_, window, cx| error_toast(label, &err, window, cx))
                     .ok();
@@ -182,13 +193,38 @@ impl ClipboardList {
         self.controller.active_item(&self.model).cloned()
     }
 
-    /// 粘贴一条记录：交给宿主（写回剪贴板、让出前台、注入粘贴键），同时发 `ListIntent::Paste` 通知。
+    /// 多选快照：交给 core 按完整列表排序并读取原文，不能使用可能脱敏或未加载的卡片正文。
+    fn text_selection(&self) -> Option<(Vec<String>, ClipboardItemQuery)> {
+        (self.selection.count() >= 2).then(|| {
+            (
+                self.selection
+                    .ids()
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect(),
+                item_query(&self.view_query()),
+            )
+        })
+    }
+
+    /// 粘贴记录或多选文本：交给宿主写回、让出前台、注入粘贴键，同时发 `ListIntent::Paste` 通知。
     pub fn paste_item(&mut self, id: Arc<str>, plain: bool, cx: &mut Context<Self>) {
         log::info!("paste requested for {id} (plain: {plain})");
         self.close_preview(cx);
-        let task = self.host.paste(id.clone(), plain, cx);
+        let task = self
+            .host
+            .paste(id.clone(), plain, self.text_selection(), cx);
         self.report_host_failure("commands:labels.paste", task, cx);
         cx.emit(ListIntent::Paste { id, plain });
+    }
+
+    /// 右键菜单“粘贴为文件”：把图片原文件作为文件列表粘贴，其余同 [`Self::paste_item`]。
+    pub fn paste_image_file(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
+        log::info!("image-file paste requested for {id}");
+        self.close_preview(cx);
+        let task = self.host.paste_image_as_file(id.clone(), cx);
+        self.report_host_failure("commands:labels.paste", task, cx);
+        cx.emit(ListIntent::Paste { id, plain: false });
     }
 
     /// Enter / Mod+Enter：粘贴当前项。数据还没追上 core 时先挂起，第一页落地后按那时的第一行执行。
@@ -307,6 +343,32 @@ impl ClipboardList {
         cx.notify();
     }
 
+    // ------------------------------------------------------------ 大图
+
+    /// 在大图预览窗里看这张图：已加载的图片记录按列表顺序做快照，面板按点外部处理（固定时留着）。
+    pub fn view_image(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
+        let images: Vec<ViewerImage> = (0..self.model.total())
+            .filter_map(|index| self.model.get(index))
+            .filter(|item| item.kind == ItemKind::Image)
+            .map(|item| ViewerImage {
+                id: item.id.clone(),
+                size: item.width.zip(item.height),
+            })
+            .collect();
+        let Some(index) = images.iter().position(|image| image.id == id) else {
+            return;
+        };
+
+        self.close_preview(cx);
+        editing::request_panel(
+            cx,
+            PanelCommand::Hide(Trigger::now(TriggerSource::OutsideClick)),
+        );
+        if let Err(err) = viewer::open(self.source.clone(), self.host.clone(), images, index, cx) {
+            log::error!("could not open the image viewer: {err:#}");
+        }
+    }
+
     // ------------------------------------------------------------ 复制
 
     /// 写回剪贴板（宿主按设置决定复制后是否隐藏面板）。`feedback` 是点的那个快捷动作按钮，
@@ -320,7 +382,7 @@ impl ClipboardList {
         cx: &mut Context<Self>,
     ) {
         self.close_preview_of(&id, cx);
-        let task = self.host.copy(id.clone(), plain, cx);
+        let task = self.host.copy(id.clone(), plain, self.text_selection(), cx);
 
         cx.spawn_in(window, async move |list, cx| {
             let result = task.await;
@@ -641,6 +703,24 @@ impl ClipboardList {
                     Self::toast_success("commands:messages.noteSaved", window, cx);
                 }
                 Err(err) => Self::toast_error("clipboard:menu.editContent", &err, window, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 恢复编辑前的原文，刷新方式同保存编辑。
+    pub fn restore_original(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_preview_of(&id, cx);
+        let future = self.source.restore_original_content(id.clone());
+        cx.spawn_in(window, async move |list, cx| {
+            let result = future.await;
+            list.update_in(cx, |list, window, cx| match result {
+                Ok(restored) => {
+                    list.patch_item(&id, |item| *item = restored, cx);
+                    cx.emit(ListIntent::Changed);
+                }
+                Err(err) => Self::toast_error("clipboard:menu.restoreOriginal", &err, window, cx),
             })
             .ok();
         })

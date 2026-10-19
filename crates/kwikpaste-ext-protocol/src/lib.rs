@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub const OCR_PROTOCOL: u32 = 1;
+pub const OCR_PROTOCOL: u32 = 2;
 pub const WETYPE_PROTOCOL: u32 = 1;
 pub const WETYPE_MAX_TEXT_BYTES: usize = 1024 * 1024;
 pub const WETYPE_MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
@@ -74,8 +74,9 @@ pub enum OcrSupport {
 
 // JSON 的控制字符最多膨胀六倍，另留出路径、设备名和事件元数据空间。
 pub const WETYPE_MAX_FRAME_BYTES: usize = WETYPE_MAX_TEXT_BYTES * 6 + 64 * 1024;
-pub const MAX_FRAME_BYTES: usize = 512 * 1024;
 pub const MAX_TEXT_CHARS: usize = 64 * 1024;
+// 最坏每行只有一个字：连同换行最多约 32K 行，八个 f32 坐标也必须放得下。
+pub const MAX_FRAME_BYTES: usize = MAX_TEXT_CHARS * 96 + 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tag", deny_unknown_fields)]
@@ -84,19 +85,33 @@ pub enum Request {
     Recognize { job_id: String, path: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "tag", deny_unknown_fields)]
 pub enum Response {
     Probe { support: OcrSupport },
     Recognize { job_id: String, outcome: Outcome },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// 原图像素网格中的归一化行框；依次为阅读起点上、终点上、终点下、起点下。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TextLine {
+    pub text: String,
+    pub quad: [[f32; 2]; 4],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "tag", deny_unknown_fields)]
 pub enum Outcome {
-    Done { text: String, language: String },
-    Skipped { reason: String },
-    Failed { reason: String },
+    Done {
+        lines: Vec<TextLine>,
+        language: String,
+    },
+    Skipped {
+        reason: String,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 /// 复用调用方缓冲区；仅帧边界上的 EOF 正常，半帧或未知 tag 必须拒绝。
@@ -265,7 +280,7 @@ mod tests {
             text: "\0".repeat(WETYPE_MAX_TEXT_BYTES),
         })?;
         let command = WeTypeCommand::SendText {
-            text: "x".repeat(WETYPE_MAX_TEXT_BYTES),
+            text: "x".repeat(MAX_FRAME_BYTES),
         };
         assert!(write_frame(&mut Vec::new(), &command, &mut Vec::new()).is_err());
         assert!(
@@ -301,6 +316,30 @@ mod tests {
     }
 
     #[test]
+    fn full_cjk_text_with_short_lines_fits_frame() {
+        let value = Response::Recognize {
+            job_id: "full".into(),
+            outcome: Outcome::Done {
+                lines: vec![
+                    TextLine {
+                        text: "字".into(),
+                        quad: [[0.0000012345679, 0.0000012345679]; 4],
+                    };
+                    MAX_TEXT_CHARS / 2
+                ],
+                language: "zh-Hans".into(),
+            },
+        };
+        let mut wire = Vec::new();
+        let mut buffer = Vec::new();
+        write_frame(&mut wire, &value, &mut buffer).unwrap();
+        assert_eq!(
+            read_frame::<Response>(&mut Cursor::new(wire), &mut buffer).unwrap(),
+            Some(value)
+        );
+    }
+
+    #[test]
     fn rejects_truncated_oversized_and_unknown_frames() {
         let mut buffer = Vec::new();
         for wire in [
@@ -328,7 +367,10 @@ mod tests {
             Response::Recognize {
                 job_id: "a".into(),
                 outcome: Outcome::Done {
-                    text: "中文\nEnglish".into(),
+                    lines: vec![TextLine {
+                        text: "中文\nEnglish".into(),
+                        quad: [[0.1, 0.2], [0.8, 0.2], [0.8, 0.3], [0.1, 0.3]],
+                    }],
                     language: "zh-Hans-CN".into(),
                 },
             },

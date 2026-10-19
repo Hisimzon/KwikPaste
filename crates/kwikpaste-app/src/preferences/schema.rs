@@ -58,11 +58,14 @@ pub struct Section {
     pub settings: Vec<Setting>,
 }
 
-/// 外观磁贴的种类。
+/// 带示意图的磁贴：选项本身有视觉含义的设置。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TilesKind {
     Theme,
     Material,
+    ListStyle,
+    PanelLayout,
+    WindowPosition,
 }
 
 impl TilesKind {
@@ -70,6 +73,9 @@ impl TilesKind {
         match self {
             Self::Theme => &["auto", "light", "dark"],
             Self::Material => &["default", "mica", "acrylic"],
+            Self::ListStyle => LIST_STYLES,
+            Self::PanelLayout => PANEL_LAYOUTS,
+            Self::WindowPosition => WINDOW_POSITIONS,
         }
     }
 }
@@ -85,7 +91,7 @@ pub enum PermissionKind {
     RunAsAdministrator,
 }
 
-/// 下拉选项：值的文案取 `schema.settings.<id>.options.<value>`；快捷键选项直接显示按键。
+/// 下拉或分段的选项：值的文案取 `schema.settings.<id>.options.<value>`；快捷键选项直接显示按键。
 #[derive(Clone, Copy, Debug)]
 pub enum Options {
     Values(&'static [&'static str]),
@@ -95,11 +101,14 @@ pub enum Options {
     Shortcuts(&'static [(&'static str, &'static str)]),
 }
 
-/// 设置项右侧的控件。1.x 的 `select` 与 `segmented` 视觉统一为下拉，这里合成一种。
+/// 设置项右侧的控件。
 #[derive(Clone, Copy, Debug)]
 pub enum Control {
     Switch,
+    /// 选项多或文案长：下拉。
     Select(Options),
+    /// 两到六个短选项：分段控件，全部选项一眼可见。
+    Segmented(Options),
     Number {
         min: u64,
         max: u64,
@@ -129,6 +138,8 @@ pub enum Control {
     Retention,
     /// 按类型、来源、大小的清理规则。
     RetentionRules,
+    /// 用户文本匹配规则列表。
+    CustomRules,
     /// 清理状态与「立即清理」。
     CleanupStatus,
     /// 数据概览。
@@ -140,19 +151,25 @@ pub enum Control {
     /// 图片文字识别的进度、结果和系统能力（开关下面的一行，按状态换标题和按钮）。
     ImageTextStatus,
     ShortcutRecorder,
+    /// 一个全局功能的全部触发方式：行内列出，点进二级页增删。
+    ShortcutEntry,
+    /// 剪贴板窗口内的按键表，点按键重新录制。
+    PanelShortcuts,
 }
 
 impl Control {
-    /// 采集类型、采集顺序和清理规则需要整行宽度，换到标题下方单独一行；外观磁贴现在画成
-    /// 下拉框，和其他选项一样靠右。
+    /// 采集类型、采集顺序、清理规则和磁贴需要整行宽度，换到标题下方单独一行。
     pub fn full_width(self) -> bool {
         matches!(
             self,
-            Self::CaptureKinds
+            Self::Tiles(_)
+                | Self::CaptureKinds
                 | Self::CaptureOrder
                 | Self::RetentionRules
+                | Self::CustomRules
                 | Self::LanSync
                 | Self::Extensions
+                | Self::PanelShortcuts
         )
     }
 }
@@ -237,6 +254,7 @@ const CLICK_ACTIONS: &[&str] = &[
     "singleClickCopy",
     "doubleClickCopy",
 ];
+const COPY_SOUND_TONES: &[&str] = &["classic", "chirp", "bubble", "chime", "tick"];
 const MIDDLE_CLICK_ACTIONS: &[&str] = &[
     "disabled",
     "singleClickPaste",
@@ -262,6 +280,8 @@ const OPEN_RANGES: &[&str] = &["preserve", "all", "favorite"];
 const OPEN_CATEGORIES: &[&str] = &["preserve", "all", "text", "image", "files"];
 const HOVER_DELAYS: &[&str] = &["ms300", "ms500", "ms1000"];
 const TEXT_VIEWS: &[&str] = &["plain", "words"];
+/// 预览窗与卡片之间可选的距离（px）。
+const PREVIEW_GAPS: &[u64] = &[0, 8, 16, 28, 40, 56];
 #[cfg(target_os = "windows")]
 const DOUBLE_TAP_KEYS: &[&str] = &["disabled", "control", "shift", "alt"];
 #[cfg(target_os = "macos")]
@@ -307,10 +327,7 @@ pub fn tabs(portable: bool) -> Vec<Tab> {
             id: TabId::Shortcuts,
             group: Group::App,
             icon: PrefIcon::Keyboard,
-            sections: vec![Section {
-                id: "globalShortcuts",
-                settings: shortcut_settings(),
-            }],
+            sections: shortcut_sections(),
         },
         Tab {
             id: TabId::Appearance,
@@ -415,7 +432,7 @@ fn general_sections(portable: bool) -> Vec<Section> {
             #[cfg(target_os = "windows")]
             Setting::new(
                 "control.trayClick",
-                Control::Select(Options::Values(TRAY_CLICK)),
+                Control::Segmented(Options::Values(TRAY_CLICK)),
             )
             .path("general.trayClick")
             .keywords(&["tray", "click", "preferences", "clipboard"])
@@ -498,6 +515,65 @@ const PAUSE_KEYWORDS: &[&str] = &[
     "pause",
 ];
 
+/// 快捷键页：每个全局功能一行（点进去管理触发方式）、停用规则、剪贴板窗口内的按键。
+/// 双击按键、鼠标按键、Win+V 的设置都在「打开剪贴板窗口」的二级页里，关键词挂在这一行上。
+fn shortcut_sections() -> Vec<Section> {
+    vec![
+        Section {
+            id: "globalShortcuts",
+            settings: vec![
+                Setting::new("shortcuts.openClipboard", Control::ShortcutEntry)
+                    .path("shortcuts.openClipboard")
+                    .keywords(&[
+                        "shortcut",
+                        "hotkey",
+                        "open",
+                        "double tap",
+                        "双击",
+                        "mouse",
+                        "middle click",
+                        "side button",
+                        "鼠标",
+                        "win",
+                        "winv",
+                        "clipboard history",
+                    ]),
+                Setting::new("shortcuts.pastePlain", Control::ShortcutEntry)
+                    .path("shortcuts.pastePlain")
+                    .keywords(&["shortcut", "hotkey", "plain", "text", "paste", "纯文本"]),
+                Setting::new("shortcuts.quickPaste", Control::ShortcutEntry)
+                    .path("shortcuts.quickPaste")
+                    .keywords(&["quick paste", "number", "digit", "paste", "modifier"]),
+                Setting::new("shortcuts.openPreference", Control::ShortcutEntry)
+                    .path("shortcuts.openPreference")
+                    .keywords(&["shortcut", "hotkey", "preference"]),
+            ],
+        },
+        Section {
+            id: "shortcutPause",
+            settings: vec![
+                // TODO: macOS 还没有全屏判断（见 `kwikpaste_os::mac::trigger_pause`），先只在 Windows 显示。
+                #[cfg(target_os = "windows")]
+                Setting::new("shortcuts.pauseInFullscreen", Control::Switch)
+                    .path("shortcuts.pauseInFullscreen")
+                    .keywords(PAUSE_KEYWORDS),
+                Setting::new("shortcuts.pauseApps", Control::AppExclusion)
+                    .path("shortcuts.pauseAppIds")
+                    .keywords(PAUSE_KEYWORDS),
+            ],
+        },
+        Section {
+            id: "panelShortcuts",
+            settings: vec![
+                Setting::new("shortcuts.panel", Control::PanelShortcuts).keywords(&[
+                    "shortcut", "hotkey", "key", "window", "favorite", "pin", "copy", "delete",
+                    "收藏", "置顶", "复制", "删除", "按键",
+                ]),
+            ],
+        },
+    ]
+}
+
 /// 首次引导使用完整列表，不按 advanced 标记折叠。
 pub(super) fn shortcut_settings() -> Vec<Setting> {
     vec![
@@ -527,7 +603,7 @@ pub(super) fn shortcut_settings() -> Vec<Setting> {
         .keywords(DOUBLE_TAP_KEYWORDS),
         Setting::new(
             "shortcuts.doubleTapSide",
-            Control::Select(Options::Values(KEY_SIDES)),
+            Control::Segmented(Options::Values(KEY_SIDES)),
         )
         .path("shortcuts.doubleTap.side")
         .keywords(DOUBLE_TAP_KEYWORDS)
@@ -590,16 +666,13 @@ fn appearance_sections() -> Vec<Section> {
                     .keywords(&["theme", "dark", "light"]),
                 Setting::new("appearance.material", Control::Tiles(TilesKind::Material))
                     .path("appearance.material")
-                    .keywords(&["material", "mica", "acrylic", "transparency"]),
-                Setting::new(
-                    "appearance.listStyle",
-                    Control::Select(Options::Values(LIST_STYLES)),
-                )
-                .path("clipboard.display.listStyle")
-                .keywords(&["list", "card", "seamless", "divider", "style"]),
+                    .keywords(&["material", "mica", "frosted", "blur", "transparency"]),
+                Setting::new("appearance.listStyle", Control::Tiles(TilesKind::ListStyle))
+                    .path("clipboard.display.listStyle")
+                    .keywords(&["list", "card", "seamless", "divider", "style"]),
                 Setting::new(
                     "appearance.listDensity",
-                    Control::Select(Options::Values(LIST_DENSITIES)),
+                    Control::Segmented(Options::Values(LIST_DENSITIES)),
                 )
                 .path("clipboard.display.density")
                 .keywords(&["density", "compact", "spacing", "height", "custom"]),
@@ -610,7 +683,7 @@ fn appearance_sections() -> Vec<Section> {
                 // 无间风格条目贴边排列，间距不生效，一并收起。
                 Setting::new(
                     "appearance.itemGap",
-                    Control::Select(Options::Numbers(LIST_ITEM_GAPS)),
+                    Control::Segmented(Options::Numbers(LIST_ITEM_GAPS)),
                 )
                 .path("clipboard.display.customLayout.itemGap")
                 .keywords(&["density", "gap", "spacing", "margin"])
@@ -620,7 +693,7 @@ fn appearance_sections() -> Vec<Section> {
                 }),
                 Setting::new(
                     "appearance.itemPadding",
-                    Control::Select(Options::Numbers(LIST_PADDINGS_Y)),
+                    Control::Segmented(Options::Numbers(LIST_PADDINGS_Y)),
                 )
                 .path("clipboard.display.customLayout.paddingY")
                 .keywords(&["density", "padding", "height"])
@@ -690,16 +763,13 @@ fn window_sections() -> Vec<Section> {
             settings: vec![
                 Setting::new(
                     "appearance.panelLayout",
-                    Control::Select(Options::Values(PANEL_LAYOUTS)),
+                    Control::Tiles(TilesKind::PanelLayout),
                 )
                 .path("clipboard.display.layout")
                 .keywords(&["layout", "split", "column", "favorite", "group", "sidebar"]),
-                Setting::new(
-                    "window.position",
-                    Control::Select(Options::Values(WINDOW_POSITIONS)),
-                )
-                .path("clipboard.window.position")
-                .keywords(&["window", "position", "cursor"]),
+                Setting::new("window.position", Control::Tiles(TilesKind::WindowPosition))
+                    .path("clipboard.window.position")
+                    .keywords(&["window", "position", "cursor"]),
                 Setting::new("search.defaultFocus", Control::Switch)
                     .path("clipboard.search.defaultFocus")
                     .keywords(&["search", "focus", "open"]),
@@ -709,7 +779,7 @@ fn window_sections() -> Vec<Section> {
                     .advanced(),
                 Setting::new(
                     "window.selectRangeOnOpen",
-                    Control::Select(Options::Values(OPEN_RANGES)),
+                    Control::Segmented(Options::Values(OPEN_RANGES)),
                 )
                 .path("clipboard.window.selectRangeOnOpen")
                 .keywords(&["window", "range", "all", "favorite", "open"])
@@ -739,7 +809,7 @@ fn window_sections() -> Vec<Section> {
         Section {
             id: "sort",
             settings: vec![
-                Setting::new("search.sort", Control::Select(Options::Values(SORTS)))
+                Setting::new("search.sort", Control::Segmented(Options::Values(SORTS)))
                     .path("clipboard.content.sort")
                     .keywords(&["sort", "frequency", "usage", "created", "updated"]),
                 Setting::new("copy.updateOnReuse", Control::Switch)
@@ -756,7 +826,7 @@ fn window_sections() -> Vec<Section> {
                     .keywords(&["preview", "hover"]),
                 Setting::new(
                     "preview.delay",
-                    Control::Select(Options::Values(HOVER_DELAYS)),
+                    Control::Segmented(Options::Values(HOVER_DELAYS)),
                 )
                 .path("clipboard.preview.hoverDelayMs")
                 .keywords(&["preview", "delay", "hover"])
@@ -768,10 +838,17 @@ fn window_sections() -> Vec<Section> {
                     .keywords(&["space", "preview", "keyboard"]),
                 Setting::new(
                     "preview.textView",
-                    Control::Select(Options::Values(TEXT_VIEWS)),
+                    Control::Segmented(Options::Values(TEXT_VIEWS)),
                 )
                 .path("clipboard.preview.textView")
                 .keywords(&["preview", "text", "words", "split"])
+                .advanced(),
+                Setting::new(
+                    "preview.gap",
+                    Control::Segmented(Options::Numbers(PREVIEW_GAPS)),
+                )
+                .path("clipboard.preview.gap")
+                .keywords(&["preview", "gap", "spacing", "distance", "margin"])
                 .advanced(),
                 Setting::new("appearance.showOriginalPreview", Control::Switch)
                     .path("clipboard.content.showOriginalPreview")
@@ -878,14 +955,18 @@ fn paste_sections() -> Vec<Section> {
                     .path("clipboard.feedback.copySound")
                     .keywords(&["sound", "feedback", "copy", "音效", "提示音", "声音"])
                     .advanced(),
+                Setting::new(
+                    "copy.sound.tone",
+                    Control::Segmented(Options::Values(COPY_SOUND_TONES)),
+                )
+                .path("clipboard.feedback.copySoundTone")
+                .keywords(&["音色", "音效", "提示音", "试听", "tone", "sound", "preview"])
+                .child_of("copy.sound", |settings| {
+                    !settings.clipboard.feedback.copy_sound
+                })
+                .advanced(),
                 Setting::new("copy.sound.volume", Control::Slider { min: 0, max: 100 })
                     .path("clipboard.feedback.copySoundVolume")
-                    .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
-                    .child_of("copy.sound", |settings| {
-                        !settings.clipboard.feedback.copy_sound
-                    })
-                    .advanced(),
-                Setting::new("copy.sound.preview", Control::Action { danger: false })
                     .keywords(&["音量", "音效", "试听", "volume", "sound", "preview"])
                     .child_of("copy.sound", |settings| {
                         !settings.clipboard.feedback.copy_sound
@@ -958,6 +1039,14 @@ fn capture_sections() -> Vec<Section> {
             ],
         },
         Section {
+            id: "customRules",
+            settings: vec![
+                Setting::new("customRules", Control::CustomRules)
+                    .path(kwikpaste_core::settings::paths::CUSTOM_RULES)
+                    .keywords(&["regex", "pattern", "snippet", "sensitive", "ignore"]),
+            ],
+        },
+        Section {
             id: "cleanup",
             settings: vec![
                 Setting::new("history.retention", Control::Retention)
@@ -1006,7 +1095,7 @@ fn capture_sections() -> Vec<Section> {
                 .advanced(),
                 Setting::new(
                     "localData.storageLimitAction",
-                    Control::Select(Options::Values(STORAGE_LIMIT_ACTIONS)),
+                    Control::Segmented(Options::Values(STORAGE_LIMIT_ACTIONS)),
                 )
                 .path("clipboard.history.storageLimitAction")
                 .keywords(&["storage", "limit", "cleanup", "remind"])
@@ -1094,6 +1183,14 @@ fn about_sections() -> Vec<Section> {
         Section {
             id: "diagnostics",
             settings: vec![
+                Setting::new(
+                    "diagnostics.reportProblem",
+                    Control::Action { danger: false },
+                )
+                .keywords(&[
+                    "feedback", "bug", "report", "problem", "issue", "log", "反馈", "日志",
+                ])
+                .advanced(),
                 Setting::new("localData.logDirectory", Control::Action { danger: false })
                     .keywords(&["log", "diagnostic"])
                     .advanced(),
@@ -1201,6 +1298,10 @@ mod tests {
             find("control.reopenOnboarding"),
             (TabId::About, "about", false)
         );
+        assert_eq!(
+            find("diagnostics.reportProblem"),
+            (TabId::About, "diagnostics", true)
+        );
         assert_eq!(tabs[8].sections[0].settings[0].id, "overview.dashboard");
         // Onboarding consumes this entire list, including advanced shortcuts.
         assert!(
@@ -1297,14 +1398,14 @@ mod tests {
                 .iter()
                 .map(|setting| setting.id)
                 .collect::<Vec<_>>(),
-            ["copy.sound", "copy.sound.volume", "copy.sound.preview"]
+            ["copy.sound", "copy.sound.tone", "copy.sound.volume"]
         );
         assert_eq!(
-            sound.settings[1].path,
+            sound.settings[2].path,
             Some("clipboard.feedback.copySoundVolume")
         );
         assert!(matches!(
-            sound.settings[1].control,
+            sound.settings[2].control,
             Control::Slider { min: 0, max: 100 }
         ));
         let mut settings = Settings::default();
@@ -1331,7 +1432,7 @@ mod tests {
             assert!(super::super::view::search_matches(
                 keyword,
                 "",
-                sound.settings[1].keywords
+                sound.settings[2].keywords
             ));
         }
     }

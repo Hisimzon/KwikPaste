@@ -410,6 +410,7 @@ async fn merge_preserves_is_sensitive_flag() {
         note: None,
         created_at: ts,
         updated_at: ts,
+        has_original: false,
         origin_device_id: None,
         source_app_name: None,
         source_app_icon_file: None,
@@ -565,6 +566,34 @@ fn export(source: &Source, mode: BackupExportMode, password: Option<&str>) -> Pa
     assert_eq!(path.extension().unwrap(), BACKUP_EXTENSION);
     assert_eq!(fs::metadata(&path).unwrap().len(), result.total_bytes);
     path
+}
+
+#[test]
+fn backup_preserves_original_content_for_merge_and_overwrite() {
+    let source = source();
+    let id = store(&source.core, text("shared text"));
+    let before = block_on(source.core.find_item(&id)).unwrap().unwrap();
+    block_on(source.core.update_text_content(&id, "edited text".into())).unwrap();
+    let backup = export(&source, BackupExportMode::Plain, None);
+
+    for strategy in [BackupImportStrategy::Merge, BackupImportStrategy::Overwrite] {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        block_on(core.import_history_backup(input(&backup, None), strategy)).unwrap();
+        assert_eq!(
+            block_on(core.find_item(&id)).unwrap().unwrap().content,
+            "edited text"
+        );
+        assert!(block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        block_on(core.restore_original_content(&id)).unwrap();
+        assert_eq!(
+            serde_json::to_value(block_on(core.find_item(&id)).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        block_on(core.shutdown()).unwrap();
+    }
+    block_on(source.core.shutdown()).unwrap();
 }
 
 #[test]
@@ -1335,7 +1364,8 @@ fn partial_backup_strips_ocr_text_while_full_backup_keeps_it() {
     block_on(source.core.hop({
         let core = source.core.clone();
         async move {
-            sqlx::query("INSERT INTO image_texts(item_id,status,text,attempts,created_at,updated_at) SELECT id,'done','private OCR sentinel',1,created_at,created_at FROM clipboard_items WHERE kind='image'")
+            sqlx::query("INSERT INTO image_texts(item_id,status,text,lines,attempts,created_at,updated_at) SELECT id,'done','private OCR sentinel',?,1,created_at,created_at FROM clipboard_items WHERE kind='image'")
+                .bind(r#"[{"text":"private OCR sentinel","quad":[[0,0],[1,0],[1,1],[0,1]]}]"#)
                 .execute(&core.0.db.pool().await).await.unwrap();
             Ok(())
         }
@@ -1369,8 +1399,54 @@ fn partial_backup_strips_ocr_text_while_full_backup_keeps_it() {
             .await
             .unwrap();
             assert_eq!((rows, hits), (expected, expected));
+            let lines: Option<String> = sqlx::query_scalar("SELECT lines FROM image_texts")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+            if expected == 1 {
+                let lines: Vec<crate::ocr::ImageTextLine> =
+                    serde_json::from_str(&lines.unwrap()).unwrap();
+                assert_eq!(lines[0].text, "private OCR sentinel");
+                assert_eq!(lines[0].quad, [[0., 0.], [1., 0.], [1., 1.], [0., 1.]]);
+            } else {
+                assert!(lines.is_none());
+            }
             pool.close().await;
         });
     }
     block_on(source.core.shutdown()).unwrap();
+}
+
+#[test]
+fn overwrite_old_backup_adds_null_ocr_layout() {
+    let temp = tempdir().unwrap();
+    let backup = craft_backup(temp.path(), |pool| {
+        Box::pin(async move {
+            sqlx::query("ALTER TABLE image_texts DROP COLUMN lines")
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 10")
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE clipboard_items SET kind = 'image', content = 'legacy.png' WHERE id = 'crafted'")
+            .execute(pool).await.unwrap();
+            sqlx::query("INSERT INTO image_texts(item_id,status,text,attempts,created_at,updated_at) SELECT id,'done','legacy text',1,created_at,updated_at FROM clipboard_items")
+            .execute(pool).await.unwrap();
+        })
+    });
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    block_on(core.import_history_backup(input(&backup, None), BackupImportStrategy::Overwrite))
+        .unwrap();
+    fixture.runtime.handle().block_on(async {
+        let row: (String, Option<String>) =
+            sqlx::query_as("SELECT text, lines FROM image_texts WHERE item_id = 'crafted'")
+                .fetch_one(&core.0.db.pool().await)
+                .await
+                .unwrap();
+        assert_eq!(row, ("legacy text".into(), None));
+    });
+    block_on(core.shutdown()).unwrap();
 }

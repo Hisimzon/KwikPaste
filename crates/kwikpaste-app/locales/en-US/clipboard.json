@@ -99,9 +99,11 @@
     "moveToGroup": "Move to Group",
     "openLink": "Open Link",
     "paste": "Paste",
+    "pasteAsFile": "Paste as File",
     "pasteAsPath": "Paste as Path",
     "pasteAsPlainText": "Paste as Plain Text",
     "pinItem": "Pin to Top",
+    "restoreOriginal": "Restore Original",
     "revealInExplorer": "Show in Explorer",
     "revealInFinder": "Show in Finder",
     "saveImage": "Save Image",
@@ -109,7 +111,8 @@
     "sendEmail": "Send Email",
     "splitWords": "Split Words",
     "unfavorite": "Unfavorite",
-    "unpinItem": "Unpin from Top"
+    "unpinItem": "Unpin from Top",
+    "viewImage": "View Full Size"
   },
   "note": {
     "placeholder": "Add a note for this item...",
@@ -151,6 +154,7 @@
     "copySelected": "Copy selected item",
     "createGroup": "Create group",
     "deleteSelected": "Delete selected item",
+    "editContent": "Edit selected item content",
     "favoriteSelected": "Favorite / unfavorite",
     "focusSearch": "Focus search",
     "navigate": "Navigate up/down",
@@ -169,7 +173,8 @@
     "switchCategory": "Switch category",
     "switchCustomGroup": "Switch custom group",
     "title": "Keyboard shortcuts",
-    "toggleRange": "Toggle all / favorites"
+    "toggleRange": "Toggle all / favorites",
+    "viewImage": "View image full size"
   },
   "types": {
     "color": "Color",

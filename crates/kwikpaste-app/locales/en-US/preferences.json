@@ -81,6 +81,31 @@
     "shortcutInUse": "In use by another app",
     "shortcutNotSet": "Not set"
   },
+  "customRules": {
+    "action": "Action",
+    "actions": {
+      "ignore": "Don't record",
+      "sensitive": "Sensitive",
+      "snippet": "Quick snippet"
+    },
+    "add": "Add rule",
+    "delete": "Delete",
+    "edit": "Edit rule",
+    "empty": "No text matching rules yet",
+    "fromTemplate": "Add from template",
+    "matches": "{{count}} matches",
+    "name": "Name",
+    "pattern": "Regular expression",
+    "templates": {
+      "identity": "Mainland ID number",
+      "ipv4": "IPv4 address",
+      "mac": "MAC address",
+      "new": "New rule",
+      "ticket": "Ticket number",
+      "tracking": "CN tracking number"
+    },
+    "test": "Test text"
+  },
   "extensions": {
     "details": {
       "feature": "What it does",
@@ -92,9 +117,9 @@
     "install": "Install",
     "installing": "Installing…",
     "ocr": {
-      "description": "Recognizes text in images for search and copying, using the system's built-in recognition.",
+      "description": "Recognizes text in images for search and copying.",
       "feature": "Recognizes the text in images you copy. You can then find an image by its text, use “Copy Text in Image” from the context menu, or switch the preview to Text to pick and copy part of it.",
-      "how": "Uses the system's built-in text recognition: Windows.Media.Ocr on Windows and the Vision framework on macOS. Recognition runs in a separate background process that starts only when there are new images and exits when it is done, so it doesn't stay in memory. Supported languages depend on the language packs installed on the system.",
+      "how": "Uses the system's built-in text recognition: Windows.Media.Ocr on Windows and the Vision framework on macOS. Recognition runs in a separate background process that starts only when there are new images and exits when it is done, so it doesn't stay in memory. Supported languages depend on the language packs installed on the system. On Windows you can also download a more accurate PP-OCRv6 engine.",
       "name": "Image text recognition",
       "privacy": "Recognition happens entirely on this device. Neither images nor recognized text are uploaded.",
       "uninstallContent": "New images will no longer be recognized; recognized text is kept."
@@ -133,6 +158,39 @@
       "writeClipboard": "Write received items to the clipboard"
     }
   },
+  "feedback": {
+    "attachments": "Included",
+    "close": "Close",
+    "description": "Description",
+    "descriptionPlaceholder": "What went wrong? For example: the panel doesn't open when I press the shortcut",
+    "errors": {
+      "badResponse": "The feedback service returned an unexpected response.",
+      "collect": "Couldn't collect diagnostics.",
+      "descriptionLength": "Describe the problem in up to 5,000 characters.",
+      "noEndpoint": "This development build has no feedback service configured.",
+      "offline": "Can't reach the feedback service. Check your network connection.",
+      "rateLimited": "Too many reports today. Try again tomorrow.",
+      "rejected": "The feedback service didn't accept this report.",
+      "save": "Couldn't write the selected file. Check folder permissions and free disk space.",
+      "timeout": "The feedback service timed out. Try again later.",
+      "tooLarge": "The included content is malformed or too large.",
+      "unavailable": "The feedback service is temporarily unavailable. Try again later."
+    },
+    "failedContent": "{{reason}} You can save the report as a file and send it to the developer another way.",
+    "failedTitle": "Couldn't Send Feedback",
+    "loading": "Collecting diagnostics…",
+    "noClipboard": "Clipboard contents are never uploaded.",
+    "notReady": "Diagnostics aren't ready yet",
+    "saveAsFile": "Save as File",
+    "saved": "Feedback saved as a file",
+    "send": "Send",
+    "sendFailed": "Feedback wasn't sent",
+    "sending": "Sending feedback…",
+    "sent": "Feedback sent",
+    "sentContent": "Feedback ID: {{code}}. Mention this ID when you contact the developer.",
+    "sentTitle": "Received. Thanks for the Feedback",
+    "title": "Report a Problem"
+  },
   "imageText": {
     "checking": "Checking text recognition on this system…",
     "deleted": "Image text deleted",
@@ -161,6 +219,12 @@
     },
     "queued": {
       "title": "{{count}} images waiting"
+    },
+    "recognizeAll": {
+      "action": "Recognize all again",
+      "content": "Recognize all {{count}} images again with the current engine. Until that finishes, their text can't be found by search.",
+      "ok": "Recognize again",
+      "title": "Recognize all again"
     },
     "running": {
       "description": "Recognition runs in a separate background process that exits when it's done, so it doesn't add to memory use.",
@@ -231,6 +295,47 @@
       "noAddress": "No network connection",
       "title": "This Device"
     }
+  },
+  "ocrEngine": {
+    "columns": {
+      "errors": "Errors",
+      "memory": "Memory",
+      "speed": "Per image"
+    },
+    "description": "An engine runs only while recognizing, then exits and releases all of its memory. Switching affects images copied afterwards; use “Recognize all again” for older ones.",
+    "download": "Download {{size}}",
+    "footnote": "Measured on 41 test images with a Ryzen 7 9850X3D. Memory is the peak while recognizing.",
+    "medium": {
+      "errors": "0.3%",
+      "memory": "710 MB",
+      "name": "PP-OCRv6 High accuracy",
+      "speed": "1.3 s",
+      "summary": "Most accurate, even on blurry images; not for PCs under 8 GB"
+    },
+    "recommended": "Recommended",
+    "small": {
+      "errors": "0.5%",
+      "memory": "320 MB",
+      "name": "PP-OCRv6 Standard",
+      "speed": "0.4 s",
+      "summary": "More accurate on small text, code and URLs"
+    },
+    "system": {
+      "errors": "22%",
+      "memory": "~20 MB",
+      "name": "System",
+      "speed": "0.02 s",
+      "summary": "Built into Windows, no download; often misreads small text and code"
+    },
+    "tiny": {
+      "errors": "1%",
+      "memory": "210 MB",
+      "name": "PP-OCRv6 Light",
+      "speed": "0.2 s",
+      "summary": "Good for most screenshots"
+    },
+    "title": "Recognition engine",
+    "unavailable": "Not available yet"
   },
   "overview": {
     "categories": {
@@ -492,6 +597,9 @@
       "click": {
         "title": "Click Actions"
       },
+      "customRules": {
+        "title": "Text matching rules"
+      },
       "deleteProtection": {
         "title": "Delete Protection"
       },
@@ -528,6 +636,9 @@
       "overview": {
         "title": "Overview"
       },
+      "panelShortcuts": {
+        "title": "In the clipboard window"
+      },
       "performance": {
         "title": "Performance"
       },
@@ -539,6 +650,9 @@
       },
       "sensitive": {
         "title": "Privacy"
+      },
+      "shortcutPause": {
+        "title": "Pause rules"
       },
       "sort": {
         "title": "Sorting"
@@ -658,7 +772,7 @@
         "material": {
           "description": "Falls back to a solid color when unsupported or when reduced transparency is on.",
           "options": {
-            "acrylic": "Acrylic",
+            "acrylic": "Frosted",
             "default": "Default",
             "mica": "Mica"
           },
@@ -771,11 +885,18 @@
           "title": "Copy as Plain Text by Default"
         },
         "sound": {
-          "preview": {
-            "controlLabel": "Preview",
-            "title": "Preview sound"
-          },
           "title": "Copy Sound",
+          "tone": {
+            "description": "Click a tone to hear it.",
+            "options": {
+              "bubble": "Bubble",
+              "chime": "Chime",
+              "chirp": "Chirp",
+              "classic": "Classic",
+              "tick": "Tick"
+            },
+            "title": "Sound tone"
+          },
           "volume": {
             "description": "Drag to adjust, release to save; 0% is silent.",
             "title": "Sound volume"
@@ -786,7 +907,16 @@
           "title": "Update Record on Reuse"
         }
       },
+      "customRules": {
+        "description": "Match copied text with a regex to show it as a quick snippet, mark it sensitive, or skip recording it. Sensitive and Don't record apply to new copies only.",
+        "title": "Text matching rules"
+      },
       "diagnostics": {
+        "reportProblem": {
+          "controlLabel": "Report",
+          "description": "Send a description of the problem to the developer, along with logs and diagnostics.",
+          "title": "Report a Problem"
+        },
         "resetPreferences": {
           "confirmContent": "This restores every preference to its default value, but keeps clipboard history records.",
           "confirmTitle": "Reset all preferences?",
@@ -946,6 +1076,18 @@
           },
           "title": "Hover Delay"
         },
+        "gap": {
+          "description": "Distance between the preview window and the record in the main window.",
+          "options": {
+            "0": "0 px",
+            "8": "8 px",
+            "16": "16 px",
+            "28": "28 px",
+            "40": "40 px",
+            "56": "56 px"
+          },
+          "title": "Preview Gap"
+        },
         "hover": {
           "title": "Hover Preview"
         },
@@ -1039,6 +1181,10 @@
           "description": "Open or hide the preferences window.",
           "placeholder": "Alt+X",
           "title": "Open Preferences Window"
+        },
+        "panel": {
+          "description": "Keys inside the clipboard window, such as paste, favorite and pin.",
+          "title": "Clipboard window shortcuts"
         },
         "pastePlain": {
           "description": "Paste what's on the clipboard without formatting, without opening the clipboard window.",
@@ -1201,6 +1347,62 @@
     "openTab": "Open {{tab}}",
     "placeholder": "Search settings",
     "title": "Search Results"
+  },
+  "shortcutsPage": {
+    "added": "Added",
+    "addTrigger": "Add trigger",
+    "anyTrigger": "Any of the triggers below works.",
+    "chips": {
+      "doubleTap": "Double {{key}}",
+      "mouse": "Mouse {{button}}",
+      "quickPasteOff": "Off"
+    },
+    "conflict": "{{key}} is already used by “{{name}}”.",
+    "conflictPanel": "{{key}} is already used by “{{name}}” in the clipboard window.",
+    "kinds": {
+      "combo": {
+        "description": "Works in any app",
+        "title": "Key combination"
+      },
+      "doubleTap": {
+        "description": "Press it twice quickly. Shift may also switch your input method.",
+        "title": "Double-tap a key"
+      },
+      "mouse": {
+        "description": "Click the middle or a side button; its usual click action stops working",
+        "title": "Mouse button"
+      },
+      "winV": {
+        "description": "Replaces the Windows clipboard history panel",
+        "title": "Take over Win+V"
+      }
+    },
+    "panel": {
+      "cardClick": "Mouse clicks on cards are set in “{{tab}}”",
+      "fixed": "Fixed key, can't be changed",
+      "groups": {
+        "navigate": "Navigate",
+        "organize": "Organize",
+        "paste": "Paste & copy",
+        "window": "Window"
+      },
+      "hint": "Only works in the clipboard window. Click a key to record a new one.",
+      "invalid": "Window shortcuts need {{mod}} plus a key, optionally with Shift",
+      "recording": "Press the new key…",
+      "reset": "Reset to default",
+      "resetAll": "Reset all"
+    },
+    "quickPaste": {
+      "enable": "Enable quick paste",
+      "hold": "Hold {{mods}} and press:",
+      "nth": "Item {{n}}"
+    },
+    "recording": "Press the new shortcut…",
+    "recordingHelp": "Other shortcuts are paused while recording · Esc to cancel · Backspace to clear",
+    "remove": "Remove",
+    "rerecord": "Record again",
+    "takeOver": "Use it here",
+    "triggers": "Triggers"
   },
   "sidebar": {
     "collapse": "Collapse Sidebar",

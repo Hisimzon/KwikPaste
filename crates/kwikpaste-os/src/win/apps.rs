@@ -32,20 +32,31 @@ pub fn frontmost_app() -> Option<FrontmostApp> {
         return None;
     }
     let path = process_image_name(window_process(window)?)?;
+    Some(app_from_process_path(String::from_utf16_lossy(&path)))
+}
+
+/// 使用已采样的剪贴板所有者，拿不到时才查询前台窗口。
+pub fn clipboard_source_app(owner: Option<&Path>) -> Option<FrontmostApp> {
+    owner
+        .map(|path| app_from_process_path(path.to_string_lossy().into_owned()))
+        .or_else(frontmost_app)
+}
+
+/// 前台与剪贴板所有者共用同一套 id、名称和图标路径规则。
+fn app_from_process_path(id: String) -> FrontmostApp {
     // 与 1.x 一致：前台应用的 id 用系统给的原样路径，不做规范化。
-    let id = String::from_utf16_lossy(&path);
     let name = Path::new(&id)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or(&id)
         .to_owned();
 
-    Some(FrontmostApp {
+    FrontmostApp {
         icon_source: Some(PathBuf::from(&id)),
         id,
         name,
         platform: Platform::Windows,
-    })
+    }
 }
 
 /// 剪贴板当前所有者窗口所属进程的 exe；剪贴板没有所有者或查不到时返回 `None`。
@@ -217,6 +228,17 @@ fn exe_display_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_owner_uses_the_same_raw_id_as_the_foreground_process() {
+        let path = r"C:\Program Files\所有者\Owner App.exe";
+        let source = clipboard_source_app(Some(Path::new(path))).expect("owner app");
+
+        assert_eq!(source, app_from_process_path(path.to_owned()));
+        assert_eq!(source.id, path);
+        assert_eq!(source.name, "Owner App");
+        assert_eq!(source.icon_source.as_deref(), Some(Path::new(path)));
+    }
 
     #[test]
     fn verbatim_prefixes_are_stripped() {

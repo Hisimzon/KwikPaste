@@ -17,7 +17,9 @@ e2e-overrides = []
 anyhow.workspace = true
 base64.workspace = true
 chrono.workspace = true
+flate2.workspace = true
 kwikpaste-core.workspace = true
+kwikpaste-os.workspace = true
 kwikpaste-ext-protocol = { path = "../kwikpaste-ext-protocol" }
 log.workspace = true
 minisign-verify.workspace = true
@@ -26,6 +28,7 @@ semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+thiserror.workspace = true
 time = { workspace = true, features = ["parsing", "formatting"] }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 url = { workspace = true, features = ["serde"] }
@@ -39,13 +42,11 @@ windows-registry.workspace = true
 windows-sys = { workspace = true, features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-flate2.workspace = true
 tar.workspace = true
 
 [dev-dependencies]
 blake2.workspace = true
 ed25519-dalek.workspace = true
-flate2.workspace = true
 rand.workspace = true
 tar.workspace = true
 

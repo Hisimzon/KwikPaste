@@ -11,7 +11,8 @@ use crate::error::Result;
 
 const SELECT_ITEM: &str = "SELECT id, kind, sub_kind, group_id, source_app_id, content, \
      content_hash, search_text, summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
-     is_sensitive, platform, note, created_at, updated_at, origin_device_id FROM clipboard_items";
+     is_sensitive, platform, note, created_at, updated_at, origin_device_id, \
+     original_content IS NOT NULL AS has_original FROM clipboard_items";
 
 /// 列表/单条刷新场景的精简 SELECT：text 类型条目的 `content` 与 `search_text` 一律置空，
 /// 由前端用 `summary` 渲染。HTML/RTF/长纯文本可能很大（用户复制整段文档），
@@ -31,6 +32,7 @@ const LIST_SELECT_ITEM: &str = "SELECT clipboard_items.id, clipboard_items.kind,
      clipboard_items.is_sensitive, \
      clipboard_items.platform, clipboard_items.note, \
      clipboard_items.created_at, clipboard_items.updated_at, clipboard_items.origin_device_id, \
+     clipboard_items.original_content IS NOT NULL AS has_original, \
      clipboard_apps.name AS source_app_name, \
      clipboard_apps.icon_file AS source_app_icon_file \
      FROM clipboard_items \
@@ -84,6 +86,16 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
 pub async fn upsert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<UpsertResult> {
     if let Some(existing) = find_item_by_content_hash(pool, &item.content_hash).await? {
         increment_item_use_count(pool, &existing).await?;
+        // 规则新增后再次复制同一内容，也要收紧敏感标记；不清除历史敏感状态。
+        if item.is_sensitive {
+            sqlx::query(
+                "UPDATE clipboard_items SET is_sensitive = 1 WHERE id = ? AND is_sensitive = 0",
+            )
+            .bind(&existing)
+            .execute(pool)
+            .await
+            .context("failed to mark recopied item sensitive")?;
+        }
         return Ok(UpsertResult {
             id: existing,
             deduplicated: true,
@@ -355,10 +367,14 @@ pub async fn update_item_note(pool: &SqlitePool, id: &str, note: Option<&str>) -
     Ok(())
 }
 
-/// 只改写文本内容及采集派生字段，不刷新复用时间、同步序号或排序元数据。
+/// 首次编辑时保留被覆盖字段；后续编辑不覆盖原文，不刷新复用时间、同步序号或排序元数据。
 pub async fn update_item_text_content(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> {
     let result = sqlx::query(
-        "UPDATE clipboard_items SET content = ?, content_hash = ?, search_text = ?, \
+        "UPDATE clipboard_items SET original_content = COALESCE(original_content, \
+         json_object('content', content, 'content_hash', content_hash, 'search_text', search_text, \
+                     'summary', summary, 'size', size, 'sub_kind', sub_kind, \
+                     'file_types', file_types, 'width', width, 'height', height)), \
+         content = ?, content_hash = ?, search_text = ?, \
          summary = ?, size = ?, sub_kind = ?, file_types = ?, width = ?, height = ? \
          WHERE id = ? AND kind = 'text'",
     )
@@ -378,6 +394,33 @@ pub async fn update_item_text_content(pool: &SqlitePool, item: &ClipboardItem) -
     if result.rows_affected() == 0 {
         return Err(crate::error::AppError::Clipboard(
             "Text record no longer exists".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// 原子恢复首次编辑前的字段并清除快照，FTS 由现有触发器更新。
+/// 与编辑一致，允许重复哈希，保留各条记录；后续采集仍复用创建时间最新的记录。
+pub async fn restore_item_original_content(pool: &SqlitePool, id: &str) -> Result<()> {
+    let result = sqlx::query(
+        "UPDATE clipboard_items SET content = json_extract(original_content, '$.content'), \
+         content_hash = json_extract(original_content, '$.content_hash'), \
+         search_text = json_extract(original_content, '$.search_text'), \
+         summary = json_extract(original_content, '$.summary'), \
+         size = json_extract(original_content, '$.size'), \
+         sub_kind = json_extract(original_content, '$.sub_kind'), \
+         file_types = json_extract(original_content, '$.file_types'), \
+         width = json_extract(original_content, '$.width'), \
+         height = json_extract(original_content, '$.height'), original_content = NULL \
+         WHERE id = ? AND original_content IS NOT NULL",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .context("failed to restore clipboard item original content")?;
+    if result.rows_affected() == 0 {
+        return Err(crate::error::AppError::Clipboard(
+            "No original content to restore".to_owned(),
         ));
     }
     Ok(())
@@ -950,6 +993,7 @@ mod tests {
             note: None,
             created_at: ts,
             updated_at: ts,
+            has_original: false,
             origin_device_id: None,
             source_app_name: None,
             source_app_icon_file: None,

@@ -323,6 +323,7 @@ fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextVie
                 .filter_map(|snippet| {
                     let start = text.find(&snippet.text)?;
                     Some(PreviewSnippet {
+                        label: None,
                         text: snippet.text.clone(),
                         kind: snippet.kind,
                         range: start..start + snippet.text.len(),
@@ -396,6 +397,7 @@ fn fixture_preview(item: &ListItem, thumbnails: &Path, text_view: PreviewTextVie
                 .as_deref()
                 .map(|text| i64::try_from(text.encode_utf16().count()).unwrap_or(i64::MAX)),
             text,
+            document: None,
             image_exists: image_path.is_some(),
             image_path: image_path.map(|path| path.to_string_lossy().into_owned()),
             image_width: item.width.map(i64::from),
@@ -630,6 +632,13 @@ impl ClipboardSource for FixtureSource {
         &self,
         _id: Arc<str>,
         _content: String,
+    ) -> BoxFuture<'static, anyhow::Result<ListItem>> {
+        Box::pin(async { anyhow::bail!("Content editing requires the core data source") })
+    }
+
+    fn restore_original_content(
+        &self,
+        _id: Arc<str>,
     ) -> BoxFuture<'static, anyhow::Result<ListItem>> {
         Box::pin(async { anyhow::bail!("Content editing requires the core data source") })
     }

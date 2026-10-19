@@ -23,10 +23,11 @@ use kwikpaste_ui::{
 };
 
 use super::{
-    CopySelected, DeleteSelected, Dismiss, EditNote, FocusSearch, KEY_CONTEXT, NewGroup,
-    NextCategory, NextGroup, OpenPreferences, OpenSelected, PasteSelected, PasteSelectedPlain,
-    PinWindow, PreviousCategory, PreviousGroup, QuickPaste, SelectAll, SelectNext, SelectPrevious,
-    ShowShortcuts, SplitSelected, ToggleFavorite, TogglePinned, ToggleRange,
+    CopySelected, DeleteSelected, Dismiss, EditContent, EditNote, FocusSearch, KEY_CONTEXT,
+    NewGroup, NextCategory, NextGroup, OpenPreferences, OpenSelected, PasteSelected,
+    PasteSelectedPlain, PinWindow, PreviousCategory, PreviousGroup, QuickPaste, SelectAll,
+    SelectNext, SelectPrevious, ShowShortcuts, SplitSelected, ToggleFavorite, TogglePinned,
+    ToggleRange,
     editing::{self, EditTarget},
     group_bar::{BarMode, GroupBar, GroupBarEvent},
     group_dialogs,
@@ -186,8 +187,8 @@ impl ClipboardPanel {
             ListIntent::Paste { id, plain } => {
                 log::debug!("paste intent handled by panel host: {id} plain={plain}");
             }
-            ListIntent::PasteSnippet { id, text } => {
-                log::debug!("paste snippet intent handled by panel host: {id} ({text})");
+            ListIntent::PasteSnippet { id, .. } => {
+                log::debug!("paste snippet intent handled by panel host: {id}");
             }
             ListIntent::DragOut { id } => {
                 log::debug!("drag-out intent handled by panel host: {id}");
@@ -1109,6 +1110,13 @@ impl Render for ClipboardPanel {
                     list.edit_note(item.id.clone(), window, cx)
                 });
             })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &EditContent, window, cx| {
+                    panel.with_active(cx, |list, item, cx| {
+                        list.edit_content(item.id.clone(), window, cx)
+                    });
+                })),
+            )
             .on_action(
                 cx.listener(unless_menu(|panel, _: &OpenSelected, window, cx| {
                     panel.with_active(cx, |list, _, cx| list.open_active(window, cx));

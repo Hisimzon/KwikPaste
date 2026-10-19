@@ -22,7 +22,7 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// 已发布（含 2.0 新增）迁移的 sha384：LF 是 macOS 检出的字节，CRLF 是 Windows 检出的字节。
 /// 用户库的 `_sqlx_migrations` 里存的就是这两种之一，对不上的话存量用户启动即失败；
 /// 跨平台覆盖导入备份时按这张表换算（[`adopt_published_checksums`]）。新增迁移要在这里补上两种值。
-pub(crate) const PUBLISHED: [(i64, &str, &str); 9] = [
+pub(crate) const PUBLISHED: [(i64, &str, &str); 11] = [
     (
         1,
         "bfa656aa68eed66f8dab5bacb9efa4bafeb11713fd417239e05f7b4c5757330fae5eafeeb138771c6d18785670c44b05",
@@ -63,11 +63,21 @@ pub(crate) const PUBLISHED: [(i64, &str, &str); 9] = [
         "e9a4905e3f6285520158e89fd59054ad5beb1549c5cd2ee9bd099e7efc64c6cbd7d9a30500171243a6a4091f26ddd958",
         "32ae6ae06370708b427782341654b48bdefa38d232320db81581b3a4d9122ac34e7c0b4396544c7561f71f95dd790920",
     ),
-    // 本地新增的拼音索引迁移从 0009 起:0008 已给上游图片文字识别占用。
     (
         9,
-        "ddde6370231c2ac1d0b173715b3b5818691bc043837b18a418c26e758279639fff7dfc0fb9dbbe63019d1ee0c4548441",
-        "cec0050451e7937da63e453d3559c9000cc73da6f3f2404e2bb163659d83d68bb51657ad86ee446b88ae50a4bf51a4b0",
+        "d6eaf11e575215e774a7d9f253d72825ef510acbd306fcd987d015a632acf7b3e9b0b09fd7a1eb797ca59372c8ecb013",
+        "d8bd6edaf64504cb6b9888f66f9cd3b54d4bdf5b47416d54d91b0e2238b35efc880575b1c2b5b9b2ce81af7e89ef204c",
+    ),
+    (
+        10,
+        "63a530790e242038e85438c22231ae5a4c060933c74b8805cf570e9a04545cc5ecaf627eb8e4ce413770dd4cfb66cd2c",
+        "492c7ed37d773eafb11c932dab38f91a7bbc92b93c642b89e25881cd9d28dfc2d9e60be19475ce5c26cf772d45fbe163",
+    ),
+    // 本地新增的拼音索引迁移从 0100 起，避开上游后续新增迁移占用的编号。
+    (
+        100,
+        "63f8eeed1e77b5bab3465cf299e700de730b7c098093f3f661b539b47a210b8d189b8bf4ef022d9378f32874ae580ccf",
+        "b60fd6f1f983ab282511336207747c025ab5932058315a24b8bd5e98fe634400e3d66d85203f2a022131eb8fabf9adb3",
     ),
 ];
 
@@ -238,6 +248,53 @@ mod tests {
             .unwrap();
         assert_eq!(adopt_published_checksums(&pool).await.unwrap(), 0);
         assert!(MIGRATOR.run(&pool).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn original_content_migration_preserves_existing_items() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let old = Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|migration| migration.version <= 8)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        };
+        old.run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO clipboard_items (id, kind, content, content_hash, search_text, platform, created_at, updated_at) \
+             VALUES ('old', 'text', 'originalneedle', 'hash', 'originalneedle', 'windows', \
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool).await.unwrap();
+        let before = sqlx::query_as::<_, crate::db::models::ClipboardItem>(
+            "SELECT * FROM clipboard_items WHERE id = 'old'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        MIGRATOR.run(&pool).await.unwrap();
+        let after = crate::db::items::find_item_by_id(&pool, "old")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!after.has_original);
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
+        );
+        let hits: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM clipboard_items_fts WHERE clipboard_items_fts MATCH 'originalneedle'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(hits, 1);
     }
 
     #[tokio::test]

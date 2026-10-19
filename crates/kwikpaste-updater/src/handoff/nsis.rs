@@ -1,16 +1,34 @@
-//! NSIS 安装版：用 `/P /R /UPDATE /ARGS <原参数>` 拉起安装包（被动模式、装完重启、按更新处理、
-//! 重启时带上原来的命令行参数）。参数转义照抄 Tauri，`/` 也要加引号，免得 NSIS 当成自己的开关。
+//! NSIS 安装版：自动更新用 `/S /R /UPDATE /ARGS <参数>` 静默安装并隐藏重启，手动更新保留 `/P` 被动模式。
+//! 参数转义沿用 Tauri，`/` 也要加引号，免得 NSIS 当成自己的开关。
 
 use std::ffi::OsString;
 
 /// 安装包的命令行：模式开关 + 原进程参数（不含 argv[0]）。
-pub(crate) fn parameters(args: &[OsString]) -> String {
-    ["/P", "/R", "/UPDATE", "/ARGS"]
+pub(crate) fn parameters(args: &[OsString], silent: bool) -> String {
+    [if silent { "/S" } else { "/P" }, "/R", "/UPDATE", "/ARGS"]
         .into_iter()
         .map(str::to_owned)
         .chain(args.iter().map(|arg| escape_arg(&arg.to_string_lossy())))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// 仅已通过写权限探测的自动更新使用无提权子进程；手动更新保持 ShellExecuteW 的 UAC 行为。
+#[cfg(target_os = "windows")]
+pub(crate) fn launch(file: &std::path::Path, parameters: &str, silent: bool) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use std::os::windows::process::CommandExt;
+
+    if !silent {
+        return shell_execute(file, parameters);
+    }
+    // 模板请求 highestAvailable；仅对子进程设 RunAsInvoker，防止可写安装仍弹 UAC。
+    std::process::Command::new(file)
+        .raw_arg(parameters)
+        .env("__COMPAT_LAYER", "RunAsInvoker")
+        .spawn()
+        .context("failed to start the silent installer")?;
+    Ok(())
 }
 
 /// 与 Tauri `escape_nsis_current_exe_arg` 相同：按 Windows 命令行规则加引号和反斜杠，
@@ -113,9 +131,12 @@ mod tests {
 
     #[test]
     fn parameters_carry_the_original_arguments() {
-        assert_eq!(parameters(&[]), "/P /R /UPDATE /ARGS");
+        assert_eq!(parameters(&[], false), "/P /R /UPDATE /ARGS");
         assert_eq!(
-            parameters(&[OsString::from("--auto-launch"), OsString::from("a b")]),
+            parameters(
+                &[OsString::from("--auto-launch"), OsString::from("a b")],
+                false
+            ),
             "/P /R /UPDATE /ARGS --auto-launch \"a b\""
         );
     }

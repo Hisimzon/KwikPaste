@@ -18,6 +18,19 @@ pub fn mask_sensitive_text(text: &str) -> String {
         .join("\n")
 }
 
+/// 内置密钥保持旧遮罩；自定义敏感记录只遮命中区间，规则删除后退回旧遮罩。
+pub(crate) fn mask_with_rules(
+    text: &str,
+    rules: &crate::clipboard::rules::CompiledRules,
+) -> String {
+    if crate::clipboard::contains_secret(text) {
+        return mask_sensitive_text(text);
+    }
+    rules
+        .mask(text)
+        .unwrap_or_else(|| mask_sensitive_text(text))
+}
+
 /// 遮罩单行敏感文本；短文本全量替换，长文本保留前后 4 个字符。
 pub fn mask_sensitive_line(line: &str) -> String {
     const VISIBLE_EDGE_CHARS: usize = 4;
@@ -72,6 +85,7 @@ pub(crate) fn preview_text_source(item: &ClipboardItem) -> &str {
 ///
 /// 遮罩条件必须和 [`preview_text`] 一字不差：遮罩会把一整行缩成十几个字符，这里多遮一次，
 /// 面板就按一行开窗，把实际渲染出来的几十行内容截掉。
+#[cfg(test)]
 pub(crate) fn preview_text_rows(item: &ClipboardItem, redact_sensitive: bool) -> u32 {
     count_preview_text_rows(
         preview_text_source(item),
@@ -134,6 +148,26 @@ mod tests {
     use crate::presenter::tests::text_item;
 
     // 行数统计要和前端的软切规则一致，并且在面板撑满后停手。
+    #[test]
+    fn custom_masking_preserves_context_but_builtin_and_deleted_rules_use_legacy_mask() {
+        use crate::clipboard::rules::{tests::rule, CompiledRules, RuleAction};
+        let rules = CompiledRules::new(&[rule("[0-9]+", RuleAction::Sensitive)]);
+        assert_eq!(
+            mask_with_rules("订单123456789012已发出", &rules),
+            "订单123*****9012已发出"
+        );
+        let builtin = "sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890";
+        assert_eq!(
+            mask_with_rules(builtin, &rules),
+            mask_sensitive_text(builtin)
+        );
+        let plain = "订单123456789012已发出";
+        assert_eq!(
+            mask_with_rules(plain, &CompiledRules::default()),
+            mask_sensitive_text(plain)
+        );
+    }
+
     #[test]
     fn preview_text_rows_match_the_frontend_soft_wrap() {
         assert_eq!(count_preview_text_rows("", false), 0);

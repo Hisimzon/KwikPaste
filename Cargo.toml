@@ -5,7 +5,7 @@ exclude = ["src-tauri", "third_party"]
 resolver = "3"
 
 [workspace.package]
-version = "2.0.5"
+version = "2.0.7"
 edition = "2024"
 authors = ["LILTT"]
 license = "Apache-2.0"
@@ -55,6 +55,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # 平台层（kwikpaste-os 与 kwikpaste-app/src/platform）。托盘、热键与 1.x 的 Tauri 插件同一系 crate；
 # windows 与 GPUI 用同一个大版本，特性合并后不多编一份。
 
+arc-swap = "1"
 async-channel = "2"
 dispatch2 = "0.3"
 global-hotkey = "0.8"

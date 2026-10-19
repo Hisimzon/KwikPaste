@@ -13,7 +13,9 @@ use crate::clipboard::{
 use crate::db::models::{ClipboardItemQuery, ClipboardKind};
 use crate::db::overview::{ClearScope, ContentCategory};
 use crate::events::CoreEvent;
+use crate::presenter::ClipboardAction;
 use crate::root::Core;
+use crate::settings::CopySoundTone;
 use crate::testing::{block_on, sample_png, Fixture};
 
 const NO_RETRY: [Duration; 0] = [];
@@ -75,7 +77,10 @@ fn capture_records_source_app_plays_sound_and_dedups() {
         1
     );
     assert_eq!(fixture.platform.sounds(), 2);
-    assert_eq!(*fixture.platform.sound_volumes.lock().unwrap(), [100, 100]);
+    assert_eq!(
+        *fixture.platform.played_sounds.lock().unwrap(),
+        [(CopySoundTone::Classic, 100); 2]
+    );
 
     let upserts: Vec<bool> = fixture
         .take_events()
@@ -89,26 +94,32 @@ fn capture_records_source_app_plays_sound_and_dedups() {
 }
 
 #[test]
-fn capture_uses_current_volume_and_preview_passes_its_own_clamped_volume() {
+fn capture_uses_current_tone_and_volume_and_preview_passes_its_own() {
     let fixture = Fixture::new();
     let core = fixture.start();
     copy_in(&core, text("sound disabled"));
     assert_eq!(fixture.platform.sounds(), 0);
-    for volume in [80, 0, 255] {
+    for (tone, volume) in [("chirp", 80), ("classic", 0), ("tick", 255)] {
         block_on(core.update_settings(json!({"clipboard": {"feedback": {
-            "copySound": true, "copySoundVolume": volume
+            "copySound": true, "copySoundVolume": volume, "copySoundTone": tone
         }}})))
         .unwrap();
         copy_in(&core, text(&format!("volume {volume}")));
     }
-    core.play_copy_sound(25);
-    core.play_copy_sound(255);
+    core.play_copy_sound(CopySoundTone::Chime, 25);
+    core.play_copy_sound(CopySoundTone::Bubble, 255);
     block_on(core.update_settings(json!({"clipboard": {"feedback": {"copySound": false}}})))
         .unwrap();
     copy_in(&core, text("sound disabled again"));
     assert_eq!(
-        *fixture.platform.sound_volumes.lock().unwrap(),
-        [80, 0, 100, 25, 100]
+        *fixture.platform.played_sounds.lock().unwrap(),
+        [
+            (CopySoundTone::Chirp, 80),
+            (CopySoundTone::Classic, 0),
+            (CopySoundTone::Tick, 100),
+            (CopySoundTone::Chime, 25),
+            (CopySoundTone::Bubble, 100),
+        ]
     );
     assert_eq!(fixture.platform.sounds(), 5);
 }
@@ -323,6 +334,156 @@ fn copy_and_paste_follow_plain_text_settings_and_reuse() {
 
     assert!(block_on(core.copy_item(&id, false)).unwrap().hide_window);
     assert!(block_on(core.copy_item("missing", false)).is_err());
+}
+
+#[test]
+fn text_selection_joins_in_list_order_using_full_plain_text() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let mut ids = Vec::new();
+    let mut plain_texts = std::collections::HashMap::new();
+    for state in [
+        text("plain"),
+        text("https://example.com"),
+        text("test@example.com"),
+        text("#123456"),
+        text("C:\\fixture.txt"),
+        MemoryState {
+            text: Some("HTML plain text".repeat(100)),
+            html: Some("<b>HTML plain text</b>".repeat(100)),
+            ..Default::default()
+        },
+        MemoryState {
+            text: Some("RTF plain text".into()),
+            rtf: Some("{\\rtf1 RTF plain text}".into()),
+            ..Default::default()
+        },
+    ] {
+        let plain = state.text.clone().unwrap();
+        let id = copy_in(&core, state).unwrap();
+        plain_texts.insert(id.clone(), plain);
+        ids.push(id);
+    }
+    block_on(core.toggle_pinned(&ids[0])).unwrap();
+    block_on(core.update_settings(json!({"clipboard": {"content": {
+        "updateOnReuse": true, "copyThenHideWindow": true
+    }}})))
+    .unwrap();
+    block_on(core.hop({
+        let core = core.clone();
+        let id = ids[0].clone();
+        async move {
+            sqlx::query("UPDATE clipboard_items SET is_sensitive = 1 WHERE id = ?")
+                .bind(id)
+                .execute(&core.0.db.pool().await)
+                .await
+                .unwrap();
+            Ok(())
+        }
+    }))
+    .unwrap();
+    let query = ClipboardItemQuery {
+        limit: 1,
+        offset: 1,
+        ..Default::default()
+    };
+    let refs = block_on(core.list_item_refs(query.clone())).unwrap();
+    let expected = refs
+        .iter()
+        .map(|item| plain_texts[&item.id].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let reversed = refs.iter().rev().map(|item| item.id.clone()).collect();
+
+    let outcome = block_on(core.copy_text_selection(reversed, query))
+        .unwrap()
+        .unwrap();
+    assert!(outcome.hide_window);
+    assert_eq!(fixture.clipboard.snapshot(), text(&expected));
+    assert!(core
+        .writeback_guard()
+        .should_skip(&crate::db::items::content_hash(
+            ClipboardKind::Text,
+            &expected
+        )));
+    for id in ids {
+        assert_eq!(use_count(&core, &id), 2);
+    }
+}
+
+#[test]
+fn text_selection_does_not_write_when_any_item_is_non_text() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let first = copy_in(&core, text("first")).unwrap();
+    let second = copy_in(&core, text("second")).unwrap();
+    for state in [
+        MemoryState {
+            png: Some(sample_png(2, 2)),
+            ..Default::default()
+        },
+        MemoryState {
+            files: Some(vec!["C:/fixture.txt".into()]),
+            ..Default::default()
+        },
+    ] {
+        let other = copy_in(&core, state).unwrap();
+        fixture.clipboard.set_text("unchanged".into()).unwrap();
+        assert!(block_on(core.copy_text_selection(
+            vec![first.clone(), other.clone(), second.clone()],
+            ClipboardItemQuery::default(),
+        ))
+        .unwrap()
+        .is_none());
+        assert_eq!(fixture.clipboard.snapshot(), text("unchanged"));
+        assert_eq!(use_count(&core, &other), 1);
+    }
+}
+
+#[test]
+fn paste_image_as_file_uses_original_and_suppresses_writeback() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let png = sample_png(3, 3);
+    let image = copy_in(
+        &core,
+        MemoryState {
+            png: Some(png.clone()),
+            ..MemoryState::default()
+        },
+    )
+    .unwrap();
+    let source = block_on(core.prepare_image_save(&image)).unwrap().source;
+    block_on(core.update_settings(json!({"clipboard": {"content": {
+        "pasteFilesAsPath": true, "updateOnReuse": true
+    }}})))
+    .unwrap();
+
+    block_on(core.prepare_paste_image_as_file(&image)).unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot(),
+        MemoryState {
+            files: Some(vec![source.to_string_lossy().into_owned()]),
+            ..MemoryState::default()
+        }
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), png);
+    assert_eq!(use_count(&core, &image), 2);
+    assert!(copy_in(&core, fixture.clipboard.snapshot()).is_none());
+
+    let text_id = copy_in(&core, text("not an image")).unwrap();
+    for (id, message) in [
+        (&text_id, "selected item is not an image"),
+        (&image, "image file does not exist"),
+    ] {
+        if id == &image {
+            std::fs::remove_file(&source).unwrap();
+        }
+        let before = fixture.clipboard.snapshot();
+        let error = block_on(core.prepare_paste_image_as_file(id)).unwrap_err();
+        assert!(matches!(error, crate::AppError::Clipboard(ref value) if value == message));
+        assert_eq!(fixture.clipboard.snapshot(), before);
+    }
 }
 
 #[test]
@@ -842,6 +1003,7 @@ fn rich_text_edit_drops_formats_and_unchanged_save_is_a_noop() {
             )
         ));
         block_on(core.update_text_content(&id, before.search_text.clone().unwrap())).unwrap();
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().has_original);
         assert_eq!(
             serde_json::to_value(block_on(core.find_item(&id)).unwrap()).unwrap(),
             serde_json::to_value(Some(before)).unwrap()
@@ -856,6 +1018,88 @@ fn rich_text_edit_drops_formats_and_unchanged_save_is_a_noop() {
         assert_eq!(fixture.clipboard.snapshot(), text("  edited plain text  "));
         block_on(core.prepare_paste(&id, false)).unwrap();
         assert_eq!(fixture.clipboard.snapshot(), text("  edited plain text  "));
+    }
+}
+
+#[test]
+fn text_edits_restore_first_original_and_clear_snapshot() {
+    for state in [
+        text("https://example.com/originalneedle"),
+        MemoryState {
+            text: Some("originalneedle".into()),
+            html: Some("<b>originalneedle</b>".into()),
+            ..Default::default()
+        },
+        MemoryState {
+            text: Some("originalneedle".into()),
+            rtf: Some(r"{\rtf1 originalneedle}".into()),
+            ..Default::default()
+        },
+    ] {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let id = copy_in(&core, state).unwrap();
+        block_on(core.update_note(&id, Some("kept note".into()))).unwrap();
+        block_on(core.toggle_pinned(&id)).unwrap();
+        let before = block_on(core.find_item(&id)).unwrap().unwrap();
+        let metadata = edit_metadata(&core, &id);
+        let sync = sync_numbers(&core, &id);
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        fixture.take_events();
+
+        for edit in ["firsteditneedle", "secondeditneedle"] {
+            block_on(core.update_text_content(&id, edit.into())).unwrap();
+            assert!(block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        }
+        let refreshed = block_on(core.list_item(&id)).unwrap().unwrap();
+        let page = block_on(core.list_items(ClipboardItemQuery::default())).unwrap();
+        for view in [refreshed, page.list.into_iter().next().unwrap()] {
+            assert!(view.item.has_original);
+            assert!(view.item.content.is_empty());
+            assert!(view
+                .available_actions
+                .contains(&ClipboardAction::RestoreOriginal));
+        }
+        block_on(core.restore_original_content(&id)).unwrap();
+        assert_eq!(
+            serde_json::to_value(block_on(core.find_item(&id)).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        assert!(!block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        let restored = block_on(core.list_item(&id)).unwrap().unwrap();
+        assert!(!restored.item.has_original);
+        assert!(!restored
+            .available_actions
+            .contains(&ClipboardAction::RestoreOriginal));
+        assert_eq!(edit_metadata(&core, &id), metadata);
+        assert_eq!(sync_numbers(&core, &id), sync);
+        assert!(fixture.take_events().is_empty());
+        for (keyword, total) in [
+            ("originalneedle", 1),
+            ("firsteditneedle", 0),
+            ("secondeditneedle", 0),
+        ] {
+            assert_eq!(
+                block_on(core.list_items(ClipboardItemQuery {
+                    keyword: Some(keyword.into()),
+                    ..Default::default()
+                }))
+                .unwrap()
+                .total,
+                total
+            );
+        }
+        assert_eq!(
+            block_on(core.restore_original_content(&id))
+                .unwrap_err()
+                .to_string(),
+            "No original content to restore"
+        );
+        block_on(core.update_text_content(&id, "third edit".into())).unwrap();
+        assert!(block_on(core.find_item(&id)).unwrap().unwrap().has_original);
+        block_on(core.delete_item(&id)).unwrap();
+        assert!(block_on(core.find_item(&id)).unwrap().is_none());
+        block_on(core.shutdown()).unwrap();
     }
 }
 
@@ -941,4 +1185,17 @@ fn text_edit_allows_duplicate_hashes_and_capture_reuses_newest_created() {
             .total,
         2
     );
+    block_on(core.update_text_content(&second, "first unique".into())).unwrap();
+    block_on(core.restore_original_content(&first)).unwrap();
+    assert_eq!(use_count(&core, &first), 1);
+    assert_eq!(use_count(&core, &second), 2);
+    assert!(
+        !block_on(core.find_item(&first))
+            .unwrap()
+            .unwrap()
+            .has_original
+    );
+    assert_eq!(copy_in(&core, text("first unique")).unwrap(), second);
+    assert_eq!(use_count(&core, &first), 1);
+    assert_eq!(use_count(&core, &second), 3);
 }

@@ -1,9 +1,22 @@
 //! 复制成功提示音：内嵌 16-bit PCM WAV，按平方曲线调整音量。
 //!
-//! 播放在短命工作线程里完成：Windows 的同步 `PlaySoundW` 持有内存直到播放结束，
-//! macOS 的 `NSSound` 则持有到播放结束。调用方（包括偏好页试听）不等待音频设备。
+//! 每段 WAV 开头都有 200 ms 静音：输出设备省电休眠后要几百毫秒才醒，0.1 秒的提示音会被整段吞掉。
+//! Windows 用异步 `PlaySoundW`；macOS 在短命线程里持有 `NSSound` 到播放结束。
+//! 调用方（包括偏好页试听）不等待音频设备。
+
+use kwikpaste_core::settings::CopySoundTone;
 
 const COPY_SOUND: &[u8] = include_bytes!("../assets/sounds/copy.wav");
+
+fn tone_wav(tone: CopySoundTone) -> &'static [u8] {
+    match tone {
+        CopySoundTone::Classic => COPY_SOUND,
+        CopySoundTone::Chirp => include_bytes!("../assets/sounds/chirp.wav"),
+        CopySoundTone::Bubble => include_bytes!("../assets/sounds/bubble.wav"),
+        CopySoundTone::Chime => include_bytes!("../assets/sounds/chime.wav"),
+        CopySoundTone::Tick => include_bytes!("../assets/sounds/tick.wav"),
+    }
+}
 
 /// 百分比转换为感知音量增益；手改配置超出上限时按满音量处理。
 fn perceptual_gain(percent: u8) -> f32 {
@@ -108,53 +121,71 @@ fn scale_pcm_wav(bytes: &[u8], percent: u8) -> Result<std::borrow::Cow<'_, [u8]>
     Ok(std::borrow::Cow::Owned(scaled))
 }
 
-/// 异步播放一次复制提示音；静音不创建线程，失败只记日志。
+/// 异步播放一次复制提示音；静音直接返回，失败只记日志。
+///
+/// `SND_ASYNC` 播放期间系统一直读这段内存，所以缩放后的副本存在静态里，
+/// 换音色或音量时先停掉正在播的声音再释放旧副本。不加 `SND_NOSTOP`：新的播放替换上一段声音。
 #[cfg(target_os = "windows")]
-pub fn play_copy(volume_percent: u8) {
-    use windows::Win32::Media::Audio::{PlaySoundW, SND_MEMORY, SND_NODEFAULT, SND_SYNC};
+pub fn play_copy(tone: CopySoundTone, volume_percent: u8) {
+    use std::sync::Mutex;
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
     use windows::core::PCWSTR;
 
+    static SCALED: Mutex<Option<(CopySoundTone, u8, Vec<u8>)>> = Mutex::new(None);
+
+    let volume_percent = volume_percent.min(100);
     if volume_percent == 0 {
         return;
     }
-    let spawned = std::thread::Builder::new()
-        .name("copy-sound".to_owned())
-        .spawn(move || {
-            let bytes = match scale_pcm_wav(COPY_SOUND, volume_percent) {
-                Ok(bytes) => bytes,
+    let mut scaled = SCALED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let bytes: &[u8] = if volume_percent == 100 {
+        tone_wav(tone)
+    } else {
+        let key = Some((tone, volume_percent));
+        if scaled.as_ref().map(|(tone, percent, _)| (*tone, *percent)) != key {
+            let next = match scale_pcm_wav(tone_wav(tone), volume_percent) {
+                Ok(bytes) => bytes.into_owned(),
                 Err(err) => {
                     log::warn!("the copy sound data is invalid: {err}");
                     return;
                 }
             };
-            // 同步调用返回前，工作线程一直持有 bytes。不能加 SND_ASYNC，否则副本会提前释放。
-            // 不加 SND_NOSTOP：新的播放替换同进程里的上一段声音，而不是排队或叠加。
-            let played = unsafe {
-                PlaySoundW(
-                    PCWSTR(bytes.as_ptr().cast()),
-                    None,
-                    SND_MEMORY | SND_SYNC | SND_NODEFAULT,
-                )
-            };
-            if !played.as_bool() {
-                log::warn!("the copy sound could not be played");
+            // 传空指针会同步停掉当前声音，之后旧副本才能释放。
+            unsafe {
+                let _ = PlaySoundW(PCWSTR::null(), None, SND_NODEFAULT);
             }
-        });
-    if let Err(err) = spawned {
-        log::warn!("the copy sound thread could not start: {err}");
+            *scaled = Some((tone, volume_percent, next));
+        }
+        let Some((_, _, bytes)) = scaled.as_ref() else {
+            return;
+        };
+        bytes
+    };
+    let played = unsafe {
+        PlaySoundW(
+            PCWSTR(bytes.as_ptr().cast()),
+            None,
+            SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+        )
+    };
+    if !played.as_bool() {
+        log::warn!("the copy sound could not be played");
     }
 }
 
 /// 异步播放一次复制提示音；静音不创建线程，失败只记日志。
 #[cfg(target_os = "macos")]
-pub fn play_copy(volume_percent: u8) {
+pub fn play_copy(tone: CopySoundTone, volume_percent: u8) {
     if volume_percent == 0 {
         return;
     }
     let spawned = std::thread::Builder::new()
         .name("copy-sound".to_owned())
         .spawn(move || {
-            if let Err(err) = mac::play_until_done(COPY_SOUND, perceptual_gain(volume_percent)) {
+            if let Err(err) = mac::play_until_done(tone_wav(tone), perceptual_gain(volume_percent))
+            {
                 log::warn!("the copy sound could not be played: {err}");
             }
         });
@@ -242,13 +273,24 @@ mod tests {
         assert!(silence[data].iter().all(|byte| *byte == 0));
     }
 
+    const TONES: [CopySoundTone; 5] = [
+        CopySoundTone::Classic,
+        CopySoundTone::Chirp,
+        CopySoundTone::Bubble,
+        CopySoundTone::Chime,
+        CopySoundTone::Tick,
+    ];
+
     #[test]
-    fn full_volume_borrows_original_including_embedded_wave() {
-        for percent in [100, 255] {
-            let scaled = scale_pcm_wav(COPY_SOUND, percent).unwrap();
+    fn full_volume_borrows_original_including_embedded_waves() {
+        for (tone, percent) in TONES
+            .into_iter()
+            .flat_map(|tone| [(tone, 100), (tone, 255)])
+        {
+            let wav = tone_wav(tone);
+            let scaled = scale_pcm_wav(wav, percent).unwrap();
             assert!(matches!(scaled, Cow::Borrowed(_)));
-            assert_eq!(scaled.as_ptr(), COPY_SOUND.as_ptr());
-            assert_eq!(scaled.as_ref(), COPY_SOUND);
+            assert_eq!(scaled.as_ptr(), wav.as_ptr());
         }
     }
 
@@ -299,9 +341,11 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn nssound_decodes_and_sets_volume_without_playing() {
-        let sound = mac::decode(COPY_SOUND).expect("NSSound decodes copy.wav");
-        sound.setVolume(perceptual_gain(50));
-        assert_eq!(sound.volume(), 0.25);
-        assert!(sound.duration() > 0.0);
+        for tone in TONES {
+            let sound = mac::decode(tone_wav(tone)).expect("NSSound decodes every tone");
+            sound.setVolume(perceptual_gain(50));
+            assert_eq!(sound.volume(), 0.25);
+            assert!(sound.duration() > 0.0);
+        }
     }
 }

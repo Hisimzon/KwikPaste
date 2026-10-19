@@ -1,5 +1,6 @@
 //! 预览窗（1.x `pages/Preview` 与 `window/preview.rs`）：卡片旁边的一个独立的不激活窗口，头部是标题、
-//! 说明、文本方式切换和类型标签，内容是大图、长文本（纯文本或选词）、HTML / RTF 的纯文本、文件列表。
+//! 说明、文本方式切换和类型标签，内容是大图、长文本（纯文本或选词）、HTML 的结构化文档、RTF 的纯文本、
+//! 文件列表。
 //!
 //! 窗口启动后按需建一次、永不销毁；显示、隐藏、定位只走原生调用（Windows 与主面板一样是
 //! `WS_EX_NOACTIVATE` 的 topmost 工具窗口），点它、滚它、选词都不抢前台。原生调用都放在任务里、
@@ -9,15 +10,17 @@ use std::{ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Div, ElementId, Entity,
-    EventEmitter, FontWeight, HighlightStyle, ImageSource, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Render, ScrollHandle,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledText,
-    UnderlineStyle, UniformListScrollHandle, Window, WindowBounds, WindowKind, WindowOptions, div,
-    img, point, prelude::FluentBuilder as _, px, size, uniform_list,
+    EventEmitter, FontStyle, FontWeight, HighlightStyle, ImageSource, InteractiveElement as _,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Render,
+    ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, StrikethroughStyle,
+    Styled as _, StyledText, UnderlineStyle, UniformListScrollHandle, Window, WindowBounds,
+    WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
+    uniform_list,
 };
 use kwikpaste_core::{
     clipboard::SnippetKind,
     db::models::{ClipboardKind, ClipboardSubKind},
+    presenter::{PreviewBlock, PreviewDocument, PreviewInline},
 };
 use kwikpaste_ui::{
     Button, Icon, IconName, KpStyled as _,
@@ -59,6 +62,10 @@ pub enum PreviewEvent {
     Snippet(Arc<str>),
     /// 点了链接、邮箱记录的正文：打开链接或写邮件。
     Open(OpenTarget),
+    /// 点了文件记录里的一行：在文件管理器中定位这个文件。
+    Reveal(Arc<str>),
+    /// 点了图片：在大图预览窗里看。
+    ViewImage,
 }
 
 /// 有识别文字的图片记录正在看的那一面。
@@ -392,6 +399,8 @@ impl PreviewPanel {
                     Self::empty("preview:empty.text", cx)
                 } else if self.words_view() {
                     self.words(&preview, cx)
+                } else if let Some(document) = &payload.document {
+                    self.document(&preview, document, cx)
                 } else {
                     self.plain_text(&preview, cx)
                 }
@@ -431,8 +440,11 @@ impl PreviewPanel {
             .justify_center()
             .p(space((16.) / 4.))
             .child(match state {
-                // 同列表缩略图：圆角，叠一圈不占位置的细描边。
+                // 同列表缩略图：圆角，叠一圈不占位置的细描边。点图片看大图。
                 ImageState::Ready(image) => div()
+                    .id("preview-image")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(PreviewEvent::ViewImage)))
                     .relative()
                     .flex_none()
                     .w(px(width))
@@ -554,6 +566,44 @@ impl PreviewPanel {
             .into_any_element()
     }
 
+    /// HTML 记录的结构化预览（段落、标题、列表、表格、引用、代码块），下方仍是快捷信息区。
+    fn document(
+        &self,
+        preview: &Preview,
+        document: &PreviewDocument,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id("preview-document")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(space(2.))
+                            .px(space((TEXT_PADDING_X as f32) / 4.))
+                            .py(space((16.) / 4.))
+                            .kp_text(TextSize::Sm)
+                            .children(
+                                document
+                                    .blocks
+                                    .iter()
+                                    .map(|block| document_block(block, cx)),
+                            ),
+                    ),
+            )
+            .children(self.snippets(preview, cx))
+            .into_any_element()
+    }
+
     /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段。
     fn snippets(&self, preview: &Preview, cx: &mut Context<Self>) -> Option<AnyElement> {
         let snippets = &preview.payload.snippets;
@@ -596,10 +646,13 @@ impl PreviewPanel {
                                 )))
                             })
                             .child(
-                                div()
-                                    .flex_none()
-                                    .text_color(tokens.text.secondary)
-                                    .child(t(snippet_label(snippet.kind))),
+                                div().flex_none().text_color(tokens.text.secondary).child(
+                                    snippet
+                                        .label
+                                        .clone()
+                                        .map(SharedString::from)
+                                        .unwrap_or_else(|| t(snippet_label(snippet.kind))),
+                                ),
                             )
                             .child(
                                 div()
@@ -824,8 +877,15 @@ impl PreviewPanel {
                     t("preview:file.missingPath")
                 };
 
+                let target: Arc<str> = file.path.as_str().into();
+                let reveal = file.exists.then(|| {
+                    let target = target.clone();
+                    cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::Reveal(target.clone())))
+                });
+
                 div().px(space((8.) / 4.)).child(
                     div()
+                        .id(ElementId::Name(target.into()))
                         .flex()
                         .min_h(space((FILE_ROW_HEIGHT as f32) / 4.))
                         .items_center()
@@ -835,6 +895,11 @@ impl PreviewPanel {
                         .py(space((6.) / 4.))
                         .when(!file.exists, |row| {
                             row.opacity(theme::components(cx).preview_file.missing_opacity)
+                        })
+                        .when_some(reveal, |row, reveal| {
+                            row.cursor_pointer()
+                                .hover(|style| style.bg(tokens.fill.subtle))
+                                .on_click(reveal)
                         })
                         .child(match (file.icon_path.is_some(), icon_state) {
                             (true, Some(ImageState::Ready(image))) => {
@@ -960,12 +1025,132 @@ fn segmented(segments: impl IntoIterator<Item = Stateful<Div>>, cx: &App) -> Any
 /// 快捷信息类型名的文案 key。
 pub fn snippet_label(kind: SnippetKind) -> &'static str {
     match kind {
+        SnippetKind::Custom => "preview:snippets.kinds.custom",
         SnippetKind::Number => "preview:snippets.kinds.number",
         SnippetKind::Phone => "preview:snippets.kinds.phone",
         SnippetKind::Email => "preview:snippets.kinds.email",
         SnippetKind::Time => "preview:snippets.kinds.time",
         SnippetKind::Link => "preview:snippets.kinds.link",
     }
+}
+
+/// 预览文档里的一块；列表项和引用里的块递归渲染。
+fn document_block(block: &PreviewBlock, cx: &App) -> AnyElement {
+    let tokens = theme::semantic(cx);
+    let blocks = |blocks: &[PreviewBlock]| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(space(1.))
+            .children(blocks.iter().map(|block| document_block(block, cx)))
+    };
+
+    match block {
+        PreviewBlock::Paragraph(runs) => div().child(document_runs(runs, cx)).into_any_element(),
+        PreviewBlock::Heading { level, runs } => div()
+            .kp_text(if *level == 1 {
+                TextSize::Lg
+            } else {
+                TextSize::Base
+            })
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(document_runs(runs, cx))
+            .into_any_element(),
+        PreviewBlock::List { ordered, items } => div()
+            .flex()
+            .flex_col()
+            .gap(space(1.))
+            .children(items.iter().enumerate().map(|(index, item)| {
+                let marker = if *ordered {
+                    format!("{}.", index + 1)
+                } else {
+                    "•".to_owned()
+                };
+                div()
+                    .flex()
+                    .gap(space(1.5))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(tokens.text.secondary)
+                            .child(marker),
+                    )
+                    .child(blocks(item).flex_1().min_w_0())
+            }))
+            .into_any_element(),
+        PreviewBlock::Table { rows } => div()
+            .flex()
+            .flex_col()
+            .rounded(radius::SM)
+            .border_1()
+            .border_color(tokens.border.divider)
+            .children(rows.iter().enumerate().map(|(index, row)| {
+                div()
+                    .flex()
+                    .when(index > 0, |row| {
+                        row.border_t_1().border_color(tokens.border.divider)
+                    })
+                    .children(row.iter().enumerate().map(|(column, cell)| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .px(space(2.))
+                            .py(space(1.))
+                            .when(column > 0, |cell| {
+                                cell.border_l_1().border_color(tokens.border.divider)
+                            })
+                            .child(document_runs(cell, cx))
+                    }))
+            }))
+            .into_any_element(),
+        PreviewBlock::Blockquote(quoted) => blocks(quoted)
+            .pl(space(3.))
+            .border_l_2()
+            .border_color(tokens.border.divider)
+            .text_color(tokens.text.secondary)
+            .into_any_element(),
+        PreviewBlock::CodeBlock(code) => div()
+            .p(space(2.))
+            .rounded(radius::SM)
+            .bg(tokens.fill.subtle)
+            .kp_mono()
+            .child(SharedString::from(code.clone()))
+            .into_any_element(),
+    }
+}
+
+/// 一段行内文字，样式按区间叠加；链接只上色加下划线，不可点、不加载。
+fn document_runs(runs: &[PreviewInline], cx: &App) -> StyledText {
+    let tokens = theme::semantic(cx);
+    let mut text = String::new();
+    let mut highlights = Vec::new();
+
+    for run in runs {
+        let start = text.len();
+        text.push_str(&run.text);
+        let style = &run.style;
+        let link = style.href.is_some();
+        let highlight = HighlightStyle {
+            font_weight: style.bold.then_some(FontWeight::BOLD),
+            font_style: style.italic.then_some(FontStyle::Italic),
+            underline: (style.underline || link).then(|| UnderlineStyle {
+                thickness: px(1.),
+                ..UnderlineStyle::default()
+            }),
+            strikethrough: style.strikethrough.then(|| StrikethroughStyle {
+                thickness: px(1.),
+                ..StrikethroughStyle::default()
+            }),
+            color: link.then_some(tokens.text.link),
+            background_color: style.code.then_some(tokens.fill.subtle),
+            ..HighlightStyle::default()
+        };
+        if highlight != HighlightStyle::default() {
+            highlights.push((start..text.len(), highlight));
+        }
+    }
+
+    StyledText::new(SharedString::from(text)).with_highlights(highlights)
 }
 
 fn type_key(kind: ClipboardKind, sub_kind: Option<ClipboardSubKind>) -> &'static str {

@@ -144,6 +144,38 @@
     "words": [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6]]
   },
   "text-html": {
+    "document": {
+      "blocks": [
+        {
+          "content": [
+            {
+              "style": {
+                "bold": true,
+                "code": false,
+                "href": null,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false
+              },
+              "text": "Hello"
+            },
+            {
+              "style": {
+                "bold": false,
+                "code": false,
+                "href": null,
+                "italic": false,
+                "strikethrough": false,
+                "underline": false
+              },
+              "text": " World"
+            }
+          ],
+          "kind": "paragraph"
+        }
+      ],
+      "truncated": false
+    },
     "files": [],
     "id": "text-html",
     "imageExists": false,

@@ -1,6 +1,7 @@
 //! 单条记录的操作：写回剪贴板（复制、粘贴前准备、片段、快速粘贴）、手动读取、收藏置顶备注分组、
 //! 删除与清空、链接与文件定位、图片另存。
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -17,8 +18,8 @@ use crate::clipboard::{
 use crate::db::items::{
     clear_items, delete_item, delete_items, find_item_by_id, find_item_id_at,
     increment_item_use_count, list_item_refs, mark_item_favorite, reorder_item,
-    toggle_item_favorite, toggle_item_pinned, touch_item_last_used, update_item_group,
-    update_item_note, update_item_text_content, ReorderAnchor, ReorderSection,
+    restore_item_original_content, toggle_item_favorite, toggle_item_pinned, touch_item_last_used,
+    update_item_group, update_item_note, update_item_text_content, ReorderAnchor, ReorderSection,
 };
 use crate::db::models::{
     ClipboardItem, ClipboardItemQuery, ClipboardItemRef, ClipboardKind, ClipboardSubKind,
@@ -225,6 +226,27 @@ fn write_fragment(core: &CoreInner, text: &str) -> Result<()> {
     clipboard::write_text_fragment(&*backend, &core.guard, text)
 }
 
+/// 复制图片里识别出的文字：这是新内容，不登记回环，由监听当作一次普通复制记成文字记录；原图不算复用。
+fn write_recognized_text(core: &CoreInner, text: &str) -> Result<()> {
+    core.clipboard()?.set_text(text.to_owned())
+}
+
+/// 图片另存与文件粘贴共用的原图校验和路径解析。
+fn original_image_path(core: &CoreInner, item: &ClipboardItem) -> Result<PathBuf> {
+    if item.kind != ClipboardKind::Image {
+        return Err(AppError::Clipboard(
+            "selected item is not an image".to_owned(),
+        ));
+    }
+    validate_image_file_name(&item.content)?;
+
+    let source = core.images.origin_path(&item.content);
+    if !source.is_file() {
+        return Err(AppError::Clipboard("image file does not exist".to_owned()));
+    }
+    Ok(source)
+}
+
 /// 按设置决定是否把复制 / 粘贴历史记录计为一次复用：计入时累加次数、刷新 `updated_at` 并通知宿主；
 /// 不计入时也记下最后使用时间，自动清理按它判断。
 pub(crate) async fn mark_item_reused_if_enabled(
@@ -258,7 +280,7 @@ async fn load_fragment_text(
 ) -> Result<(ClipboardKind, String)> {
     let item = find_required(pool, id).await?;
     let text = match fragment {
-        ClipboardFragment::ImageWords { indices }
+        ClipboardFragment::ImageWords { .. } | ClipboardFragment::ImageTextRange { .. }
             if item.kind == ClipboardKind::Image && core.extensions.resolve("ocr").is_some() =>
         {
             let recognized: Option<String> = sqlx::query_scalar(
@@ -268,7 +290,16 @@ async fn load_fragment_text(
             .fetch_optional(pool)
             .await
             .map_err(anyhow::Error::from)?;
-            recognized.and_then(|text| select_words(&text, indices))
+            recognized.and_then(|text| match fragment {
+                ClipboardFragment::ImageWords { indices } => select_words(&text, indices),
+                ClipboardFragment::ImageTextRange { start, end } => {
+                    if start >= end || *end > text.chars().count() {
+                        return None;
+                    }
+                    Some(text.chars().skip(*start).take(end - start).collect())
+                }
+                _ => None,
+            })
         }
         ClipboardFragment::Snippet { .. } | ClipboardFragment::Words { .. }
             if item.kind == ClipboardKind::Text =>
@@ -285,6 +316,52 @@ async fn load_fragment_text(
 }
 
 impl Core {
+    /// 按当前列表顺序合并至少两条文本记录，一次写回纯文本并逐条记录复用。
+    /// `ids` 的传入顺序无关；`query` 必须与列表一致，分页参数不影响合并。
+    /// 不足两条或包含图片 / 文件时不写剪贴板，返回 `None`，调用方继续原来的单条操作。
+    pub async fn copy_text_selection(
+        &self,
+        ids: Vec<String>,
+        mut query: ClipboardItemQuery,
+    ) -> Result<Option<CopyOutcome>> {
+        let core = self.clone();
+        self.hop(async move {
+            let ids: HashSet<_> = ids.into_iter().collect();
+            if ids.len() < 2 {
+                return Ok(None);
+            }
+
+            let pool = core.0.db.pool().await;
+            query.ocr_enabled = core.ocr_enabled();
+            let refs = list_item_refs(&pool, &query).await?;
+            let mut items = Vec::new();
+            for item_ref in refs.into_iter().filter(|item| ids.contains(&item.id)) {
+                let item = find_required(&pool, &item_ref.id).await?;
+                if item.kind != ClipboardKind::Text {
+                    return Ok(None);
+                }
+                items.push(item);
+            }
+            if items.len() < 2 {
+                return Ok(None);
+            }
+
+            let text = items
+                .iter()
+                .map(clipboard::fragment_source)
+                .collect::<Vec<_>>()
+                .join("\n");
+            write_fragment(&core.0, &text)?;
+            for item in items {
+                mark_item_reused_if_enabled(&core.0, &pool, &item.id, item.kind).await?;
+            }
+            Ok(Some(CopyOutcome {
+                hide_window: core.settings().clipboard.content.copy_then_hide_window,
+            }))
+        })
+        .await
+    }
+
     /// 把记录写回剪贴板（不粘贴）。`plain = true` 强制纯文本；否则文本记录按「复制时去除格式」设置。
     pub async fn copy_item(&self, id: &str, plain: bool) -> Result<CopyOutcome> {
         let core = self.clone();
@@ -325,8 +402,7 @@ impl Core {
                 .await?
                 .filter(|text| !text.is_empty())
                 .ok_or_else(|| AppError::Clipboard("no recognized image text".into()))?;
-            write_fragment(&core.0, &text)?;
-            mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await?;
+            write_recognized_text(&core.0, &text)?;
             Ok(CopyOutcome {
                 hide_window: settings.content.copy_then_hide_window,
             })
@@ -351,6 +427,29 @@ impl Core {
             );
 
             write_item(&core.0, &item, write_plain)?;
+            mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await
+        })
+        .await
+    }
+
+    /// 把已存原图作为文件列表写回并记一次使用；宿主随后走普通粘贴的隐藏与按键注入流程。
+    pub async fn prepare_paste_image_as_file(&self, id: &str) -> Result<()> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            let item = find_required(&pool, &id).await?;
+            let path = original_image_path(&core.0, &item)?
+                .to_string_lossy()
+                .into_owned();
+
+            {
+                let backend = core.0.clipboard()?;
+                core.0
+                    .guard
+                    .suppress(crate::db::items::content_hash(ClipboardKind::Files, &path));
+                backend.set_files(vec![path])?;
+            }
             mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await
         })
         .await
@@ -400,8 +499,12 @@ impl Core {
             let pool = core.0.db.pool().await;
             let (kind, text) = load_fragment_text(&core.0, &pool, &id, &fragment).await?;
 
-            write_fragment(&core.0, &text)?;
-            mark_item_reused_if_enabled(&core.0, &pool, &id, kind).await?;
+            if kind == ClipboardKind::Image {
+                write_recognized_text(&core.0, &text)?;
+            } else {
+                write_fragment(&core.0, &text)?;
+                mark_item_reused_if_enabled(&core.0, &pool, &id, kind).await?;
+            }
             Ok(CopyOutcome {
                 hide_window: core
                     .0
@@ -514,6 +617,7 @@ impl Core {
                         &settings.clipboard.capture,
                         &settings.clipboard.sensitive,
                         settings.clipboard.content.copy_plain,
+                        settings.clipboard.compiled_rules(),
                     )?,
                     None => None,
                 }
@@ -594,7 +698,7 @@ impl Core {
         .await
     }
 
-    /// 编辑文本记录：按采集规则重建内容字段，保留元数据，不发布同步或复用事件。
+    /// 编辑文本记录：保留首次原文，按采集规则重建内容字段，不发布同步或复用事件。
     pub async fn update_text_content(&self, id: &str, content: String) -> Result<()> {
         let core = self.clone();
         let id = id.to_owned();
@@ -628,6 +732,14 @@ impl Core {
             update_item_text_content(&pool, &item).await
         })
         .await
+    }
+
+    /// 恢复首次编辑前的原文并清除快照；保留元数据，不发事件，界面自行刷新记录。
+    pub async fn restore_original_content(&self, id: &str) -> Result<()> {
+        let core = self.clone();
+        let id = id.to_owned();
+        self.hop(async move { restore_item_original_content(&core.0.db.pool().await, &id).await })
+            .await
     }
 
     /// 把记录移到自定义分组；分组不存在时报错。
@@ -768,17 +880,7 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let item = find_required(&core.0.db.pool().await, &id).await?;
-            if item.kind != ClipboardKind::Image {
-                return Err(AppError::Clipboard(
-                    "selected item is not an image".to_owned(),
-                ));
-            }
-            validate_image_file_name(&item.content)?;
-
-            let source = core.0.images.origin_path(&item.content);
-            if !source.is_file() {
-                return Err(AppError::Clipboard("image file does not exist".to_owned()));
-            }
+            let source = original_image_path(&core.0, &item)?;
             Ok(ImageSave {
                 source,
                 default_file_name: default_saved_image_file_name(&item.created_at, &Local),

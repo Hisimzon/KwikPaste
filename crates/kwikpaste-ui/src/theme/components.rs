@@ -40,11 +40,17 @@ pub struct OnboardingTokens {
     pub done_background: Hsla,
 }
 
-/// 偏好设置导航的常态、悬停和选中状态。
+/// 偏好设置导航的常态、悬停和选中状态，禁用的分段控件，以及材质磁贴示意图的着色。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PreferencesTokens {
     pub nav_selected: Hsla,
     pub nav_hover: Hsla,
+    pub choice_disabled_opacity: f32,
+    pub material_wallpaper: Hsla,
+    pub material_blob: Hsla,
+    pub material_mica_backdrop: Hsla,
+    pub material_mica_panel: Hsla,
+    pub material_frosted_panel: Hsla,
 }
 
 /// 输入和选择器的表面、边框、聚焦边框及占位符颜色。
@@ -114,6 +120,7 @@ pub struct KindTagTokens {
 /// 快捷信息按类型的颜色：卡片和预览里的圆点、预览正文里的淡色底。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SnippetTokens {
+    pub custom: KindTag,
     pub number: KindTag,
     pub phone: KindTag,
     pub email: KindTag,
@@ -176,7 +183,31 @@ pub struct ScrollbarTokens {
     pub thumb_hover: Hsla,
 }
 
+/// 自绘标题栏的窗口按钮：普通按钮悬停、按下是中性填充，关闭按钮悬停变红（Windows 惯例）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CaptionButtonTokens {
+    pub foreground: Hsla,
+    pub inactive_foreground: Hsla,
+    pub hover: Hsla,
+    pub pressed: Hsla,
+    pub close_hover: Hsla,
+    pub close_pressed: Hsla,
+    pub close_foreground: Hsla,
+}
+
+/// 大图预览文字层：标出的文字区域和选中的文字，叠在图片上所以是半透明的。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageTextTokens {
+    pub region: Hsla,
+    pub selection: Hsla,
+}
+
 /// 淡色底跟着文字色走，材质窗口上也不会变成一块实色。
+/// 材质示意图的壁纸：暗色的色阶带透明度，先压到窗口底上，壁纸才是不透明的。
+fn material_wallpaper(s: &super::semantic::SemanticTokens) -> Hsla {
+    s.surface.window.blend(s.hues.blue_6.opacity(0.35))
+}
+
 fn kind_tag(foreground: Hsla) -> KindTag {
     KindTag {
         background: foreground.opacity(0.12),
@@ -229,6 +260,8 @@ pub struct ComponentTokens {
     pub dialog: DialogTokens,
     pub switch: SwitchTokens,
     pub scrollbar: ScrollbarTokens,
+    pub caption_button: CaptionButtonTokens,
+    pub image_text: ImageTextTokens,
 }
 
 impl ComponentTokens {
@@ -252,6 +285,12 @@ impl ComponentTokens {
             preferences: PreferencesTokens {
                 nav_selected: s.fill.default,
                 nav_hover: s.fill.subtle,
+                choice_disabled_opacity: 0.5,
+                material_wallpaper: material_wallpaper(s),
+                material_blob: s.hues.orange_6,
+                material_mica_backdrop: material_wallpaper(s).blend(s.hues.orange_6.opacity(0.2)),
+                material_mica_panel: s.surface.panel.opacity(0.55),
+                material_frosted_panel: s.surface.panel.opacity(0.45),
             },
             input: input(s),
             group_chip: GroupChipTokens {
@@ -310,6 +349,7 @@ impl ComponentTokens {
             },
             // 链接、邮箱与类型标签同色；手机号、时间借用路径的绿和颜色的橙，与官网一致。
             snippet: SnippetTokens {
+                custom: kind_tag(s.accent.solid),
                 number: kind_tag(s.hues.magenta_6),
                 phone: kind_tag(s.kinds.path),
                 email: kind_tag(s.kinds.email),
@@ -352,6 +392,19 @@ impl ComponentTokens {
             scrollbar: ScrollbarTokens {
                 thumb: s.text.faint,
                 thumb_hover: s.text.muted,
+            },
+            caption_button: CaptionButtonTokens {
+                foreground: s.text.primary,
+                inactive_foreground: s.text.muted,
+                hover: s.fill.default,
+                pressed: s.fill.strong,
+                close_hover: s.status.danger.solid,
+                close_pressed: s.status.danger.active,
+                close_foreground: s.white,
+            },
+            image_text: ImageTextTokens {
+                region: s.accent.solid.opacity(0.16),
+                selection: s.accent.solid.opacity(0.38),
             },
         }
     }

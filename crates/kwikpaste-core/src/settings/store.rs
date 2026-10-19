@@ -284,7 +284,11 @@ pub(crate) fn read_replacement(path: &Path) -> Result<Settings> {
 fn validate_settings(settings: &Settings) -> Result<()> {
     validate_window_open_group(&settings.clipboard.window.select_group_on_open)?;
     validate_retention_rules(&settings.clipboard.history.rules)?;
+    crate::clipboard::rules::validate_rules(&settings.clipboard.custom_rules).map_err(|error| {
+        AppError::Other(anyhow::anyhow!(error.message(settings.appearance.language)))
+    })?;
     validate_lan_sync(&settings.sync.lan)?;
+    super::panel::validate_panel_shortcuts(&settings.shortcuts)?;
 
     let mut shortcuts = std::collections::HashSet::new();
     for value in [
@@ -372,22 +376,25 @@ fn normalize_shortcut_value(value: &str) -> String {
     keys.join("+")
 }
 
+/// JSON merge-patch：对象递归合并，null 删除成员，数组与其它值整体替换。
 fn deep_merge(base: &mut serde_json::Value, patch: serde_json::Value) {
-    match (base, patch) {
-        (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
-            for (k, v) in patch_map {
-                match base_map.get_mut(&k) {
-                    Some(existing) if existing.is_object() && v.is_object() => {
-                        deep_merge(existing, v);
-                    }
-                    _ => {
-                        base_map.insert(k, v);
-                    }
-                }
+    let serde_json::Value::Object(patch_map) = patch else {
+        *base = patch;
+        return;
+    };
+    if !base.is_object() {
+        *base = serde_json::json!({});
+    }
+    if let serde_json::Value::Object(base_map) = base {
+        for (key, value) in patch_map {
+            if value.is_null() {
+                base_map.remove(&key);
+            } else {
+                deep_merge(
+                    base_map.entry(key).or_insert(serde_json::Value::Null),
+                    value,
+                );
             }
-        }
-        (slot, patch) => {
-            *slot = patch;
         }
     }
 }
@@ -395,6 +402,71 @@ fn deep_merge(base: &mut serde_json::Value, patch: serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_patch_resets_one_panel_override_without_touching_others() {
+        use super::super::{effective_panel_keys, PanelAction};
+        let mut base = serde_json::json!({"shortcuts":{"panel":{
+            "favoriteSelected":"secondary-b", "copySelected":""
+        }}});
+        deep_merge(
+            &mut base,
+            serde_json::json!({"shortcuts":{"panel":{
+                "favoriteSelected":null, "unknown":null
+            }}}),
+        );
+        assert_eq!(
+            base,
+            serde_json::json!({"shortcuts":{"panel":{"copySelected":""}}})
+        );
+        let mut settings: Settings = serde_json::from_value(base).unwrap();
+        assert_eq!(
+            effective_panel_keys(&settings.shortcuts, PanelAction::FavoriteSelected),
+            ["secondary-d"]
+        );
+        assert!(effective_panel_keys(&settings.shortcuts, PanelAction::CopySelected).is_empty());
+        settings.shortcuts.open_clipboard = "Control+D".into();
+        assert!(validate_settings(&settings).is_ok());
+        settings
+            .shortcuts
+            .panel
+            .insert("favoriteSelected".into(), "secondary-t".into());
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn custom_rule_patch_rejection_keeps_settings_and_disk_unchanged() -> anyhow::Result<()> {
+        use crate::{
+            clipboard::rules::{tests::rule, RuleAction, RuleError},
+            testing::{block_on, Fixture},
+        };
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let path = fixture.paths.config_dir()?.join("settings.json");
+        for (tag, language) in [("zh-CN", Language::ZhCN), ("en-US", Language::EnUS)] {
+            block_on(core.update_settings(serde_json::json!({"appearance":{"language":tag}})))?;
+            let before = core.settings();
+            let bytes = std::fs::read(&path)?;
+            for (pattern, error) in [
+                ("[".to_owned(), RuleError::Invalid),
+                ("a*".to_owned(), RuleError::Empty),
+                ("a".repeat(501), RuleError::TooLong),
+            ] {
+                let value = rule(&pattern, RuleAction::Ignore);
+                let result = block_on(
+                    core.update_settings(serde_json::json!({"clipboard":{"customRules":[value]}})),
+                );
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains(error.message(language)));
+                assert_eq!(core.settings(), before);
+                assert_eq!(std::fs::read(&path)?, bytes);
+            }
+        }
+        block_on(core.shutdown())?;
+        Ok(())
+    }
 
     #[test]
     fn old_settings_without_extensions_load_with_additive_defaults() -> anyhow::Result<()> {

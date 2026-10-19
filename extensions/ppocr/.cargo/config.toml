@@ -1,0 +1,12 @@
+[build]
+target-dir = "target"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+ORT_LIB_LOCATION = { value = ".cache/ort-1.31.0-x86_64-pc-windows-msvc-3dd96742956a/Release", relative = true }
+ORT_PREFER_DYNAMIC_LINK = "0"
