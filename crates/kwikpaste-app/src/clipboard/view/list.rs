@@ -1848,6 +1848,7 @@ impl Render for ClipboardList {
                         if phase != DispatchPhase::Capture
                             || !bounds.contains(&event.position)
                             || kwikpaste_ui::has_dialog(window, cx)
+                            || kwikpaste_ui::menu_open(window)
                         {
                             return;
                         }
