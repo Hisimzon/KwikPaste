@@ -797,6 +797,7 @@ mod tests {
             limit: 100,
             filter: ListFilter::default(),
             sort: Default::default(),
+            hide_favorites: false,
         });
         assert_eq!(page.total, store.len());
         let icon = page
@@ -885,6 +886,7 @@ mod tests {
             limit: 3,
             filter: ListFilter::default(),
             sort: Default::default(),
+            hide_favorites: false,
         }))
         .expect("page");
         assert_eq!(page.items.len(), 3);
@@ -923,6 +925,7 @@ mod tests {
                 limit: 100,
                 filter,
                 sort: Default::default(),
+                hide_favorites: false,
             }))
             .expect("page")
         };

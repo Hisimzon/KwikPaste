@@ -592,8 +592,7 @@ impl ClipboardList {
         let future = self.source.list(ListQuery {
             offset: request.range.start,
             limit: request.range.len(),
-            filter: self.controller.filter().clone(),
-            sort: self.settings.clipboard.content.sort,
+            ..self.view_query()
         });
 
         cx.spawn(async move |this, cx| {

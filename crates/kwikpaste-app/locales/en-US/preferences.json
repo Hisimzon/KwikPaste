@@ -1000,6 +1000,10 @@
         "customGroups": {
           "controlLabel": "Manage",
           "title": "Custom Groups"
+        },
+        "hideFavoritesInAll": {
+          "description": "Favorites only show under Favorites; search still finds them.",
+          "title": "Hide Favorites from All"
         }
       },
       "overview": {

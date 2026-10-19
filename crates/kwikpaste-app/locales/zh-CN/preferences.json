@@ -990,6 +990,10 @@
         "customGroups": {
           "controlLabel": "管理",
           "title": "自定义分组"
+        },
+        "hideFavoritesInAll": {
+          "description": "收藏的记录只在「收藏」里显示，搜索时仍能找到。",
+          "title": "「全部」中不显示收藏"
         }
       },
       "overview": {

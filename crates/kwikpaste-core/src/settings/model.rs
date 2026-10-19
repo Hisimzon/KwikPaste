@@ -475,6 +475,8 @@ pub struct Content {
     /// 开启后已收藏条目仅能在收藏分组删除，普通条目不受影响。
     pub delete_favorite_items_only_in_favorite_group: bool,
     pub auto_favorite: bool,
+    /// 「全部」视图不显示已收藏条目（搜索与自定义分组照常包含）。
+    pub hide_favorites_in_all: bool,
     /// 从历史中复制 / 粘贴时，是否刷新使用次数与 `updated_at`。
     pub update_on_reuse: bool,
     /// 历史列表默认排序，和 `ClipboardItemQuery.sort` 使用同一套契约字面量。
@@ -502,6 +504,7 @@ impl Default for Content {
             delete_pinned_confirm: true,
             delete_favorite_items_only_in_favorite_group: true,
             auto_favorite: false,
+            hide_favorites_in_all: false,
             update_on_reuse: false,
             sort: ClipboardItemSort::UpdatedAt,
             item_actions: vec![

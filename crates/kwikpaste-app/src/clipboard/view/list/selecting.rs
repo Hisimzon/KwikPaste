@@ -70,6 +70,7 @@ impl ClipboardList {
             limit: 0,
             filter: self.filter().clone(),
             sort: self.settings.clipboard.content.sort,
+            hide_favorites: self.hides_favorites(),
         }
     }
 

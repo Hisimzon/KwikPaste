@@ -98,11 +98,17 @@ impl ClipboardList {
         &self.settings
     }
 
+    pub(super) fn hides_favorites(&self) -> bool {
+        self.filter()
+            .hides_favorites(self.settings.clipboard.content.hide_favorites_in_all)
+    }
+
     /// core 的设置变了：排序变了整体重载；影响列表载荷的展示设置变了重拉当前范围（1.x 同）。
     pub fn apply_settings(&mut self, settings: Settings, cx: &mut Context<Self>) {
         let old = &self.settings.clipboard;
         let new = &settings.clipboard;
-        let resort = old.content.sort != new.content.sort;
+        let resort = old.content.sort != new.content.sort
+            || old.content.hide_favorites_in_all != new.content.hide_favorites_in_all;
         let rules_changed = old.custom_rules != new.custom_rules;
         let refresh = old.display != new.display || old.sensitive != new.sensitive || rules_changed;
         let preview_changed = old.preview != new.preview || rules_changed;
@@ -431,7 +437,8 @@ impl ClipboardList {
 
     // ------------------------------------------------------------ 收藏、置顶
 
-    /// 翻转收藏：收藏视图里取消收藏的记录立即移出，其余只更新标记（1.x `handleFavoriteToggled`）。
+    /// 翻转收藏：收藏视图里取消收藏、隐藏收藏的「全部」里收藏的记录立即移出，其余只更新标记
+    /// （1.x `handleFavoriteToggled`）。
     pub fn toggle_favorite(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(current) = self.model.find(&id).map(|item| item.is_favorite) else {
             return;
@@ -448,7 +455,9 @@ impl ClipboardList {
                         "commands:messages.favoriteRemoved"
                     };
                     Self::toast_success(key, window, cx);
-                    if list.filter().favorites() && !favorite {
+                    if (list.filter().favorites() && !favorite)
+                        || (list.hides_favorites() && favorite)
+                    {
                         list.remove_item(&id, cx);
                     } else {
                         list.patch_item(&id, |item| item.is_favorite = favorite, cx);
@@ -576,6 +585,11 @@ impl ClipboardList {
                         "commands:messages.noteSaved"
                     };
                     Self::toast_success(key, window, cx);
+                    if saved.auto_favorited && list.hides_favorites() {
+                        list.remove_item(&id, cx);
+                        cx.emit(ListIntent::Changed);
+                        return;
+                    }
                     list.patch_item(
                         &id,
                         |item| {

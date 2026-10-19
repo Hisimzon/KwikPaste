@@ -222,6 +222,7 @@ impl Driver {
                 limit: 1,
                 filter,
                 sort: Default::default(),
+                hide_favorites: false,
             })
             .await
             .map(|page| page.total)
@@ -1731,6 +1732,7 @@ impl Driver {
                             limit: 1,
                             filter: ListFilter::default(),
                             sort: Default::default(),
+                            hide_favorites: false,
                         })
                         .items
                         .first()
@@ -2069,6 +2071,7 @@ impl Driver {
                 limit: 0,
                 filter: ListFilter::default(),
                 sort: Default::default(),
+                hide_favorites: false,
             })
             .await
             .unwrap_or_default();

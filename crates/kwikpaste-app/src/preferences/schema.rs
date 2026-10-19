@@ -856,6 +856,9 @@ fn window_sections() -> Vec<Section> {
             settings: vec![
                 Setting::new("organizing.customGroups", Control::Action { danger: false })
                     .keywords(&["group", "folder", "organize"]),
+                Setting::new("organizing.hideFavoritesInAll", Control::Switch)
+                    .path("clipboard.content.hideFavoritesInAll")
+                    .keywords(&["favorite", "hide", "all", "收藏", "隐藏"]),
                 Setting::new("organizing.autoFavorite", Control::Switch)
                     .path("clipboard.content.autoFavorite")
                     .keywords(&["note", "favorite", "auto"])
