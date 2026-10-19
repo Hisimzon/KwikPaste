@@ -31,6 +31,8 @@ pub struct App {
 pub struct Payload {
     pub schema: u8,
     pub description: String,
+    /// 用户自愿留下的回复邮箱，空串表示未填。
+    pub email: String,
     pub app: App,
     pub diagnostics: Value,
     pub settings: Value,
@@ -48,6 +50,8 @@ pub struct Receipt {
 pub enum FeedbackError {
     #[error("description must be 1-5000 characters")]
     DescriptionLength,
+    #[error("email address is malformed")]
+    Email,
     #[error("attachments are malformed or too large")]
     TooLarge,
     #[error("no feedback endpoint is configured")]
@@ -72,12 +76,28 @@ pub enum FeedbackError {
 
 pub type Result<T> = std::result::Result<T, FeedbackError>;
 
-/// 描述去首尾空白后 1–5000 字符；弹窗和编码共用。
-pub fn validate(description: &str) -> Result<()> {
+/// 描述去首尾空白后 1–5000 字符；邮箱可留空，填了就要像 `a@b.c` 且不超过 254 字符。弹窗和编码共用。
+pub fn validate(description: &str, email: &str) -> Result<()> {
     if !(1..=5000).contains(&description.trim().chars().count()) {
         return Err(FeedbackError::DescriptionLength);
     }
+    let email = email.trim();
+    if !email.is_empty() && !valid_email(email) {
+        return Err(FeedbackError::Email);
+    }
     Ok(())
+}
+
+fn valid_email(email: &str) -> bool {
+    email.chars().count() <= 254
+        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
+        && email.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty()
+                && !domain.contains('@')
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        })
 }
 
 /// 保留末尾最多指定字节的完整 UTF-8 文本，不切断多字节字符。
@@ -93,7 +113,8 @@ pub fn tail(text: &str, limit: usize) -> &str {
 pub fn encode(payload: &Payload) -> Result<Vec<u8>> {
     let mut payload = payload.clone();
     payload.description = payload.description.trim().to_owned();
-    validate(&payload.description)?;
+    payload.email = payload.email.trim().to_owned();
+    validate(&payload.description, &payload.email)?;
     if payload.schema != 1
         || !payload.diagnostics.is_object()
         || serde_json::to_vec(&payload.diagnostics)
@@ -215,6 +236,7 @@ mod tests {
         Payload {
             schema: 1,
             description: " test ".into(),
+            email: " user@example.com ".into(),
             app: App {
                 version: "2.0.5".into(),
                 official: false,
@@ -275,9 +297,10 @@ mod tests {
             assert!(headers.contains("content-type: application/json"));
             assert!(headers.contains("content-encoding: gzip"));
             let body = decode(&requests[0].body);
-            assert_eq!(body.as_object().unwrap().len(), 6);
+            assert_eq!(body.as_object().unwrap().len(), 7);
             assert_eq!(body["schema"], 1);
             assert_eq!(body["description"], "test");
+            assert_eq!(body["email"], "user@example.com");
             assert_eq!(body["app"]["osVersion"], "10.0.26100");
             assert_eq!(body["logs"][0]["text"], "hello");
         }
@@ -304,6 +327,11 @@ mod tests {
         p.description = "a".repeat(5001);
         assert_eq!(encode(&p).err(), Some(FeedbackError::DescriptionLength));
         p.description = "ok".into();
+        for email in ["a@b", "a b@c.d", "@b.c", "a@b@c.d", "a@.b"] {
+            p.email = email.into();
+            assert_eq!(encode(&p).err(), Some(FeedbackError::Email));
+        }
+        p.email.clear();
         p.diagnostics = json!({"large":"x".repeat(256 * 1024)});
         assert_eq!(encode(&p).err(), Some(FeedbackError::TooLarge));
         p.diagnostics = json!({});

@@ -163,10 +163,13 @@
     "close": "关闭",
     "description": "问题描述",
     "descriptionPlaceholder": "遇到了什么问题？比如：按快捷键面板不弹出",
+    "email": "回复邮箱",
+    "emailPlaceholder": "选填，方便我们回复你",
     "errors": {
       "badResponse": "反馈服务返回了意外的响应。",
       "collect": "无法收集诊断信息。",
       "descriptionLength": "请填写问题描述，最多 5000 个字符。",
+      "email": "邮箱格式不正确。",
       "noEndpoint": "开发构建没有配置反馈服务地址。",
       "offline": "无法连接反馈服务，请检查网络。",
       "rateLimited": "今天提交的反馈太多了，请明天再试。",

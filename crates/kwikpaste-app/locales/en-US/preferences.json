@@ -163,10 +163,13 @@
     "close": "Close",
     "description": "Description",
     "descriptionPlaceholder": "What went wrong? For example: the panel doesn't open when I press the shortcut",
+    "email": "Email",
+    "emailPlaceholder": "Optional, so we can reply to you",
     "errors": {
       "badResponse": "The feedback service returned an unexpected response.",
       "collect": "Couldn't collect diagnostics.",
       "descriptionLength": "Describe the problem in up to 5,000 characters.",
+      "email": "That email address doesn't look right.",
       "noEndpoint": "This development build has no feedback service configured.",
       "offline": "Can't reach the feedback service. Check your network connection.",
       "rateLimited": "Too many reports today. Try again tomorrow.",
