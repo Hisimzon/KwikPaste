@@ -37,8 +37,8 @@ use crate::{
             actions::OpenTarget,
             preview::{
                 FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, SNIPPET_CHIP_HEIGHT, SNIPPET_CHIP_PADDING_X,
-                SNIPPET_PART_GAP, SNIPPETS_PADDING_Y, TEXT_PADDING_X, TEXT_ROW_HEIGHT,
-                WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
+                SNIPPET_PART_GAP, SNIPPETS_MAX_HEIGHT, SNIPPETS_PADDING_Y, TEXT_PADDING_X,
+                TEXT_ROW_HEIGHT, WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
             },
         },
         source::{Preview, PreviewTextView},
@@ -604,7 +604,7 @@ impl PreviewPanel {
             .into_any_element()
     }
 
-    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段。
+    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段；片段多时封顶，区内滚动。
     fn snippets(&self, preview: &Preview, cx: &mut Context<Self>) -> Option<AnyElement> {
         let snippets = &preview.payload.snippets;
         if snippets.is_empty() {
@@ -615,7 +615,10 @@ impl PreviewPanel {
 
         Some(
             div()
+                .id("preview-snippets")
                 .flex_none()
+                .max_h(space((SNIPPETS_MAX_HEIGHT as f32) / 4.))
+                .overflow_y_scroll()
                 .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
                 .px(space((TEXT_PADDING_X as f32) / 4.))
                 .border_t_1()

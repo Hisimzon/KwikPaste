@@ -5,7 +5,10 @@
 use std::{collections::BTreeSet, ops::Range};
 
 use gpui::{App, FontWeight, TextRun, Window, font, px};
-use kwikpaste_core::{clipboard::WordSpan, presenter::PreviewContentMetrics};
+use kwikpaste_core::{
+    clipboard::WordSpan,
+    presenter::{PreviewContentMetrics, PreviewWordChip},
+};
 use kwikpaste_ui::theme::{TextSize, fonts};
 
 /// 面板离显示器边缘至少这么远。
@@ -47,6 +50,10 @@ pub const SNIPPET_CHIP_HEIGHT: f64 = 24.;
 pub const SNIPPET_CHIP_PADDING_X: f64 = 8.;
 pub const SNIPPET_DOT: f64 = 6.;
 pub const SNIPPET_PART_GAP: f64 = 4.;
+/// 快捷信息区最高这么多（含分隔线）：三行整块再露出第四行的一半，看得出下面还有、可以滚动，
+/// 片段再多也给正文留出位置。
+pub const SNIPPETS_MAX_HEIGHT: f64 =
+    1. + SNIPPETS_PADDING_Y + 3.5 * SNIPPET_CHIP_HEIGHT + 3. * WORD_GAP;
 
 /// 逻辑像素的矩形。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -209,6 +216,27 @@ pub fn measure_metrics(
     PreviewContentMetrics::Words { chips: measured }
 }
 
+/// 选词视图的度量：一个词一块，前面隔着换行就另起一行（与预览窗的渲染一致）；宽度先估，
+/// 再由 [`measure_metrics`] 按实际字体量。
+pub fn words_metrics(text: &str, words: &[WordSpan]) -> PreviewContentMetrics {
+    let mut previous_end = 0;
+    let chips = words
+        .iter()
+        .enumerate()
+        .map(|(index, span)| {
+            let range = utf16_range(text, span.0, span.1);
+            let line_break = index > 0
+                && text
+                    .get(previous_end.min(range.start)..range.start)
+                    .is_some_and(|between| between.contains('\n'));
+            previous_end = range.end;
+            PreviewWordChip::new(text.get(range).unwrap_or_default(), line_break)
+        })
+        .collect();
+
+    PreviewContentMetrics::Words { chips }
+}
+
 /// 按内容度量算面板尺寸，规则与面板的渲染一一对应。`snippets` 是纯文本下方快捷信息区的高度。
 fn panel_size(
     metrics: Option<&PreviewContentMetrics>,
@@ -285,7 +313,8 @@ pub fn snippet_chip_width(label: &str, text: &str, dot: bool, scale: f64, window
         .ceil()
 }
 
-/// 快捷信息区的高度（含顶部 1px 分隔线），小块按 `content_width` 折行；没有小块时为 0。
+/// 快捷信息区的高度（含顶部 1px 分隔线），小块按 `content_width` 折行，最高 [`SNIPPETS_MAX_HEIGHT`]；
+/// 没有小块时为 0。
 pub fn snippets_height(chips: &[f64], content_width: f64) -> f64 {
     if chips.is_empty() {
         return 0.;
@@ -305,9 +334,10 @@ pub fn snippets_height(chips: &[f64], content_width: f64) -> f64 {
         }
     }
 
-    1. + SNIPPETS_PADDING_Y * 2.
+    (1. + SNIPPETS_PADDING_Y * 2.
         + f64::from(rows) * SNIPPET_CHIP_HEIGHT
-        + f64::from(rows - 1) * WORD_GAP
+        + f64::from(rows - 1) * WORD_GAP)
+        .min(SNIPPETS_MAX_HEIGHT)
 }
 
 fn text_height(rows: u32) -> f64 {
@@ -599,6 +629,11 @@ mod tests {
         );
         assert_eq!(with_snippets.panel.height, geometry.panel.height + snippets);
         assert_eq!(snippets_height(&[], 445.), 0.);
+        assert_eq!(
+            snippets_height(&[445.; 3], 445.),
+            1. + 24. + 3. * 24. + 2. * 4.
+        );
+        assert_eq!(snippets_height(&[445.; 32], 445.), SNIPPETS_MAX_HEIGHT);
     }
 
     #[test]

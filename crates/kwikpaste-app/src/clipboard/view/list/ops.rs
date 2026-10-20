@@ -840,15 +840,14 @@ impl ClipboardList {
         .detach();
     }
 
-    /// 拆词：core 没给出拆词动作（非文本、脱敏展示的敏感内容）时不响应。拆词面板还没做，
-    /// 这里先发意图。
+    /// 拆词：core 没给出拆词动作（非文本、脱敏展示的敏感内容）时不响应。发意图，由面板交给
+    /// [`Self::split_words`] 打开（或退出）选词预览。
     pub fn split(&mut self, item: &ListItem, cx: &mut Context<Self>) {
         if !is_available(QuickAction::SplitWords, item) {
             return;
         }
 
         self.controller.select(&item.id);
-        self.close_preview(cx);
         log::info!("split words requested for {}", item.id);
         cx.emit(ListIntent::SplitWords {
             id: item.id.clone(),
