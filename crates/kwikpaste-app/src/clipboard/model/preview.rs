@@ -123,6 +123,24 @@ pub struct Geometry {
     pub placement: Placement,
 }
 
+impl Geometry {
+    /// 同一条预览换视图（图片 / 文字、默认 / 选词）时沿用上一次的顶边，头部的切换按钮留在指针下面；
+    /// 只在仍放在卡片同一侧的左右时生效，超出显示器照常夹回。
+    pub fn keep_top(self, previous: &Geometry, monitor: RectF) -> Self {
+        let side = matches!(self.placement, Placement::Left | Placement::Right);
+        if !side || self.placement != previous.placement {
+            return self;
+        }
+        let panel = RectF {
+            top: previous.panel.top,
+            ..self.panel
+        }
+        .clamp_into(&monitor.inset(MARGIN));
+
+        Self { panel, ..self }
+    }
+}
+
 /// 算预览窗的位置：`card` 是卡片、`monitor` 是显示器（同一坐标系的逻辑像素），`metrics` 为 `None`
 /// 表示记录已经不在了（只剩空状态）。`prefer_left`：指针在主窗口左半边。`gap` 是面板与卡片的距离。
 /// `scale` 是文本缩放，面板内容随它放大，尺寸上下限和间距也跟着放大。
@@ -581,6 +599,23 @@ mod tests {
         );
         assert_eq!(with_snippets.panel.height, geometry.panel.height + snippets);
         assert_eq!(snippets_height(&[], 445.), 0.);
+    }
+
+    #[test]
+    fn switching_views_keeps_the_top_edge() {
+        let text = Some(&PreviewContentMetrics::Text { rows: 12 });
+        let image = Some(&PreviewContentMetrics::Image {
+            width: Some(858.),
+            height: Some(329.),
+        });
+        let tall = geometry(card(800.), MONITOR, text, 0., true, GAP, 1.);
+        let short = geometry(card(800.), MONITOR, image, 0., true, GAP, 1.);
+        assert_ne!(tall.panel.top, short.panel.top);
+
+        let kept = short.keep_top(&tall, MONITOR);
+        assert_eq!(kept.panel.top, tall.panel.top);
+        assert_eq!(kept.panel.height, short.panel.height);
+        assert_eq!(kept.panel.left, short.panel.left);
     }
 
     #[test]

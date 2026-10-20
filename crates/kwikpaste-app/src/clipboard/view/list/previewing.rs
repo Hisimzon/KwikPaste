@@ -72,6 +72,8 @@ pub(super) struct Previewing {
     session: Option<(Arc<str>, PreviewTrigger)>,
     /// 正在看识别文字（而不是图片本身）的图片记录；换了记录或关上预览就回到图片。
     image_text: Option<Arc<str>>,
+    /// 上一次摆好的预览窗：同一条换视图时沿用它的顶边；关上预览就清掉。
+    placed: Option<(Arc<str>, preview::Geometry)>,
     /// 每次打开、关闭都加一，晚到的结果按它作废。
     request: u64,
     hover_timer: Option<Task<()>>,
@@ -452,6 +454,7 @@ impl ClipboardList {
         self.previewing.follow_timer = None;
         self.previewing.pointer_inside = false;
         self.previewing.image_text = None;
+        self.previewing.placed = None;
         self.previewing.request += 1;
         let was_open = self.previewing.session.take().is_some();
         if !was_open {
@@ -701,6 +704,11 @@ impl ClipboardList {
             f64::from(self.settings.clipboard.preview.gap),
             text_scale,
         );
+        let geometry = match &self.previewing.placed {
+            Some((placed, previous)) if placed == id => geometry.keep_top(previous, place.monitor),
+            _ => geometry,
+        };
+        self.previewing.placed = Some((id.clone(), geometry));
         let image_box = preview
             .as_ref()
             .and_then(|preview| image_box(preview, geometry.panel, text_scale));
