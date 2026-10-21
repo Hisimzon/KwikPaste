@@ -136,9 +136,12 @@ pub(crate) fn should_write_plain_for_paste(
 }
 
 /// 决定一次全局纯文本粘贴要写入的文本；空文本和图片返回 `None`。
+/// 文本去掉末尾空白，与列表里的纯文本写回一致（Excel 复制的文本自带结尾换行）。
 pub fn plain_paste_decision(payload: &ClipboardPayload) -> Option<String> {
     match payload {
-        ClipboardPayload::Text(text) if !text.text.is_empty() => Some(text.text.clone()),
+        ClipboardPayload::Text(text) if !text.text.trim_end().is_empty() => {
+            Some(text.text.trim_end().to_owned())
+        }
         ClipboardPayload::Files(files) => {
             let content = files
                 .iter()
@@ -1006,6 +1009,13 @@ mod tests {
             rtf: None,
         });
         assert_eq!(plain_paste_decision(&plain), Some("hello".to_owned()));
+
+        let excel = ClipboardPayload::Text(TextPayload {
+            text: "a\tb\r\n".to_owned(),
+            html: None,
+            rtf: None,
+        });
+        assert_eq!(plain_paste_decision(&excel), Some("a\tb".to_owned()));
 
         for rich in [Some("<b>hello</b>".to_owned()), None] {
             let payload = ClipboardPayload::Text(TextPayload {
