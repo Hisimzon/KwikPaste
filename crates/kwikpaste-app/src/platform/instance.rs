@@ -52,8 +52,27 @@ pub fn release(cx: &mut App) {
     }
 }
 
+/// 原样重启：放掉单实例，用同样的参数拉起新进程后退出；没拉起来就重新占回单实例。
+pub fn restart(cx: &mut App) {
+    log::info!("restart requested");
+    release(cx);
+    let spawned = std::env::current_exe().and_then(|exe| {
+        std::process::Command::new(exe)
+            .args(std::env::args().skip(1))
+            .spawn()
+    });
+    match spawned {
+        Ok(_) => cx.quit(),
+        Err(err) => {
+            log::error!("the restarted instance could not be started: {err}");
+            if let Err(err) = reclaim(cx) {
+                log::error!("the single instance could not be reclaimed: {err:#}");
+            }
+        }
+    }
+}
+
 /// [`release`] 之后没能交出去（例如提权重启被取消）时重新占回单实例。
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn reclaim(cx: &mut App) -> anyhow::Result<()> {
     let Some(instance) = cx.try_global::<Instance>() else {
         anyhow::bail!("the single instance is not served");

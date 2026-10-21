@@ -62,13 +62,17 @@ pub trait ItemHost {
 /// 平台层的粘贴链路（数据来自宿主的 core）。
 pub struct PlatformHost;
 
-/// core 的错误（`AppError`）转成 anyhow，消息不变。
+/// core 的错误（`AppError`）转成 anyhow，消息不变；`Other` 直接取出里面的 anyhow，保留可向下转型的根因。
 fn ok_or_anyhow<T: 'static>(
     task: Task<kwikpaste_core::Result<T>>,
     cx: &mut App,
 ) -> Task<anyhow::Result<()>> {
-    cx.foreground_executor()
-        .spawn(async move { task.await.map(|_| ()).map_err(anyhow::Error::from) })
+    cx.foreground_executor().spawn(async move {
+        task.await.map(|_| ()).map_err(|err| match err {
+            kwikpaste_core::AppError::Other(err) => err,
+            err => err.into(),
+        })
+    })
 }
 
 impl ItemHost for PlatformHost {

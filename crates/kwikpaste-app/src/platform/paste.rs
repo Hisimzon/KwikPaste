@@ -312,6 +312,15 @@ async fn wait_for_modifiers_released(cx: &mut AsyncApp) -> bool {
     true
 }
 
+/// 粘贴键被系统拒收（`SendInput` 返回拒绝访问）。前台权限并不更高时也会出现，例如游戏反作弊驱动
+/// 把本进程拉黑；之后本进程的注入一直失败，换一个进程（重启）就恢复。
+pub fn injection_blocked(err: &anyhow::Error) -> bool {
+    cfg!(target_os = "windows")
+        && err
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|err| err.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
 fn foreground_window() -> isize {
     #[cfg(target_os = "windows")]
     {

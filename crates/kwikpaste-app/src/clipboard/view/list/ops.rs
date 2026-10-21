@@ -38,7 +38,7 @@ use crate::{
         },
     },
     i18n::{t, t_args},
-    platform::{EditTrigger, PanelCommand, Trigger, TriggerSource},
+    platform::{self, EditTrigger, PanelCommand, Trigger, TriggerSource},
 };
 
 /// 弹框里的多行输入框。打开时没拿到编辑态（面板仍不可激活，没有光标）的话，点它再按鼠标触发请求一次。
@@ -59,7 +59,10 @@ const COPIED_FEEDBACK: Duration = Duration::from_secs(1);
 /// 挂起的按键最多等这么久；第一页查询正常几十毫秒就落地。
 const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// 失败提示：“{动作}失败：{原因}”（1.x `commands:error`）。
+/// 粘贴键被系统拦截时的提示停留时长：要留出点“重启快贴”的时间。
+const PASTE_BLOCKED_TOAST: Duration = Duration::from_secs(10);
+
+/// 失败提示：“{动作}失败：{原因}”（1.x `commands:error`）；粘贴键被系统拦截时说明原因并给出重启按钮。
 pub(in crate::clipboard::view) fn error_toast(
     label: &str,
     err: &anyhow::Error,
@@ -67,6 +70,16 @@ pub(in crate::clipboard::view) fn error_toast(
     cx: &mut App,
 ) {
     log::warn!("{label} failed: {err:#}");
+    if platform::paste::injection_blocked(err) {
+        let toast = Toast::error(t("commands:messages.pasteBlocked"))
+            .key("paste-blocked")
+            .duration(PASTE_BLOCKED_TOAST)
+            .action(t("commands:labels.restartApp"), |_, cx| {
+                platform::restart(cx)
+            });
+        toast::show(toast, window, cx);
+        return;
+    }
     let message = t_args(
         "commands:error",
         &[("label", &t(label)), ("message", &err.to_string())],
