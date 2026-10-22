@@ -10,7 +10,7 @@
 //!
 //! 设置变更时重新注册。管理器在主线程创建，`WM_HOTKEY` / Carbon 事件由 GPUI 的消息循环顺带派发；
 //! 事件经「专用线程阻塞 `recv()` → `async_channel` → 主线程」送回，不轮询。线程里只转发、不碰 GPUI，
-//! 唯一的例外是快速粘贴按下时立刻屏蔽 Alt / Win 的单独松开：这一步必须趁修饰键还按着做。
+//! 唯一的例外是唤起面板或粘贴时立刻屏蔽 Alt / Win 的单独松开：这一步必须趁修饰键还按着做。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -53,6 +53,16 @@ enum Action {
     QuickPaste(i64),
     OpenPreference,
     PastePlain,
+}
+
+impl Action {
+    /// 保留目标前台的操作必须屏蔽修饰键的菜单副作用；打开偏好设置则本来就会转移前台。
+    fn needs_modifier_mask(self) -> bool {
+        matches!(
+            self,
+            Self::TogglePanel | Self::QuickPaste(_) | Self::PastePlain
+        )
+    }
 }
 
 /// 当前注册的热键 id → 动作，事件桥线程据此分发。
@@ -101,6 +111,13 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
                     continue;
                 }
                 let action = lock(&bridge_actions).get(&event.id).copied();
+                // RegisterHotKey 截走主键后，目标可能只收到 Alt 的按下/松开，结束资源管理器的重命名。
+                // 在投递面板命令前屏蔽松开，不能等到显示窗口之后才处理。
+                if action.is_some_and(Action::needs_modifier_mask)
+                    && let Err(err) = kwikpaste_os::keystroke::mask_modifier_release()
+                {
+                    log::warn!("modifier release could not be masked: {err}");
+                }
                 let delivered = match action {
                     Some(Action::TogglePanel) => {
                         let trigger = Trigger::now(TriggerSource::Hotkey);
@@ -108,19 +125,9 @@ pub fn register(cx: &mut App, commands: Sender<PanelCommand>) -> anyhow::Result<
                             .send_blocking(PanelCommand::Toggle(trigger))
                             .is_ok()
                     }
-                    Some(Action::QuickPaste(offset)) => {
-                        if let Err(err) = kwikpaste_os::keystroke::mask_modifier_release() {
-                            log::warn!("modifier release could not be masked: {err}");
-                        }
-                        quick_sender.send_blocking(offset).is_ok()
-                    }
+                    Some(Action::QuickPaste(offset)) => quick_sender.send_blocking(offset).is_ok(),
                     Some(Action::OpenPreference) => preference_sender.send_blocking(()).is_ok(),
-                    Some(Action::PastePlain) => {
-                        if let Err(err) = kwikpaste_os::keystroke::mask_modifier_release() {
-                            log::warn!("modifier release could not be masked: {err}");
-                        }
-                        plain_sender.send_blocking(()).is_ok()
-                    }
+                    Some(Action::PastePlain) => plain_sender.send_blocking(()).is_ok(),
                     None => true,
                 };
                 if !delivered {
@@ -497,6 +504,14 @@ mod tests {
     use kwikpaste_core::settings::QuickPasteModifiers;
 
     use super::*;
+
+    #[test]
+    fn non_activating_hotkey_actions_mask_modifier_release() {
+        assert!(Action::TogglePanel.needs_modifier_mask());
+        assert!(Action::QuickPaste(0).needs_modifier_mask());
+        assert!(Action::PastePlain.needs_modifier_mask());
+        assert!(!Action::OpenPreference.needs_modifier_mask());
+    }
 
     #[test]
     fn tauri_accelerators_parse_like_1x() {
