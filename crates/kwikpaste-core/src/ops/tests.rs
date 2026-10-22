@@ -1015,7 +1015,7 @@ fn rich_text_edit_drops_formats_and_unchanged_save_is_a_noop() {
         block_on(core.copy_item(&id, false)).unwrap();
         assert_eq!(fixture.clipboard.snapshot(), text("  edited plain text  "));
         block_on(core.copy_item(&id, true)).unwrap();
-        assert_eq!(fixture.clipboard.snapshot(), text("  edited plain text  "));
+        assert_eq!(fixture.clipboard.snapshot(), text("  edited plain text"));
         block_on(core.prepare_paste(&id, false)).unwrap();
         assert_eq!(fixture.clipboard.snapshot(), text("  edited plain text  "));
     }
