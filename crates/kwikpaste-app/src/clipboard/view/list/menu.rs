@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use gpui::{App, Context, Window};
+use kwikpaste_core::clipboard::SnippetKind;
 use kwikpaste_ui::{
     MenuEntry, MenuItem, Submenu,
     toast::{self, Toast},
@@ -23,7 +24,7 @@ use crate::{
             shortcut,
         },
         source::ImageSave,
-        view::pin,
+        view::{card::snippet_open_url, pin},
     },
     i18n::t,
 };
@@ -36,6 +37,9 @@ impl ClipboardList {
     ) -> Vec<MenuEntry> {
         if self.selection.active() {
             return Vec::new();
+        }
+        if let Some(entries) = self.snippet_menu_entries(cx) {
+            return entries;
         }
         let Some(item) = self
             .hovered
@@ -110,6 +114,54 @@ impl ClipboardList {
         }
 
         entries
+    }
+
+    /// 指针在卡片的快捷信息上时的右键菜单：复制、粘贴这一段，链接 / 邮箱还能直接打开。
+    fn snippet_menu_entries(&mut self, cx: &mut Context<Self>) -> Option<Vec<MenuEntry>> {
+        let (id, text, kind) = self.hovered_snippet.clone()?;
+        if self.hovered.as_ref() != Some(&id) {
+            return None;
+        }
+
+        let entity = cx.entity().downgrade();
+        let copy = {
+            let (entity, id, text) = (entity.clone(), id.clone(), text.clone());
+            MenuItem::new(t("clipboard:menu.copy"), move |window, cx| {
+                entity
+                    .update(cx, |list, cx| {
+                        list.copy_snippet(&id, text.clone(), window, cx)
+                    })
+                    .ok();
+            })
+        };
+        let paste = {
+            let (entity, id, text) = (entity.clone(), id.clone(), text.clone());
+            MenuItem::new(t("clipboard:menu.paste"), move |_, cx| {
+                entity
+                    .update(cx, |list, cx| list.paste_snippet(&id, text.clone(), cx))
+                    .ok();
+            })
+        };
+        let mut entries = vec![paste.into(), copy.into()];
+
+        let open_label = match kind {
+            SnippetKind::Link => Some("clipboard:menu.openLink"),
+            SnippetKind::Email => Some("clipboard:menu.sendEmail"),
+            _ => None,
+        };
+        if let Some(label) = open_label.filter(|_| snippet_open_url(kind, &text).is_some()) {
+            entries.push(MenuEntry::Separator);
+            entries.push(
+                MenuItem::new(t(label), move |_, cx| {
+                    entity
+                        .update(cx, |list, cx| list.open_snippet(&id, &text, kind, cx))
+                        .ok();
+                })
+                .into(),
+            );
+        }
+
+        Some(entries)
     }
 
     /// 执行右键菜单里的动作（1.x `handleMenuActionRef`）。

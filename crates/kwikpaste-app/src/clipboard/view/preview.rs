@@ -23,7 +23,7 @@ use kwikpaste_core::{
     presenter::{PreviewBlock, PreviewDocument, PreviewInline},
 };
 use kwikpaste_ui::{
-    Button, Icon, IconName, KpStyled as _,
+    Button, Icon, IconName, KpStyled as _, MenuEntry, MenuItem, context_menu, dismiss_menu,
     theme::{self, TextSize, px_rems, radius, space},
 };
 
@@ -60,6 +60,10 @@ pub enum PreviewEvent {
     ImageText(ImageTextView),
     /// 点了快捷信息区的一块：只复制这一段。
     Snippet(Arc<str>),
+    /// 快捷信息右键菜单里选了粘贴。
+    PasteSnippet(Arc<str>),
+    /// 中键点了链接 / 邮箱快捷信息，或在右键菜单里选了打开。
+    OpenSnippet(Arc<str>, SnippetKind),
     /// 点了链接、邮箱记录的正文：打开链接或写邮件。
     Open(OpenTarget),
     /// 点了文件记录里的一行：在文件管理器中定位这个文件。
@@ -91,6 +95,8 @@ pub struct PreviewPanel {
     image_text: Option<ImageTextView>,
     /// 快捷信息按类型着色（「快捷信息颜色」设置），列表在 [Self::set] 前更新。
     pub snippet_colors: bool,
+    /// 指针下的那块快捷信息：右键菜单按它给出动作。
+    hovered_snippet: Option<(Arc<str>, SnippetKind)>,
     images: Entity<KpImageCache>,
     /// 预览文件图标的独立有界缓存；关闭预览时不清空，避免再次打开时闪烁。
     icons: Entity<KpImageCache>,
@@ -116,6 +122,7 @@ impl PreviewPanel {
             image_box: None,
             image_text: None,
             snippet_colors: true,
+            hovered_snippet: None,
             images,
             icons,
             text_scroll: UniformListScrollHandle::new(),
@@ -167,8 +174,10 @@ impl PreviewPanel {
         self.selection.selected().iter().copied().collect()
     }
 
-    /// 释放图片（预览关上时）。
+    /// 释放图片（预览关上时），关掉开着的快捷信息菜单。
     pub fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        dismiss_menu(window, cx);
+        self.hovered_snippet = None;
         self.selection.clear();
         self.images
             .update(cx, |images, cx| images.clear(Some(window), cx));
@@ -619,64 +628,123 @@ impl PreviewPanel {
         }
         let tokens = theme::semantic(cx);
         let colors = self.snippet_colors.then(|| theme::components(cx).snippet);
+        let entity = cx.entity().downgrade();
 
-        Some(
-            div()
-                .id("preview-snippets")
-                .flex_none()
-                .max_h(space((SNIPPETS_MAX_HEIGHT as f32) / 4.))
-                .overflow_y_scroll()
-                .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
-                .px(space((TEXT_PADDING_X as f32) / 4.))
-                .border_t_1()
-                .border_color(tokens.border.divider)
-                .child(div().flex().flex_wrap().gap(space(1.)).children(
-                    snippets.iter().enumerate().map(|(index, snippet)| {
-                        let text: Arc<str> = Arc::from(snippet.text.as_str());
-                        div()
-                            .id(ElementId::NamedInteger(
-                                "preview-snippet".into(),
-                                index as u64,
-                            ))
-                            .flex()
-                            .items_center()
-                            .gap(space((SNIPPET_PART_GAP as f32) / 4.))
-                            .max_w_full()
-                            .h(space((SNIPPET_CHIP_HEIGHT as f32) / 4.))
-                            .px(space((SNIPPET_CHIP_PADDING_X as f32) / 4.))
-                            .rounded(radius::MD)
-                            .bg(tokens.fill.subtle)
-                            .kp_text(TextSize::Xs)
-                            .cursor_pointer()
-                            .hover(|style| style.bg(tokens.fill.default))
-                            .when_some(colors, |chip, colors| {
-                                chip.child(card::snippet_dot(card::snippet_color(
-                                    &colors,
-                                    snippet.kind,
-                                )))
-                            })
-                            .child(
-                                div().flex_none().text_color(tokens.text.secondary).child(
-                                    snippet
-                                        .label
-                                        .clone()
-                                        .map(SharedString::from)
-                                        .unwrap_or_else(|| t(snippet_label(snippet.kind))),
-                                ),
+        let area = div()
+            .id("preview-snippets")
+            .flex_none()
+            .max_h(space((SNIPPETS_MAX_HEIGHT as f32) / 4.))
+            .overflow_y_scroll()
+            .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
+            .px(space((TEXT_PADDING_X as f32) / 4.))
+            .border_t_1()
+            .border_color(tokens.border.divider)
+            .child(div().flex().flex_wrap().gap(space(1.)).children(
+                snippets.iter().enumerate().map(|(index, snippet)| {
+                    let text: Arc<str> = Arc::from(snippet.text.as_str());
+                    let kind = snippet.kind;
+                    let hover_text = text.clone();
+                    let open_text = text.clone();
+                    div()
+                        .id(ElementId::NamedInteger(
+                            "preview-snippet".into(),
+                            index as u64,
+                        ))
+                        .flex()
+                        .items_center()
+                        .gap(space((SNIPPET_PART_GAP as f32) / 4.))
+                        .max_w_full()
+                        .h(space((SNIPPET_CHIP_HEIGHT as f32) / 4.))
+                        .px(space((SNIPPET_CHIP_PADDING_X as f32) / 4.))
+                        .rounded(radius::MD)
+                        .bg(tokens.fill.subtle)
+                        .kp_text(TextSize::Xs)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(tokens.fill.default))
+                        .when_some(colors, |chip, colors| {
+                            chip.child(card::snippet_dot(card::snippet_color(
+                                &colors,
+                                snippet.kind,
+                            )))
+                        })
+                        .child(
+                            div().flex_none().text_color(tokens.text.secondary).child(
+                                snippet
+                                    .label
+                                    .clone()
+                                    .map(SharedString::from)
+                                    .unwrap_or_else(|| t(snippet_label(snippet.kind))),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .child(SharedString::from(snippet.text.clone())),
+                        )
+                        .on_hover(cx.listener(move |panel, hovered: &bool, _, _| {
+                            if *hovered {
+                                panel.hovered_snippet = Some((hover_text.clone(), kind));
+                            } else if panel
+                                .hovered_snippet
+                                .as_ref()
+                                .is_some_and(|(current, _)| *current == hover_text)
+                            {
+                                panel.hovered_snippet = None;
+                            }
+                        }))
+                        .when(card::snippet_open_url(kind, &text).is_some(), |chip| {
+                            chip.on_mouse_down(
+                                MouseButton::Middle,
+                                cx.listener(move |_, _, _, cx| {
+                                    cx.emit(PreviewEvent::OpenSnippet(open_text.clone(), kind));
+                                }),
                             )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(SharedString::from(snippet.text.clone())),
-                            )
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(PreviewEvent::Snippet(text.clone()));
-                            }))
-                    }),
-                ))
-                .into_any_element(),
-        )
+                        })
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(PreviewEvent::Snippet(text.clone()));
+                        }))
+                }),
+            ));
+
+        Some(context_menu(area, move |_, cx| {
+            entity
+                .update(cx, |panel, cx| panel.snippet_menu(cx))
+                .unwrap_or_default()
+        }))
+    }
+
+    /// 快捷信息的右键菜单：粘贴、复制指针下的那一段，链接 / 邮箱还能直接打开。
+    fn snippet_menu(&self, cx: &mut Context<Self>) -> Vec<MenuEntry> {
+        let Some((text, kind)) = self.hovered_snippet.clone() else {
+            return Vec::new();
+        };
+        let entity = cx.entity().downgrade();
+        let item = |label: &str, event: PreviewEvent| -> MenuEntry {
+            let entity = entity.clone();
+            MenuItem::new(t(label), move |_, cx| {
+                entity.update(cx, |_, cx| cx.emit(event.clone())).ok();
+            })
+            .into()
+        };
+        let mut entries = vec![
+            item(
+                "clipboard:menu.paste",
+                PreviewEvent::PasteSnippet(text.clone()),
+            ),
+            item("clipboard:menu.copy", PreviewEvent::Snippet(text.clone())),
+        ];
+        let open_label = match kind {
+            SnippetKind::Link => Some("clipboard:menu.openLink"),
+            SnippetKind::Email => Some("clipboard:menu.sendEmail"),
+            _ => None,
+        };
+        if let Some(label) = open_label.filter(|_| card::snippet_open_url(kind, &text).is_some()) {
+            entries.push(MenuEntry::Separator);
+            entries.push(item(label, PreviewEvent::OpenSnippet(text, kind)));
+        }
+
+        entries
     }
 
     fn words(&self, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {

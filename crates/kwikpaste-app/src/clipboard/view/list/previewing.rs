@@ -231,6 +231,16 @@ impl ClipboardList {
             PreviewEvent::Words { paste } => self.use_preview_words(*paste, cx),
             PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
             PreviewEvent::Snippet(text) => self.copy_preview_snippet(text.clone(), cx),
+            PreviewEvent::PasteSnippet(text) => {
+                if let Some((id, _)) = self.previewing.session.clone() {
+                    self.paste_snippet(&id, text.clone(), cx);
+                }
+            }
+            PreviewEvent::OpenSnippet(text, kind) => {
+                if let Some((id, _)) = self.previewing.session.clone() {
+                    self.open_snippet(&id, text, *kind, cx);
+                }
+            }
             PreviewEvent::Open(target) => self.open_preview_target(*target, cx),
             PreviewEvent::ViewImage => {
                 if let Some((id, _)) = self.previewing.session.clone() {

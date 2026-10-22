@@ -12,7 +12,7 @@ use gpui::{
     ParentElement as _, Styled as _, Task, Window, div,
 };
 use kwikpaste_core::{
-    clipboard::ClipboardFragment,
+    clipboard::{ClipboardFragment, SnippetKind},
     db::models::ClipboardItemQuery,
     settings::{AutoPaste, Settings},
 };
@@ -33,6 +33,7 @@ use crate::{
         },
         source::{Group, core_source::item_query},
         view::{
+            card,
             editing::{self, EditTarget},
             viewer::{self, ViewerImage},
         },
@@ -326,40 +327,93 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.controller.select(&item.id);
-        let fragment = ClipboardFragment::Snippet {
-            text: text.to_string(),
-        };
         let copy = matches!(
             self.settings.clipboard.content.auto_paste,
             AutoPaste::SingleClickCopy | AutoPaste::DoubleClickCopy
         );
 
         if copy {
-            self.close_preview_of(&item.id, cx);
-            let task = self.host.copy_fragment(item.id.clone(), fragment, cx);
-            cx.spawn_in(window, async move |_, cx| {
-                let result = task.await;
-                cx.update(|window, cx| match result {
-                    Ok(()) => {
-                        toast::show(Toast::success(t("commands:messages.copied")), window, cx)
-                    }
-                    Err(err) => error_toast("commands:labels.copy", &err, window, cx),
-                })
-                .ok();
-            })
-            .detach();
+            self.copy_snippet(&item.id, text, window, cx);
         } else {
-            log::info!("snippet paste requested for {}", item.id);
-            self.close_preview(cx);
-            let task = self.host.paste_fragment(item.id.clone(), fragment, cx);
-            self.report_host_failure("commands:labels.paste", task, cx);
-            cx.emit(ListIntent::PasteSnippet {
-                id: item.id.clone(),
-                text,
-            });
+            self.paste_snippet(&item.id, text, cx);
         }
+    }
+
+    /// 只复制卡片上的这个片段。
+    pub fn copy_snippet(
+        &mut self,
+        id: &Arc<str>,
+        text: Arc<str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.controller.select(id);
+        self.close_preview_of(id, cx);
+        let fragment = ClipboardFragment::Snippet {
+            text: text.to_string(),
+        };
+        let task = self.host.copy_fragment(id.clone(), fragment, cx);
+        cx.spawn_in(window, async move |_, cx| {
+            let result = task.await;
+            cx.update(|window, cx| match result {
+                Ok(()) => toast::show(Toast::success(t("commands:messages.copied")), window, cx),
+                Err(err) => error_toast("commands:labels.copy", &err, window, cx),
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
+    }
+
+    /// 把卡片上的这个片段粘贴到目标应用。
+    pub fn paste_snippet(&mut self, id: &Arc<str>, text: Arc<str>, cx: &mut Context<Self>) {
+        self.controller.select(id);
+        log::info!("snippet paste requested for {id}");
+        self.close_preview(cx);
+        let fragment = ClipboardFragment::Snippet {
+            text: text.to_string(),
+        };
+        let task = self.host.paste_fragment(id.clone(), fragment, cx);
+        self.report_host_failure("commands:labels.paste", task, cx);
+        cx.emit(ListIntent::PasteSnippet {
+            id: id.clone(),
+            text,
+        });
+        cx.notify();
+    }
+
+    /// 用浏览器 / 邮件客户端打开快捷信息里的链接或邮箱（中键、右键菜单）；别的类型不响应。
+    pub fn open_snippet(
+        &mut self,
+        id: &Arc<str>,
+        text: &str,
+        kind: SnippetKind,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(url) = card::snippet_open_url(kind, text) else {
+            return;
+        };
+        self.close_preview_of(id, cx);
+        cx.open_url(&url);
+    }
+
+    /// 指针进出卡片上的一块快捷信息。离开时只清掉自己：换到相邻一块时进入可能先于离开到达。
+    pub(in crate::clipboard::view) fn hover_snippet(
+        &mut self,
+        id: &Arc<str>,
+        text: Arc<str>,
+        kind: SnippetKind,
+        hovered: bool,
+    ) {
+        if hovered {
+            self.hovered_snippet = Some((id.clone(), text, kind));
+        } else if self
+            .hovered_snippet
+            .as_ref()
+            .is_some_and(|(current, current_text, _)| current == id && *current_text == text)
+        {
+            self.hovered_snippet = None;
+        }
     }
 
     // ------------------------------------------------------------ 大图

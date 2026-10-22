@@ -40,6 +40,7 @@ use gpui::{
 };
 use kwikpaste_core::{
     CoreEvent,
+    clipboard::SnippetKind,
     ops::{ReorderAnchor, ReorderSection},
     settings::{AutoPaste, MiddleClickAction, PanelAction, Settings, effective_panel_keys},
 };
@@ -50,7 +51,7 @@ use kwikpaste_ui::{
 
 use super::{
     bench::Bench,
-    card::{self, CardEnv, CardState, LinkHandler, SnippetHandler, Visual},
+    card::{self, CardEnv, CardState, LinkHandler, SnippetEvent, SnippetHandler, Visual},
     editing::{self, EditTarget},
     frame::{FrameTimer, FrameTiming, ListFrame, PaintedCallback, Snapshot, WidthHint},
     host::ItemHost,
@@ -278,6 +279,8 @@ pub struct ClipboardList {
     selection: Selection,
     /// 指针所在的卡片：显示快捷动作、备注原文。
     pub(super) hovered: Option<Arc<str>>,
+    /// 指针所在的快捷信息（卡片 id、文字、类型）：右键菜单换成这一段的动作。
+    pub(super) hovered_snippet: Option<(Arc<str>, Arc<str>, SnippetKind)>,
     /// 按住修饰键：显示数字角标。
     pub(super) key_hints: bool,
     /// 刚复制成功的快捷动作按钮，1 秒后复原。
@@ -372,6 +375,7 @@ impl ClipboardList {
             groups: Vec::new(),
             selection: Selection::default(),
             hovered: None,
+            hovered_snippet: None,
             key_hints: false,
             copied: None,
             copied_reset: None,
@@ -1586,10 +1590,20 @@ impl ClipboardList {
         let on_snippet = (!selecting && !item.quick_snippets.is_empty()).then(|| {
             let entity = cx.entity().downgrade();
             let target = item.clone();
-            let handler: SnippetHandler = Rc::new(move |text, window, cx| {
+            let handler: SnippetHandler = Rc::new(move |event, window, cx| {
                 entity
-                    .update(cx, |list, cx| {
-                        list.pick_snippet(target.clone(), text, window, cx);
+                    .update(cx, |list, cx| match event {
+                        SnippetEvent::Pick(text) => {
+                            list.pick_snippet(target.clone(), text, window, cx)
+                        }
+                        SnippetEvent::Open(text, kind) => {
+                            list.open_snippet(&target.id, &text, kind, cx)
+                        }
+                        SnippetEvent::Hover {
+                            text,
+                            kind,
+                            hovered,
+                        } => list.hover_snippet(&target.id, text, kind, hovered),
                     })
                     .ok();
             });
