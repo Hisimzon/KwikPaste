@@ -241,7 +241,24 @@ impl ClipboardList {
                 self.close_preview(cx);
                 cx.reveal_path(Path::new(path.as_ref()));
             }
+            PreviewEvent::EditText => self.edit_preview_text(cx),
         }
+    }
+
+    /// 双击了预览里的正文：关掉预览，打开这一条的内容编辑框。
+    fn edit_preview_text(&mut self, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.previewing.session.clone() else {
+            return;
+        };
+        let window = self.window;
+        cx.spawn(async move |list, cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    list.update(cx, |list, cx| list.edit_content(id, window, cx))
+                })
+                .ok();
+        })
+        .detach();
     }
 
     /// 点了预览里的链接 / 邮箱：关掉预览，交给浏览器或邮件客户端。
@@ -738,6 +755,7 @@ impl ClipboardList {
         };
         let geometry = preview::geometry(
             place.card,
+            place.window,
             place.monitor,
             measured_metrics.as_ref(),
             snippets_height,

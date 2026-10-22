@@ -9,13 +9,13 @@
 use std::{ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Div, ElementId, Entity,
-    EventEmitter, FontStyle, FontWeight, HighlightStyle, ImageSource, InteractiveElement as _,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Render,
-    ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, StrikethroughStyle,
-    Styled as _, StyledText, UnderlineStyle, UniformListScrollHandle, Window, WindowBounds,
-    WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
-    uniform_list,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context, Div, ElementId,
+    Entity, EventEmitter, FontStyle, FontWeight, HighlightStyle, ImageSource,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement as _, Render, ScrollHandle, SharedString, Stateful,
+    StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledText, UnderlineStyle,
+    UniformListScrollHandle, Window, WindowBounds, WindowKind, WindowOptions, div, img, point,
+    prelude::FluentBuilder as _, px, size, uniform_list,
 };
 use kwikpaste_core::{
     clipboard::SnippetKind,
@@ -66,6 +66,8 @@ pub enum PreviewEvent {
     Reveal(Arc<str>),
     /// 点了图片：在大图预览窗里看。
     ViewImage,
+    /// 双击了文本记录的正文：打开内容编辑框。
+    EditText,
 }
 
 /// 有识别文字的图片记录正在看的那一面。
@@ -544,6 +546,7 @@ impl PreviewPanel {
             Some(ClipboardSubKind::Email) => Some(OpenTarget::Email),
             _ => None,
         };
+        let editable = self.image_text.is_none();
         let list = div()
             .id("preview-text-body")
             .flex()
@@ -551,10 +554,13 @@ impl PreviewPanel {
             .flex_1()
             .min_h_0()
             .child(list)
-            .when_some(link, |body, target| {
-                body.cursor_pointer()
+            .map(|body| match link {
+                Some(target) => body
+                    .cursor_pointer()
                     .text_color(theme::semantic(cx).text.link)
-                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::Open(target))))
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::Open(target)))),
+                None if editable => body.on_click(cx.listener(edit_on_double_click)),
+                None => body,
             });
 
         div()
@@ -584,6 +590,7 @@ impl PreviewPanel {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
+                    .on_click(cx.listener(edit_on_double_click))
                     .child(
                         div()
                             .flex()
@@ -980,6 +987,18 @@ impl PreviewPanel {
 
 /// 类型标签的文案 key（1.x `clipboard:types.{subKind ?? kind}`）。
 /// 头部小号分段切换里的一段：选中段在亮色里是浮起的白块（带一层极淡的影），暗色里是亮一档的填充。
+/// 双击文本正文进入编辑（图片的单击看大图对应）；单击留给滚动和链接。
+fn edit_on_double_click(
+    _: &mut PreviewPanel,
+    event: &ClickEvent,
+    _: &mut Window,
+    cx: &mut Context<PreviewPanel>,
+) {
+    if event.click_count() >= 2 {
+        cx.emit(PreviewEvent::EditText);
+    }
+}
+
 fn segment(key: &str, selected: bool, cx: &App) -> Stateful<Div> {
     let tokens = theme::semantic(cx);
     let thumb = match theme::appearance(cx) {
@@ -1338,46 +1357,61 @@ pub mod native {
             .or_else(|| monitors.first().copied())
     }
 
-    /// 面板窗口里 `card`（逻辑像素）所在显示器上的几何。
+    /// 面板窗口里 `card`（逻辑像素）所在显示器工作区上的几何（不含任务栏，预览窗不被它挡住）。
     pub fn screen_place(window: &Window, card: Bounds<Pixels>) -> Option<ScreenPlace> {
         let origin = client_origin(window)?;
         let scale = f64::from(window.scale_factor());
-        let to_screen = |value: Pixels| f64::from(value.as_f32()) * scale;
-        let left = f64::from(origin.x) + to_screen(card.origin.x);
-        let top = f64::from(origin.y) + to_screen(card.origin.y);
-        let width = to_screen(card.size.width);
-        let height = to_screen(card.size.height);
+        // 面板里的逻辑矩形换成屏幕物理像素 (left, top, width, height)。
+        let to_screen = |bounds: Bounds<Pixels>| {
+            let physical = |value: Pixels| f64::from(value.as_f32()) * scale;
+            (
+                f64::from(origin.x) + physical(bounds.origin.x),
+                f64::from(origin.y) + physical(bounds.origin.y),
+                physical(bounds.size.width),
+                physical(bounds.size.height),
+            )
+        };
+        let (left, top, width, height) = to_screen(card);
         let monitor = monitor_at(Point {
             x: (left + width / 2.) as i32,
             y: (top + height / 2.) as i32,
         })?;
+        let work = monitor.work_area;
         let monitor_scale = monitor.scale();
+        let to_monitor = |(left, top, width, height): (f64, f64, f64, f64)| RectF {
+            left: (left - f64::from(work.left)) / monitor_scale,
+            top: (top - f64::from(work.top)) / monitor_scale,
+            width: width / monitor_scale,
+            height: height / monitor_scale,
+        };
 
         Some(ScreenPlace {
-            card: RectF {
-                left: (left - f64::from(monitor.monitor.left)) / monitor_scale,
-                top: (top - f64::from(monitor.monitor.top)) / monitor_scale,
-                width: width / monitor_scale,
-                height: height / monitor_scale,
-            },
+            card: to_monitor((left, top, width, height)),
+            window: to_monitor(to_screen(Bounds::new(
+                gpui::Point::default(),
+                window.viewport_size(),
+            ))),
             monitor: RectF {
                 left: 0.,
                 top: 0.,
-                width: f64::from(monitor.monitor.width()) / monitor_scale,
-                height: f64::from(monitor.monitor.height()) / monitor_scale,
+                width: f64::from(work.width()) / monitor_scale,
+                height: f64::from(work.height()) / monitor_scale,
             },
-            origin: (monitor.monitor.left, monitor.monitor.top),
+            origin: (work.left, work.top),
             scale: monitor_scale,
             dpi: monitor.dpi,
         })
     }
 }
 
-/// 卡片所在显示器上的几何：卡片与显示器都是以显示器左上角为原点的逻辑像素。
+/// 卡片所在显示器上的几何：卡片、主窗口与显示器都是以显示器（Windows 上是工作区）左上角为原点的
+/// 逻辑像素。
 pub struct ScreenPlace {
     pub card: RectF,
+    /// 卡片所在的主窗口（内容区）。
+    pub window: RectF,
     pub monitor: RectF,
-    /// 显示器左上角的屏幕坐标（物理像素）。
+    /// 显示器（Windows 上是工作区）左上角的屏幕坐标（物理像素）。
     pub origin: (i32, i32),
     /// 显示器的缩放比例。
     pub scale: f64,
@@ -1447,6 +1481,12 @@ pub mod native {
                 top: top - monitor.y,
                 width,
                 height,
+            },
+            window: RectF {
+                left: frame.origin.x - monitor.x,
+                top: primary_height - (frame.origin.y + frame.size.height) - monitor.y,
+                width: frame.size.width,
+                height: frame.size.height,
             },
             monitor: RectF {
                 left: 0.,

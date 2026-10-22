@@ -304,6 +304,18 @@ async fn load_fragment_text(
                 _ => None,
             })
         }
+        ClipboardFragment::ImageQrCode => {
+            let path = original_image_path(core, &item)?;
+            let codes = tokio::task::spawn_blocking(move || clipboard::qr::decode_qr_codes(&path))
+                .await
+                .map_err(|err| AppError::Other(anyhow::anyhow!("QR code task failed: {err}")))??;
+            if codes.is_empty() {
+                return Err(AppError::Clipboard(
+                    label(core.language(), Key::QrCodeNotFound).to_owned(),
+                ));
+            }
+            Some(codes.join("\n"))
+        }
         ClipboardFragment::Snippet { .. } | ClipboardFragment::Words { .. }
             if item.kind == ClipboardKind::Text =>
         {

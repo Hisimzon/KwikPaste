@@ -40,6 +40,8 @@ static EMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// 需要跨越分隔符整体识别的数字串：中国大陆手机号（可带空格 / 连字符）、日期、时间，
 /// 以及用连字符连接的编号（座机、订单号、序列号）。按词切分会把它们拆成几段。
+/// 斜杠或连字符连接的月 / 日（`05/28`、`05-28`、`2026-05-28`）先按整段取出，再由
+/// [`is_numeric_date`] 决定算日期还是编号。
 static JOINED_NUMBER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?P<phone>(?:\+?86[\s-]?)?1[3-9][0-9](?:[\s-]?[0-9]{4}){2})",
@@ -47,6 +49,7 @@ static JOINED_NUMBER_RE: LazyLock<Regex> = LazyLock::new(|| {
         r"|[0-9]{1,2}月[0-9]{1,2}[日号]",
         r"|[0-9]{4}[/.][0-9]{1,2}[/.][0-9]{1,2}",
         r"|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)",
+        r"|(?P<month_day>[0-9]{1,2}/[0-9]{1,2})",
         r"|[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)+",
     ))
     .expect("invalid snippet number regex")
@@ -101,6 +104,8 @@ pub enum ClipboardFragment {
     ImageWords { indices: Vec<usize> },
     /// 图片识别原文的字符区间，按 Unicode 标量计数，包含起点但不包含终点。
     ImageTextRange { start: usize, end: usize },
+    /// 图片里二维码的内容（有几个就按行连起来）。
+    ImageQrCode,
 }
 
 /// 拆词面板里的一个词。
@@ -234,8 +239,11 @@ fn extract_snippets(
         }
         let kind = if captures.name("phone").is_some() {
             SnippetKind::Phone
-        } else if captures.name("time").is_some() {
+        } else if captures.name("time").is_some() || is_numeric_date(found.as_str()) {
             SnippetKind::Time
+        } else if captures.name("month_day").is_some() {
+            // 不像日期的 `a/b`（分数、页码）照旧按词切分。
+            continue;
         } else {
             SnippetKind::Number
         };
@@ -339,6 +347,26 @@ fn has_ascii_digit(text: &str) -> bool {
     text.bytes().any(|byte| byte.is_ascii_digit())
 }
 
+/// 只由数字和 `/` `-` 组成的日期：`5/28`、`05-28`、`2026-05-28`；月、日超出范围的（`29-28`）不算。
+/// 月 / 日两段都只有一位时更常是分数或范围（`1/2`、`3-5`），也不算。
+fn is_numeric_date(text: &str) -> bool {
+    let parts: Vec<&str> = text.split(['/', '-']).collect();
+    let (month, day) = match parts[..] {
+        [year, month, day] if year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit()) => {
+            (month, day)
+        }
+        [month, day] if month.len() + day.len() >= 3 => (month, day),
+        _ => return false,
+    };
+    let in_range = |part: &str, max: u8| {
+        part.len() <= 2
+            && part.bytes().all(|b| b.is_ascii_digit())
+            && part.parse::<u8>().is_ok_and(|n| (1..=max).contains(&n))
+    };
+
+    in_range(month, 12) && in_range(day, 31)
+}
+
 /// 含数字的词才像编号、型号、尺寸、金额这类信息；单个字符或只有一位数字的短词（如 `4K`）太常见，跳过。
 fn is_info_word(word: &str) -> bool {
     if !word.chars().any(char::is_alphanumeric) {
@@ -434,8 +462,10 @@ pub fn resolve_fragment(item: &ClipboardItem, fragment: &ClipboardFragment) -> O
             (!text.is_empty() && source.contains(text.as_str())).then(|| text.clone())
         }
         ClipboardFragment::Words { indices } => select_words(source, indices),
-        // 图片识别文本来自派生表，由 core 的片段加载入口读取后拆词。
-        ClipboardFragment::ImageWords { .. } | ClipboardFragment::ImageTextRange { .. } => None,
+        // 图片识别文本来自派生表、二维码要解码原图，都由 core 的片段加载入口处理。
+        ClipboardFragment::ImageWords { .. }
+        | ClipboardFragment::ImageTextRange { .. }
+        | ClipboardFragment::ImageQrCode => None,
     }
 }
 
@@ -602,6 +632,35 @@ mod tests {
         for snippet in snippets {
             assert_eq!(text.get(snippet.range), Some(snippet.text.as_str()));
         }
+    }
+
+    #[test]
+    fn month_day_dates_stay_whole() {
+        let text = "2026年10月18日 05/28 29-28 29、21 2026/01/02 21+23 2026-05-28 12-31 3-5 1/2";
+        let snippets = extract_snippets(
+            text,
+            false,
+            MAX_PREVIEW_SNIPPETS,
+            &super::super::rules::CompiledRules::default(),
+        );
+        assert_eq!(
+            snippets
+                .iter()
+                .map(|snippet| (snippet.text.as_str(), snippet.kind))
+                .collect::<Vec<_>>(),
+            [
+                ("2026年10月18日", SnippetKind::Time),
+                ("05/28", SnippetKind::Time),
+                ("29-28", SnippetKind::Number),
+                ("29", SnippetKind::Number),
+                ("21", SnippetKind::Number),
+                ("2026/01/02", SnippetKind::Time),
+                ("23", SnippetKind::Number),
+                ("2026-05-28", SnippetKind::Time),
+                ("12-31", SnippetKind::Time),
+                ("3-5", SnippetKind::Number),
+            ]
+        );
     }
 
     #[test]

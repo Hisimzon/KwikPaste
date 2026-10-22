@@ -53,6 +53,7 @@ const ICONS = [
   "lucide:chevron-right",
   "lucide:download",
   "lucide:rotate-cw",
+  "lucide:scan-qr-code",
   "lucide:shrink",
   "lucide:zoom-in",
   "lucide:zoom-out",

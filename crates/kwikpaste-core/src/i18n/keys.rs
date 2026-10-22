@@ -35,6 +35,7 @@ pub enum CommandKey {
     DragTextEmpty,
     ExternalUrlUnsupported,
     FragmentUnavailable,
+    QrCodeNotFound,
     SplitTextOnly,
     SplitSensitiveRedacted,
     PortableStorageFixed,
