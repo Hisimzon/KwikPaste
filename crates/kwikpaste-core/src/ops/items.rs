@@ -878,12 +878,16 @@ impl Core {
         .await
     }
 
-    /// 「在文件管理器中显示」的目标路径；内容为空时返回 `None`。
+    /// 「在文件管理器中显示」的目标路径：图片记录是落盘的原图；内容为空时返回 `None`。
     pub async fn reveal_target(&self, id: &str) -> Result<Option<String>> {
         let core = self.clone();
         let id = id.to_owned();
         self.hop(async move {
             let item = find_required(&core.0.db.pool().await, &id).await?;
+            if item.kind == ClipboardKind::Image {
+                let path = original_image_path(&core.0, &item)?;
+                return Ok(Some(path.to_string_lossy().into_owned()));
+            }
             Ok(reveal_target(&item))
         })
         .await

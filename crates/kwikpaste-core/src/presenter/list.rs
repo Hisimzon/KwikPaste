@@ -333,8 +333,9 @@ pub(crate) fn compute_available_actions(
         _ => {}
     }
 
-    let can_reveal =
-        item.kind == ClipboardKind::Files || item.sub_kind == Some(ClipboardSubKind::Path);
+    // 图片记录显示落盘的原图。
+    let can_reveal = matches!(item.kind, ClipboardKind::Files | ClipboardKind::Image)
+        || item.sub_kind == Some(ClipboardSubKind::Path);
     if can_reveal {
         #[cfg(target_os = "macos")]
         actions.push(ClipboardAction::RevealInFinder);
