@@ -8,6 +8,7 @@
 pub mod bench;
 mod card;
 mod editing;
+mod editor;
 mod frame;
 mod group_bar;
 pub mod group_dialogs;
