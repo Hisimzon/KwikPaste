@@ -145,6 +145,7 @@
     "delete": "删除",
     "exit": "取消",
     "hint": "点击选择，按住 Shift 连选",
+    "paste": "粘贴",
     "protected": "收藏或置顶记录受删除保护，可在设置里允许删除",
     "selectAll": "全选",
     "selected": "已选 {{count}} 项"

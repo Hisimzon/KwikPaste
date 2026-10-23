@@ -1264,9 +1264,9 @@ impl ClipboardList {
         cx.notify();
     }
 
-    /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选；否则左键选中、记下拖出的
-    /// 起点（1.x 卡片 `draggable={!selecting}`）并预备单击动作（见 [`Self::click_card`]），中键按
-    /// 中键设置执行。
+    /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选，并记下拖出的起点（按住
+    /// 已勾选的卡片拖动时整组拖出）；否则左键选中、记下拖出的起点并预备单击动作（见
+    /// [`Self::click_card`]），中键按中键设置执行。
     fn press_card(
         &mut self,
         item: Arc<ListItem>,
@@ -1280,9 +1280,15 @@ impl ClipboardList {
                 self.controller.select(&item.id);
                 if event.modifiers.shift {
                     self.check_range(item, window, cx);
-                } else {
-                    self.toggle_checked(&item, window, cx);
+                    return;
                 }
+                // 已勾选的卡片松开时才取消勾选：按住拖动是把整组拖出去。
+                if self.selection.is_checked(&item.id) {
+                    self.armed_click = Some(item.id.clone());
+                } else {
+                    self.toggle_checked(&item, cx);
+                }
+                self.drag.press(item.id.to_string(), event.position);
             }
             return;
         }
@@ -1354,8 +1360,8 @@ impl ClipboardList {
     }
 
     /// 点击卡片（左键在同一张卡片上按下又松开）：“单击粘贴 / 复制”在没有拖出时执行，“双击粘贴 /
-    /// 复制”在第二次点击时执行（1.x `handleCardDoubleClick`）；多选时不响应。单击动作不放在按下时：
-    /// 那样拖出图片会先粘贴一次、投放时再贴一次。
+    /// 复制”在第二次点击时执行（1.x `handleCardDoubleClick`）；多选时只取消按下时就已勾选的那张。
+    /// 单击动作不放在按下时：那样拖出图片会先粘贴一次、投放时再贴一次。
     fn click_card(
         &mut self,
         item: Arc<ListItem>,
@@ -1368,6 +1374,9 @@ impl ClipboardList {
         }
         let armed = self.armed_click.take().is_some_and(|id| id == item.id);
         if self.selection.active() {
+            if armed {
+                self.toggle_checked(&item, cx);
+            }
             return;
         }
 

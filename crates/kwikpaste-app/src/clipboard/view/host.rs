@@ -55,8 +55,15 @@ pub trait ItemHost {
         cx: &mut App,
     ) -> Task<anyhow::Result<()>>;
 
-    /// 把记录拖到别的应用（`window` 是拖出源窗口）。任务在拖放结束后完成。
-    fn drag_out(&self, id: Arc<str>, window: &Window, cx: &mut App) -> Task<anyhow::Result<()>>;
+    /// 把记录拖到别的应用（`window` 是拖出源窗口），有 `selection` 时拖出合并后的多选。任务在拖放
+    /// 结束后完成。
+    fn drag_out(
+        &self,
+        id: Arc<str>,
+        selection: Option<(Vec<String>, ClipboardItemQuery)>,
+        window: &Window,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>>;
 }
 
 /// 平台层的粘贴链路（数据来自宿主的 core）。
@@ -132,8 +139,19 @@ impl ItemHost for PlatformHost {
         ok_or_anyhow(task, cx)
     }
 
-    fn drag_out(&self, id: Arc<str>, window: &Window, cx: &mut App) -> Task<anyhow::Result<()>> {
-        let task = platform::drag_out::start_item(id.to_string(), window, cx);
+    fn drag_out(
+        &self,
+        id: Arc<str>,
+        selection: Option<(Vec<String>, ClipboardItemQuery)>,
+        window: &Window,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>> {
+        let task = match selection {
+            Some((ids, query)) => {
+                platform::drag_out::start_selection(id.to_string(), ids, query, window, cx)
+            }
+            None => platform::drag_out::start_item(id.to_string(), window, cx),
+        };
         cx.foreground_executor().spawn(async move {
             let report = task.await?;
             log::debug!("drag-out of {id}: {report:?}");
@@ -207,7 +225,13 @@ impl ItemHost for SourceHost {
         Task::ready(Ok(()))
     }
 
-    fn drag_out(&self, id: Arc<str>, _: &Window, _: &mut App) -> Task<anyhow::Result<()>> {
+    fn drag_out(
+        &self,
+        id: Arc<str>,
+        _: Option<(Vec<String>, ClipboardItemQuery)>,
+        _: &Window,
+        _: &mut App,
+    ) -> Task<anyhow::Result<()>> {
         log::info!("no drag-out for {id}: the data is not the host core's");
         Task::ready(Ok(()))
     }

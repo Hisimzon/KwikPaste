@@ -21,6 +21,8 @@ pub fn label(key: Key) -> &'static str {
         Key::DragTextEmpty => "Text content is empty",
         Key::ExternalUrlUnsupported => "Only links starting with http or https can be opened",
         Key::FragmentUnavailable => "The selected text is no longer in this record",
+        Key::SelectionMixedKinds => "Text can't be merged with images or files",
+        Key::SelectionFilesMissing => "None of the selected images or files exist anymore",
         Key::QrCodeNotFound => "No QR code was found in this image",
         Key::SplitTextOnly => "Only text records can be split into words",
         Key::SplitSensitiveRedacted => "Sensitive content is redacted and can't be split",

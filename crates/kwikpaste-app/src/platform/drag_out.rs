@@ -29,8 +29,11 @@ use gpui::{
     PlatformInput, Point, Task, Window, point, px,
 };
 use kwikpaste_core::Core;
-use kwikpaste_core::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind};
+use kwikpaste_core::db::models::{
+    ClipboardItem, ClipboardItemQuery, ClipboardKind, ClipboardSubKind,
+};
 use kwikpaste_core::i18n::commands::{Key, label};
+use kwikpaste_core::ops::MergedSelection;
 #[allow(unused_imports, reason = "UI 接线用的接口，见本模块文档")]
 pub use kwikpaste_os::drag_out::{DragData, DragReport, DragResult};
 
@@ -115,6 +118,39 @@ pub fn start_item(
             .await?
             .with_context(|| format!("item {item_id} no longer exists"))?;
         let data = payload(&item, &core)?;
+        let preview = preview(&item, &data, &core).await;
+        run(target?, data, preview, cx).await
+    })
+}
+
+/// 拖出多选的记录：文本合并成一段纯文本，图片 / 文件合成一份文件列表（见
+/// [`Core::merge_selection`]），预览图跟按住的那张卡片走。`ids` 不足两条时只拖 `item_id`。
+pub fn start_selection(
+    item_id: String,
+    ids: Vec<String>,
+    query: ClipboardItemQuery,
+    window: &Window,
+    cx: &mut App,
+) -> Task<anyhow::Result<DragReport>> {
+    let target = DragTarget::of(window);
+    let core = core_host::core(cx).cloned();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let core = core.context("the core is not running")?;
+        let item = core
+            .find_item(&item_id)
+            .await?
+            .with_context(|| format!("item {item_id} no longer exists"))?;
+        let data = match core.merge_selection(ids, query).await? {
+            Some(MergedSelection::Text(plain)) => DragData::Text {
+                plain,
+                html: None,
+                rtf: None,
+            },
+            Some(MergedSelection::Files(paths)) => {
+                DragData::Files(paths.into_iter().map(PathBuf::from).collect())
+            }
+            None => payload(&item, &core)?,
+        };
         let preview = preview(&item, &data, &core).await;
         run(target?, data, preview, cx).await
     })

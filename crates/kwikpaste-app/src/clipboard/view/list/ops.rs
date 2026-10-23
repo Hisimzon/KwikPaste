@@ -214,7 +214,7 @@ impl ClipboardList {
     }
 
     /// 多选快照：交给 core 按完整列表排序并读取原文，不能使用可能脱敏或未加载的卡片正文。
-    fn text_selection(&self) -> Option<(Vec<String>, ClipboardItemQuery)> {
+    pub(super) fn checked_selection(&self) -> Option<(Vec<String>, ClipboardItemQuery)> {
         (self.selection.count() >= 2).then(|| {
             (
                 self.selection
@@ -227,13 +227,13 @@ impl ClipboardList {
         })
     }
 
-    /// 粘贴记录或多选文本：交给宿主写回、让出前台、注入粘贴键，同时发 `ListIntent::Paste` 通知。
+    /// 粘贴记录或合并后的多选：交给宿主写回、让出前台、注入粘贴键，同时发 `ListIntent::Paste` 通知。
     pub fn paste_item(&mut self, id: Arc<str>, plain: bool, cx: &mut Context<Self>) {
         log::info!("paste requested for {id} (plain: {plain})");
         self.close_preview(cx);
         let task = self
             .host
-            .paste(id.clone(), plain, self.text_selection(), cx);
+            .paste(id.clone(), plain, self.checked_selection(), cx);
         self.report_host_failure("commands:labels.paste", task, cx);
         cx.emit(ListIntent::Paste { id, plain });
     }
@@ -455,7 +455,9 @@ impl ClipboardList {
         cx: &mut Context<Self>,
     ) {
         self.close_preview_of(&id, cx);
-        let task = self.host.copy(id.clone(), plain, self.text_selection(), cx);
+        let task = self
+            .host
+            .copy(id.clone(), plain, self.checked_selection(), cx);
 
         cx.spawn_in(window, async move |list, cx| {
             let result = task.await;
@@ -886,12 +888,17 @@ impl ClipboardList {
         cx.notify();
     }
 
-    /// 卡片按住拖过系统阈值：把这条记录拖到别的应用（1.x `startDragClipboardItem`）。拖出期间面板
-    /// 不激活；失败（文件已不存在等）时提示原因。
+    /// 卡片按住拖过系统阈值：把这条记录拖到别的应用（1.x `startDragClipboardItem`）；多选时按住的
+    /// 是已勾选的卡片就整组一起拖出。拖出期间面板不激活；失败（文件已不存在等）时提示原因。
     pub(super) fn drag_out(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
         log::info!("drag-out requested for {id}");
         self.close_preview(cx);
-        let task = self.host.drag_out(id.clone(), window, cx);
+        let selection = self
+            .selection
+            .is_checked(&id)
+            .then(|| self.checked_selection())
+            .flatten();
+        let task = self.host.drag_out(id.clone(), selection, window, cx);
         self.report_host_failure("commands:labels.drag", task, cx);
         cx.emit(ListIntent::DragOut { id });
     }

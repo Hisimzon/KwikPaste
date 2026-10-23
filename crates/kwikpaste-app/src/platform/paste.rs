@@ -43,7 +43,7 @@ pub fn paste(cx: &mut App, id: String, plain: bool, keep_visible: bool) -> Task<
     paste_selection(cx, id, plain, None, keep_visible)
 }
 
-/// 优先合并多选文本；不能合并时仍粘贴 `id`，整个操作只注入一次粘贴键。
+/// 多选两条以上时合并成一段文本或一份文件列表再粘贴，否则粘贴 `id`；整个操作只注入一次粘贴键。
 pub fn paste_selection(
     cx: &mut App,
     id: String,
@@ -59,7 +59,7 @@ pub fn paste_selection(
         let _phase = super::enter_phase(crate::health::Phase::Paste);
         let started = Instant::now();
         let merged = if let Some((ids, query)) = selection {
-            core.copy_text_selection(ids, query).await?.is_some()
+            core.copy_selection(ids, query).await?.is_some()
         } else {
             false
         };
@@ -119,7 +119,7 @@ pub fn copy(
     copy_selection(cx, id, plain, None, keep_visible)
 }
 
-/// 优先合并多选文本；不能合并时仍复制 `id`，隐藏规则同 [`copy`]。
+/// 多选两条以上时合并后复制（同 [`paste_selection`]），否则复制 `id`；隐藏规则同 [`copy`]。
 pub fn copy_selection(
     cx: &mut App,
     id: String,
@@ -133,7 +133,7 @@ pub fn copy_selection(
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         let merged = if let Some((ids, query)) = selection {
-            core.copy_text_selection(ids, query).await?
+            core.copy_selection(ids, query).await?
         } else {
             None
         };

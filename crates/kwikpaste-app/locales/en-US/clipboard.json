@@ -145,6 +145,7 @@
     "delete": "Delete",
     "exit": "Cancel",
     "hint": "Click to select, Shift-click for a range",
+    "paste": "Paste",
     "protected": "Favorite and pinned records are protected from deletion. You can allow it in settings.",
     "selectAll": "Select all",
     "selected": "{{count}} selected"

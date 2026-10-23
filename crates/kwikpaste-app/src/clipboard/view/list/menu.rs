@@ -199,12 +199,10 @@ impl ClipboardList {
             MenuAction::EditContent => self.edit_content(id, window, cx),
             MenuAction::RestoreOriginal => self.restore_original(id, window, cx),
             MenuAction::Select => {
-                // 进入多选并勾上这一条（受删除保护的勾不上，1.x 同）。
+                // 进入多选并勾上这一条。
                 self.selection.enter();
-                if self.can_delete(item.is_favorite, item.is_pinned)
-                    && !self.selection.is_checked(&id)
-                {
-                    self.toggle_checked(&item, window, cx);
+                if !self.selection.is_checked(&id) {
+                    self.toggle_checked(&item, cx);
                 }
             }
             MenuAction::Delete => self.delete(id, window, cx),

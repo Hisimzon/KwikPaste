@@ -395,7 +395,7 @@ fn text_selection_joins_in_list_order_using_full_plain_text() {
         .join("\n");
     let reversed = refs.iter().rev().map(|item| item.id.clone()).collect();
 
-    let outcome = block_on(core.copy_text_selection(reversed, query))
+    let outcome = block_on(core.copy_selection(reversed, query))
         .unwrap()
         .unwrap();
     assert!(outcome.hide_window);
@@ -412,32 +412,83 @@ fn text_selection_joins_in_list_order_using_full_plain_text() {
 }
 
 #[test]
-fn text_selection_does_not_write_when_any_item_is_non_text() {
+fn selection_of_images_and_files_becomes_one_file_list() {
     let fixture = Fixture::new();
     let core = fixture.start();
-    let first = copy_in(&core, text("first")).unwrap();
-    let second = copy_in(&core, text("second")).unwrap();
-    for state in [
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a.txt");
+    std::fs::write(&file, "a").unwrap();
+    let file = file.to_string_lossy().into_owned();
+    let image = copy_in(
+        &core,
         MemoryState {
             png: Some(sample_png(2, 2)),
             ..Default::default()
         },
+    )
+    .unwrap();
+    let files = copy_in(
+        &core,
         MemoryState {
-            files: Some(vec!["C:/fixture.txt".into()]),
+            files: Some(vec![file.clone(), "C:/missing.txt".into()]),
             ..Default::default()
         },
-    ] {
-        let other = copy_in(&core, state).unwrap();
-        fixture.clipboard.set_text("unchanged".into()).unwrap();
-        assert!(block_on(core.copy_text_selection(
-            vec![first.clone(), other.clone(), second.clone()],
-            ClipboardItemQuery::default(),
-        ))
+    )
+    .unwrap();
+    let source = block_on(core.prepare_image_save(&image))
         .unwrap()
-        .is_none());
-        assert_eq!(fixture.clipboard.snapshot(), text("unchanged"));
-        assert_eq!(use_count(&core, &other), 1);
-    }
+        .source
+        .to_string_lossy()
+        .into_owned();
+    let expected: Vec<String> = block_on(core.list_item_refs(ClipboardItemQuery::default()))
+        .unwrap()
+        .into_iter()
+        .map(|item| {
+            if item.id == image {
+                source.clone()
+            } else {
+                file.clone()
+            }
+        })
+        .collect();
+
+    assert!(block_on(core.copy_selection(
+        vec![image.clone(), files.clone()],
+        ClipboardItemQuery::default(),
+    ))
+    .unwrap()
+    .is_some());
+    assert_eq!(
+        fixture.clipboard.snapshot(),
+        MemoryState {
+            files: Some(expected),
+            ..Default::default()
+        }
+    );
+    assert!(copy_in(&core, fixture.clipboard.snapshot()).is_none());
+}
+
+#[test]
+fn mixed_selection_is_refused_without_writing() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let first = copy_in(&core, text("first")).unwrap();
+    let image = copy_in(
+        &core,
+        MemoryState {
+            png: Some(sample_png(2, 2)),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    fixture.clipboard.set_text("unchanged".into()).unwrap();
+
+    assert!(block_on(
+        core.copy_selection(vec![first, image.clone()], ClipboardItemQuery::default(),)
+    )
+    .is_err());
+    assert_eq!(fixture.clipboard.snapshot(), text("unchanged"));
+    assert_eq!(use_count(&core, &image), 1);
 }
 
 #[test]
