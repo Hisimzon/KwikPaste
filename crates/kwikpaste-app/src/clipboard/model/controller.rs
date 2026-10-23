@@ -4,7 +4,8 @@
 //!   指针移进卡片就把它设为当前项，键盘和指针共用一个选中。
 //! - ↑/↓ 夹在首尾、不循环；目标行没加载时先发请求，这一次移动作废（与 1.x 相同）。
 //! - 剪贴板有新内容时：面板隐藏时立即重拉第一页（再显示总会回到顶部，显示时数据已经是新的）；
-//!   显示中不在顶部只记挂起，回到顶部的那一帧再刷新（附录 D L3）。
+//!   显示中不在顶部只记挂起，回到顶部的那一帧再刷新（附录 D L3）。已有记录被复用时例外：
+//!   就地重拉当前范围，让它马上离开原位、排到顶部，视口锚点由视图保持。
 
 use std::sync::Arc;
 
@@ -57,6 +58,8 @@ pub enum UpdateAction {
     },
     /// 不在顶部或面板隐藏：记成挂起，回到顶部再刷新。
     Defer { reset_selection: bool },
+    /// 显示中不在顶部时复用了已有记录：就地重拉当前范围，保持视口锚点。
+    RefreshInPlace,
 }
 
 /// 数字提示 1–9、0（Mod+数字粘贴第 N 个可见项）。
@@ -229,6 +232,17 @@ impl ListController {
         if !visible {
             self.pending_reload = false;
             return UpdateAction::ReloadNow { reset_selection };
+        }
+        if !at_top
+            && matches!(
+                update,
+                ListUpdate::Upserted {
+                    deduplicated: true,
+                    ..
+                }
+            )
+        {
+            return UpdateAction::RefreshInPlace;
         }
 
         self.request_reload_at_top(at_top, reset_selection)
@@ -501,6 +515,27 @@ mod tests {
         assert!(!controller.take_reload_at_top(false));
         assert!(controller.take_reload_at_top(true));
         assert!(!controller.take_reload_at_top(true), "consumed once");
+    }
+
+    #[test]
+    fn reuse_refreshes_in_place_below_the_top() {
+        let mut controller = ListController::new();
+        let reuse = ListUpdate::Upserted {
+            kind: ItemKind::Text,
+            deduplicated: true,
+        };
+
+        assert_eq!(
+            controller.on_update(reuse, true, false),
+            UpdateAction::RefreshInPlace
+        );
+        assert!(!controller.has_pending_reload());
+        assert_eq!(
+            controller.on_update(reuse, true, true),
+            UpdateAction::ReloadNow {
+                reset_selection: false
+            }
+        );
     }
 
     #[test]

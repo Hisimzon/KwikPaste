@@ -475,7 +475,7 @@ impl ClipboardList {
         let reset_selection = match action {
             UpdateAction::ReloadNow { reset_selection }
             | UpdateAction::Defer { reset_selection } => reset_selection,
-            UpdateAction::Ignore => false,
+            UpdateAction::RefreshInPlace | UpdateAction::Ignore => false,
         };
         if reset_selection {
             // 清理、导入之后不再勾着可能已经不存在的记录（1.x `resetChecked`）。
@@ -484,8 +484,10 @@ impl ClipboardList {
         if action != UpdateAction::Ignore {
             self.freshness.changed();
         }
-        if let UpdateAction::ReloadNow { .. } = action {
-            self.reload(cx);
+        match action {
+            UpdateAction::ReloadNow { .. } => self.reload(cx),
+            UpdateAction::RefreshInPlace => self.refresh(cx),
+            UpdateAction::Defer { .. } | UpdateAction::Ignore => {}
         }
         cx.notify();
     }
