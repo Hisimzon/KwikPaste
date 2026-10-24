@@ -5438,10 +5438,10 @@ pub(crate) fn shortcut_from_keystroke(keystroke: &Keystroke) -> Option<String> {
     if keystroke.modifiers.alt {
         modifiers.push("Alt");
     }
-    if keystroke.modifiers.shift {
+    let (key, shifted) = normalize_recorded_key(keystroke.key.as_str())?;
+    if keystroke.modifiers.shift || shifted {
         modifiers.push("Shift");
     }
-    let key = normalize_recorded_key(keystroke.key.as_str())?;
     if modifiers.is_empty() && !key.starts_with('F') {
         return None;
     }
@@ -5458,16 +5458,48 @@ fn shortcut_path(id: &str) -> Option<&'static str> {
     }
 }
 
-fn normalize_recorded_key(key: &str) -> Option<String> {
+/// GPUI 把标点键报成字符本身，Shift+数字/标点报成上档字符并去掉 Shift；
+/// 按美式键位还原成 1.x 的主键写法，第二项表示需要补回 Shift。
+fn normalize_recorded_key(key: &str) -> Option<(String, bool)> {
+    const SHIFTED: [(char, char); 21] = [
+        ('~', '`'),
+        ('!', '1'),
+        ('@', '2'),
+        ('#', '3'),
+        ('$', '4'),
+        ('%', '5'),
+        ('^', '6'),
+        ('&', '7'),
+        ('*', '8'),
+        ('(', '9'),
+        (')', '0'),
+        ('_', '-'),
+        ('+', '='),
+        ('{', '['),
+        ('}', ']'),
+        ('|', '\\'),
+        (':', ';'),
+        ('"', '\''),
+        ('<', ','),
+        ('>', '.'),
+        ('?', '/'),
+    ];
     let lower = key.to_ascii_lowercase();
-    if lower.len() == 1 && lower.as_bytes()[0].is_ascii_alphanumeric() {
-        return Some(lower.to_ascii_uppercase());
+    let mut chars = lower.chars();
+    if let (Some(key), None) = (chars.next(), chars.next()) {
+        if key.is_ascii_alphanumeric() || "`-=[]\\;',./".contains(key) {
+            return Some((key.to_ascii_uppercase().to_string(), false));
+        }
+        return SHIFTED
+            .iter()
+            .find(|(shifted, _)| *shifted == key)
+            .map(|(_, base)| (base.to_string(), true));
     }
     if let Some(number) = lower.strip_prefix('f')
         && let Ok(number) = number.parse::<u8>()
         && (1..=24).contains(&number)
     {
-        return Some(format!("F{number}"));
+        return Some((format!("F{number}"), false));
     }
     let name = match lower.as_str() {
         "backspace" => "Backspace",
@@ -5479,26 +5511,15 @@ fn normalize_recorded_key(key: &str) -> Option<String> {
         "insert" => "Insert",
         "pageup" | "page_up" => "PageUp",
         "pagedown" | "page_down" => "PageDown",
-        "arrowup" => "ArrowUp",
-        "arrowdown" => "ArrowDown",
-        "arrowleft" => "ArrowLeft",
-        "arrowright" => "ArrowRight",
+        "up" => "ArrowUp",
+        "down" => "ArrowDown",
+        "left" => "ArrowLeft",
+        "right" => "ArrowRight",
         "space" => "Space",
         "tab" => "Tab",
-        "backquote" | "grave" => "Backquote",
-        "backslash" => "Backslash",
-        "bracketleft" => "BracketLeft",
-        "bracketright" => "BracketRight",
-        "comma" => "Comma",
-        "equal" => "Equal",
-        "minus" => "Minus",
-        "period" => "Period",
-        "quote" => "Quote",
-        "semicolon" => "Semicolon",
-        "slash" => "Slash",
         _ => return None,
     };
-    Some(name.to_owned())
+    Some((name.to_owned(), false))
 }
 
 /// 录制按钮的提示和行内提示共用原因；自身冲突优先于系统注册失败。
@@ -5774,6 +5795,28 @@ mod tests {
         assert_eq!(
             shortcut_from_keystroke(&keystroke).as_deref(),
             Some("Alt+Shift+X")
+        );
+    }
+
+    #[test]
+    fn recorded_punctuation_restores_the_shift_gpui_folds_into_the_key() {
+        let recorded = |key: &str, shift: bool| {
+            shortcut_from_keystroke(&Keystroke {
+                modifiers: Modifiers {
+                    control: true,
+                    shift,
+                    ..Modifiers::default()
+                },
+                key: key.to_owned(),
+                key_char: None,
+            })
+        };
+        assert_eq!(recorded("`", false).as_deref(), Some("Control+`"));
+        assert_eq!(recorded("~", false).as_deref(), Some("Control+Shift+`"));
+        assert_eq!(recorded("!", false).as_deref(), Some("Control+Shift+1"));
+        assert_eq!(
+            recorded("up", true).as_deref(),
+            Some("Control+Shift+ArrowUp")
         );
     }
 
