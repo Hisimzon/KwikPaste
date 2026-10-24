@@ -1,5 +1,5 @@
-// Checks Windows installers against the size budget in lib/size.mjs (warning above 5.5 MiB, error above
-// 6 MiB) and prints every size in MiB; --exe also prints the size of the packaged exe. Native CI runs it on
+// Checks Windows installers against the size budget in lib/size.mjs (warning above 6 MiB, error above
+// 6.5 MiB) and prints every size in MiB; --exe also prints the size of the packaged exe. Native CI runs it on
 // every build, so the installer cannot grow past the budget unnoticed between releases.
 //
 // Usage: node scripts/ci/check-installer-size.mjs <setup.exe>... [--exe <KwikPaste.exe>]...
