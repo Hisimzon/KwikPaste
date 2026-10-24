@@ -31,7 +31,6 @@ use super::{
 use crate::{
     clipboard::{
         model::{
-            actions::DeletePolicy,
             controller::ListUpdate,
             empty_state::empty_text,
             filter::{ListFilter, Range},
@@ -222,6 +221,7 @@ impl Driver {
                 limit: 1,
                 filter,
                 sort: Default::default(),
+                hide_favorites: false,
             })
             .await
             .map(|page| page.total)
@@ -1576,7 +1576,8 @@ impl Driver {
             .await;
     }
 
-    /// 拖出：按住卡片拖过系统阈值交给宿主拖出那张卡片；只挪 1 px 不算拖；多选时不拖。
+    /// 拖出：按住卡片拖过系统阈值交给宿主拖出那张卡片；只挪 1 px 不算拖；多选时按住已勾选的卡片
+    /// 照样拖出（整组），勾选不变。
     async fn drag_out(&mut self, cx: &mut AsyncApp) {
         self.focus_list(cx);
         let Some(item) = self.hover_row(cx).await else {
@@ -1601,13 +1602,17 @@ impl Driver {
         );
 
         self.key(cx, "secondary-a");
-        self.settle(cx, |list, _| list.selecting()).await;
+        self.settle(cx, |list, _| list.checked_count() > 0).await;
+        let checked = self.read(cx, |list, _| list.checked_count());
         self.intents.borrow_mut().clear();
         self.press_and_move(cx, (180., 360.), (230., 380.));
         let selecting = dragged(&self.intents.borrow());
-        self.check("no drag-out while selecting", selecting.is_none(), || {
-            format!("{selecting:?}")
-        });
+        let kept = self.read(cx, |list, _| list.checked_count());
+        self.check(
+            "dragging a checked card drags the selection and keeps it checked",
+            selecting.as_ref() == Some(&item.id) && kept == checked,
+            || format!("drag {selecting:?}, checked {checked} -> {kept}"),
+        );
         self.key(cx, "escape");
         self.pointer_at(cx, 20., 20.);
     }
@@ -1731,6 +1736,7 @@ impl Driver {
                             limit: 1,
                             filter: ListFilter::default(),
                             sort: Default::default(),
+                            hide_favorites: false,
                         })
                         .items
                         .first()
@@ -2069,25 +2075,22 @@ impl Driver {
                 limit: 0,
                 filter: ListFilter::default(),
                 sort: Default::default(),
+                hide_favorites: false,
             })
             .await
             .unwrap_or_default();
-        let policy = DeletePolicy::default();
-        let deletable = refs
-            .iter()
-            .filter(|item| policy.can_delete(item.is_favorite, item.is_pinned, false))
-            .count();
+        let every = refs.len();
 
-        // Mod+A：进入多选并全选能删的记录；再按一次取消全选。
+        // Mod+A：进入多选并全选（收藏、置顶也勾上）；再按一次取消全选。
         self.key(cx, "secondary-a");
         let all = self
             .settle(cx, |list, _| {
-                list.selecting() && list.checked_count() == deletable
+                list.selecting() && list.checked_count() == every
             })
             .await;
         let count = self.read(cx, |list, _| list.checked_count());
-        self.check("mod+a selects every deletable row", all, || {
-            format!("want {deletable}, got {count}")
+        self.check("mod+a selects every row", all, || {
+            format!("want {every}, got {count}")
         });
         self.key(cx, "secondary-a");
         let none = self.read(cx, |list, _| list.selecting() && list.checked_count() == 0);
@@ -2095,7 +2098,7 @@ impl Driver {
             "selection not cleared".into()
         });
 
-        // Enter 勾选当前项（受保护的勾不上）。
+        // Enter 勾选当前项。
         self.select_where(cx, |item| !item.is_pinned && !item.is_favorite);
         self.key(cx, "enter");
         self.key(cx, "down");

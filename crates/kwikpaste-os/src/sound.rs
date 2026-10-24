@@ -1,5 +1,6 @@
-//! 复制成功提示音：内嵌 16-bit PCM WAV，按平方曲线调整音量。
+//! 复制成功提示音：内嵌双声道 16-bit PCM WAV，按平方曲线调整音量。
 //!
+//! 左右声道使用相同样本，避免面向耳机 L/R 的 APO 配置遇到单声道 C 布局。
 //! 每段 WAV 开头都有 200 ms 静音：输出设备省电休眠后要几百毫秒才醒，0.1 秒的提示音会被整段吞掉。
 //! Windows 用异步 `PlaySoundW`；macOS 在短命线程里持有 `NSSound` 到播放结束。
 //! 调用方（包括偏好页试听）不等待音频设备。
@@ -280,6 +281,14 @@ mod tests {
         CopySoundTone::Chime,
         CopySoundTone::Tick,
     ];
+
+    #[test]
+    fn embedded_tones_are_stereo_pcm() {
+        for tone in TONES {
+            // fmt 块：PCM（1）、双声道（2）。
+            assert_eq!(&tone_wav(tone)[20..24], &[1, 0, 2, 0], "{tone:?}");
+        }
+    }
 
     #[test]
     fn full_volume_borrows_original_including_embedded_waves() {

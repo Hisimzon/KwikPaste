@@ -59,12 +59,10 @@ fn write_text(
     plain: bool,
 ) -> Result<()> {
     // 纯文本模式下，OS 提供的 plain 表示优先；缺失时退回 content（plain 文本场景下 content 即纯文本）。
+    // 去掉末尾空白：Excel 等来源的纯文本自带结尾换行，粘贴后会多出一行。
     let (content, sub_kind) = if plain {
-        let text = item
-            .search_text
-            .clone()
-            .unwrap_or_else(|| item.content.clone());
-        (text, None)
+        let text = item.search_text.as_deref().unwrap_or(&item.content);
+        (text.trim_end().to_owned(), None)
     } else {
         (item.content.clone(), item.sub_kind)
     };
@@ -253,6 +251,19 @@ mod tests {
         assert_eq!(read_item.sub_kind, None);
         assert_eq!(read_item.content, "Hello World");
         assert!(guard.should_skip(&read_item.content_hash));
+    }
+
+    // 纯文本模式：去掉末尾空白（Excel 单元格复制自带 \r\n）。
+    #[test]
+    fn plain_mode_trims_trailing_whitespace() {
+        let (_dir, store) = temp_store();
+        let guard = WritebackGuard::new();
+        let clipboard = MemoryClipboard::new();
+
+        let item = text_item("a\tb\r\n", None, None);
+        write_to_clipboard(&clipboard, &store, &guard, &item, true).unwrap();
+
+        assert_eq!(clipboard.snapshot().text.as_deref(), Some("a\tb"));
     }
 
     // HTML 写回同时带纯文本回退，两种表示的哈希都登记，读回 HTML 时被抑制。

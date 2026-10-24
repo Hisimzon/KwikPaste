@@ -226,6 +226,7 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["doubleTap"] = serde_json::json!({"key": "disabled", "side": "any"});
     // 夹具没有免焦点搜索开关，读取后应补上新版本默认值（默认关）。
     expected["clipboard"]["search"]["typeToSearch"] = Value::Bool(false);
+    expected["clipboard"]["content"]["hideFavoritesInAll"] = Value::Bool(false);
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
     expected["clipboard"]["feedback"]["copySoundTone"] = Value::from("classic");
     expected["clipboard"]["display"]["layout"] = Value::from("single");

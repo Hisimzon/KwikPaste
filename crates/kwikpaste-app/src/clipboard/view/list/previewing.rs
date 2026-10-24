@@ -72,6 +72,10 @@ pub(super) struct Previewing {
     session: Option<(Arc<str>, PreviewTrigger)>,
     /// 正在看识别文字（而不是图片本身）的图片记录；换了记录或关上预览就回到图片。
     image_text: Option<Arc<str>>,
+    /// 上一次摆好的预览窗：同一条换视图时沿用它的顶边；关上预览就清掉。
+    placed: Option<(Arc<str>, preview::Geometry)>,
+    /// 「拆词」临时换的文本方式，只管这一次预览（键盘换当前项时跟着走），不写进设置；关上预览就清掉。
+    text_view: Option<PreviewTextView>,
     /// 每次打开、关闭都加一，晚到的结果按它作废。
     request: u64,
     hover_timer: Option<Task<()>>,
@@ -120,10 +124,32 @@ fn hover_delay(delay: PreviewHoverDelayMs) -> Duration {
 }
 
 impl ClipboardList {
-    /// 直接打开现有预览，并切到可选择词语的模式。
+    /// 拆词：打开这一条的预览并切到选词；正在选词预览这一条时再拆一次就退回原文。只管这一次预览，
+    /// 不改「预览方式」设置。
     pub fn split_words(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
-        self.settings.clipboard.preview.text_view = PreviewTextView::Words;
-        self.open_preview(id, PreviewTrigger::Words, cx);
+        let session = self
+            .previewing
+            .session
+            .clone()
+            .filter(|(session, _)| *session == id);
+        if session.is_none() {
+            self.close_preview(cx);
+        }
+        let (view, trigger) = match session {
+            Some((_, trigger)) if self.preview_text_view() == PreviewTextView::Words => {
+                (PreviewTextView::Plain, trigger)
+            }
+            _ => (PreviewTextView::Words, PreviewTrigger::Words),
+        };
+        self.previewing.text_view = Some(view);
+        self.open_preview(id, trigger, cx);
+    }
+
+    /// 当前预览用的文本方式：拆词临时换的优先，否则按设置。
+    fn preview_text_view(&self) -> PreviewTextView {
+        self.previewing
+            .text_view
+            .unwrap_or(self.settings.clipboard.preview.text_view)
     }
 
     /// 正在预览的记录与打开方式。
@@ -205,6 +231,16 @@ impl ClipboardList {
             PreviewEvent::Words { paste } => self.use_preview_words(*paste, cx),
             PreviewEvent::ImageText(view) => self.switch_preview_image_text(*view, cx),
             PreviewEvent::Snippet(text) => self.copy_preview_snippet(text.clone(), cx),
+            PreviewEvent::PasteSnippet(text) => {
+                if let Some((id, _)) = self.previewing.session.clone() {
+                    self.paste_snippet(&id, text.clone(), cx);
+                }
+            }
+            PreviewEvent::OpenSnippet(text, kind) => {
+                if let Some((id, _)) = self.previewing.session.clone() {
+                    self.open_snippet(&id, text, *kind, cx);
+                }
+            }
             PreviewEvent::Open(target) => self.open_preview_target(*target, cx),
             PreviewEvent::ViewImage => {
                 if let Some((id, _)) = self.previewing.session.clone() {
@@ -215,7 +251,24 @@ impl ClipboardList {
                 self.close_preview(cx);
                 cx.reveal_path(Path::new(path.as_ref()));
             }
+            PreviewEvent::EditText => self.edit_preview_text(cx),
         }
+    }
+
+    /// 双击了预览里的正文：关掉预览，打开这一条的内容编辑框。
+    fn edit_preview_text(&mut self, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.previewing.session.clone() else {
+            return;
+        };
+        let window = self.window;
+        cx.spawn(async move |list, cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    list.update(cx, |list, cx| list.edit_content(id, window, cx))
+                })
+                .ok();
+        })
+        .detach();
     }
 
     /// 点了预览里的链接 / 邮箱：关掉预览，交给浏览器或邮件客户端。
@@ -452,6 +505,8 @@ impl ClipboardList {
         self.previewing.follow_timer = None;
         self.previewing.pointer_inside = false;
         self.previewing.image_text = None;
+        self.previewing.placed = None;
+        self.previewing.text_view = None;
         self.previewing.request += 1;
         let was_open = self.previewing.session.take().is_some();
         if !was_open {
@@ -599,6 +654,7 @@ impl ClipboardList {
     /// 切换预览的文本方式：写进设置，当前预览按新方式重开（尺寸也跟着变）。
     fn switch_preview_text_view(&mut self, view: PreviewTextView, cx: &mut Context<Self>) {
         self.settings.clipboard.preview.text_view = view;
+        self.previewing.text_view = None;
         let future = self.source.set_preview_text_view(view);
         cx.spawn(async move |list, cx| {
             let result = future.await;
@@ -651,22 +707,37 @@ impl ClipboardList {
             .and_then(|preview| preview.payload.text.as_deref())
             .map(|text| preview::text_rows(text, wrap_width, text_scale, cx))
             .unwrap_or_default();
-        let measured_metrics = preview.as_ref().map(|preview| match preview.metrics {
-            // core 只能按字数估行数，这里换成按正文字体实际折出的行数。
-            PreviewContentMetrics::Text { .. } => PreviewContentMetrics::Text {
-                rows: u32::try_from(rows.len()).unwrap_or(u32::MAX),
-            },
-            _ => preview::measure_metrics(
-                &preview.metrics,
-                preview.payload.text.as_deref(),
-                &preview.payload.words,
+        let text_view = self.preview_text_view();
+        let measured_metrics = preview.as_ref().map(|preview| {
+            let payload = &preview.payload;
+            let metrics = match (&preview.metrics, payload.text.as_deref()) {
+                // core 按设置里的预览方式量；拆词可能临时换了方式，文本按这次实际的视图重新量。
+                (PreviewContentMetrics::Text { .. } | PreviewContentMetrics::Words { .. }, _)
+                    if text_view == PreviewTextView::Plain || payload.words.is_empty() =>
+                {
+                    // core 只能按字数估行数，这里换成按正文字体实际折出的行数。
+                    return PreviewContentMetrics::Text {
+                        rows: u32::try_from(rows.len()).unwrap_or(u32::MAX),
+                    };
+                }
+                (PreviewContentMetrics::Text { .. }, Some(text)) => {
+                    preview::words_metrics(text, &payload.words)
+                }
+                (metrics, _) => metrics.clone(),
+            };
+            preview::measure_metrics(
+                &metrics,
+                payload.text.as_deref(),
+                &payload.words,
                 text_scale,
                 window,
-            ),
+            )
         });
         let snippet_colors = self.settings.clipboard.display.quick_snippet_colors;
         let snippets_height = match &preview {
-            Some(preview) if matches!(preview.metrics, PreviewContentMetrics::Text { .. }) => {
+            Some(preview)
+                if matches!(measured_metrics, Some(PreviewContentMetrics::Text { .. })) =>
+            {
                 let chips: Vec<f64> = preview
                     .payload
                     .snippets
@@ -694,6 +765,7 @@ impl ClipboardList {
         };
         let geometry = preview::geometry(
             place.card,
+            place.window,
             place.monitor,
             measured_metrics.as_ref(),
             snippets_height,
@@ -701,10 +773,14 @@ impl ClipboardList {
             f64::from(self.settings.clipboard.preview.gap),
             text_scale,
         );
+        let geometry = match &self.previewing.placed {
+            Some((placed, previous)) if placed == id => geometry.keep_top(previous, place.monitor),
+            _ => geometry,
+        };
+        self.previewing.placed = Some((id.clone(), geometry));
         let image_box = preview
             .as_ref()
             .and_then(|preview| image_box(preview, geometry.panel, text_scale));
-        let text_view = self.settings.clipboard.preview.text_view;
         let preview_window = self.previewing.window.as_ref()?;
         preview_window.panel.update(cx, |panel, cx| {
             panel.snippet_colors = snippet_colors;

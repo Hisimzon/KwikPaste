@@ -9,13 +9,13 @@
 use std::{ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Div, ElementId, Entity,
-    EventEmitter, FontStyle, FontWeight, HighlightStyle, ImageSource, InteractiveElement as _,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Render,
-    ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, StrikethroughStyle,
-    Styled as _, StyledText, UnderlineStyle, UniformListScrollHandle, Window, WindowBounds,
-    WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
-    uniform_list,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context, Div, ElementId,
+    Entity, EventEmitter, FontStyle, FontWeight, HighlightStyle, ImageSource,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement as _, Render, ScrollHandle, SharedString, Stateful,
+    StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledText, UnderlineStyle,
+    UniformListScrollHandle, Window, WindowBounds, WindowKind, WindowOptions, div, img, point,
+    prelude::FluentBuilder as _, px, size, uniform_list,
 };
 use kwikpaste_core::{
     clipboard::SnippetKind,
@@ -23,7 +23,7 @@ use kwikpaste_core::{
     presenter::{PreviewBlock, PreviewDocument, PreviewInline},
 };
 use kwikpaste_ui::{
-    Button, Icon, IconName, KpStyled as _,
+    Button, Icon, IconName, KpStyled as _, MenuEntry, MenuItem, context_menu, dismiss_menu,
     theme::{self, TextSize, px_rems, radius, space},
 };
 
@@ -37,8 +37,8 @@ use crate::{
             actions::OpenTarget,
             preview::{
                 FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, SNIPPET_CHIP_HEIGHT, SNIPPET_CHIP_PADDING_X,
-                SNIPPET_PART_GAP, SNIPPETS_PADDING_Y, TEXT_PADDING_X, TEXT_ROW_HEIGHT,
-                WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
+                SNIPPET_PART_GAP, SNIPPETS_MAX_HEIGHT, SNIPPETS_PADDING_Y, TEXT_PADDING_X,
+                TEXT_ROW_HEIGHT, WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
             },
         },
         source::{Preview, PreviewTextView},
@@ -60,12 +60,18 @@ pub enum PreviewEvent {
     ImageText(ImageTextView),
     /// 点了快捷信息区的一块：只复制这一段。
     Snippet(Arc<str>),
+    /// 快捷信息右键菜单里选了粘贴。
+    PasteSnippet(Arc<str>),
+    /// 中键点了链接 / 邮箱快捷信息，或在右键菜单里选了打开。
+    OpenSnippet(Arc<str>, SnippetKind),
     /// 点了链接、邮箱记录的正文：打开链接或写邮件。
     Open(OpenTarget),
     /// 点了文件记录里的一行：在文件管理器中定位这个文件。
     Reveal(Arc<str>),
     /// 点了图片：在大图预览窗里看。
     ViewImage,
+    /// 双击了文本记录的正文：打开内容编辑框。
+    EditText,
 }
 
 /// 有识别文字的图片记录正在看的那一面。
@@ -89,6 +95,8 @@ pub struct PreviewPanel {
     image_text: Option<ImageTextView>,
     /// 快捷信息按类型着色（「快捷信息颜色」设置），列表在 [Self::set] 前更新。
     pub snippet_colors: bool,
+    /// 指针下的那块快捷信息：右键菜单按它给出动作。
+    hovered_snippet: Option<(Arc<str>, SnippetKind)>,
     images: Entity<KpImageCache>,
     /// 预览文件图标的独立有界缓存；关闭预览时不清空，避免再次打开时闪烁。
     icons: Entity<KpImageCache>,
@@ -114,6 +122,7 @@ impl PreviewPanel {
             image_box: None,
             image_text: None,
             snippet_colors: true,
+            hovered_snippet: None,
             images,
             icons,
             text_scroll: UniformListScrollHandle::new(),
@@ -165,8 +174,10 @@ impl PreviewPanel {
         self.selection.selected().iter().copied().collect()
     }
 
-    /// 释放图片（预览关上时）。
+    /// 释放图片（预览关上时），关掉开着的快捷信息菜单。
     pub fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        dismiss_menu(window, cx);
+        self.hovered_snippet = None;
         self.selection.clear();
         self.images
             .update(cx, |images, cx| images.clear(Some(window), cx));
@@ -544,6 +555,7 @@ impl PreviewPanel {
             Some(ClipboardSubKind::Email) => Some(OpenTarget::Email),
             _ => None,
         };
+        let editable = self.image_text.is_none();
         let list = div()
             .id("preview-text-body")
             .flex()
@@ -551,10 +563,13 @@ impl PreviewPanel {
             .flex_1()
             .min_h_0()
             .child(list)
-            .when_some(link, |body, target| {
-                body.cursor_pointer()
+            .map(|body| match link {
+                Some(target) => body
+                    .cursor_pointer()
                     .text_color(theme::semantic(cx).text.link)
-                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::Open(target))))
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::Open(target)))),
+                None if editable => body.on_click(cx.listener(edit_on_double_click)),
+                None => body,
             });
 
         div()
@@ -584,6 +599,7 @@ impl PreviewPanel {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
+                    .on_click(cx.listener(edit_on_double_click))
                     .child(
                         div()
                             .flex()
@@ -604,7 +620,7 @@ impl PreviewPanel {
             .into_any_element()
     }
 
-    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段。
+    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段；片段多时封顶，区内滚动。
     fn snippets(&self, preview: &Preview, cx: &mut Context<Self>) -> Option<AnyElement> {
         let snippets = &preview.payload.snippets;
         if snippets.is_empty() {
@@ -612,61 +628,123 @@ impl PreviewPanel {
         }
         let tokens = theme::semantic(cx);
         let colors = self.snippet_colors.then(|| theme::components(cx).snippet);
+        let entity = cx.entity().downgrade();
 
-        Some(
-            div()
-                .flex_none()
-                .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
-                .px(space((TEXT_PADDING_X as f32) / 4.))
-                .border_t_1()
-                .border_color(tokens.border.divider)
-                .child(div().flex().flex_wrap().gap(space(1.)).children(
-                    snippets.iter().enumerate().map(|(index, snippet)| {
-                        let text: Arc<str> = Arc::from(snippet.text.as_str());
-                        div()
-                            .id(ElementId::NamedInteger(
-                                "preview-snippet".into(),
-                                index as u64,
-                            ))
-                            .flex()
-                            .items_center()
-                            .gap(space((SNIPPET_PART_GAP as f32) / 4.))
-                            .max_w_full()
-                            .h(space((SNIPPET_CHIP_HEIGHT as f32) / 4.))
-                            .px(space((SNIPPET_CHIP_PADDING_X as f32) / 4.))
-                            .rounded(radius::MD)
-                            .bg(tokens.fill.subtle)
-                            .kp_text(TextSize::Xs)
-                            .cursor_pointer()
-                            .hover(|style| style.bg(tokens.fill.default))
-                            .when_some(colors, |chip, colors| {
-                                chip.child(card::snippet_dot(card::snippet_color(
-                                    &colors,
-                                    snippet.kind,
-                                )))
-                            })
-                            .child(
-                                div().flex_none().text_color(tokens.text.secondary).child(
-                                    snippet
-                                        .label
-                                        .clone()
-                                        .map(SharedString::from)
-                                        .unwrap_or_else(|| t(snippet_label(snippet.kind))),
-                                ),
+        let area = div()
+            .id("preview-snippets")
+            .flex_none()
+            .max_h(space((SNIPPETS_MAX_HEIGHT as f32) / 4.))
+            .overflow_y_scroll()
+            .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
+            .px(space((TEXT_PADDING_X as f32) / 4.))
+            .border_t_1()
+            .border_color(tokens.border.divider)
+            .child(div().flex().flex_wrap().gap(space(1.)).children(
+                snippets.iter().enumerate().map(|(index, snippet)| {
+                    let text: Arc<str> = Arc::from(snippet.text.as_str());
+                    let kind = snippet.kind;
+                    let hover_text = text.clone();
+                    let open_text = text.clone();
+                    div()
+                        .id(ElementId::NamedInteger(
+                            "preview-snippet".into(),
+                            index as u64,
+                        ))
+                        .flex()
+                        .items_center()
+                        .gap(space((SNIPPET_PART_GAP as f32) / 4.))
+                        .max_w_full()
+                        .h(space((SNIPPET_CHIP_HEIGHT as f32) / 4.))
+                        .px(space((SNIPPET_CHIP_PADDING_X as f32) / 4.))
+                        .rounded(radius::MD)
+                        .bg(tokens.fill.subtle)
+                        .kp_text(TextSize::Xs)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(tokens.fill.default))
+                        .when_some(colors, |chip, colors| {
+                            chip.child(card::snippet_dot(card::snippet_color(
+                                &colors,
+                                snippet.kind,
+                            )))
+                        })
+                        .child(
+                            div().flex_none().text_color(tokens.text.secondary).child(
+                                snippet
+                                    .label
+                                    .clone()
+                                    .map(SharedString::from)
+                                    .unwrap_or_else(|| t(snippet_label(snippet.kind))),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .child(SharedString::from(snippet.text.clone())),
+                        )
+                        .on_hover(cx.listener(move |panel, hovered: &bool, _, _| {
+                            if *hovered {
+                                panel.hovered_snippet = Some((hover_text.clone(), kind));
+                            } else if panel
+                                .hovered_snippet
+                                .as_ref()
+                                .is_some_and(|(current, _)| *current == hover_text)
+                            {
+                                panel.hovered_snippet = None;
+                            }
+                        }))
+                        .when(card::snippet_open_url(kind, &text).is_some(), |chip| {
+                            chip.on_mouse_down(
+                                MouseButton::Middle,
+                                cx.listener(move |_, _, _, cx| {
+                                    cx.emit(PreviewEvent::OpenSnippet(open_text.clone(), kind));
+                                }),
                             )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(SharedString::from(snippet.text.clone())),
-                            )
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(PreviewEvent::Snippet(text.clone()));
-                            }))
-                    }),
-                ))
-                .into_any_element(),
-        )
+                        })
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(PreviewEvent::Snippet(text.clone()));
+                        }))
+                }),
+            ));
+
+        Some(context_menu(area, move |_, cx| {
+            entity
+                .update(cx, |panel, cx| panel.snippet_menu(cx))
+                .unwrap_or_default()
+        }))
+    }
+
+    /// 快捷信息的右键菜单：粘贴、复制指针下的那一段，链接 / 邮箱还能直接打开。
+    fn snippet_menu(&self, cx: &mut Context<Self>) -> Vec<MenuEntry> {
+        let Some((text, kind)) = self.hovered_snippet.clone() else {
+            return Vec::new();
+        };
+        let entity = cx.entity().downgrade();
+        let item = |label: &str, event: PreviewEvent| -> MenuEntry {
+            let entity = entity.clone();
+            MenuItem::new(t(label), move |_, cx| {
+                entity.update(cx, |_, cx| cx.emit(event.clone())).ok();
+            })
+            .into()
+        };
+        let mut entries = vec![
+            item(
+                "clipboard:menu.paste",
+                PreviewEvent::PasteSnippet(text.clone()),
+            ),
+            item("clipboard:menu.copy", PreviewEvent::Snippet(text.clone())),
+        ];
+        let open_label = match kind {
+            SnippetKind::Link => Some("clipboard:menu.openLink"),
+            SnippetKind::Email => Some("clipboard:menu.sendEmail"),
+            _ => None,
+        };
+        if let Some(label) = open_label.filter(|_| card::snippet_open_url(kind, &text).is_some()) {
+            entries.push(MenuEntry::Separator);
+            entries.push(item(label, PreviewEvent::OpenSnippet(text, kind)));
+        }
+
+        entries
     }
 
     fn words(&self, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {
@@ -977,6 +1055,18 @@ impl PreviewPanel {
 
 /// 类型标签的文案 key（1.x `clipboard:types.{subKind ?? kind}`）。
 /// 头部小号分段切换里的一段：选中段在亮色里是浮起的白块（带一层极淡的影），暗色里是亮一档的填充。
+/// 双击文本正文进入编辑（图片的单击看大图对应）；单击留给滚动和链接。
+fn edit_on_double_click(
+    _: &mut PreviewPanel,
+    event: &ClickEvent,
+    _: &mut Window,
+    cx: &mut Context<PreviewPanel>,
+) {
+    if event.click_count() >= 2 {
+        cx.emit(PreviewEvent::EditText);
+    }
+}
+
 fn segment(key: &str, selected: bool, cx: &App) -> Stateful<Div> {
     let tokens = theme::semantic(cx);
     let thumb = match theme::appearance(cx) {
@@ -1335,46 +1425,61 @@ pub mod native {
             .or_else(|| monitors.first().copied())
     }
 
-    /// 面板窗口里 `card`（逻辑像素）所在显示器上的几何。
+    /// 面板窗口里 `card`（逻辑像素）所在显示器工作区上的几何（不含任务栏，预览窗不被它挡住）。
     pub fn screen_place(window: &Window, card: Bounds<Pixels>) -> Option<ScreenPlace> {
         let origin = client_origin(window)?;
         let scale = f64::from(window.scale_factor());
-        let to_screen = |value: Pixels| f64::from(value.as_f32()) * scale;
-        let left = f64::from(origin.x) + to_screen(card.origin.x);
-        let top = f64::from(origin.y) + to_screen(card.origin.y);
-        let width = to_screen(card.size.width);
-        let height = to_screen(card.size.height);
+        // 面板里的逻辑矩形换成屏幕物理像素 (left, top, width, height)。
+        let to_screen = |bounds: Bounds<Pixels>| {
+            let physical = |value: Pixels| f64::from(value.as_f32()) * scale;
+            (
+                f64::from(origin.x) + physical(bounds.origin.x),
+                f64::from(origin.y) + physical(bounds.origin.y),
+                physical(bounds.size.width),
+                physical(bounds.size.height),
+            )
+        };
+        let (left, top, width, height) = to_screen(card);
         let monitor = monitor_at(Point {
             x: (left + width / 2.) as i32,
             y: (top + height / 2.) as i32,
         })?;
+        let work = monitor.work_area;
         let monitor_scale = monitor.scale();
+        let to_monitor = |(left, top, width, height): (f64, f64, f64, f64)| RectF {
+            left: (left - f64::from(work.left)) / monitor_scale,
+            top: (top - f64::from(work.top)) / monitor_scale,
+            width: width / monitor_scale,
+            height: height / monitor_scale,
+        };
 
         Some(ScreenPlace {
-            card: RectF {
-                left: (left - f64::from(monitor.monitor.left)) / monitor_scale,
-                top: (top - f64::from(monitor.monitor.top)) / monitor_scale,
-                width: width / monitor_scale,
-                height: height / monitor_scale,
-            },
+            card: to_monitor((left, top, width, height)),
+            window: to_monitor(to_screen(Bounds::new(
+                gpui::Point::default(),
+                window.viewport_size(),
+            ))),
             monitor: RectF {
                 left: 0.,
                 top: 0.,
-                width: f64::from(monitor.monitor.width()) / monitor_scale,
-                height: f64::from(monitor.monitor.height()) / monitor_scale,
+                width: f64::from(work.width()) / monitor_scale,
+                height: f64::from(work.height()) / monitor_scale,
             },
-            origin: (monitor.monitor.left, monitor.monitor.top),
+            origin: (work.left, work.top),
             scale: monitor_scale,
             dpi: monitor.dpi,
         })
     }
 }
 
-/// 卡片所在显示器上的几何：卡片与显示器都是以显示器左上角为原点的逻辑像素。
+/// 卡片所在显示器上的几何：卡片、主窗口与显示器都是以显示器（Windows 上是工作区）左上角为原点的
+/// 逻辑像素。
 pub struct ScreenPlace {
     pub card: RectF,
+    /// 卡片所在的主窗口（内容区）。
+    pub window: RectF,
     pub monitor: RectF,
-    /// 显示器左上角的屏幕坐标（物理像素）。
+    /// 显示器（Windows 上是工作区）左上角的屏幕坐标（物理像素）。
     pub origin: (i32, i32),
     /// 显示器的缩放比例。
     pub scale: f64,
@@ -1444,6 +1549,12 @@ pub mod native {
                 top: top - monitor.y,
                 width,
                 height,
+            },
+            window: RectF {
+                left: frame.origin.x - monitor.x,
+                top: primary_height - (frame.origin.y + frame.size.height) - monitor.y,
+                width: frame.size.width,
+                height: frame.size.height,
             },
             monitor: RectF {
                 left: 0.,

@@ -2,7 +2,7 @@
 //! 删除与清空、链接与文件定位、图片另存。
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -35,6 +35,15 @@ use crate::root::{Core, CoreInner};
 pub struct CopyOutcome {
     /// 设置要求从历史复制后隐藏剪贴板窗口；窗口被用户固定时宿主应忽略。
     pub hide_window: bool,
+}
+
+/// 多选合并的内容。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergedSelection {
+    /// 全是文本：按列表顺序换行连接的纯文本。
+    Text(String),
+    /// 全是图片 / 文件：按列表顺序合成的一份文件列表，图片取原图，已不存在的文件跳过。
+    Files(Vec<String>),
 }
 
 /// 备注更新结果：归一化后的备注（去前后空白，纯空白为 `None`）与是否顺带自动收藏。
@@ -136,9 +145,12 @@ pub(crate) fn should_write_plain_for_paste(
 }
 
 /// 决定一次全局纯文本粘贴要写入的文本；空文本和图片返回 `None`。
+/// 文本去掉末尾空白，与列表里的纯文本写回一致（Excel 复制的文本自带结尾换行）。
 pub fn plain_paste_decision(payload: &ClipboardPayload) -> Option<String> {
     match payload {
-        ClipboardPayload::Text(text) if !text.text.is_empty() => Some(text.text.clone()),
+        ClipboardPayload::Text(text) if !text.text.trim_end().is_empty() => {
+            Some(text.text.trim_end().to_owned())
+        }
         ClipboardPayload::Files(files) => {
             let content = files
                 .iter()
@@ -226,6 +238,82 @@ fn write_fragment(core: &CoreInner, text: &str) -> Result<()> {
     clipboard::write_text_fragment(&*backend, &core.guard, text)
 }
 
+/// 打开剪贴板写回一份文件列表并登记回环抑制。
+fn write_file_list(core: &CoreInner, paths: Vec<String>) -> Result<()> {
+    let backend = core.clipboard()?;
+    core.guard.suppress(crate::db::items::content_hash(
+        ClipboardKind::Files,
+        &paths.join("\n"),
+    ));
+    backend.set_files(paths)
+}
+
+/// 按当前列表顺序读出多选的记录并合并（`ids` 的传入顺序无关，分页参数不影响）。不足两条时返回
+/// `None`；文本与图片 / 文件混选，或选中的文件都已不存在时返回用户可读的错误。
+async fn merge_selection(
+    core: &CoreInner,
+    pool: &SqlitePool,
+    ids: Vec<String>,
+    query: &ClipboardItemQuery,
+) -> Result<Option<(Vec<ClipboardItem>, MergedSelection)>> {
+    let ids: HashSet<_> = ids.into_iter().collect();
+    if ids.len() < 2 {
+        return Ok(None);
+    }
+
+    let mut items = Vec::new();
+    for item_ref in list_item_refs(pool, query).await? {
+        if ids.contains(&item_ref.id) {
+            items.push(find_required(pool, &item_ref.id).await?);
+        }
+    }
+    if items.len() < 2 {
+        return Ok(None);
+    }
+
+    let texts = items
+        .iter()
+        .filter(|item| item.kind == ClipboardKind::Text)
+        .count();
+    let merged = if texts == items.len() {
+        MergedSelection::Text(
+            items
+                .iter()
+                .map(clipboard::fragment_source)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    } else if texts == 0 {
+        let paths: Vec<String> = items
+            .iter()
+            .flat_map(|item| match item.kind {
+                ClipboardKind::Image => original_image_path(core, item)
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                _ => item
+                    .content
+                    .split('\n')
+                    .filter(|path| !path.is_empty() && Path::new(path).exists())
+                    .map(str::to_owned)
+                    .collect(),
+            })
+            .collect();
+        if paths.is_empty() {
+            return Err(AppError::Clipboard(
+                label(core.language(), Key::SelectionFilesMissing).to_owned(),
+            ));
+        }
+        MergedSelection::Files(paths)
+    } else {
+        return Err(AppError::Clipboard(
+            label(core.language(), Key::SelectionMixedKinds).to_owned(),
+        ));
+    };
+
+    Ok(Some((items, merged)))
+}
+
 /// 复制图片里识别出的文字：这是新内容，不登记回环，由监听当作一次普通复制记成文字记录；原图不算复用。
 fn write_recognized_text(core: &CoreInner, text: &str) -> Result<()> {
     core.clipboard()?.set_text(text.to_owned())
@@ -301,6 +389,18 @@ async fn load_fragment_text(
                 _ => None,
             })
         }
+        ClipboardFragment::ImageQrCode => {
+            let path = original_image_path(core, &item)?;
+            let codes = tokio::task::spawn_blocking(move || clipboard::qr::decode_qr_codes(&path))
+                .await
+                .map_err(|err| AppError::Other(anyhow::anyhow!("QR code task failed: {err}")))??;
+            if codes.is_empty() {
+                return Err(AppError::Clipboard(
+                    label(core.language(), Key::QrCodeNotFound).to_owned(),
+                ));
+            }
+            Some(codes.join("\n"))
+        }
         ClipboardFragment::Snippet { .. } | ClipboardFragment::Words { .. }
             if item.kind == ClipboardKind::Text =>
         {
@@ -316,42 +416,41 @@ async fn load_fragment_text(
 }
 
 impl Core {
-    /// 按当前列表顺序合并至少两条文本记录，一次写回纯文本并逐条记录复用。
-    /// `ids` 的传入顺序无关；`query` 必须与列表一致，分页参数不影响合并。
-    /// 不足两条或包含图片 / 文件时不写剪贴板，返回 `None`，调用方继续原来的单条操作。
-    pub async fn copy_text_selection(
+    /// 多选合并（见 [`MergedSelection`]），拖出用，不写剪贴板。`query` 必须与列表一致。
+    pub async fn merge_selection(
+        &self,
+        ids: Vec<String>,
+        mut query: ClipboardItemQuery,
+    ) -> Result<Option<MergedSelection>> {
+        let core = self.clone();
+        self.hop(async move {
+            let pool = core.0.db.pool().await;
+            query.ocr_enabled = core.ocr_enabled();
+            let merged = merge_selection(&core.0, &pool, ids, &query).await?;
+            Ok(merged.map(|(_, merged)| merged))
+        })
+        .await
+    }
+
+    /// 把多选合并后一次写回：文本写成一段纯文本，图片 / 文件写成一份文件列表，逐条记录复用。
+    /// 不足两条时不写剪贴板，返回 `None`，调用方继续原来的单条操作。`query` 必须与列表一致。
+    pub async fn copy_selection(
         &self,
         ids: Vec<String>,
         mut query: ClipboardItemQuery,
     ) -> Result<Option<CopyOutcome>> {
         let core = self.clone();
         self.hop(async move {
-            let ids: HashSet<_> = ids.into_iter().collect();
-            if ids.len() < 2 {
-                return Ok(None);
-            }
-
             let pool = core.0.db.pool().await;
             query.ocr_enabled = core.ocr_enabled();
-            let refs = list_item_refs(&pool, &query).await?;
-            let mut items = Vec::new();
-            for item_ref in refs.into_iter().filter(|item| ids.contains(&item.id)) {
-                let item = find_required(&pool, &item_ref.id).await?;
-                if item.kind != ClipboardKind::Text {
-                    return Ok(None);
-                }
-                items.push(item);
-            }
-            if items.len() < 2 {
+            let Some((items, merged)) = merge_selection(&core.0, &pool, ids, &query).await? else {
                 return Ok(None);
-            }
+            };
 
-            let text = items
-                .iter()
-                .map(clipboard::fragment_source)
-                .collect::<Vec<_>>()
-                .join("\n");
-            write_fragment(&core.0, &text)?;
+            match merged {
+                MergedSelection::Text(text) => write_fragment(&core.0, &text)?,
+                MergedSelection::Files(paths) => write_file_list(&core.0, paths)?,
+            }
             for item in items {
                 mark_item_reused_if_enabled(&core.0, &pool, &item.id, item.kind).await?;
             }
@@ -443,13 +542,7 @@ impl Core {
                 .to_string_lossy()
                 .into_owned();
 
-            {
-                let backend = core.0.clipboard()?;
-                core.0
-                    .guard
-                    .suppress(crate::db::items::content_hash(ClipboardKind::Files, &path));
-                backend.set_files(vec![path])?;
-            }
+            write_file_list(&core.0, vec![path])?;
             mark_item_reused_if_enabled(&core.0, &pool, &id, item.kind).await
         })
         .await
@@ -863,12 +956,16 @@ impl Core {
         .await
     }
 
-    /// 「在文件管理器中显示」的目标路径；内容为空时返回 `None`。
+    /// 「在文件管理器中显示」的目标路径：图片记录是落盘的原图；内容为空时返回 `None`。
     pub async fn reveal_target(&self, id: &str) -> Result<Option<String>> {
         let core = self.clone();
         let id = id.to_owned();
         self.hop(async move {
             let item = find_required(&core.0.db.pool().await, &id).await?;
+            if item.kind == ClipboardKind::Image {
+                let path = original_image_path(&core.0, &item)?;
+                return Ok(Some(path.to_string_lossy().into_owned()));
+            }
             Ok(reveal_target(&item))
         })
         .await
@@ -1006,6 +1103,13 @@ mod tests {
             rtf: None,
         });
         assert_eq!(plain_paste_decision(&plain), Some("hello".to_owned()));
+
+        let excel = ClipboardPayload::Text(TextPayload {
+            text: "a\tb\r\n".to_owned(),
+            html: None,
+            rtf: None,
+        });
+        assert_eq!(plain_paste_decision(&excel), Some("a\tb".to_owned()));
 
         for rich in [Some("<b>hello</b>".to_owned()), None] {
             let payload = ClipboardPayload::Text(TextPayload {

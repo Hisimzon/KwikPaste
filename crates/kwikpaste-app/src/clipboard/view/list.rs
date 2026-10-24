@@ -40,6 +40,7 @@ use gpui::{
 };
 use kwikpaste_core::{
     CoreEvent,
+    clipboard::SnippetKind,
     ops::{ReorderAnchor, ReorderSection},
     settings::{AutoPaste, MiddleClickAction, PanelAction, Settings, effective_panel_keys},
 };
@@ -50,7 +51,7 @@ use kwikpaste_ui::{
 
 use super::{
     bench::Bench,
-    card::{self, CardEnv, CardState, LinkHandler, SnippetHandler, Visual},
+    card::{self, CardEnv, CardState, LinkHandler, SnippetEvent, SnippetHandler, Visual},
     editing::{self, EditTarget},
     frame::{FrameTimer, FrameTiming, ListFrame, PaintedCallback, Snapshot, WidthHint},
     host::ItemHost,
@@ -129,13 +130,6 @@ enum Pointer {
 
 /// 指针离开显示时的位置超过这个距离才算动过。
 const POINTER_SLOP: f32 = 2.;
-
-/// 正在编辑的完整文本；原文用于判定未改动的保存。
-struct ContentEdit {
-    id: Arc<str>,
-    input: TextAreaInput,
-    original: String,
-}
 
 /// 正在编辑的备注。
 struct NoteEdit {
@@ -278,6 +272,8 @@ pub struct ClipboardList {
     selection: Selection,
     /// 指针所在的卡片：显示快捷动作、备注原文。
     pub(super) hovered: Option<Arc<str>>,
+    /// 指针所在的快捷信息（卡片 id、文字、类型）：右键菜单换成这一段的动作。
+    pub(super) hovered_snippet: Option<(Arc<str>, Arc<str>, SnippetKind)>,
     /// 按住修饰键：显示数字角标。
     pub(super) key_hints: bool,
     /// 刚复制成功的快捷动作按钮，1 秒后复原。
@@ -286,8 +282,6 @@ pub struct ClipboardList {
     /// 批量删除后第一页落地时再补拉视图范围。
     refetch_view_after_first_page: bool,
     note: Option<NoteEdit>,
-    content_edit: Option<ContentEdit>,
-    content_loading: Option<Task<()>>,
     /// 粘贴、复制交给谁做（平台层的粘贴链路，或夹具的替身）。
     host: Rc<dyn ItemHost>,
     freshness: Freshness,
@@ -372,13 +366,12 @@ impl ClipboardList {
             groups: Vec::new(),
             selection: Selection::default(),
             hovered: None,
+            hovered_snippet: None,
             key_hints: false,
             copied: None,
             copied_reset: None,
             refetch_view_after_first_page: false,
             note: None,
-            content_edit: None,
-            content_loading: None,
             host,
             freshness: Freshness::default(),
             pending_activation: None,
@@ -482,7 +475,7 @@ impl ClipboardList {
         let reset_selection = match action {
             UpdateAction::ReloadNow { reset_selection }
             | UpdateAction::Defer { reset_selection } => reset_selection,
-            UpdateAction::Ignore => false,
+            UpdateAction::RefreshInPlace | UpdateAction::Ignore => false,
         };
         if reset_selection {
             // 清理、导入之后不再勾着可能已经不存在的记录（1.x `resetChecked`）。
@@ -491,8 +484,10 @@ impl ClipboardList {
         if action != UpdateAction::Ignore {
             self.freshness.changed();
         }
-        if let UpdateAction::ReloadNow { .. } = action {
-            self.reload(cx);
+        match action {
+            UpdateAction::ReloadNow { .. } => self.reload(cx),
+            UpdateAction::RefreshInPlace => self.refresh(cx),
+            UpdateAction::Defer { .. } | UpdateAction::Ignore => {}
         }
         cx.notify();
     }
@@ -529,7 +524,7 @@ impl ClipboardList {
                 cx.notify();
             }
             PanelEvent::EditingEnded => {
-                if !self.side && self.note.is_none() && self.content_edit.is_none() {
+                if !self.side && self.note.is_none() {
                     window.focus(&self.focus, cx);
                 }
             }
@@ -539,11 +534,6 @@ impl ClipboardList {
                     && let Some(note) = &self.note
                 {
                     note.input.focus(window, cx);
-                }
-                if editing::target(cx) == Some(EditTarget::Content)
-                    && let Some(edit) = &self.content_edit
-                {
-                    edit.input.focus(window, cx);
                 }
             }
             PanelEvent::PopupDismissed => {
@@ -564,11 +554,6 @@ impl ClipboardList {
                 self.close_preview(cx);
                 // 隐藏时退出多选（1.x `exitClipboardSelection`），收起备注框（当作取消）。
                 self.selection.exit();
-                self.content_loading = None;
-                if self.content_edit.is_some() {
-                    close_dialog(window, cx);
-                    self.finish_content(false, window, cx);
-                }
                 if self.note.is_some() {
                     close_dialog(window, cx);
                     self.finish_note(false, window, cx);
@@ -594,8 +579,7 @@ impl ClipboardList {
         let future = self.source.list(ListQuery {
             offset: request.range.start,
             limit: request.range.len(),
-            filter: self.controller.filter().clone(),
-            sort: self.settings.clipboard.content.sort,
+            ..self.view_query()
         });
 
         cx.spawn(async move |this, cx| {
@@ -1284,9 +1268,9 @@ impl ClipboardList {
         cx.notify();
     }
 
-    /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选；否则左键选中、记下拖出的
-    /// 起点（1.x 卡片 `draggable={!selecting}`）并预备单击动作（见 [`Self::click_card`]），中键按
-    /// 中键设置执行。
+    /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选，并记下拖出的起点（按住
+    /// 已勾选的卡片拖动时整组拖出）；否则左键选中、记下拖出的起点并预备单击动作（见
+    /// [`Self::click_card`]），中键按中键设置执行。
     fn press_card(
         &mut self,
         item: Arc<ListItem>,
@@ -1300,9 +1284,15 @@ impl ClipboardList {
                 self.controller.select(&item.id);
                 if event.modifiers.shift {
                     self.check_range(item, window, cx);
-                } else {
-                    self.toggle_checked(&item, window, cx);
+                    return;
                 }
+                // 已勾选的卡片松开时才取消勾选：按住拖动是把整组拖出去。
+                if self.selection.is_checked(&item.id) {
+                    self.armed_click = Some(item.id.clone());
+                } else {
+                    self.toggle_checked(&item, cx);
+                }
+                self.drag.press(item.id.to_string(), event.position);
             }
             return;
         }
@@ -1374,8 +1364,8 @@ impl ClipboardList {
     }
 
     /// 点击卡片（左键在同一张卡片上按下又松开）：“单击粘贴 / 复制”在没有拖出时执行，“双击粘贴 /
-    /// 复制”在第二次点击时执行（1.x `handleCardDoubleClick`）；多选时不响应。单击动作不放在按下时：
-    /// 那样拖出图片会先粘贴一次、投放时再贴一次。
+    /// 复制”在第二次点击时执行（1.x `handleCardDoubleClick`）；多选时只取消按下时就已勾选的那张。
+    /// 单击动作不放在按下时：那样拖出图片会先粘贴一次、投放时再贴一次。
     fn click_card(
         &mut self,
         item: Arc<ListItem>,
@@ -1388,6 +1378,9 @@ impl ClipboardList {
         }
         let armed = self.armed_click.take().is_some_and(|id| id == item.id);
         if self.selection.active() {
+            if armed {
+                self.toggle_checked(&item, cx);
+            }
             return;
         }
 
@@ -1589,10 +1582,20 @@ impl ClipboardList {
         let on_snippet = (!selecting && !item.quick_snippets.is_empty()).then(|| {
             let entity = cx.entity().downgrade();
             let target = item.clone();
-            let handler: SnippetHandler = Rc::new(move |text, window, cx| {
+            let handler: SnippetHandler = Rc::new(move |event, window, cx| {
                 entity
-                    .update(cx, |list, cx| {
-                        list.pick_snippet(target.clone(), text, window, cx);
+                    .update(cx, |list, cx| match event {
+                        SnippetEvent::Pick(text) => {
+                            list.pick_snippet(target.clone(), text, window, cx)
+                        }
+                        SnippetEvent::Open(text, kind) => {
+                            list.open_snippet(&target.id, &text, kind, cx)
+                        }
+                        SnippetEvent::Hover {
+                            text,
+                            kind,
+                            hovered,
+                        } => list.hover_snippet(&target.id, text, kind, hovered),
                     })
                     .ok();
             });
@@ -1839,6 +1842,7 @@ impl Render for ClipboardList {
                         if phase != DispatchPhase::Capture
                             || !bounds.contains(&event.position)
                             || kwikpaste_ui::has_dialog(window, cx)
+                            || kwikpaste_ui::menu_open(window)
                         {
                             return;
                         }

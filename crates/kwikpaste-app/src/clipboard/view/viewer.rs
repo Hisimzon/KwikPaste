@@ -51,6 +51,8 @@ const MIN_WINDOW: (f32, f32) = (560., 420.);
 const MAX_WINDOW: (f32, f32) = (1280., 860.);
 /// 量识别行里字符位置用的字号：只取比例，具体多大无所谓。
 const MEASURE_FONT_SIZE: f32 = 16.;
+/// 复制图片 / 选中文字的失败动作名与成功提示。
+const COPY_LABELS: (&str, &str) = ("commands:labels.copy", "commands:messages.copied");
 
 /// 快照里的一张图：列表载荷里的原图尺寸只用来定窗口初始大小，真实尺寸读文件头。
 #[derive(Clone, Debug)]
@@ -533,7 +535,7 @@ impl ImageViewer {
             return;
         };
         let task = self.host.copy(id, false, None, cx);
-        Self::report_copy(task, window, cx);
+        Self::report_copy(task, COPY_LABELS, window, cx);
     }
 
     /// 复制选中的文字。
@@ -546,15 +548,40 @@ impl ImageViewer {
             end: range.end,
         };
         let task = self.host.copy_fragment(id, fragment, cx);
-        Self::report_copy(task, window, cx);
+        Self::report_copy(task, COPY_LABELS, window, cx);
     }
 
-    fn report_copy(task: Task<anyhow::Result<()>>, window: &mut Window, cx: &mut Context<Self>) {
+    /// 识别当前图里的二维码并复制内容；与复制图中文字一样，复制的内容会记成一条新的文本记录。
+    fn copy_qr_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.current_id() else {
+            return;
+        };
+        let task = self
+            .host
+            .copy_fragment(id, ClipboardFragment::ImageQrCode, cx);
+        Self::report_copy(
+            task,
+            (
+                "commands:labels.scanQrCode",
+                "commands:messages.qrCodeCopied",
+            ),
+            window,
+            cx,
+        );
+    }
+
+    /// 复制完成后的提示：`(label, done)` 是失败时的动作名和成功提示的文案键。
+    fn report_copy(
+        task: Task<anyhow::Result<()>>,
+        (label, done): (&'static str, &'static str),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn_in(window, async move |_, cx| {
             let result = task.await;
             cx.update(|window, cx| match result {
-                Ok(()) => toast::show(Toast::success(t("commands:messages.copied")), window, cx),
-                Err(err) => error_toast("commands:labels.copy", &err, window, cx),
+                Ok(()) => toast::show(Toast::success(t(done)), window, cx),
+                Err(err) => error_toast(label, &err, window, cx),
             })
             .ok();
         })
@@ -725,6 +752,8 @@ impl ImageViewer {
                 cx.notify();
             }
             "escape" => window.remove_window(),
+            // 与面板上打开大图的 Shift+空格成对：再按一次关上。
+            "space" if plain && modifiers.shift => window.remove_window(),
             "left" if plain => self.switch(false, window, cx),
             "right" if plain => self.switch(true, window, cx),
             "=" | "+" if plain => self.step(true, window, cx),
@@ -733,6 +762,7 @@ impl ImageViewer {
             "1" if plain => self.actual_size(window, cx),
             "r" if plain => self.rotate(window, cx),
             "t" if plain => self.toggle_reveal(window, cx),
+            "q" if plain => self.copy_qr_code(window, cx),
             "a" if modifiers.secondary() => self.select_all(cx),
             "c" if modifiers.secondary() => match self.selected() {
                 Some(range) => self.copy_text(range, window, cx),
@@ -1004,6 +1034,14 @@ impl ImageViewer {
                     .selected(self.reveal),
                 )
             })
+            .child(self.icon_button(
+                "viewer-qr-code",
+                IconName::ScanQrCode,
+                "preview:viewer.scanQrCode",
+                Some("q"),
+                Self::copy_qr_code,
+                cx,
+            ))
             .child(separator())
             .child(self.icon_button(
                 "viewer-copy",

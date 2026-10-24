@@ -96,6 +96,8 @@ pub enum IconName {
     Plus,
     /// `lucide:rotate-cw`：大图预览向右旋转。
     RotateCw,
+    /// `lucide:scan-qr-code`：大图预览识别二维码。
+    ScanQrCode,
     /// `i-lucide:scan-text`：图片里识别出的文字。
     ScanText,
     Search,
@@ -143,6 +145,7 @@ impl IconName {
             Self::ChevronRight => "lucide-chevron-right.svg",
             Self::Download => "lucide-download.svg",
             Self::RotateCw => "lucide-rotate-cw.svg",
+            Self::ScanQrCode => "lucide-scan-qr-code.svg",
             Self::Shrink => "lucide-shrink.svg",
             Self::ZoomIn => "lucide-zoom-in.svg",
             Self::ZoomOut => "lucide-zoom-out.svg",

@@ -5,9 +5,10 @@
 //! - `WS_THICKFRAME`：四边可拉伸（不可见的拉伸边，GPUI 去掉了标题栏）；
 //! - 子类过程：
 //!   - `WM_MOUSEACTIVATE` 由 GPUI 补丁 W0002 回 `MA_NOACTIVATE`，这里校验返回值，补丁失效时兜底并记错；
-//!   - 拖动区和拉伸边的按下改走自己的 `SetCapture` 循环：`DefWindowProc` 的模态移动 / 缩放循环
-//!     会让窗口在本线程内被激活（前台没变，但 GPUI 以为自己是活动窗口），这种「幽灵激活」清除不掉；
-//!   - 吞掉非客户区双击和 `SC_MOVE` / `SC_SIZE` / `SC_MAXIMIZE`，它们同样会幽灵激活；
+//!   - 拖动区和拉伸边的按下（包括双击的第二下）改走自己的 `SetCapture` 循环：`DefWindowProc` 的
+//!     模态移动 / 缩放循环会让窗口在本线程内被激活（前台没变，但 GPUI 以为自己是活动窗口），这种
+//!     「幽灵激活」清除不掉；
+//!   - 吞掉其余非客户区双击和 `SC_MOVE` / `SC_SIZE` / `SC_MAXIMIZE`，它们同样会幽灵激活；
 //!   - `WM_GETMINMAXINFO` 的最小尺寸乘上系统「文本大小」（GPUI 只在建窗时按逻辑像素算一次）；
 //!   - 断言：收到激活却不是前台窗口时记一次幽灵激活。
 //!
@@ -368,7 +369,8 @@ unsafe extern "system" fn subclass_proc(
                 );
             }
         }
-        WM_NCLBUTTONDOWN if is_drag_hit(wparam.0 as u32) => {
+        // 快速的第二下按下是 WM_NCLBUTTONDBLCLK（非客户区不需要 CS_DBLCLKS），同样开始拖动。
+        WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK if is_drag_hit(wparam.0 as u32) => {
             if let Some(sink) = state.drag_sink.borrow().as_ref() {
                 sink();
             }
@@ -752,6 +754,25 @@ mod tests {
         }
         assert!(!unsafe { IsZoomed(panel.hwnd) }.as_bool());
 
+        destroy(panel);
+    }
+
+    #[test]
+    fn a_double_click_on_a_drag_area_starts_the_drag() {
+        let panel = hidden_popup();
+        panel.install(OPTIONS).expect("install");
+
+        unsafe {
+            SendMessageW(
+                panel.hwnd,
+                WM_NCLBUTTONDBLCLK,
+                Some(WPARAM(HTCAPTION as usize)),
+                None,
+            )
+        };
+
+        assert_eq!(unsafe { GetCapture() }, panel.hwnd);
+        unsafe { SendMessageW(panel.hwnd, WM_LBUTTONUP, None, None) };
         destroy(panel);
     }
 

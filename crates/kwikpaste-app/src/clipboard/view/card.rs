@@ -97,8 +97,22 @@ pub struct CardState {
     pub lifted: bool,
 }
 
-/// 快捷信息被点了：参数是那段文字。
-pub type SnippetHandler = Rc<dyn Fn(Arc<str>, &mut Window, &mut App)>;
+/// 卡片下方快捷信息的交互。
+pub enum SnippetEvent {
+    /// 左键点了：按「点击」设置复制或粘贴这一段。
+    Pick(Arc<str>),
+    /// 中键点了链接 / 邮箱：直接打开。
+    Open(Arc<str>, SnippetKind),
+    /// 指针进出这一块：右键菜单按指针下的那一块给出动作。
+    Hover {
+        text: Arc<str>,
+        kind: SnippetKind,
+        hovered: bool,
+    },
+}
+
+/// 快捷信息的交互处理。
+pub type SnippetHandler = Rc<dyn Fn(SnippetEvent, &mut Window, &mut App)>;
 
 /// 链接正文被点了。
 pub type LinkHandler = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -934,7 +948,12 @@ fn snippets(
                             return chip.into_any_element();
                         };
                         let text: Arc<str> = Arc::from(snippet.text.as_str());
+                        let kind = snippet.kind;
                         let long = snippet.text.chars().count() >= SNIPPET_TOOLTIP_MIN_CHARS;
+                        let on_hover = on_pick.clone();
+                        let hover_text = text.clone();
+                        let on_open = on_pick.clone();
+                        let open_text = text.clone();
 
                         // 按下时拦住事件，不触发卡片的选中、单击粘贴和双击粘贴（1.x `SnippetChip`）。
                         chip.cursor_pointer()
@@ -943,10 +962,28 @@ fn snippets(
                                     .bg(tokens.fill.default)
                                     .text_color(tokens.text.primary)
                             })
+                            .on_hover(move |hovered, window, cx| {
+                                let event = SnippetEvent::Hover {
+                                    text: hover_text.clone(),
+                                    kind,
+                                    hovered: *hovered,
+                                };
+                                on_hover(event, window, cx);
+                            })
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .when(snippet_open_url(kind, &text).is_some(), |chip| {
+                                chip.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    on_open(
+                                        SnippetEvent::Open(open_text.clone(), kind),
+                                        window,
+                                        cx,
+                                    );
+                                })
+                            })
                             .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
-                                on_pick(text.clone(), window, cx);
+                                on_pick(SnippetEvent::Pick(text.clone()), window, cx);
                             })
                             .when(long, |chip| {
                                 chip.kp_tooltip(SharedString::from(snippet.text.clone()))
@@ -956,6 +993,20 @@ fn snippets(
             )
             .into_any_element(),
     )
+}
+
+/// 快捷信息「打开」的去处：链接（`www.` 开头补 `https://`）用浏览器、邮箱用 `mailto:`；
+/// 其它类型（以及 `ftp://` 这类不交给浏览器的链接）没有。
+pub fn snippet_open_url(kind: SnippetKind, text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    match kind {
+        SnippetKind::Link if lower.starts_with("www.") => Some(format!("https://{text}")),
+        SnippetKind::Link if lower.starts_with("http://") || lower.starts_with("https://") => {
+            Some(text.to_owned())
+        }
+        SnippetKind::Email => Some(format!("mailto:{text}")),
+        _ => None,
+    }
 }
 
 /// 快捷信息类型对应的颜色。
@@ -1013,11 +1064,32 @@ fn status_marks(tokens: &SemanticTokens, pinned: bool, sensitive: bool, inline: 
 
 #[cfg(test)]
 mod tests {
-    use super::note_line;
+    use kwikpaste_core::clipboard::SnippetKind;
+
+    use super::{note_line, snippet_open_url};
 
     #[test]
     fn multi_line_notes_join_into_one_line() {
         assert_eq!(note_line("ty\n tongyi \n\n"), "ty / tongyi");
         assert_eq!(note_line("备注"), "备注");
+    }
+
+    #[test]
+    fn only_links_and_emails_open() {
+        let open = |kind, text| snippet_open_url(kind, text);
+        assert_eq!(
+            open(SnippetKind::Link, "https://a.com/x").as_deref(),
+            Some("https://a.com/x")
+        );
+        assert_eq!(
+            open(SnippetKind::Link, "WWW.a.com").as_deref(),
+            Some("https://WWW.a.com")
+        );
+        assert_eq!(open(SnippetKind::Link, "ftp://a.com"), None);
+        assert_eq!(
+            open(SnippetKind::Email, "a@b.com").as_deref(),
+            Some("mailto:a@b.com")
+        );
+        assert_eq!(open(SnippetKind::Number, "123456"), None);
     }
 }

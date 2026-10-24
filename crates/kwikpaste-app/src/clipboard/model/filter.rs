@@ -167,6 +167,11 @@ impl ListFilter {
         !self.keyword.is_empty()
     }
 
+    /// 偏好「全部视图隐藏收藏」只作用于「全部」本身：搜索和自定义分组照常包含收藏。
+    pub fn hides_favorites(&self, setting: bool) -> bool {
+        setting && !self.favorites() && self.group_id.is_none() && !self.searching()
+    }
+
     /// 一条新记录或被重新使用的记录可能出现在当前视图里吗（1.x `shouldRefreshCurrentGroup`）。
     /// 与 1.x 一样不看搜索词：搜索时有新记录也回到顶部刷新。
     pub fn may_include(&self, kind: Option<ItemKind>) -> bool {
@@ -346,6 +351,36 @@ mod tests {
         assert_eq!(start(Since::Today).time(), NaiveTime::MIN);
         assert_eq!((today - start(Since::Week).date_naive()).num_days(), 6);
         assert_eq!((today - start(Since::Month).date_naive()).num_days(), 29);
+    }
+
+    #[test]
+    fn hiding_favorites_covers_only_the_plain_all_view() {
+        let all = ListFilter::default();
+        assert!(all.hides_favorites(true));
+        assert!(!all.hides_favorites(false));
+
+        let text = ListFilter {
+            category: Some(ItemKind::Text),
+            ..ListFilter::default()
+        };
+        assert!(text.hides_favorites(true), "categories inside All");
+
+        for filter in [
+            ListFilter {
+                range: Range::Favorite,
+                ..ListFilter::default()
+            },
+            ListFilter {
+                group_id: Some("g".into()),
+                ..ListFilter::default()
+            },
+            ListFilter {
+                keyword: "abc".into(),
+                ..ListFilter::default()
+            },
+        ] {
+            assert!(!filter.hides_favorites(true), "{filter:?}");
+        }
     }
 
     #[test]

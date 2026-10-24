@@ -9,8 +9,8 @@
 //               absolute or .. paths, the executable is 0755; Info.plist has the 19 keys of 1.4.0 with the
 //               same identifier, executable and document types, and LSMinimumSystemVersion 10.15.
 //   e2e         no binary contains the e2e-overrides sentinel.
-//   size        the Windows installers stay within the budget in lib/size.mjs: warning above 5.5 MiB,
-//               error above 6 MiB.
+//   size        the Windows installers stay within the budget in lib/size.mjs: warning above 6 MiB,
+//               error above 6.5 MiB.
 //   latest.json must not exist: old clients read GitHub's latest/download/latest.json.
 //
 // Usage: node scripts/ci/check-native-artifacts.mjs <dir> --version <v> [--identity production|test]

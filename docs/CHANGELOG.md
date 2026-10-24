@@ -2,6 +2,29 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.8 - 2026-10-24
+
+- Text items can be edited in a separate, resizable window; double-click the text in the preview to edit it directly.
+- Several selected images and files can be pasted, copied or dragged to another app together.
+- The preview and the full-size viewer can read a QR code in an image and copy its content, which is recorded as a new item.
+- Quick snippets on cards have a context menu to copy or paste that part and to open links and emails; middle-click opens a link or email directly.
+- Added Hide Favorites from All: favorites only show under Favorites, and search still finds them.
+- Image items can show their saved original with Show in Explorer (Show in Finder on macOS).
+- Report a Problem takes an optional reply email, and the diagnostics now include the OS edition and hardware.
+- macOS builds are signed with a fixed certificate, so updates no longer require granting Accessibility again (updating to 2.0.8 still asks once more).
+- Dates such as 05/28 and 2026-05-28 stay whole in quick snippets and Split Words.
+- When there is no room for the preview beside the clipboard window (for example on a portrait screen), it goes above or below and covers as little of the window as possible.
+- The quick snippets area in the preview has a maximum height and scrolls when there are many; Split Words applies only to the current preview and no longer changes the preview setting.
+- Pasting as plain text drops trailing spaces and line breaks.
+- When the system blocks the paste keystroke (often game anti-cheat), KwikPaste says so and offers a one-click restart to bring auto-paste back.
+- Fixed dragging the panel by a blank area not working right after a click on Windows.
+- Fixed a reused item not moving to the top right away once the list had been scrolled.
+- Fixed a hotkey with Alt ending a rename in File Explorer when it opened the clipboard window on Windows.
+- Fixed the copy sound not playing with Equalizer APO on Windows.
+- Fixed the preview jumping up or down when switching between image and text or the Split Words view.
+- Fixed long submenus running outside the window and not scrolling with the mouse wheel.
+- Fixed dialog buttons being cut off when the window is short.
+
 ## 2.0.7 - 2026-10-18
 
 - Fixed screenshots from tools such as Snowshot sometimes not being recorded.

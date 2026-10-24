@@ -1,8 +1,9 @@
-//! 多选（与 1.3.8 一致）：点击勾选、Shift 连选、Mod+A 全选 / 取消全选、批量删除。
+//! 多选（与 1.3.8 一致）：点击勾选、Shift 连选、Mod+A 全选 / 取消全选、批量删除；另有合并粘贴、
+//! 合并复制和整组拖出（见 `ops.rs` 的 `checked_selection`）。
 //!
-//! 受删除保护的收藏、置顶记录勾不上，第一次碰到时提示可以去设置里放开（同一条提示只留一份）。
-//! 连选两端都已加载时就地取中间的行，否则向数据源要当前视图的完整顺序再截取；全选也是。
-//! 请求在路上时换了视图（换代）就作废。
+//! 收藏、置顶记录也能勾选；批量删除时跳过受删除保护的，一条都删不了时提示可以去设置里放开
+//! （同一条提示只留一份）。连选两端都已加载时就地取中间的行，否则向数据源要当前视图的完整顺序
+//! 再截取；全选也是。请求在路上时换了视图（换代）就作废。
 
 use std::sync::Arc;
 
@@ -56,10 +57,11 @@ impl ClipboardList {
         );
     }
 
-    fn deletable(&self, refs: Vec<ItemRef>) -> Vec<Arc<str>> {
-        refs.into_iter()
+    fn deletable(&self) -> Vec<Arc<str>> {
+        self.selection
+            .refs()
             .filter(|item| self.can_delete(item.is_favorite, item.is_pinned))
-            .map(|item| item.id)
+            .map(|item| item.id.clone())
             .collect()
     }
 
@@ -70,21 +72,17 @@ impl ClipboardList {
             limit: 0,
             filter: self.filter().clone(),
             sort: self.settings.clipboard.content.sort,
+            hide_favorites: self.hides_favorites(),
         }
     }
 
     /// 切换一条的勾选，并把它记为连选起点。
-    pub fn toggle_checked(&mut self, item: &ListItem, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_delete(item.is_favorite, item.is_pinned) {
-            Self::show_protected_hint(window, cx);
-            return;
-        }
-
-        self.selection.toggle(&item.id);
+    pub fn toggle_checked(&mut self, item: &ListItem, cx: &mut Context<Self>) {
+        self.selection.toggle(ItemRef::of(item));
         cx.notify();
     }
 
-    /// Shift 点击：勾上起点到目标之间（含两端）能删的记录，起点不变。
+    /// Shift 点击：勾上起点到目标之间（含两端）的记录，起点不变。
     pub fn check_range(
         &mut self,
         target: Arc<ListItem>,
@@ -97,12 +95,13 @@ impl ClipboardList {
             .filter(|anchor| **anchor != target.id)
             .cloned()
         else {
-            self.toggle_checked(&target, window, cx);
+            self.toggle_checked(&target, cx);
             return;
         };
 
         if let Some(range) = loaded_range(&self.model, &anchor, &target.id) {
-            self.check_refs(range, window, cx);
+            self.selection.add(range);
+            cx.notify();
             return;
         }
 
@@ -120,8 +119,8 @@ impl ClipboardList {
                 }
                 match result {
                     Ok(refs) => match range_in(&refs, &anchor, &target.id) {
-                        Some(range) => list.check_refs(range, window, cx),
-                        None => list.toggle_checked(&target, window, cx),
+                        Some(range) => list.selection.add(range),
+                        None => list.toggle_checked(&target, cx),
                     },
                     Err(err) => {
                         Self::toast_error("commands:labels.selectClipboardItems", &err, window, cx)
@@ -133,18 +132,7 @@ impl ClipboardList {
         .detach();
     }
 
-    fn check_refs(&mut self, refs: Vec<ItemRef>, window: &mut Window, cx: &mut Context<Self>) {
-        let ids = self.deletable(refs);
-        if ids.is_empty() {
-            Self::show_protected_hint(window, cx);
-            return;
-        }
-
-        self.selection.add(ids);
-        cx.notify();
-    }
-
-    /// Mod+A / 全选按钮：全选当前视图里能删的记录，已全选时全部取消；还没进入多选时顺带进入。
+    /// Mod+A / 全选按钮：全选当前视图的记录，已全选时全部取消；还没进入多选时顺带进入。
     pub fn toggle_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.enter();
         if self.selection.all_checked() {
@@ -166,17 +154,8 @@ impl ClipboardList {
                     return;
                 }
                 match result {
-                    Ok(refs) => {
-                        let any = !refs.is_empty();
-                        let ids = list.deletable(refs);
-                        if ids.is_empty() {
-                            if any {
-                                Self::show_protected_hint(window, cx);
-                            }
-                            return;
-                        }
-                        list.selection.check_all(ids);
-                    }
+                    Ok(refs) if !refs.is_empty() => list.selection.check_all(refs),
+                    Ok(_) => {}
                     Err(err) => {
                         Self::toast_error("commands:labels.selectClipboardItems", &err, window, cx)
                     }
@@ -187,14 +166,33 @@ impl ClipboardList {
         .detach();
     }
 
-    /// 删除已勾选的记录：总是二次确认；成功后退出多选，按新数据刷新列表；取消或失败时保留勾选。
+    /// 合并粘贴已勾选的记录（文本合成一段，图片 / 文件合成一份文件列表）；只勾了一条就粘贴那一条。
+    pub fn paste_checked(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selection.ids().into_iter().next() {
+            self.paste_item(id, false, cx);
+        }
+    }
+
+    /// 多选时的 Mod+C：合并复制已勾选的记录，规则同 [`Self::paste_checked`]。
+    pub fn copy_checked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.selection.ids().into_iter().next() {
+            self.copy(id, false, None, window, cx);
+        }
+    }
+
+    /// 删除已勾选的记录（跳过受删除保护的）：总是二次确认；成功后退出多选，按新数据刷新列表；
+    /// 取消或失败时保留勾选。
     pub fn delete_checked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let count = self.selection.count();
-        if count == 0 || self.selection.busy() {
+        if self.selection.count() == 0 || self.selection.busy() {
+            return;
+        }
+        let ids = self.deletable();
+        if ids.is_empty() {
+            Self::show_protected_hint(window, cx);
             return;
         }
 
-        let count = i64::try_from(count).unwrap_or(i64::MAX);
+        let count = i64::try_from(ids.len()).unwrap_or(i64::MAX);
         let answer = confirm(
             ConfirmSpec::new(t("commands:batchDeleteConfirm.title"))
                 .content(t_count("commands:batchDeleteConfirm.content", count, &[]))
@@ -208,14 +206,21 @@ impl ClipboardList {
             if !answer.await.unwrap_or(false) {
                 return;
             }
-            list.update_in(cx, |list, window, cx| list.delete_checked_now(window, cx))
-                .ok();
+            list.update_in(cx, |list, window, cx| {
+                list.delete_checked_now(ids, window, cx)
+            })
+            .ok();
         })
         .detach();
     }
 
-    fn delete_checked_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let future = self.source.delete_many(self.selection.ids());
+    fn delete_checked_now(
+        &mut self,
+        ids: Vec<Arc<str>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let future = self.source.delete_many(ids);
         self.selection.set_busy(true);
         cx.notify();
 

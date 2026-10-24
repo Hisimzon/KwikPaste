@@ -31,6 +31,7 @@ mdns-sd.workspace = true
 pinyin.workspace = true
 rand.workspace = true
 regex.workspace = true
+rqrr = { version = "0.11", default-features = false }
 rust_xlsxwriter.workspace = true
 semver.workspace = true
 serde.workspace = true

@@ -342,7 +342,7 @@ impl ClipboardList {
             .into_any_element()
     }
 
-    /// 多选栏（1.x `SelectionBar.tsx`）：左侧已选条数或操作提示，右侧全选、删除、取消。
+    /// 多选栏（1.x `SelectionBar.tsx`）：左侧已选条数或操作提示，右侧全选、粘贴、删除、取消。
     fn render_selection_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let tokens = theme::semantic(cx);
         let count = self.selection.count();
@@ -399,6 +399,13 @@ impl ClipboardList {
                             .on_click(cx.listener(|list, _, window, cx| {
                                 list.toggle_all(window, cx);
                             })),
+                    )
+                    .child(
+                        Button::new("selection-paste", t("clipboard:selection.paste"))
+                            .small()
+                            .primary()
+                            .disabled(busy || count == 0)
+                            .on_click(cx.listener(|list, _, _, cx| list.paste_checked(cx))),
                     )
                     .child(
                         Button::new("selection-delete", t("clipboard:selection.delete"))

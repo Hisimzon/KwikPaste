@@ -1,20 +1,20 @@
 //! 多选（1.3.8 起的 `clipboardSelection` 与 `List.tsx` 的勾选逻辑）：点击勾选、Shift 连选、
-//! Mod+A 全选 / 取消全选、批量删除。
+//! Mod+A 全选 / 取消全选、批量删除、合并粘贴与拖出。
 //!
 //! 每次清空都换代（`token`）：还在路上的全选、连选结果回来时代号不对就作废。受删除保护的记录
-//! 勾不上（由调用方按 [`super::actions::DeletePolicy`] 过滤后再交进来）。
+//! 也能勾选（合并粘贴、拖出要用），批量删除时由调用方按 [`super::actions::DeletePolicy`] 跳过。
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use super::{item::ItemRef, list_model::ListModel};
 
 #[derive(Debug, Default)]
 pub struct Selection {
     active: bool,
-    checked: HashSet<Arc<str>>,
+    checked: HashMap<Arc<str>, ItemRef>,
     /// Shift 连选的起点：最近一次单独勾选或取消的记录。
     anchor: Option<Arc<str>>,
-    /// 当前视图里能删的记录已全部勾上：全选按钮切成取消全选。
+    /// 当前视图的记录已全部勾上：全选按钮切成取消全选。
     all_checked: bool,
     token: u64,
     /// 正在向数据源要全选 / 连选范围，或正在删除。
@@ -65,11 +65,15 @@ impl Selection {
     }
 
     pub fn is_checked(&self, id: &str) -> bool {
-        self.checked.contains(id)
+        self.checked.contains_key(id)
     }
 
     pub fn ids(&self) -> Vec<Arc<str>> {
-        self.checked.iter().cloned().collect()
+        self.checked.keys().cloned().collect()
+    }
+
+    pub fn refs(&self) -> impl Iterator<Item = &ItemRef> {
+        self.checked.values()
     }
 
     pub fn anchor(&self) -> Option<&Arc<str>> {
@@ -77,24 +81,28 @@ impl Selection {
     }
 
     /// 切换一条的勾选，并把它记为连选起点。
-    pub fn toggle(&mut self, id: &Arc<str>) {
-        self.anchor = Some(id.clone());
+    pub fn toggle(&mut self, item: ItemRef) {
+        self.anchor = Some(item.id.clone());
         self.all_checked = false;
-        if !self.checked.remove(id) {
-            self.checked.insert(id.clone());
+        if self.checked.remove(&item.id).is_none() {
+            self.checked.insert(item.id.clone(), item);
         }
     }
 
     /// Shift 连选：勾上一段（起点不变）。
-    pub fn add(&mut self, ids: impl IntoIterator<Item = Arc<str>>) {
+    pub fn add(&mut self, items: impl IntoIterator<Item = ItemRef>) {
         self.all_checked = false;
-        self.checked.extend(ids);
+        self.checked
+            .extend(items.into_iter().map(|item| (item.id.clone(), item)));
     }
 
     /// 全选：换成这一批，起点清空。
-    pub fn check_all(&mut self, ids: impl IntoIterator<Item = Arc<str>>) {
+    pub fn check_all(&mut self, items: impl IntoIterator<Item = ItemRef>) {
         self.anchor = None;
-        self.checked = ids.into_iter().collect();
+        self.checked = items
+            .into_iter()
+            .map(|item| (item.id.clone(), item))
+            .collect();
         self.all_checked = true;
     }
 
@@ -144,15 +152,15 @@ mod tests {
     fn toggling_sets_the_anchor_and_clears_select_all() {
         let mut selection = Selection::default();
         selection.enter();
-        selection.check_all(["a".into(), "b".into()]);
+        selection.check_all(refs(&["a", "b"]));
         assert!(selection.all_checked());
 
-        selection.toggle(&"a".into());
+        selection.toggle(refs(&["a"]).remove(0));
         assert!(!selection.all_checked());
         assert!(!selection.is_checked("a"));
         assert_eq!(selection.anchor().map(|id| &**id), Some("a"));
 
-        selection.toggle(&"a".into());
+        selection.toggle(refs(&["a"]).remove(0));
         assert!(selection.is_checked("a"));
         assert_eq!(selection.count(), 2);
     }
@@ -161,7 +169,7 @@ mod tests {
     fn reset_bumps_the_token_and_exit_leaves() {
         let mut selection = Selection::default();
         selection.enter();
-        selection.toggle(&"a".into());
+        selection.toggle(refs(&["a"]).remove(0));
         let token = selection.token();
 
         selection.reset();
@@ -169,7 +177,7 @@ mod tests {
         assert_eq!(selection.count(), 0);
         assert!(selection.active(), "reset keeps the mode");
 
-        selection.toggle(&"b".into());
+        selection.toggle(refs(&["b"]).remove(0));
         selection.exit();
         assert!(!selection.active());
         assert_eq!(selection.count(), 0);

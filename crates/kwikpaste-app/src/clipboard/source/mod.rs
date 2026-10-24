@@ -37,6 +37,8 @@ pub struct ListQuery {
     pub limit: usize,
     pub filter: ListFilter,
     pub sort: ClipboardItemSort,
+    /// 偏好「全部视图隐藏收藏」在这个视图里生效（[`ListFilter::hides_favorites`]）。
+    pub hide_favorites: bool,
 }
 
 /// 一个自定义分组（core `ClipboardGroup`）。

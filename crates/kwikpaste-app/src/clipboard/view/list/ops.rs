@@ -6,22 +6,21 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
-use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Context, Div, InteractiveElement as _, IntoElement as _, MouseButton, MouseDownEvent,
-    ParentElement as _, Styled as _, Task, Window, div,
+    ParentElement as _, Task, Window, div,
 };
 use kwikpaste_core::{
-    clipboard::ClipboardFragment,
+    clipboard::{ClipboardFragment, SnippetKind},
     db::models::ClipboardItemQuery,
     settings::{AutoPaste, Settings},
 };
 use kwikpaste_ui::{
-    ConfirmSpec, DialogSpec, TextArea, TextAreaInput, confirm, form_dialog, theme,
+    ConfirmSpec, DialogSpec, TextArea, TextAreaInput, confirm, form_dialog,
     toast::{self, Toast},
 };
 
-use super::{ClipboardList, ContentEdit, ListIntent, NoteEdit};
+use super::{ClipboardList, ListIntent, NoteEdit};
 use crate::{
     clipboard::{
         model::{
@@ -33,12 +32,14 @@ use crate::{
         },
         source::{Group, core_source::item_query},
         view::{
+            card,
             editing::{self, EditTarget},
+            editor::{self, EditItem},
             viewer::{self, ViewerImage},
         },
     },
     i18n::{t, t_args},
-    platform::{EditTrigger, PanelCommand, Trigger, TriggerSource},
+    platform::{self, EditTrigger, PanelCommand, Trigger, TriggerSource},
 };
 
 /// 弹框里的多行输入框。打开时没拿到编辑态（面板仍不可激活，没有光标）的话，点它再按鼠标触发请求一次。
@@ -59,7 +60,10 @@ const COPIED_FEEDBACK: Duration = Duration::from_secs(1);
 /// 挂起的按键最多等这么久；第一页查询正常几十毫秒就落地。
 const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// 失败提示：“{动作}失败：{原因}”（1.x `commands:error`）。
+/// 粘贴键被系统拦截时的提示停留时长：要留出点“重启快贴”的时间。
+const PASTE_BLOCKED_TOAST: Duration = Duration::from_secs(10);
+
+/// 失败提示：“{动作}失败：{原因}”（1.x `commands:error`）；粘贴键被系统拦截时说明原因并给出重启按钮。
 pub(in crate::clipboard::view) fn error_toast(
     label: &str,
     err: &anyhow::Error,
@@ -67,6 +71,16 @@ pub(in crate::clipboard::view) fn error_toast(
     cx: &mut App,
 ) {
     log::warn!("{label} failed: {err:#}");
+    if platform::paste::injection_blocked(err) {
+        let toast = Toast::error(t("commands:messages.pasteBlocked"))
+            .key("paste-blocked")
+            .duration(PASTE_BLOCKED_TOAST)
+            .action(t("commands:labels.restartApp"), |_, cx| {
+                platform::restart(cx)
+            });
+        toast::show(toast, window, cx);
+        return;
+    }
     let message = t_args(
         "commands:error",
         &[("label", &t(label)), ("message", &err.to_string())],
@@ -98,11 +112,17 @@ impl ClipboardList {
         &self.settings
     }
 
+    pub(super) fn hides_favorites(&self) -> bool {
+        self.filter()
+            .hides_favorites(self.settings.clipboard.content.hide_favorites_in_all)
+    }
+
     /// core 的设置变了：排序变了整体重载；影响列表载荷的展示设置变了重拉当前范围（1.x 同）。
     pub fn apply_settings(&mut self, settings: Settings, cx: &mut Context<Self>) {
         let old = &self.settings.clipboard;
         let new = &settings.clipboard;
-        let resort = old.content.sort != new.content.sort;
+        let resort = old.content.sort != new.content.sort
+            || old.content.hide_favorites_in_all != new.content.hide_favorites_in_all;
         let rules_changed = old.custom_rules != new.custom_rules;
         let refresh = old.display != new.display || old.sensitive != new.sensitive || rules_changed;
         let preview_changed = old.preview != new.preview || rules_changed;
@@ -194,7 +214,7 @@ impl ClipboardList {
     }
 
     /// 多选快照：交给 core 按完整列表排序并读取原文，不能使用可能脱敏或未加载的卡片正文。
-    fn text_selection(&self) -> Option<(Vec<String>, ClipboardItemQuery)> {
+    pub(super) fn checked_selection(&self) -> Option<(Vec<String>, ClipboardItemQuery)> {
         (self.selection.count() >= 2).then(|| {
             (
                 self.selection
@@ -207,13 +227,13 @@ impl ClipboardList {
         })
     }
 
-    /// 粘贴记录或多选文本：交给宿主写回、让出前台、注入粘贴键，同时发 `ListIntent::Paste` 通知。
+    /// 粘贴记录或合并后的多选：交给宿主写回、让出前台、注入粘贴键，同时发 `ListIntent::Paste` 通知。
     pub fn paste_item(&mut self, id: Arc<str>, plain: bool, cx: &mut Context<Self>) {
         log::info!("paste requested for {id} (plain: {plain})");
         self.close_preview(cx);
         let task = self
             .host
-            .paste(id.clone(), plain, self.text_selection(), cx);
+            .paste(id.clone(), plain, self.checked_selection(), cx);
         self.report_host_failure("commands:labels.paste", task, cx);
         cx.emit(ListIntent::Paste { id, plain });
     }
@@ -307,40 +327,93 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.controller.select(&item.id);
-        let fragment = ClipboardFragment::Snippet {
-            text: text.to_string(),
-        };
         let copy = matches!(
             self.settings.clipboard.content.auto_paste,
             AutoPaste::SingleClickCopy | AutoPaste::DoubleClickCopy
         );
 
         if copy {
-            self.close_preview_of(&item.id, cx);
-            let task = self.host.copy_fragment(item.id.clone(), fragment, cx);
-            cx.spawn_in(window, async move |_, cx| {
-                let result = task.await;
-                cx.update(|window, cx| match result {
-                    Ok(()) => {
-                        toast::show(Toast::success(t("commands:messages.copied")), window, cx)
-                    }
-                    Err(err) => error_toast("commands:labels.copy", &err, window, cx),
-                })
-                .ok();
-            })
-            .detach();
+            self.copy_snippet(&item.id, text, window, cx);
         } else {
-            log::info!("snippet paste requested for {}", item.id);
-            self.close_preview(cx);
-            let task = self.host.paste_fragment(item.id.clone(), fragment, cx);
-            self.report_host_failure("commands:labels.paste", task, cx);
-            cx.emit(ListIntent::PasteSnippet {
-                id: item.id.clone(),
-                text,
-            });
+            self.paste_snippet(&item.id, text, cx);
         }
+    }
+
+    /// 只复制卡片上的这个片段。
+    pub fn copy_snippet(
+        &mut self,
+        id: &Arc<str>,
+        text: Arc<str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.controller.select(id);
+        self.close_preview_of(id, cx);
+        let fragment = ClipboardFragment::Snippet {
+            text: text.to_string(),
+        };
+        let task = self.host.copy_fragment(id.clone(), fragment, cx);
+        cx.spawn_in(window, async move |_, cx| {
+            let result = task.await;
+            cx.update(|window, cx| match result {
+                Ok(()) => toast::show(Toast::success(t("commands:messages.copied")), window, cx),
+                Err(err) => error_toast("commands:labels.copy", &err, window, cx),
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
+    }
+
+    /// 把卡片上的这个片段粘贴到目标应用。
+    pub fn paste_snippet(&mut self, id: &Arc<str>, text: Arc<str>, cx: &mut Context<Self>) {
+        self.controller.select(id);
+        log::info!("snippet paste requested for {id}");
+        self.close_preview(cx);
+        let fragment = ClipboardFragment::Snippet {
+            text: text.to_string(),
+        };
+        let task = self.host.paste_fragment(id.clone(), fragment, cx);
+        self.report_host_failure("commands:labels.paste", task, cx);
+        cx.emit(ListIntent::PasteSnippet {
+            id: id.clone(),
+            text,
+        });
+        cx.notify();
+    }
+
+    /// 用浏览器 / 邮件客户端打开快捷信息里的链接或邮箱（中键、右键菜单）；别的类型不响应。
+    pub fn open_snippet(
+        &mut self,
+        id: &Arc<str>,
+        text: &str,
+        kind: SnippetKind,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(url) = card::snippet_open_url(kind, text) else {
+            return;
+        };
+        self.close_preview_of(id, cx);
+        cx.open_url(&url);
+    }
+
+    /// 指针进出卡片上的一块快捷信息。离开时只清掉自己：换到相邻一块时进入可能先于离开到达。
+    pub(in crate::clipboard::view) fn hover_snippet(
+        &mut self,
+        id: &Arc<str>,
+        text: Arc<str>,
+        kind: SnippetKind,
+        hovered: bool,
+    ) {
+        if hovered {
+            self.hovered_snippet = Some((id.clone(), text, kind));
+        } else if self
+            .hovered_snippet
+            .as_ref()
+            .is_some_and(|(current, current_text, _)| current == id && *current_text == text)
+        {
+            self.hovered_snippet = None;
+        }
     }
 
     // ------------------------------------------------------------ 大图
@@ -382,7 +455,9 @@ impl ClipboardList {
         cx: &mut Context<Self>,
     ) {
         self.close_preview_of(&id, cx);
-        let task = self.host.copy(id.clone(), plain, self.text_selection(), cx);
+        let task = self
+            .host
+            .copy(id.clone(), plain, self.checked_selection(), cx);
 
         cx.spawn_in(window, async move |list, cx| {
             let result = task.await;
@@ -431,7 +506,8 @@ impl ClipboardList {
 
     // ------------------------------------------------------------ 收藏、置顶
 
-    /// 翻转收藏：收藏视图里取消收藏的记录立即移出，其余只更新标记（1.x `handleFavoriteToggled`）。
+    /// 翻转收藏：收藏视图里取消收藏、隐藏收藏的「全部」里收藏的记录立即移出，其余只更新标记
+    /// （1.x `handleFavoriteToggled`）。
     pub fn toggle_favorite(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(current) = self.model.find(&id).map(|item| item.is_favorite) else {
             return;
@@ -448,7 +524,9 @@ impl ClipboardList {
                         "commands:messages.favoriteRemoved"
                     };
                     Self::toast_success(key, window, cx);
-                    if list.filter().favorites() && !favorite {
+                    if (list.filter().favorites() && !favorite)
+                        || (list.hides_favorites() && favorite)
+                    {
                         list.remove_item(&id, cx);
                     } else {
                         list.patch_item(&id, |item| item.is_favorite = favorite, cx);
@@ -514,7 +592,7 @@ impl ClipboardList {
             return;
         };
         self.close_preview_of(&id, cx);
-        if self.note.is_some() || self.content_edit.is_some() || self.content_loading.is_some() {
+        if self.note.is_some() {
             return;
         }
 
@@ -576,6 +654,11 @@ impl ClipboardList {
                         "commands:messages.noteSaved"
                     };
                     Self::toast_success(key, window, cx);
+                    if saved.auto_favorited && list.hides_favorites() {
+                        list.remove_item(&id, cx);
+                        cx.emit(ListIntent::Changed);
+                        return;
+                    }
                     list.patch_item(
                         &id,
                         |item| {
@@ -593,120 +676,47 @@ impl ClipboardList {
         .detach();
     }
 
-    /// 异步读取完整正文，再按备注框的前台编辑流程打开内容编辑器。
+    /// 异步读取完整正文，在独立的编辑窗里打开；面板按点外部处理（固定时留着）。
     pub fn edit_content(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.model.find(&id).cloned() else {
             return;
         };
-        if item.kind != crate::clipboard::model::item::ItemKind::Text
-            || self.note.is_some()
-            || self.content_edit.is_some()
-            || self.content_loading.is_some()
-        {
+        if item.kind != ItemKind::Text {
             return;
         }
         self.close_preview_of(&id, cx);
+        let rich = matches!(item.sub_kind, Some(SubKind::Html | SubKind::Rtf));
         let future = self.source.text_content(id.clone());
-        self.content_loading = Some(cx.spawn_in(window, async move |list, cx| {
-            let result = future.await;
-            list.update_in(cx, |list, window, cx| {
-                list.content_loading = None;
-                match result {
-                    Ok(original) => {
-                        let input = TextAreaInput::new("", 6, 16, window, cx);
-                        input.set_value(original.clone(), window, cx);
-                        let content = input.clone();
-                        let rich = matches!(item.sub_kind, Some(SubKind::Html | SubKind::Rtf));
-                        let answer = form_dialog(
-                            DialogSpec::new(t("clipboard:menu.editContent"))
-                                .ok_text(t("common:actions.save"))
-                                .cancel_text(t("common:actions.cancel")),
-                            move |_, cx| {
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .child(editable_area(&content, EditTarget::Content))
-                                    .when(rich, |el| {
-                                        el.child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(theme::semantic(cx).text.secondary)
-                                                .child(t("clipboard:content.richWarning")),
-                                        )
-                                    })
-                                    .into_any_element()
-                            },
-                            window,
-                            cx,
-                        );
-                        list.content_edit = Some(ContentEdit {
-                            id,
-                            input,
-                            original,
-                        });
-                        editing::begin(EditTarget::Content, EditTrigger::Keyboard, cx);
-                        cx.spawn_in(window, async move |list, cx| {
-                            let save = answer.await.unwrap_or(false);
-                            list.update_in(cx, |list, window, cx| {
-                                list.finish_content(save, window, cx)
-                            })
-                            .ok();
-                        })
-                        .detach();
-                    }
-                    Err(err) => Self::toast_error("clipboard:menu.editContent", &err, window, cx),
-                }
-            })
-            .ok();
-        }));
-    }
-
-    /// 内容框关闭后退出编辑态；空白报错，原样保存，成功后就地替换列表载荷。
-    pub(in crate::clipboard::view) fn finish_content(
-        &mut self,
-        save: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(edit) = self.content_edit.take() else {
-            return;
-        };
-        if editing::target(cx) == Some(EditTarget::Content) {
-            editing::end(cx);
-        }
-        window.focus(&self.focus, cx);
-        if !save {
-            return;
-        }
-        let value = edit.input.value(cx).to_string();
-        if value.trim().is_empty() {
-            Self::toast_error(
-                "clipboard:menu.editContent",
-                &anyhow::anyhow!(t("clipboard:content.empty")),
-                window,
-                cx,
-            );
-            return;
-        }
-        if value == edit.original {
-            return;
-        }
-        let id = edit.id;
-        let future = self.source.update_text_content(id.clone(), value);
         cx.spawn_in(window, async move |list, cx| {
             let result = future.await;
             list.update_in(cx, |list, window, cx| match result {
-                Ok(saved) => {
-                    list.patch_item(&id, |item| *item = saved, cx);
-                    cx.emit(ListIntent::Changed);
-                    Self::toast_success("commands:messages.noteSaved", window, cx);
+                Ok(original) => {
+                    editing::request_panel(
+                        cx,
+                        PanelCommand::Hide(Trigger::now(TriggerSource::OutsideClick)),
+                    );
+                    let item = EditItem { id, original, rich };
+                    let list_entity = cx.entity().downgrade();
+                    if let Err(err) = editor::open(item, list.source.clone(), list_entity, cx) {
+                        log::error!("could not open the content editor: {err:#}");
+                    }
                 }
                 Err(err) => Self::toast_error("clipboard:menu.editContent", &err, window, cx),
             })
             .ok();
         })
         .detach();
+    }
+
+    /// 编辑窗保存成功：就地替换列表载荷。
+    pub(in crate::clipboard::view) fn content_saved(
+        &mut self,
+        saved: ListItem,
+        cx: &mut Context<Self>,
+    ) {
+        let id = saved.id.clone();
+        self.patch_item(&id, |item| *item = saved, cx);
+        cx.emit(ListIntent::Changed);
     }
 
     /// 恢复编辑前的原文，刷新方式同保存编辑。
@@ -826,15 +836,14 @@ impl ClipboardList {
         .detach();
     }
 
-    /// 拆词：core 没给出拆词动作（非文本、脱敏展示的敏感内容）时不响应。拆词面板还没做，
-    /// 这里先发意图。
+    /// 拆词：core 没给出拆词动作（非文本、脱敏展示的敏感内容）时不响应。发意图，由面板交给
+    /// [`Self::split_words`] 打开（或退出）选词预览。
     pub fn split(&mut self, item: &ListItem, cx: &mut Context<Self>) {
         if !is_available(QuickAction::SplitWords, item) {
             return;
         }
 
         self.controller.select(&item.id);
-        self.close_preview(cx);
         log::info!("split words requested for {}", item.id);
         cx.emit(ListIntent::SplitWords {
             id: item.id.clone(),
@@ -879,12 +888,17 @@ impl ClipboardList {
         cx.notify();
     }
 
-    /// 卡片按住拖过系统阈值：把这条记录拖到别的应用（1.x `startDragClipboardItem`）。拖出期间面板
-    /// 不激活；失败（文件已不存在等）时提示原因。
+    /// 卡片按住拖过系统阈值：把这条记录拖到别的应用（1.x `startDragClipboardItem`）；多选时按住的
+    /// 是已勾选的卡片就整组一起拖出。拖出期间面板不激活；失败（文件已不存在等）时提示原因。
     pub(super) fn drag_out(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
         log::info!("drag-out requested for {id}");
         self.close_preview(cx);
-        let task = self.host.drag_out(id.clone(), window, cx);
+        let selection = self
+            .selection
+            .is_checked(&id)
+            .then(|| self.checked_selection())
+            .flatten();
+        let task = self.host.drag_out(id.clone(), selection, window, cx);
         self.report_host_failure("commands:labels.drag", task, cx);
         cx.emit(ListIntent::DragOut { id });
     }

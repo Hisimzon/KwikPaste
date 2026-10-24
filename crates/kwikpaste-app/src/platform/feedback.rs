@@ -62,7 +62,12 @@ pub fn prepare(cx: &mut App) -> Task<Result<FeedbackDraft>> {
 }
 
 /// UI 点击发送时传入预览过的草稿；await 成功后仅展示 code，失败可继续用同一草稿保存。
-pub fn submit(draft: FeedbackDraft, description: String, cx: &mut App) -> Task<Result<Receipt>> {
+pub fn submit(
+    draft: FeedbackDraft,
+    description: String,
+    email: String,
+    cx: &mut App,
+) -> Task<Result<Receipt>> {
     let Some(core) = crate::core_host::core(cx) else {
         return Task::ready(Err(FeedbackError::Collect));
     };
@@ -70,7 +75,7 @@ pub fn submit(draft: FeedbackDraft, description: String, cx: &mut App) -> Task<R
     cx.background_executor().spawn(async move {
         let result = kwikpaste_core::runtime::hop(&runtime, async move {
             Ok(async move {
-                let body = body(&draft, description)?;
+                let body = body(&draft, description, email)?;
                 let receipt = transport::upload(body).await?;
                 Ok(Receipt { code: receipt.code })
             }
@@ -90,12 +95,13 @@ pub fn submit(draft: FeedbackDraft, description: String, cx: &mut App) -> Task<R
 pub fn save(
     draft: FeedbackDraft,
     description: String,
+    email: String,
     path: PathBuf,
     cx: &mut App,
 ) -> Task<Result<()>> {
     cx.background_executor().spawn(async move {
         let result = (|| {
-            let body = body(&draft, description)?;
+            let body = body(&draft, description, email)?;
             std::fs::write(path, body).map_err(|_| FeedbackError::Save)
         })();
         if let Err(error) = &result {
@@ -105,9 +111,10 @@ pub fn save(
     })
 }
 
-fn body(draft: &FeedbackDraft, description: String) -> Result<Vec<u8>> {
+fn body(draft: &FeedbackDraft, description: String, email: String) -> Result<Vec<u8>> {
     let mut payload = draft.payload.clone();
     payload.description = description;
+    payload.email = email;
     transport::encode(&payload)
 }
 
@@ -181,7 +188,9 @@ fn collect(
     let mut diagnostics = json!({
         "app": {"version":app.version,"official":app.official,"portable":paths.is_portable(),"environment":paths.env().dir_name(),
             "dataDir":paths.app_data_dir().ok(),"logDir":paths.log_dir(),"uptimeSeconds":STARTED.get().map(|start| start.elapsed().as_secs())},
-        "system":{"platform":app.platform,"osVersion":os.os_version,"arch":app.arch,"language":app.language,"displayScales":os.display_scales,"elevated":os.elevated},
+        "system":{"platform":app.platform,"osName":os.os_name,"osVersion":os.os_version,"arch":app.arch,"language":app.language,
+            "model":os.model,"cpu":os.cpu,"cpuThreads":os.cpu_threads,"memoryBytes":os.memory_bytes,"gpus":os.gpus,
+            "displayScales":os.display_scales,"elevated":os.elevated},
         "hotkeys":hotkeys,"triggers":triggers,"hooks":hooks,
         "foreground":{"exe":os.foreground_exe,"privilege":os.foreground_privilege},
         "clipboard":{"watcherRunning":watcher_running,"paused":watcher_paused,"itemCount":item_count,
@@ -237,6 +246,7 @@ fn collect(
         payload: Payload {
             schema: 1,
             description: String::new(),
+            email: String::new(),
             app,
             diagnostics,
             settings: stored_settings,
@@ -318,9 +328,10 @@ mod tests {
         assert!(draft.payload.settings.is_object());
         assert_eq!(draft.payload.diagnostics["clipboard"]["itemCount"], 0);
         assert!(draft.payload.diagnostics["settingsChanged"].is_object());
+        assert!(draft.payload.diagnostics["system"]["cpuThreads"].as_u64() > Some(0));
         assert_eq!(
-            body(&draft, "test".into()).unwrap(),
-            body(&draft, "test".into()).unwrap()
+            body(&draft, "test".into(), String::new()).unwrap(),
+            body(&draft, "test".into(), String::new()).unwrap()
         );
         std::fs::write(
             core.paths().config_dir().unwrap().join("settings.json"),

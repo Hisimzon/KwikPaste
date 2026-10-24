@@ -1018,21 +1018,19 @@ impl Render for ClipboardPanel {
             .on_action(cx.listener(unless_menu(|panel, _: &SelectNext, _, cx| {
                 panel.current().update(cx, |list, cx| list.select_next(cx));
             })))
-            .on_action(
-                cx.listener(unless_menu(|panel, _: &PasteSelected, window, cx| {
-                    panel.current().update(cx, |list, cx| {
-                        if list.preview_words(cx).is_some() {
-                            // 预览里选了词：Enter 粘贴选中的词（1.x `enterPastePreviewWords`）。
-                            list.use_preview_words(true, cx);
-                        } else if !list.selecting() {
-                            list.paste_active(false, cx);
-                        } else if let Some(item) = list.active_item() {
-                            // 多选时 Enter 勾选 / 取消当前项（1.x `handleSelectionKeyDown`）。
-                            list.toggle_checked(&item, window, cx);
-                        }
-                    });
-                })),
-            )
+            .on_action(cx.listener(unless_menu(|panel, _: &PasteSelected, _, cx| {
+                panel.current().update(cx, |list, cx| {
+                    if list.preview_words(cx).is_some() {
+                        // 预览里选了词：Enter 粘贴选中的词（1.x `enterPastePreviewWords`）。
+                        list.use_preview_words(true, cx);
+                    } else if !list.selecting() {
+                        list.paste_active(false, cx);
+                    } else if let Some(item) = list.active_item() {
+                        // 多选时 Enter 勾选 / 取消当前项（1.x `handleSelectionKeyDown`）。
+                        list.toggle_checked(&item, cx);
+                    }
+                });
+            })))
             .on_action(
                 cx.listener(unless_menu(|panel, _: &PasteSelectedPlain, _, cx| {
                     panel.current().update(cx, |list, cx| {
@@ -1084,6 +1082,12 @@ impl Render for ClipboardPanel {
                         panel
                             .current()
                             .update(cx, |list, cx| list.use_preview_words(false, cx));
+                        return;
+                    }
+                    if panel.current().read(cx).selecting() {
+                        panel
+                            .current()
+                            .update(cx, |list, cx| list.copy_checked(window, cx));
                         return;
                     }
                     panel.with_active(cx, |list, item, cx| {
