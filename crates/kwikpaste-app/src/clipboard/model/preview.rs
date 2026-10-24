@@ -50,6 +50,8 @@ pub const SNIPPET_CHIP_HEIGHT: f64 = 24.;
 pub const SNIPPET_CHIP_PADDING_X: f64 = 8.;
 pub const SNIPPET_DOT: f64 = 6.;
 pub const SNIPPET_PART_GAP: f64 = 4.;
+/// 快捷信息内容一行的高度（`text-xs` 的行高）。
+pub const SNIPPET_LINE_HEIGHT: f64 = 16.;
 /// 快捷信息区最高这么多（含分隔线）：三行整块再露出第四行的一半，看得出下面还有、可以滚动，
 /// 片段再多也给正文留出位置。
 pub const SNIPPETS_MAX_HEIGHT: f64 =
@@ -288,8 +290,17 @@ pub fn snippets_content_width(monitor: &RectF, scale: f64) -> f64 {
     (MAX_WIDTH * scale).min(monitor.inset(MARGIN).width) / scale - TEXT_PADDING_X * 2. - WORDS_EDGE
 }
 
-/// 一个快捷信息小块的宽度（设计 px）：按 `text-xs` 量类型名和内容，`dot` 时前面多一个圆点。
-pub fn snippet_chip_width(label: &str, text: &str, dot: bool, scale: f64, window: &Window) -> f64 {
+/// 一个快捷信息小块的宽度（设计 px）和内容行数：按 `text-xs` 量类型名和内容，`dot` 时前面多一个圆点。
+/// 比 `content_width` 宽的小块（多为长链接）占满一行，内容在余下的宽度里折行。
+pub fn snippet_chip(
+    label: &str,
+    text: &str,
+    dot: bool,
+    content_width: f64,
+    scale: f64,
+    window: &Window,
+    cx: &App,
+) -> (f64, usize) {
     let font_size = px(TextSize::Xs.font_size().0 * 16. * scale as f32);
     let measure = |line: &str| {
         let mut ui_font = font(fonts::UI_FAMILY);
@@ -312,20 +323,32 @@ pub fn snippet_chip_width(label: &str, text: &str, dot: bool, scale: f64, window
         0.
     };
 
-    (SNIPPET_CHIP_PADDING_X * 2. + dot + measure(label) + SNIPPET_PART_GAP + measure(text) + 1.)
-        .ceil()
+    let fixed = SNIPPET_CHIP_PADDING_X * 2. + dot + measure(label) + SNIPPET_PART_GAP;
+    let width = (fixed + measure(text) + 1.).ceil();
+    // 带换行的内容按行画，同样要数行。
+    if width <= content_width && !text.contains('\n') {
+        return (width, 1);
+    }
+
+    let wrap_width = px(((content_width - fixed) * scale) as f32);
+    (
+        width,
+        kwikpaste_ui::wrap_rows(text, wrap_width, font_size, cx).len(),
+    )
 }
 
-/// 快捷信息区的高度（含顶部 1px 分隔线），小块按 `content_width` 折行，最高 [`SNIPPETS_MAX_HEIGHT`]；
-/// 没有小块时为 0。
-pub fn snippets_height(chips: &[f64], content_width: f64) -> f64 {
+/// 快捷信息区的高度（含顶部 1px 分隔线），`chips` 是每块的宽度和内容行数（见 [`snippet_chip`]）。
+/// 小块按 `content_width` 折行，折成多行的小块独占一行；最高 [`SNIPPETS_MAX_HEIGHT`]，没有小块时为 0。
+pub fn snippets_height(chips: &[(f64, usize)], content_width: f64) -> f64 {
     if chips.is_empty() {
         return 0.;
     }
 
     let mut rows = 1_u32;
+    let mut extra_lines = 0;
     let mut line_width = 0.;
-    for (index, &chip) in chips.iter().enumerate() {
+    for (index, &(chip, lines)) in chips.iter().enumerate() {
+        extra_lines += lines.saturating_sub(1);
         let width = chip.min(content_width);
         if index == 0 {
             line_width = width;
@@ -339,7 +362,8 @@ pub fn snippets_height(chips: &[f64], content_width: f64) -> f64 {
 
     (1. + SNIPPETS_PADDING_Y * 2.
         + f64::from(rows) * SNIPPET_CHIP_HEIGHT
-        + f64::from(rows - 1) * WORD_GAP)
+        + f64::from(rows - 1) * WORD_GAP
+        + extra_lines as f64 * SNIPPET_LINE_HEIGHT)
         .min(SNIPPETS_MAX_HEIGHT)
 }
 
@@ -657,7 +681,7 @@ mod tests {
         assert_eq!(geometry.panel.left, 800. + 340. + GAP);
         assert_eq!(geometry.panel.top, 340. - geometry.panel.height / 2.);
 
-        let chips = [200., 200., 120.];
+        let chips = [(200., 1), (200., 1), (120., 1)];
         let snippets = snippets_height(&chips, 445.);
         assert_eq!(snippets, 1. + 24. + 2. * 24. + 4.);
         let with_snippets = super::geometry(
@@ -673,10 +697,15 @@ mod tests {
         assert_eq!(with_snippets.panel.height, geometry.panel.height + snippets);
         assert_eq!(snippets_height(&[], 445.), 0.);
         assert_eq!(
-            snippets_height(&[445.; 3], 445.),
+            snippets_height(&[(445., 1); 3], 445.),
             1. + 24. + 3. * 24. + 2. * 4.
         );
-        assert_eq!(snippets_height(&[445.; 32], 445.), SNIPPETS_MAX_HEIGHT);
+        assert_eq!(snippets_height(&[(445., 1); 32], 445.), SNIPPETS_MAX_HEIGHT);
+        // 折成两行的长链接独占一行，比单行小块高一行字。
+        assert_eq!(
+            snippets_height(&[(900., 2), (120., 1)], 445.),
+            1. + 24. + 2. * 24. + 4. + 16.
+        );
     }
 
     #[test]

@@ -950,6 +950,7 @@ fn snippets(
                     .iter()
                     .enumerate()
                     .map(|(index, snippet)| {
+                        let long = snippet.text.chars().count() >= SNIPPET_TOOLTIP_MIN_CHARS;
                         let chip = div()
                             .id(ElementId::NamedInteger("snippet".into(), index as u64))
                             .flex()
@@ -965,17 +966,24 @@ fn snippets(
                                 chip.gap(space(1.5))
                                     .child(snippet_dot(snippet_color(&colors, snippet.kind)))
                             })
+                            // 提示挂在内容上：它自己要 `on_hover`，和小块的悬停（右键菜单认它）分开。
                             .child(
                                 div()
+                                    .id(ElementId::NamedInteger(
+                                        "snippet-text".into(),
+                                        index as u64,
+                                    ))
                                     .truncate()
-                                    .child(SharedString::from(snippet.text.clone())),
+                                    .child(SharedString::from(snippet.text.clone()))
+                                    .when(long && on_pick.is_some(), |text| {
+                                        text.kp_tooltip(SharedString::from(snippet.text.clone()))
+                                    }),
                             );
                         let Some(on_pick) = on_pick.clone() else {
                             return chip.into_any_element();
                         };
                         let text: Arc<str> = Arc::from(snippet.text.as_str());
                         let kind = snippet.kind;
-                        let long = snippet.text.chars().count() >= SNIPPET_TOOLTIP_MIN_CHARS;
                         let on_hover = on_pick.clone();
                         let hover_text = text.clone();
                         let on_open = on_pick.clone();
@@ -1010,9 +1018,6 @@ fn snippets(
                             .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
                                 on_pick(SnippetEvent::Pick(text.clone()), window, cx);
-                            })
-                            .when(long, |chip| {
-                                chip.kp_tooltip(SharedString::from(snippet.text.clone()))
                             })
                             .into_any_element()
                     }),

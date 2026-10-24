@@ -214,6 +214,8 @@ impl ClipboardList {
 
     fn on_preview_event(&mut self, event: &PreviewEvent, cx: &mut Context<Self>) {
         match event {
+            // 关上后（异步隐藏前后）预览窗还可能收到指针移动，不能把下一次预览的状态带偏。
+            PreviewEvent::Pointer(_) if self.previewing.session.is_none() => {}
             PreviewEvent::Pointer(inside) => {
                 self.previewing.pointer_inside = *inside;
                 if *inside {
@@ -738,12 +740,13 @@ impl ClipboardList {
             Some(preview)
                 if matches!(measured_metrics, Some(PreviewContentMetrics::Text { .. })) =>
             {
-                let chips: Vec<f64> = preview
+                let content_width = preview::snippets_content_width(&place.monitor, text_scale);
+                let chips: Vec<(f64, usize)> = preview
                     .payload
                     .snippets
                     .iter()
                     .map(|snippet| {
-                        preview::snippet_chip_width(
+                        preview::snippet_chip(
                             &snippet
                                 .label
                                 .clone()
@@ -751,15 +754,14 @@ impl ClipboardList {
                                 .unwrap_or_else(|| t(snippet_label(snippet.kind))),
                             &snippet.text,
                             snippet_colors,
+                            content_width,
                             text_scale,
                             window,
+                            cx,
                         )
                     })
                     .collect();
-                preview::snippets_height(
-                    &chips,
-                    preview::snippets_content_width(&place.monitor, text_scale),
-                )
+                preview::snippets_height(&chips, content_width)
             }
             _ => 0.,
         };

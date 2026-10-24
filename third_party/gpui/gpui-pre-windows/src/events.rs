@@ -120,7 +120,7 @@ impl WindowsWindowInner {
             WM_QUERYENDSESSION => Some(1),
             WM_ENDSESSION => self.handle_end_session_msg(wparam),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
-            WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),
+            WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(handle),
             WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
             // Treat double click as a second single click, since we track the double clicks ourselves.
             // If you don't interact with any elements, this will fall through to the windows default
@@ -413,7 +413,7 @@ impl WindowsWindowInner {
         if handled { Some(0) } else { Some(1) }
     }
 
-    fn handle_mouse_leave_msg(&self) -> Option<isize> {
+    fn handle_mouse_leave_msg(&self, handle: HWND) -> Option<isize> {
         self.state.hovered.set(false);
         // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
         // the flag for tight `is_cursor_visible()` semantics.
@@ -424,6 +424,27 @@ impl WindowsWindowInner {
                 .callbacks
                 .hovered_status_change
                 .set(Some(callback));
+        }
+
+        // [kwikpaste patch 0012] Windows sends no move once the pointer is off the window, so the
+        // window kept its last inside position and every hover under it stayed on (no MouseExited
+        // here, unlike macOS). When the pointer is now over another window (one covering this
+        // window included, or this window is hidden), report it gone with a move far outside the
+        // client area. Leaving into this window's own non-client area is followed by WM_NCMOUSEMOVE
+        // anyway, and while this window holds the capture its moves keep arriving with their real
+        // buttons (a button-less move would end a drag).
+        let mut cursor = POINT::default();
+        if unsafe { GetCapture() } != handle
+            && unsafe { GetCursorPos(&mut cursor) }.is_ok()
+            && unsafe { WindowFromPoint(cursor) } != handle
+            && let Some(mut func) = self.state.callbacks.input.take()
+        {
+            func(PlatformInput::MouseMove(MouseMoveEvent {
+                position: point(px(-10000.), px(-10000.)),
+                pressed_button: None,
+                modifiers: current_modifiers(),
+            }));
+            self.state.callbacks.input.set(Some(func));
         }
 
         Some(0)
