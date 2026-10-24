@@ -1,4 +1,4 @@
-//! 关于页的「上报问题」：弹窗里写描述和可选的联系方式，附带内容可以逐项展开预览；
+//! 关于页的「上报问题」：弹窗里写描述和可选的回复邮箱，附带内容可以逐项展开预览；
 //! 发送成功后显示反馈编号，失败时可以把同一份内容保存为文件。
 
 use std::{ops::Range, rc::Rc, time::Duration};
@@ -10,8 +10,8 @@ use gpui::{
     prelude::FluentBuilder as _, radians, rems, uniform_list,
 };
 use kwikpaste_ui::{
-    ConfirmSpec, DialogSpec, Icon, IconName, KpStyled as _, TextArea, TextAreaInput, confirm,
-    form_dialog,
+    ConfirmSpec, DialogSpec, Icon, IconName, Input, KpStyled as _, TextArea, TextAreaInput,
+    TextInput, confirm, form_dialog,
     theme::{self, TextSize, space},
     toast::{self, Toast},
 };
@@ -33,6 +33,7 @@ const SAVE_NAME: &str = "KwikPaste-feedback.json.gz";
 fn error_message(error: FeedbackError) -> SharedString {
     let key = match error {
         FeedbackError::DescriptionLength => "descriptionLength",
+        FeedbackError::Email => "email",
         FeedbackError::TooLarge => "tooLarge",
         FeedbackError::NoEndpoint => "noEndpoint",
         FeedbackError::Timeout => "timeout",
@@ -92,6 +93,7 @@ impl Preferences {
 struct Form {
     draft: FeedbackDraft,
     description: String,
+    email: String,
 }
 
 /// 展开预览的附件：按行切好，最宽的一行用来撑开横向滚动宽度。
@@ -104,6 +106,7 @@ struct Expanded {
 
 struct FeedbackDialog {
     description: TextAreaInput,
+    email: TextInput,
     /// `None` 表示还在收集。
     draft: Option<Result<FeedbackDraft, FeedbackError>>,
     expanded: Option<Expanded>,
@@ -130,6 +133,7 @@ impl FeedbackDialog {
                 window,
                 cx,
             ),
+            email: TextInput::new(i18n::t("preferences:feedback.emailPlaceholder"), window, cx),
             draft: None,
             expanded: None,
             preview_scroll: UniformListScrollHandle::new(),
@@ -138,7 +142,7 @@ impl FeedbackDialog {
 
     /// 点发送前的校验：返回要提示的错误，`None` 表示可以发送。
     fn validation_error(&self, cx: &gpui::App) -> Option<SharedString> {
-        if let Err(error) = feedback::validate(&self.description.value(cx)) {
+        if let Err(error) = feedback::validate(&self.description.value(cx), &self.email.value(cx)) {
             return Some(error_message(error));
         }
         match &self.draft {
@@ -153,6 +157,7 @@ impl FeedbackDialog {
         Some(Form {
             draft,
             description: self.description.value(cx).to_string(),
+            email: self.email.value(cx).trim().to_owned(),
         })
     }
 
@@ -332,6 +337,11 @@ impl Render for FeedbackDialog {
                 tokens,
             ))
             .child(form_field(
+                i18n::t("preferences:feedback.email"),
+                Input::new(&self.email).into_any_element(),
+                tokens,
+            ))
+            .child(form_field(
                 i18n::t("preferences:feedback.attachments"),
                 attachments.into_any_element(),
                 tokens,
@@ -349,7 +359,12 @@ async fn send(form: Form, cx: &mut AsyncWindowContext) {
             window,
             cx,
         );
-        feedback::submit(form.draft.clone(), form.description.clone(), cx)
+        feedback::submit(
+            form.draft.clone(),
+            form.description.clone(),
+            form.email.clone(),
+            cx,
+        )
     }) else {
         return;
     };
@@ -413,8 +428,8 @@ fn offer_save(form: Form, error: FeedbackError, window: &mut Window, cx: &mut gp
             let Some(path) = prompt.await else {
                 return;
             };
-            let Ok(task) =
-                cx.update(|_, cx| feedback::save(form.draft, form.description, path, cx))
+            let Ok(task) = cx
+                .update(|_, cx| feedback::save(form.draft, form.description, form.email, path, cx))
             else {
                 return;
             };

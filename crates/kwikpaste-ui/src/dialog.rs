@@ -140,11 +140,9 @@ pub fn form_dialog(
             .rounded(radius::LG)
             .px(rems(1.5))
             .py(rems(1.25))
+            // 窗口太矮时对话框按视口封顶、主体区被裁；按钮放在 footer 槽里，一直露着。
+            .gap(space(3.))
             .content(move |body, window, cx| {
-                let ok_answer = ok_answer.clone();
-                let cancel_answer = cancel_answer.clone();
-                let validate = validate.clone();
-                let extra = footer_extra.as_ref().map(|extra| extra(window, cx));
                 body.child(
                     v_flex()
                         .gap(space(3.))
@@ -155,42 +153,44 @@ pub fn form_dialog(
                                 .text_color(theme::semantic(cx).text.primary)
                                 .child(title.clone()),
                         )
-                        .child(content(window, cx))
-                        // 额外按钮（如“新增”）靠左，与取消、确定分开；没有时取消、确定照常靠右。
-                        .child(
-                            h_flex()
-                                .gap(space(2.))
-                                .child(div().flex().flex_1().children(extra))
-                                .when(show_cancel, |footer| {
-                                    footer.child(
-                                        Button::new("kp-dialog-cancel", cancel_text.clone())
-                                            .on_click(move |_, window, cx| {
-                                                cancel_answer.send(false);
-                                                window.close_dialog(cx);
-                                            }),
-                                    )
-                                })
-                                .child(
-                                    Button::new("kp-dialog-ok", ok_text.clone())
-                                        .map(|button| {
-                                            if danger {
-                                                button.danger()
-                                            } else {
-                                                button.primary()
-                                            }
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            if let Some(validate) = &validate
-                                                && !validate(window, cx)
-                                            {
-                                                return;
-                                            }
-                                            ok_answer.send(true);
-                                            window.close_dialog(cx);
-                                        }),
-                                ),
-                        ),
+                        .child(content(window, cx)),
                 )
+            })
+            .footer({
+                let extra = footer_extra.as_ref().map(|extra| extra(window, cx));
+                // 额外按钮（如“新增”）靠左，与取消、确定分开；没有时取消、确定照常靠右。
+                h_flex()
+                    .gap(space(2.))
+                    .child(div().flex().flex_1().children(extra))
+                    .when(show_cancel, |footer| {
+                        footer.child(
+                            Button::new("kp-dialog-cancel", cancel_text.clone()).on_click(
+                                move |_, window, cx| {
+                                    cancel_answer.send(false);
+                                    window.close_dialog(cx);
+                                },
+                            ),
+                        )
+                    })
+                    .child(
+                        Button::new("kp-dialog-ok", ok_text.clone())
+                            .map(|button| {
+                                if danger {
+                                    button.danger()
+                                } else {
+                                    button.primary()
+                                }
+                            })
+                            .on_click(move |_, window, cx| {
+                                if let Some(validate) = &validate
+                                    && !validate(window, cx)
+                                {
+                                    return;
+                                }
+                                ok_answer.send(true);
+                                window.close_dialog(cx);
+                            }),
+                    )
             })
             .on_cancel(move |_, _, _| {
                 on_cancel.send(false);

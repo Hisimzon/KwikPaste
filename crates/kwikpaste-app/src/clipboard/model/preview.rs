@@ -5,7 +5,10 @@
 use std::{collections::BTreeSet, ops::Range};
 
 use gpui::{App, FontWeight, TextRun, Window, font, px};
-use kwikpaste_core::{clipboard::WordSpan, presenter::PreviewContentMetrics};
+use kwikpaste_core::{
+    clipboard::WordSpan,
+    presenter::{PreviewContentMetrics, PreviewWordChip},
+};
 use kwikpaste_ui::theme::{TextSize, fonts};
 
 /// 面板离显示器边缘至少这么远。
@@ -47,6 +50,10 @@ pub const SNIPPET_CHIP_HEIGHT: f64 = 24.;
 pub const SNIPPET_CHIP_PADDING_X: f64 = 8.;
 pub const SNIPPET_DOT: f64 = 6.;
 pub const SNIPPET_PART_GAP: f64 = 4.;
+/// 快捷信息区最高这么多（含分隔线）：三行整块再露出第四行的一半，看得出下面还有、可以滚动，
+/// 片段再多也给正文留出位置。
+pub const SNIPPETS_MAX_HEIGHT: f64 =
+    1. + SNIPPETS_PADDING_Y + 3.5 * SNIPPET_CHIP_HEIGHT + 3. * WORD_GAP;
 
 /// 逻辑像素的矩形。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -123,11 +130,31 @@ pub struct Geometry {
     pub placement: Placement,
 }
 
-/// 算预览窗的位置：`card` 是卡片、`monitor` 是显示器（同一坐标系的逻辑像素），`metrics` 为 `None`
-/// 表示记录已经不在了（只剩空状态）。`prefer_left`：指针在主窗口左半边。`gap` 是面板与卡片的距离。
-/// `scale` 是文本缩放，面板内容随它放大，尺寸上下限和间距也跟着放大。
+impl Geometry {
+    /// 同一条预览换视图（图片 / 文字、默认 / 选词）时沿用上一次的顶边，头部的切换按钮留在指针下面；
+    /// 只在仍放在卡片同一侧的左右时生效，超出显示器照常夹回。
+    pub fn keep_top(self, previous: &Geometry, monitor: RectF) -> Self {
+        let side = matches!(self.placement, Placement::Left | Placement::Right);
+        if !side || self.placement != previous.placement {
+            return self;
+        }
+        let panel = RectF {
+            top: previous.panel.top,
+            ..self.panel
+        }
+        .clamp_into(&monitor.inset(MARGIN));
+
+        Self { panel, ..self }
+    }
+}
+
+/// 算预览窗的位置：`card` 是卡片、`window` 是卡片所在的主窗口、`monitor` 是显示器工作区（同一坐标系的
+/// 逻辑像素），`metrics` 为 `None` 表示记录已经不在了（只剩空状态）。`prefer_left`：指针在主窗口左半边。
+/// `gap` 是面板与卡片的距离。`scale` 是文本缩放，面板内容随它放大，尺寸上下限和间距也跟着放大。
+#[allow(clippy::too_many_arguments)]
 pub fn geometry(
     card: RectF,
+    window: RectF,
     monitor: RectF,
     metrics: Option<&PreviewContentMetrics>,
     snippets: f64,
@@ -141,8 +168,9 @@ pub fn geometry(
         .unwrap_or_else(|| card.clamp_into(&monitor));
     let size = panel_size(metrics, snippets, &available, scale);
     let gap = gap * scale;
-    let placement = placement(&source, &available, size, prefer_left, gap);
-    let panel = raw_panel(&source, placement, size, gap).clamp_into(&available);
+    let placement = placement(&source, &window, &available, size, prefer_left, gap);
+    let panel = raw_panel(&anchor(&source, &window, placement), placement, size, gap)
+        .clamp_into(&available);
 
     Geometry { panel, placement }
 }
@@ -189,6 +217,27 @@ pub fn measure_metrics(
     }
 
     PreviewContentMetrics::Words { chips: measured }
+}
+
+/// 选词视图的度量：一个词一块，前面隔着换行就另起一行（与预览窗的渲染一致）；宽度先估，
+/// 再由 [`measure_metrics`] 按实际字体量。
+pub fn words_metrics(text: &str, words: &[WordSpan]) -> PreviewContentMetrics {
+    let mut previous_end = 0;
+    let chips = words
+        .iter()
+        .enumerate()
+        .map(|(index, span)| {
+            let range = utf16_range(text, span.0, span.1);
+            let line_break = index > 0
+                && text
+                    .get(previous_end.min(range.start)..range.start)
+                    .is_some_and(|between| between.contains('\n'));
+            previous_end = range.end;
+            PreviewWordChip::new(text.get(range).unwrap_or_default(), line_break)
+        })
+        .collect();
+
+    PreviewContentMetrics::Words { chips }
 }
 
 /// 按内容度量算面板尺寸，规则与面板的渲染一一对应。`snippets` 是纯文本下方快捷信息区的高度。
@@ -267,7 +316,8 @@ pub fn snippet_chip_width(label: &str, text: &str, dot: bool, scale: f64, window
         .ceil()
 }
 
-/// 快捷信息区的高度（含顶部 1px 分隔线），小块按 `content_width` 折行；没有小块时为 0。
+/// 快捷信息区的高度（含顶部 1px 分隔线），小块按 `content_width` 折行，最高 [`SNIPPETS_MAX_HEIGHT`]；
+/// 没有小块时为 0。
 pub fn snippets_height(chips: &[f64], content_width: f64) -> f64 {
     if chips.is_empty() {
         return 0.;
@@ -287,9 +337,10 @@ pub fn snippets_height(chips: &[f64], content_width: f64) -> f64 {
         }
     }
 
-    1. + SNIPPETS_PADDING_Y * 2.
+    (1. + SNIPPETS_PADDING_Y * 2.
         + f64::from(rows) * SNIPPET_CHIP_HEIGHT
-        + f64::from(rows - 1) * WORD_GAP
+        + f64::from(rows - 1) * WORD_GAP)
+        .min(SNIPPETS_MAX_HEIGHT)
 }
 
 fn text_height(rows: u32) -> f64 {
@@ -369,11 +420,13 @@ fn image_size(
     )
 }
 
-/// 按偏好的一侧依次找放得下的方位：偏好侧、另一侧、下、上；都放不下时用偏好侧（再夹进显示器）。
+/// 按偏好的一侧依次找放得下的方位：偏好侧、另一侧、主窗口下方、主窗口上方。都放不下时夹进显示器，
+/// 取盖住主窗口最少的方位（一样多时按前面的顺序），比如主窗口居中在竖屏上时贴到屏幕边上。
 fn placement(
     source: &RectF,
+    window: &RectF,
     available: &RectF,
-    (width, height): (f64, f64),
+    size: (f64, f64),
     prefer_left: bool,
     gap: f64,
 ) -> Placement {
@@ -382,17 +435,43 @@ fn placement(
     } else {
         (Placement::Right, Placement::Left)
     };
-    let fits = |placement: Placement| match placement {
-        Placement::Right => source.right() + gap + width <= available.right(),
-        Placement::Left => source.left - gap - width >= available.left,
-        Placement::Bottom => source.bottom() + gap + height <= available.bottom(),
-        Placement::Top => source.top - gap - height >= available.top,
+    let (width, height) = size;
+    let order = [preferred, opposite, Placement::Bottom, Placement::Top];
+    let fits = |placement: Placement| {
+        let anchor = anchor(source, window, placement);
+        match placement {
+            Placement::Right => anchor.right() + gap + width <= available.right(),
+            Placement::Left => anchor.left - gap - width >= available.left,
+            Placement::Bottom => anchor.bottom() + gap + height <= available.bottom(),
+            Placement::Top => anchor.top - gap - height >= available.top,
+        }
     };
+    if let Some(placement) = order.into_iter().find(|placement| fits(*placement)) {
+        return placement;
+    }
 
-    [preferred, opposite, Placement::Bottom, Placement::Top]
+    let covered = |placement: Placement| {
+        raw_panel(&anchor(source, window, placement), placement, size, gap)
+            .clamp_into(available)
+            .intersect(window)
+            .map_or(0., |overlap| overlap.width * overlap.height)
+    };
+    order
         .into_iter()
-        .find(|placement| fits(*placement))
+        .min_by(|a, b| covered(*a).total_cmp(&covered(*b)))
         .unwrap_or(preferred)
+}
+
+/// 预览窗贴着放的矩形：左右贴卡片（与卡片垂直居中）；上下贴主窗口，不盖住卡片下面的列表。
+fn anchor(source: &RectF, window: &RectF, placement: Placement) -> RectF {
+    match placement {
+        Placement::Left | Placement::Right => *source,
+        Placement::Bottom | Placement::Top => RectF {
+            top: window.top,
+            height: window.height,
+            ..*source
+        },
+    }
 }
 
 fn raw_panel(source: &RectF, placement: Placement, (width, height): (f64, f64), gap: f64) -> RectF {
@@ -550,10 +629,21 @@ mod tests {
         }
     }
 
+    /// 卡片所在的主窗口：左右各留 8，上下各露出几张卡片。
+    fn window(card: RectF) -> RectF {
+        RectF {
+            left: card.left - 8.,
+            top: 100.,
+            width: card.width + 16.,
+            height: 600.,
+        }
+    }
+
     #[test]
     fn text_panels_take_the_full_width_and_grow_with_rows() {
         let geometry = geometry(
             card(800.),
+            window(card(800.)),
             MONITOR,
             Some(&PreviewContentMetrics::Text { rows: 3 }),
             0.,
@@ -572,6 +662,7 @@ mod tests {
         assert_eq!(snippets, 1. + 24. + 2. * 24. + 4.);
         let with_snippets = super::geometry(
             card(800.),
+            window(card(800.)),
             MONITOR,
             Some(&PreviewContentMetrics::Text { rows: 3 }),
             snippets,
@@ -581,22 +672,119 @@ mod tests {
         );
         assert_eq!(with_snippets.panel.height, geometry.panel.height + snippets);
         assert_eq!(snippets_height(&[], 445.), 0.);
+        assert_eq!(
+            snippets_height(&[445.; 3], 445.),
+            1. + 24. + 3. * 24. + 2. * 4.
+        );
+        assert_eq!(snippets_height(&[445.; 32], 445.), SNIPPETS_MAX_HEIGHT);
+    }
+
+    #[test]
+    fn switching_views_keeps_the_top_edge() {
+        let text = Some(&PreviewContentMetrics::Text { rows: 12 });
+        let image = Some(&PreviewContentMetrics::Image {
+            width: Some(858.),
+            height: Some(329.),
+        });
+        let tall = geometry(
+            card(800.),
+            window(card(800.)),
+            MONITOR,
+            text,
+            0.,
+            true,
+            GAP,
+            1.,
+        );
+        let short = geometry(
+            card(800.),
+            window(card(800.)),
+            MONITOR,
+            image,
+            0.,
+            true,
+            GAP,
+            1.,
+        );
+        assert_ne!(tall.panel.top, short.panel.top);
+
+        let kept = short.keep_top(&tall, MONITOR);
+        assert_eq!(kept.panel.top, tall.panel.top);
+        assert_eq!(kept.panel.height, short.panel.height);
+        assert_eq!(kept.panel.left, short.panel.left);
     }
 
     #[test]
     fn the_pointer_side_wins_and_falls_back_to_the_other_side() {
-        let left = geometry(card(800.), MONITOR, None, 0., true, GAP, 1.);
+        let left = geometry(
+            card(800.),
+            window(card(800.)),
+            MONITOR,
+            None,
+            0.,
+            true,
+            GAP,
+            1.,
+        );
         assert_eq!(left.placement, Placement::Left);
 
         // 贴着右边缘：右边放不下，换到左边。
-        let edge = geometry(card(1500.), MONITOR, None, 0., false, GAP, 1.);
+        let edge = geometry(
+            card(1500.),
+            window(card(1500.)),
+            MONITOR,
+            None,
+            0.,
+            false,
+            GAP,
+            1.,
+        );
         assert_eq!(edge.placement, Placement::Left);
+    }
+
+    #[test]
+    fn a_centered_window_on_a_portrait_monitor_keeps_its_list_uncovered() {
+        // 1080×1920 竖屏（工作区扣掉 48 的任务栏），500 宽的主窗口居中：左右都放不下，放到主窗口下面。
+        let portrait = RectF {
+            left: 0.,
+            top: 0.,
+            width: 1080.,
+            height: 1872.,
+        };
+        let main = RectF {
+            left: 290.,
+            top: 460.,
+            width: 500.,
+            height: 570.,
+        };
+        let card = RectF {
+            left: 298.,
+            top: 520.,
+            width: 484.,
+            height: 100.,
+        };
+        let text = Some(&PreviewContentMetrics::Text { rows: 12 });
+        let below = geometry(card, main, portrait, text, 0., false, GAP, 1.);
+        assert_eq!(below.placement, Placement::Bottom);
+        assert_eq!(below.panel.top, main.top + main.height + GAP);
+        assert!(below.panel.intersect(&main).is_none());
+
+        // 主窗口占满整个高度：哪里都放不下，贴到屏幕右边，只盖住主窗口的右边一条。
+        let tall = RectF {
+            top: 0.,
+            height: 1872.,
+            ..main
+        };
+        let edge = geometry(card, tall, portrait, text, 0., false, GAP, 1.);
+        assert_eq!(edge.placement, Placement::Right);
+        assert_eq!(edge.panel.right(), portrait.width - MARGIN);
     }
 
     #[test]
     fn images_fit_inside_the_limits() {
         let geometry = geometry(
             card(200.),
+            window(card(200.)),
             MONITOR,
             Some(&PreviewContentMetrics::Image {
                 width: Some(4000.),

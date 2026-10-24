@@ -75,7 +75,11 @@ pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
             ItemKind::Files => ClipboardKind::Files,
         }),
         group_id: group_id.as_deref().map(str::to_owned),
-        favorite: query.filter.favorites().then_some(true),
+        favorite: if query.filter.favorites() {
+            Some(true)
+        } else {
+            query.hide_favorites.then_some(false)
+        },
         group: Some(match category {
             Some(ItemKind::Text) => kwikpaste_core::db::models::ClipboardGroupFilter::Text,
             Some(ItemKind::Image) => kwikpaste_core::db::models::ClipboardGroupFilter::Image,
@@ -736,6 +740,7 @@ mod tests {
             limit: 100,
             filter: ListFilter::default(),
             sort: Default::default(),
+            hide_favorites: false,
         }))
         .expect("lists");
 
@@ -787,6 +792,7 @@ mod tests {
                 ..ListFilter::default()
             },
             sort: Default::default(),
+            hide_favorites: false,
         }))
         .expect("lists favorites");
         assert_eq!(favorites.total, 1);
@@ -794,6 +800,16 @@ mod tests {
             favorites.items.first().map(|item| item.id.clone()),
             Some(text.clone())
         );
+        let without_favorites = futures::executor::block_on(source.list(ListQuery {
+            offset: 0,
+            limit: 100,
+            filter: ListFilter::default(),
+            sort: Default::default(),
+            hide_favorites: true,
+        }))
+        .expect("lists all without favorites");
+        assert_eq!(without_favorites.total, page.total - 1);
+        assert!(without_favorites.items.iter().all(|item| item.id != text));
 
         let saved =
             futures::executor::block_on(source.update_note(text.clone(), Some("  备注 ".into())))
@@ -808,6 +824,7 @@ mod tests {
                 ..ListFilter::default()
             },
             sort: Default::default(),
+            hide_favorites: false,
         }))
         .expect("lists refs");
         assert!(!images.is_empty());
@@ -819,6 +836,7 @@ mod tests {
             limit: 100,
             filter: ListFilter::default(),
             sort: Default::default(),
+            hide_favorites: false,
         }))
         .expect("lists again");
         assert_eq!(after.total, page.total - 1);

@@ -224,6 +224,7 @@ fn customized_settings_round_trip_exactly() {
     expected["shortcuts"]["pauseAppIds"] = Value::Array(Vec::new());
     expected["shortcuts"]["pastePlain"] = Value::String(String::new());
     expected["shortcuts"]["doubleTap"] = serde_json::json!({"key": "disabled", "side": "any"});
+    expected["clipboard"]["content"]["hideFavoritesInAll"] = Value::Bool(false);
     expected["clipboard"]["feedback"]["copySoundVolume"] = Value::from(100);
     expected["clipboard"]["feedback"]["copySoundTone"] = Value::from("classic");
     expected["clipboard"]["display"]["layout"] = Value::from("single");

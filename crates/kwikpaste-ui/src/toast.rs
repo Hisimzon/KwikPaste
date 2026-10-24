@@ -3,11 +3,12 @@
 //! 不用 gpui-component 的 Notification：它是右上角 382 px 的卡片，悬停还会露出关闭按钮，
 //! 360 px 宽的剪贴板面板放不下。
 
-use std::time::Duration;
+use std::{fmt, rc::Rc, time::Duration};
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, ElementId, IntoElement, ParentElement as _,
-    RenderOnce, SharedString, Styled as _, Window, div, px, rems, svg,
+    Animation, AnimationExt as _, AnyElement, App, ElementId, InteractiveElement as _, IntoElement,
+    ParentElement as _, RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Window, div, px, rems, svg,
 };
 use gpui_base::{animation::cubic_bezier, h_flex, v_flex};
 
@@ -31,6 +32,23 @@ impl ToastKind {
     pub const ALL: [Self; 4] = [Self::Info, Self::Success, Self::Warning, Self::Error];
 }
 
+type ActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// 提示末尾的文字按钮。
+#[derive(Clone)]
+pub struct ToastAction {
+    label: SharedString,
+    handler: ActionHandler,
+}
+
+impl fmt::Debug for ToastAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToastAction")
+            .field("label", &self.label)
+            .finish_non_exhaustive()
+    }
+}
+
 /// 一条提示。
 #[derive(Clone, Debug)]
 pub struct Toast {
@@ -38,6 +56,7 @@ pub struct Toast {
     message: SharedString,
     key: Option<SharedString>,
     duration: Duration,
+    action: Option<ToastAction>,
 }
 
 impl Toast {
@@ -47,6 +66,7 @@ impl Toast {
             message: message.into(),
             key: None,
             duration: motion::TOAST,
+            action: None,
         }
     }
 
@@ -76,6 +96,19 @@ impl Toast {
         self.duration = duration;
         self
     }
+
+    /// 在消息后面加一个文字按钮。
+    pub fn action(
+        mut self,
+        label: impl Into<SharedString>,
+        handler: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.action = Some(ToastAction {
+            label: label.into(),
+            handler: Rc::new(handler),
+        });
+        self
+    }
 }
 
 /// 在窗口顶部显示一条提示。窗口不是经 [`crate::open_window`] 打开的就静默忽略。
@@ -92,6 +125,7 @@ struct Entry {
     kind: ToastKind,
     message: SharedString,
     key: Option<SharedString>,
+    action: Option<ToastAction>,
     leaving: bool,
 }
 
@@ -123,6 +157,7 @@ impl ToastStack {
             entry.generation = generation;
             entry.kind = toast.kind;
             entry.message = toast.message;
+            entry.action = toast.action;
             entry.leaving = false;
             return (generation, toast.duration);
         }
@@ -132,6 +167,7 @@ impl ToastStack {
             kind: toast.kind,
             message: toast.message,
             key: toast.key,
+            action: toast.action,
             leaving: false,
         });
 
@@ -167,10 +203,11 @@ impl ToastStack {
             .right_0()
             .items_center()
             .children(self.entries.iter().map(|entry| {
-                let capsule = div()
-                    .max_w_full()
-                    .p(space(2.))
-                    .child(ToastCapsule::new(entry.kind, entry.message.clone()));
+                let capsule = div().max_w_full().p(space(2.)).child(ToastCapsule {
+                    kind: entry.kind,
+                    message: entry.message.clone(),
+                    action: entry.action.clone(),
+                });
 
                 animate(capsule, entry.generation, entry.leaving, reduce_motion)
             }))
@@ -216,6 +253,7 @@ fn animate(capsule: gpui::Div, generation: u64, leaving: bool, reduce_motion: bo
 pub struct ToastCapsule {
     kind: ToastKind,
     message: SharedString,
+    action: Option<ToastAction>,
 }
 
 impl ToastCapsule {
@@ -223,6 +261,7 @@ impl ToastCapsule {
         Self {
             kind,
             message: message.into(),
+            action: None,
         }
     }
 }
@@ -261,6 +300,17 @@ impl RenderOnce for ToastCapsule {
                     .data(status_icon(self.kind)),
             )
             .child(div().min_w_0().child(self.message))
+            .children(self.action.map(|action| {
+                let handler = action.handler;
+                div()
+                    .id("kp-toast-action")
+                    .flex_none()
+                    .text_color(tokens.text.link)
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_click(move |_, window, cx| handler(window, cx))
+                    .child(action.label)
+            }))
     }
 }
 

@@ -5,7 +5,7 @@ use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Focusable as _, ImageSource, InteractiveElement,
-    Interactivity, IntoElement, ParentElement, RenderImage, SharedString, Stateful,
+    Interactivity, IntoElement, ParentElement, Pixels, Rems, RenderImage, SharedString, Stateful,
     StyleRefinement, Styled, Window, div, img, prelude::FluentBuilder as _,
 };
 use gpui_base::Selectable;
@@ -152,9 +152,17 @@ impl From<Submenu> for MenuEntry {
     }
 }
 
+/// 子菜单的最宽宽度：最多窗口的一半。筛选菜单靠右，子菜单向左展开，只有这么多地方。
+const SUBMENU_MAX_WIDTH: Rems = space(60.);
+/// 子菜单一行里名字以外的宽度：菜单内边距、行内边距、勾选标记、应用图标和间距。
+const SUBMENU_ROW_CHROME: Rems = space(16.);
+
+/// `label_max_width`：名字的最宽宽度，超出截断。gpui-component 包在外面的行没有 `min_w_0`，
+/// 只能从名字这一层限宽。
 fn build_menu(
     menu: PopupMenu,
     entries: Vec<MenuEntry>,
+    label_max_width: Option<Pixels>,
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
@@ -167,14 +175,28 @@ fn build_menu(
                 submenu.label,
                 window,
                 cx,
-                move |menu, window, cx| build_menu(menu, entries.clone(), window, cx),
+                // 来源应用这类子菜单可能很长、名字很宽：限高滚动、名字截断，否则会超出面板被裁掉。
+                move |menu, window, cx| {
+                    let rem = window.rem_size();
+                    let max_width = SUBMENU_MAX_WIDTH
+                        .to_pixels(rem)
+                        .min(window.bounds().size.width / 2.);
+                    let label_max_width = max_width - SUBMENU_ROW_CHROME.to_pixels(rem);
+                    build_menu(
+                        menu.scrollable(true),
+                        entries.clone(),
+                        Some(label_max_width),
+                        window,
+                        cx,
+                    )
+                },
             )
         }
-        MenuEntry::Item(item) => menu.item(menu_item(item, cx)),
+        MenuEntry::Item(item) => menu.item(menu_item(item, label_max_width, cx)),
     })
 }
 
-fn menu_item(item: MenuItem, cx: &App) -> PopupMenuItem {
+fn menu_item(item: MenuItem, label_max_width: Option<Pixels>, cx: &App) -> PopupMenuItem {
     let tokens = theme::semantic(cx);
     let label = item.label;
     let image = item.image;
@@ -210,6 +232,7 @@ fn menu_item(item: MenuItem, cx: &App) -> PopupMenuItem {
                         div()
                             .min_w_0()
                             .truncate()
+                            .when_some(label_max_width, |label, width| label.max_w(width))
                             .kp_text(TextSize::Sm)
                             .text_color(color)
                             .child(label.clone()),
@@ -253,7 +276,7 @@ where
     element
         .context_menu(move |menu, window, cx| {
             let entries = build(window, cx);
-            let menu = build_menu(menu, entries, window, cx);
+            let menu = build_menu(menu, entries, None, window, cx);
             if !menu.is_empty() {
                 window.focus(&menu.focus_handle(cx), cx);
             }
@@ -298,7 +321,7 @@ impl MenuTrigger {
     ) -> AnyElement {
         self.dropdown_menu(move |menu, window, cx| {
             let entries = build(window, cx);
-            build_menu(menu, entries, window, cx)
+            build_menu(menu, entries, None, window, cx)
         })
         .into_any_element()
     }

@@ -332,6 +332,18 @@ impl TextAreaInput {
         Self { state }
     }
 
+    /// 不随内容增高、超出时滚动的文本框，光标在开头；渲染时配 [`TextArea::fill`] 撑满父元素。
+    pub fn filling(value: impl Into<SharedString>, window: &mut Window, cx: &mut App) -> Self {
+        let value = value.into();
+        let state = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .context_menu(false)
+                .default_value(value)
+        });
+
+        Self { state }
+    }
+
     /// 多行文本变化时通知拥有者；返回的订阅需要长期保存。
     pub fn on_change<V: 'static>(
         &self,
@@ -370,18 +382,28 @@ impl TextAreaInput {
 #[derive(IntoElement)]
 pub struct TextArea {
     input: TextAreaInput,
+    fill: bool,
 }
 
 impl TextArea {
     pub fn new(input: &TextAreaInput) -> Self {
         Self {
             input: input.clone(),
+            fill: false,
         }
+    }
+
+    /// 高度撑满父元素（[`TextAreaInput::filling`] 的文本框）。
+    pub fn fill(mut self) -> Self {
+        self.fill = true;
+        self
     }
 }
 
 impl RenderOnce for TextArea {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        KitTextarea::new(&self.input.state).w_full()
+        KitTextarea::new(&self.input.state)
+            .w_full()
+            .when(self.fill, |area| area.h(gpui::relative(1.)))
     }
 }

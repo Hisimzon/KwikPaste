@@ -46,7 +46,8 @@ fn is_key_down(vk: VIRTUAL_KEY) -> bool {
     state < 0
 }
 
-/// 按顺序注入一组键盘事件；系统拒收（例如被更高完整性级别的窗口挡住）时返回错误。
+/// 按顺序注入一组键盘事件；系统拒收（例如被更高完整性级别的窗口挡住）时返回错误，
+/// 错误的 `kind` 沿用系统错误码（拒绝访问为 `PermissionDenied`）。
 fn send_keys(keys: &[(VIRTUAL_KEY, KEYBD_EVENT_FLAGS)]) -> io::Result<()> {
     let inputs: Vec<INPUT> = keys
         .iter()
@@ -66,11 +67,11 @@ fn send_keys(keys: &[(VIRTUAL_KEY, KEYBD_EVENT_FLAGS)]) -> io::Result<()> {
 
     let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
     if sent as usize != inputs.len() {
-        return Err(io::Error::other(format!(
-            "SendInput injected {sent}/{} events: {}",
-            inputs.len(),
-            io::Error::last_os_error()
-        )));
+        let os = io::Error::last_os_error();
+        return Err(io::Error::new(
+            os.kind(),
+            format!("SendInput injected {sent}/{} events: {os}", inputs.len()),
+        ));
     }
 
     Ok(())

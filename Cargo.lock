@@ -2391,6 +2391,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "g2gen"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5a7e0eb46f83a20260b850117d204366674e85d3a908d90865c78df9a6b1dfc"
+dependencies = [
+ "g2poly",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "g2p"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "539e2644c030d3bf4cd208cb842d2ce2f80e82e6e8472390bcef83ceba0d80ad"
+dependencies = [
+ "g2gen",
+ "g2poly",
+]
+
+[[package]]
+name = "g2poly"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "312d2295c7302019c395cfb90dacd00a82a2eabd700429bba9c7a3f38dbbe11b"
+
+[[package]]
 name = "gdk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3554,6 +3582,9 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "hashlink"
@@ -4233,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-app"
-version = "2.0.7"
+version = "2.0.8"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4265,7 +4296,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-core"
-version = "2.0.7"
+version = "2.0.8"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4287,6 +4318,7 @@ dependencies = [
  "mdns-sd",
  "rand 0.8.8",
  "regex",
+ "rqrr",
  "rust_xlsxwriter",
  "semver",
  "serde",
@@ -4328,7 +4360,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ext-protocol"
-version = "2.0.7"
+version = "2.0.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -4336,7 +4368,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-os"
-version = "2.0.7"
+version = "2.0.8"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4360,7 +4392,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ui"
-version = "2.0.7"
+version = "2.0.8"
 dependencies = [
  "anyhow",
  "futures",
@@ -4373,7 +4405,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-updater"
-version = "2.0.7"
+version = "2.0.8"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4550,6 +4582,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
+]
+
+[[package]]
+name = "lru"
+version = "0.18.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
+dependencies = [
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -6816,6 +6857,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "rqrr"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d084c50c5cfa397a081850da329566c8667b0b6c4e81da16abff1fef27de93b"
+dependencies = [
+ "g2p",
+ "lru",
 ]
 
 [[package]]

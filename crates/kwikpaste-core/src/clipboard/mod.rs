@@ -14,6 +14,7 @@ pub mod icon;
 mod ingest;
 mod payload;
 pub(crate) mod persist;
+pub(crate) mod qr;
 mod read;
 pub mod rules;
 mod secrets;
