@@ -711,6 +711,52 @@ fn plain_export_merges_into_another_instance() {
 }
 
 #[test]
+fn full_export_excludes_cleanup_and_skips_missing_images() {
+    use std::future::{poll_fn, Future};
+    use std::task::Poll;
+
+    let source = source();
+    fs::remove_file(source.core.image_origin_path(&source.image_file).unwrap()).unwrap();
+    source.fixture.runtime.handle().block_on(async {
+        let core = &source.core.0;
+        let guard = core.cleanup.exclusive().await;
+        let mut export = std::pin::pin!(export_history_backup(
+            core,
+            source.fixture.root().join("locked-export"),
+            ExportHistoryBackupOptions {
+                mode: BackupExportMode::Plain,
+                password: None,
+                scope: BackupScope::default(),
+            },
+        ));
+        poll_fn(|cx| {
+            assert!(export.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let mut cleanup = std::pin::pin!(core.cleanup.exclusive());
+        poll_fn(|cx| {
+            assert!(cleanup.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(guard);
+        poll_fn(|cx| {
+            assert!(export.as_mut().poll(cx).is_pending());
+            assert!(
+                cleanup.as_mut().poll(cx).is_pending(),
+                "export keeps cleanup excluded"
+            );
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(export.await.unwrap().image_count, 1);
+        drop(cleanup.await);
+    });
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[test]
 fn encrypted_export_overwrites_another_instance() {
     let source = source();
     let backup = export(&source, BackupExportMode::Encrypted, Some(PASSWORD));

@@ -290,6 +290,8 @@ async fn export_history_backup(
     let target = normalize_backup_path(target)?;
     let password = validate_password_options(&options)?;
     let exported_at = Utc::now();
+    // 自动清理与「清理缓存」都持有此锁，归档完成前不能删掉库中引用的图片。
+    let _exclusive = core.cleanup.exclusive().await;
     let pool = core.db.pool().await;
     // 部分备份的源文件在临时目录里，打包完才能删。
     let mut _staged = None;
