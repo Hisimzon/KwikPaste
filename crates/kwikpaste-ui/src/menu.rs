@@ -170,6 +170,7 @@ fn build_menu(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    let menu = menu.scrollable(true);
     entries.into_iter().fold(menu, |menu, entry| match entry {
         MenuEntry::Separator => menu.separator(),
         MenuEntry::Submenu(submenu) => {
