@@ -192,6 +192,7 @@ pub fn form_dialog(
                             }),
                     )
             })
+            .on_ok(|_, _, _| false)
             .on_cancel(move |_, _, _| {
                 on_cancel.send(false);
                 true
