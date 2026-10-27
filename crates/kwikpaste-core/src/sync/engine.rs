@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 
-use super::protocol::{WireItem, MAX_HEADER_BYTES};
+use super::protocol::{Message, WireItem, MAX_HEADER_BYTES};
 use crate::clipboard::{
     build_item_with_settings, png_dimensions, write_to_clipboard, ClipboardPayload, ImagePayload,
     TextPayload,
@@ -22,8 +22,6 @@ use crate::settings::LanSync;
 const CATCH_UP_DAYS: i64 = 7;
 const CATCH_UP_TOTAL: i64 = 500;
 const CATCH_UP_PAGE: i64 = 50;
-/// 文本放在 JSON 头里，给其余字段留出余量。
-const MAX_TEXT_BYTES: usize = MAX_HEADER_BYTES - 64 * 1024;
 /// 最近一次同步过的内容在这段时间内视为回声。
 const ECHO_WINDOW: Duration = Duration::from_secs(60);
 
@@ -102,25 +100,26 @@ pub async fn wire_from_item(
 ) -> anyhow::Result<Option<(WireItem, Vec<u8>)>> {
     match item.kind {
         ClipboardKind::Text => {
-            let text_bytes = item.content.len()
-                + item.search_text.as_ref().map_or(0, String::len)
-                + item.summary.as_ref().map_or(0, String::len);
-            if text_bytes > MAX_TEXT_BYTES {
-                log::info!("lan sync skips text of {text_bytes} bytes over the message limit");
+            let wire = WireItem {
+                kind: item.kind,
+                sub_kind: item.sub_kind,
+                content: item.content.clone(),
+                search_text: item.search_text.clone(),
+                summary: item.summary.clone(),
+                width: None,
+                height: None,
+            };
+            // false 比 true 多一个字节，按补齐的头大小检查也覆盖实时推送。
+            let header_bytes = serde_json::to_vec(&Message::Push {
+                item: wire.clone(),
+                live: false,
+            })?
+            .len();
+            if header_bytes > MAX_HEADER_BYTES {
+                log::info!("lan sync skips text with a header of {header_bytes} bytes over the message limit");
                 return Ok(None);
             }
-            Ok(Some((
-                WireItem {
-                    kind: item.kind,
-                    sub_kind: item.sub_kind,
-                    content: item.content.clone(),
-                    search_text: item.search_text.clone(),
-                    summary: item.summary.clone(),
-                    width: None,
-                    height: None,
-                },
-                Vec::new(),
-            )))
+            Ok(Some((wire, Vec::new())))
         }
         ClipboardKind::Image => {
             if crate::clipboard::validate_image_file_name(&item.content).is_err() {
@@ -423,6 +422,49 @@ mod tests {
                 let page = collect_catch_up(&core.0, 0, None, u64::MAX).await.unwrap();
                 assert_eq!(page.items.len(), 1);
                 assert_eq!(page.until, 1);
+                Ok(())
+            }
+        }))
+        .unwrap();
+        block_on(core.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn escaped_text_over_header_limit_is_skipped_with_its_checkpoint() {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let item = core
+            .build_item(&ClipboardPayload::Text(TextPayload {
+                text: "\\".repeat(4 * 1024 * 1024),
+                html: None,
+                rtf: None,
+            }))
+            .unwrap()
+            .unwrap();
+        block_on(core.store_item(item.clone(), None)).unwrap();
+
+        block_on(core.hop({
+            let core = core.clone();
+            async move {
+                assert!(wire_from_item(&core.0, &item, 0).await.unwrap().is_none());
+                let page = collect_catch_up(&core.0, 0, None, 0).await.unwrap();
+                assert!(page.items.is_empty());
+                assert_eq!(page.until, 1);
+
+                let mut plain = item;
+                plain.content = "a".repeat(4 * 1024 * 1024);
+                plain.search_text = Some(plain.content.clone());
+                let (wire, attachment) = wire_from_item(&core.0, &plain, 0).await.unwrap().unwrap();
+                for live in [true, false] {
+                    assert!(super::super::protocol::encode(
+                        &Message::Push {
+                            item: wire.clone(),
+                            live,
+                        },
+                        &attachment
+                    )
+                    .is_ok());
+                }
                 Ok(())
             }
         }))
