@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::target::InstallKind;
@@ -38,6 +39,11 @@ pub struct Package {
     pub dir: PathBuf,
     /// 安装包文件：NSIS 是 `KwikPaste-<v>-installer.exe`，便携版是 zip，macOS 是 `.app.tar.gz`。
     pub file: PathBuf,
+    pub(crate) signature: String,
+    pub(crate) public_key: String,
+    /// 已验签内容落成的最终字节摘要；NSIS 的旧式 zip 会先提取 exe。
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    pub(crate) digest: [u8; 32],
 }
 
 /// 下载 `url` 到新建的临时目录，验签后按 `kind` 检查格式。
@@ -61,11 +67,14 @@ pub(crate) async fn download(
         fetch_to_file(client, url, &part, MAX_PACKAGE_BYTES, on_progress).await?;
         let bytes = fs::read(&part).with_context(|| format!("failed to read {part:?}"))?;
         crate::verify::verify(&bytes, signature, public_key)?;
-        let file = finalize(&dir, version, kind, &bytes)?;
+        let (file, digest) = finalize(&dir, version, kind, &bytes)?;
         fs::remove_file(&part).ok();
         Ok(Package {
             dir: dir.clone(),
             file,
+            signature: signature.to_owned(),
+            public_key: public_key.to_owned(),
+            digest,
         })
     }
     .await;
@@ -133,7 +142,7 @@ fn finalize(
     version: &str,
     kind: &InstallKind,
     bytes: &[u8],
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<(PathBuf, [u8; 32])> {
     let (name, contents): (String, std::borrow::Cow<'_, [u8]>) = match kind {
         InstallKind::Nsis => (
             format!("{TEMP_DIR_PREFIX}{version}-installer.exe"),
@@ -162,7 +171,7 @@ fn finalize(
 
     let path = dir.join(name);
     fs::write(&path, &contents).with_context(|| format!("failed to write {path:?}"))?;
-    Ok(path)
+    Ok((path, Sha256::digest(&contents).into()))
 }
 
 /// NSIS 安装包：直接是 exe（`MZ` 开头），或者是只含一个 exe 的 zip（Tauri v1 兼容格式）。
@@ -402,10 +411,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let exe = finalize(dir.path(), "2.0.1", &InstallKind::Nsis, b"MZ setup").unwrap();
-        assert_eq!(fs::read(exe).unwrap(), b"MZ setup");
+        assert_eq!(fs::read(exe.0).unwrap(), b"MZ setup");
         let zipped = zip(&[("KwikPaste_2.0.1_x64-setup.exe", b"MZ zipped")]);
         let exe = finalize(dir.path(), "2.0.2", &InstallKind::Nsis, &zipped).unwrap();
-        assert_eq!(fs::read(exe).unwrap(), b"MZ zipped");
+        assert_eq!(fs::read(exe.0).unwrap(), b"MZ zipped");
         assert!(finalize(dir.path(), "2.0.3", &InstallKind::Nsis, b"#!/bin/sh").is_err());
         assert!(
             finalize(

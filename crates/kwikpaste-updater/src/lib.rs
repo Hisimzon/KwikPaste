@@ -431,13 +431,11 @@ impl Updater {
 
         let installed = match &inner.kind {
             #[cfg(any(target_os = "windows", test))]
-            InstallKind::Nsis => handoff.nsis(&package.file).await,
+            InstallKind::Nsis => handoff.nsis(&package).await,
             #[cfg(any(target_os = "windows", test))]
-            InstallKind::Portable => handoff.portable(&package.file).await,
+            InstallKind::Portable => handoff.portable(&package).await,
             #[cfg(any(target_os = "macos", test))]
-            InstallKind::MacApp { bundle } => {
-                handoff.mac_app(bundle, &package.file, &package.dir).await
-            }
+            InstallKind::MacApp { bundle } => handoff.mac_app(bundle, &package).await,
             other_kind => Err(anyhow!("{other_kind:?} cannot install updates here")),
         };
         installed.map_err(AppError::Other)
