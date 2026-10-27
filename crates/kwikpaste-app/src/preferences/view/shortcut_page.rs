@@ -574,9 +574,7 @@ impl Preferences {
             .hover(|style| style.bg(tokens.fill.faint))
             .focus_visible(|style| style.bg(tokens.fill.subtle))
             .on_click(cx.listener(move |this, _, window, cx| {
-                if this.tab != TabId::Shortcuts {
-                    this.navigate_to(TabId::Shortcuts, None, window, cx);
-                }
+                this.navigate_to(TabId::Shortcuts, None, window, cx);
                 this.open_shortcut_detail(id, cx);
             }))
             .child(row)
