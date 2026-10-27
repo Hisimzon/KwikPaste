@@ -5442,7 +5442,13 @@ pub(crate) fn shortcut_from_keystroke(keystroke: &Keystroke) -> Option<String> {
     if keystroke.modifiers.shift || shifted {
         modifiers.push("Shift");
     }
-    if modifiers.is_empty() && !key.starts_with('F') {
+    if modifiers.is_empty()
+        && !key.strip_prefix('F').is_some_and(|number| {
+            number
+                .parse::<u8>()
+                .is_ok_and(|number| (1..=24).contains(&number))
+        })
+    {
         return None;
     }
     modifiers.push(key.as_str());
@@ -5796,6 +5802,27 @@ mod tests {
             shortcut_from_keystroke(&keystroke).as_deref(),
             Some("Alt+Shift+X")
         );
+    }
+
+    #[test]
+    fn modifier_free_recording_accepts_only_function_keys() {
+        for (key, expected) in [
+            ("f", None),
+            ("F", None),
+            ("f1", Some("F1")),
+            ("f24", Some("F24")),
+            ("f25", None),
+        ] {
+            assert_eq!(
+                shortcut_from_keystroke(&Keystroke {
+                    modifiers: Modifiers::default(),
+                    key: key.to_owned(),
+                    key_char: None,
+                })
+                .as_deref(),
+                expected
+            );
+        }
     }
 
     #[test]
