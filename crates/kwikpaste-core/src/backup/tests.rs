@@ -1287,6 +1287,44 @@ fn overwrite_with_unreadable_settings_changes_nothing() {
     block_on(core.shutdown()).unwrap();
 }
 
+#[test]
+fn overwrite_settings_write_failure_restores_database_and_resources() {
+    let source = source();
+    let backup = export(&source, BackupExportMode::Plain, None);
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let image_id = store(&core, image(20));
+    let image_file = block_on(core.find_item(&image_id))
+        .unwrap()
+        .unwrap()
+        .content;
+    let image_path = core.image_origin_path(&image_file).unwrap();
+    let before = fs::read(&image_path).unwrap();
+    store(&core, text("local history"));
+    let sync_before = sync_state(&core);
+    let tmp = fixture
+        .paths
+        .config_dir()
+        .unwrap()
+        .join("settings.json.tmp");
+    fs::create_dir(&tmp).unwrap();
+
+    assert!(block_on(
+        core.import_history_backup(input(&backup, None), BackupImportStrategy::Overwrite,)
+    )
+    .is_err());
+    assert_eq!(contents(&core), ["local history"]);
+    assert_eq!(fs::read(&image_path).unwrap(), before);
+    assert!(!core.image_origin_path(&source.image_file).unwrap().exists());
+    assert_eq!(sync_state(&core), sync_before);
+    assert_eq!(core.settings().appearance.theme, Theme::Auto);
+    assert!(!core.0.watcher_pause.is_paused());
+    fs::remove_dir(&tmp).unwrap();
+    store(&core, text("still writable"));
+    block_on(core.shutdown()).unwrap();
+    block_on(source.core.shutdown()).unwrap();
+}
+
 // ---- 1.4.0 写出的备份 ----
 
 /// `tests/fixtures/backup/` 里的两份备份由 1.4.0 的导出代码在 Windows 上写出（明文与加密，
