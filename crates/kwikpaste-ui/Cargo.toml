@@ -15,6 +15,7 @@ gpui.workspace = true
 gpui-base.workspace = true
 gpui-component.workspace = true
 gpui-kit-assets.workspace = true
+unicode-segmentation = "1"
 
 [dev-dependencies]
 serde_json.workspace = true

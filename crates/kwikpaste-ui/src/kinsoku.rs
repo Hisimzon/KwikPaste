@@ -8,6 +8,8 @@ use std::ops::Range;
 
 use gpui::{App, FontWeight, LineFragment, LineWrapperHandle, Pixels, SharedString, font, px};
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use crate::theme::fonts;
 
 /// 不放在行首的标点（UAX #14 的 CL / CP / EX / IS / NS 中常见的全角字符）。
@@ -47,13 +49,22 @@ fn wrap_with(text: &str, mut first_break: impl FnMut(&str) -> Option<usize>) -> 
         let mut start = paragraph_start;
         let mut rest = paragraph;
         while let Some(mut at) = first_break(rest).filter(|at| *at > 0 && *at < rest.len()) {
+            // GPUI 的断点也可能落在组合字符内部；至少保留一个完整字素，保证每轮前进。
+            at = rest
+                .grapheme_indices(true)
+                .map(|(index, _)| index)
+                .take_while(|index| *index <= at)
+                .last()
+                .filter(|index| *index > 0)
+                .unwrap_or_else(|| rest.graphemes(true).next().map_or(rest.len(), str::len));
             let breaks_before_mark = rest
                 .get(at..)
                 .and_then(|tail| tail.chars().next())
                 .is_some_and(no_break_before);
             if breaks_before_mark
-                && let Some((previous, _)) =
-                    rest.get(..at).and_then(|head| head.char_indices().last())
+                && let Some((previous, _)) = rest
+                    .get(..at)
+                    .and_then(|head| head.grapheme_indices(true).next_back())
                 && previous > 0
             {
                 at = previous;
@@ -133,6 +144,22 @@ mod tests {
     fn a_closing_mark_takes_the_previous_character_along() {
         assert_eq!(every("确定删除吗？", 5), "确定删除\n吗？");
         assert_eq!(every("一二三，四五六", 3), "一二\n三，四\n五六");
+    }
+
+    #[test]
+    fn punctuation_moves_a_whole_grapheme() {
+        for cluster in ["e\u{301}", "👩‍💻"] {
+            let text = format!("ab{cluster}？");
+            let rows = wrap_with(&text, |rest| rest.find('？'));
+            assert_eq!(joined(&text, &rows), format!("ab\n{cluster}\n？"));
+            assert_eq!(&text[rows[1].clone()], cluster);
+        }
+    }
+
+    #[test]
+    fn initial_breaks_inside_graphemes_are_aligned() {
+        assert_eq!(every("ae\u{301}b", 2), "a\ne\u{301}\nb");
+        assert_eq!(every("👩‍💻x", 1), "👩‍💻\nx");
     }
 
     #[test]
