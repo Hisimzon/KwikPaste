@@ -203,10 +203,8 @@ pub async fn collect_catch_up(
             continue;
         }
         let limit = attachment_limit.min(lan.max_image_bytes());
-        match wire_from_item(core, &item, limit).await {
-            Ok(Some(wire)) => items.push(wire),
-            Ok(None) => {}
-            Err(err) => log::warn!("lan sync catch-up skips item {id}: {err:#}"),
+        if let Some(wire) = wire_from_item(core, &item, limit).await? {
+            items.push(wire);
         }
     }
 
@@ -398,6 +396,39 @@ fn text_payload(wire: &WireItem) -> anyhow::Result<ClipboardPayload> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{block_on, sample_png, Fixture};
+
+    #[test]
+    fn catch_up_retries_image_read_failures() {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let bytes = sample_png(2, 2);
+        let item = core
+            .build_item(&ClipboardPayload::Image(ImagePayload {
+                bytes: bytes.clone(),
+                width: 2,
+                height: 2,
+            }))
+            .unwrap()
+            .unwrap();
+        let path = core.image_origin_path(&item.content).unwrap();
+        block_on(core.store_item(item, None)).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        block_on(core.hop({
+            let core = core.clone();
+            async move {
+                assert!(collect_catch_up(&core.0, 0, None, u64::MAX).await.is_err());
+                std::fs::write(path, bytes).unwrap();
+                let page = collect_catch_up(&core.0, 0, None, u64::MAX).await.unwrap();
+                assert_eq!(page.items.len(), 1);
+                assert_eq!(page.until, 1);
+                Ok(())
+            }
+        }))
+        .unwrap();
+        block_on(core.shutdown()).unwrap();
+    }
 
     fn wire(sub_kind: Option<ClipboardSubKind>, content: &str, search: Option<&str>) -> WireItem {
         WireItem {

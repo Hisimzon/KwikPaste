@@ -1571,6 +1571,7 @@ async fn read_loop(
                 .await
                 {
                     log::warn!("lan sync receive from {peer_id} failed: {err:#}");
+                    return;
                 }
             }
             Message::CatchUp { after, epoch } => {
@@ -1995,21 +1996,84 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn blocked_writer_stops_on_kill_and_shutdown() {
+    async fn secure_pair() -> (Handshaken, Handshaken) {
         let dir = tempfile::tempdir().unwrap();
         let identity = identity::load_or_create(dir.path()).unwrap().identity;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, server) = tokio::join!(
+            TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept(),
+        );
+        let (sender, receiver) = tokio::join!(
+            handshake(client.unwrap(), &identity, true),
+            handshake(server.unwrap().0, &identity, false),
+        );
+        (sender.unwrap(), receiver.unwrap())
+    }
+
+    #[test]
+    fn failed_receive_does_not_advance_watermark() {
+        use crate::testing::{block_on, Fixture};
+
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        block_on(core.hop({
+            let core = core.clone();
+            let mut shared = test_shared(fixture.root());
+            shared.core = Arc::downgrade(&core.0);
+            trust(&shared, "peer");
+            async move {
+                let (mut sender, mut receiver) = secure_pair().await;
+                let invalid = Message::Push {
+                    item: super::super::protocol::WireItem {
+                        kind: crate::db::models::ClipboardKind::Text,
+                        sub_kind: None,
+                        content: String::new(),
+                        search_text: None,
+                        summary: None,
+                        width: None,
+                        height: None,
+                    },
+                    live: false,
+                };
+                sender.writer.send_message(&invalid, &[]).await.unwrap();
+                sender
+                    .writer
+                    .send_message(
+                        &Message::CatchUpPage {
+                            until: 1,
+                            more: false,
+                            epoch: "e".to_owned(),
+                        },
+                        &[],
+                    )
+                    .await
+                    .unwrap();
+                drop(sender);
+                let (tx, _rx) = mpsc::channel(1);
+                let (_kill_tx, kill) = watch::channel(false);
+                let (_shutdown_tx, shutdown) = watch::channel(false);
+                shared.shutdown = shutdown;
+                let shared = Arc::new(shared);
+                let session = Session {
+                    peer_id: "peer",
+                    connection_id: 1,
+                    platform: Platform::Windows,
+                    peer_max_attachment: 0,
+                };
+                read_loop(&shared, &session, &mut receiver.reader, &tx, kill).await;
+                assert_eq!(shared.peers.get("peer").unwrap().watermark, 0);
+                Ok(())
+            }
+        }))
+        .unwrap();
+        block_on(core.shutdown()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn blocked_writer_stops_on_kill_and_shutdown() {
         for stop_service in [false, true] {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let (client, server) = tokio::join!(
-                TcpStream::connect(listener.local_addr().unwrap()),
-                listener.accept(),
-            );
-            let (sender, receiver) = tokio::join!(
-                handshake(client.unwrap(), &identity, true),
-                handshake(server.unwrap().0, &identity, false),
-            );
-            let _receiver = receiver.unwrap();
+            let (sender, _receiver) = secure_pair().await;
             let (tx, rx) = mpsc::channel(1);
             let (kill_tx, kill) = watch::channel(false);
             let kill_tx = Arc::new(kill_tx);
@@ -2018,7 +2082,7 @@ mod tests {
                 .await
                 .unwrap();
             let writer = tokio::spawn(write_loop(
-                sender.unwrap().writer,
+                sender.writer,
                 rx,
                 kill_tx.clone(),
                 kill,
