@@ -194,7 +194,20 @@ impl SettingsStore {
             disk.backup_pending = false;
         }
 
-        write_atomic(path, settings)?;
+        let mut saved = serde_json::to_value(settings).context("failed to serialize settings")?;
+        if disk.report.history_degraded()
+            && !disk.history_confirmed
+            && !delta.touches("clipboard.history")
+        {
+            // 无关保存不能把未确认的回落值洗成有效配置；整份读不懂时用空节延续暂停。
+            let history = fs::read_to_string(path)
+                .ok()
+                .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+                .and_then(|raw| raw.pointer("/clipboard/history").cloned())
+                .unwrap_or(serde_json::Value::Null);
+            saved["clipboard"]["history"] = history;
+        }
+        write_atomic(path, &saved)?;
         if delta.touches("clipboard.history") {
             disk.history_confirmed = true;
         }
@@ -254,7 +267,7 @@ fn load_from_disk(path: &Path) -> Option<(Settings, SettingsLoadReport)> {
 }
 
 /// 写入策略：把新内容写到 tmp 后 rename 成主文件；rename 在同一文件系统下是原子的。
-fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
+fn write_atomic(path: &Path, settings: &impl serde::Serialize) -> Result<()> {
     let json = serde_json::to_string_pretty(settings).context("failed to serialize settings")?;
 
     let tmp = path.with_extension("json.tmp");
