@@ -31,6 +31,8 @@ use crate::root::{Core, CoreInner};
 use crate::settings::LanSync;
 use protocol::Message;
 
+type LocalCapture = (Option<u64>, Option<ClipboardItem>, u64);
+
 pub(crate) use peers::PeerStore;
 pub(crate) use service::LanSyncService;
 pub use service::{
@@ -128,18 +130,33 @@ pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem, seq: Opti
 
     let seq = seq.and_then(|seq| u64::try_from(seq).ok());
     let lan = core.settings.snapshot().sync.lan;
-    if !engine::is_syncable(item, &lan) || !shared.should_send(&item.content_hash) {
-        shared.deliver(seq, None);
-        return;
+    let item = (engine::is_syncable(item, &lan) && shared.should_send(&item.content_hash))
+        .then(|| item.clone());
+    if shared
+        .captures
+        .try_send((seq, item, lan.max_image_bytes()))
+        .is_err()
+    {
+        log::warn!("lan sync capture queue is full, dropping an item");
+        shared.deliver_failed();
     }
-    let Some(owner) = shared.core() else {
-        return;
-    };
+}
 
-    let item = item.clone();
-    core.rt.spawn(async move {
+/// 按采集入队顺序准备并推送，慢图片和主动跳过的采集都不能被后面的文本越过。
+async fn send_captures(
+    shared: Arc<service::Shared>,
+    mut rx: tokio::sync::mpsc::Receiver<LocalCapture>,
+) {
+    while let Some((seq, item, limit)) = rx.recv().await {
+        let Some(item) = item else {
+            shared.deliver(seq, None);
+            continue;
+        };
+        let Some(owner) = shared.core() else {
+            return;
+        };
         // 本机上限先挡一次，各设备自己申报的上限在推送时再按设备挡。
-        match engine::wire_from_item(&owner, &item, lan.max_image_bytes()).await {
+        match engine::wire_from_item(&owner, &item, limit).await {
             Ok(Some((wire, attachment))) => {
                 let push = Message::Push {
                     item: wire,
@@ -153,7 +170,7 @@ pub(crate) fn on_local_capture(core: &CoreInner, item: &ClipboardItem, seq: Opti
                 shared.deliver_failed();
             }
         }
-    });
+    }
 }
 
 pub(crate) fn current_platform() -> Platform {

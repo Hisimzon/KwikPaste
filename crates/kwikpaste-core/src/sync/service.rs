@@ -278,6 +278,7 @@ impl LanSyncService {
         let (listeners, port) = bind_listeners(network)?;
         let supported = *self.supported.lock().expect("lan sync poisoned");
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (capture_tx, capture_rx) = mpsc::channel(OUTGOING_QUEUE);
         let shared = Arc::new(Shared {
             core: Arc::downgrade(core),
             app_version: core.info.version.to_string(),
@@ -294,6 +295,16 @@ impl LanSyncService {
             handshakes: Arc::new(Semaphore::new(MAX_PENDING_HANDSHAKES)),
             shutdown: shutdown_rx,
             next_conn_id: AtomicU64::new(1),
+            captures: capture_tx,
+        });
+
+        let sender_shared = shared.clone();
+        tokio::spawn(async move {
+            let mut shutdown = sender_shared.shutdown.clone();
+            tokio::select! {
+                _ = super::send_captures(sender_shared, capture_rx) => {}
+                _ = shutdown.changed() => {}
+            }
         });
 
         for listener in listeners {
@@ -607,6 +618,7 @@ pub(super) struct Shared {
     handshakes: Arc<Semaphore>,
     shutdown: watch::Receiver<bool>,
     next_conn_id: AtomicU64,
+    pub(super) captures: mpsc::Sender<super::LocalCapture>,
 }
 
 impl Shared {
@@ -1953,6 +1965,7 @@ mod tests {
             handshakes: Arc::new(Semaphore::new(1)),
             shutdown,
             next_conn_id: AtomicU64::new(1),
+            captures: mpsc::channel(OUTGOING_QUEUE).0,
         }
     }
 
@@ -2009,6 +2022,78 @@ mod tests {
             handshake(server.unwrap().0, &identity, false),
         );
         (sender.unwrap(), receiver.unwrap())
+    }
+
+    #[test]
+    fn live_captures_and_skips_wait_for_image_preparation() {
+        use crate::clipboard::{ClipboardPayload, ImagePayload};
+        use crate::db::models::ClipboardKind;
+        use crate::testing::{block_on, sample_png, Fixture};
+
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let image = core
+            .build_item(&ClipboardPayload::Image(ImagePayload {
+                bytes: sample_png(2, 2),
+                width: 2,
+                height: 2,
+            }))
+            .unwrap()
+            .unwrap();
+        let mut text = image.clone();
+        text.kind = ClipboardKind::Text;
+        text.content = "latest".to_owned();
+        let mut shared = test_shared(fixture.root());
+        shared.core = Arc::downgrade(&core.0);
+        let (capture_tx, capture_rx) = mpsc::channel(3);
+        shared.captures = capture_tx;
+        trust(&shared, "peer");
+        let (mut connection, _) = connection(1, u64::MAX);
+        let (tx, mut messages) = mpsc::channel(8);
+        connection.tx = tx;
+        assert!(shared.register("peer", "key", connection));
+        shared.confirm_catch_up("peer", 1, "e".to_owned(), 0);
+        let shared = Arc::new(shared);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx.await.unwrap();
+            let sender = tokio::spawn(super::super::send_captures(shared.clone(), capture_rx));
+            shared
+                .captures
+                .try_send((Some(1), Some(image), u64::MAX))
+                .unwrap();
+            shared.captures.try_send((Some(2), None, u64::MAX)).unwrap();
+            shared
+                .captures
+                .try_send((Some(3), Some(text), u64::MAX))
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let overtook_image = messages.try_recv().is_ok();
+            release_tx.send(()).unwrap();
+            blocker.await.unwrap();
+            assert!(!overtook_image);
+
+            assert!(matches!(messages.recv().await.unwrap().0,
+                Message::Push { item, live: true } if item.kind == ClipboardKind::Image));
+            assert_eq!(checkpoint(Some(messages.recv().await.unwrap().0)), Some(1));
+            assert_eq!(checkpoint(Some(messages.recv().await.unwrap().0)), Some(2));
+            assert!(matches!(messages.recv().await.unwrap().0,
+                Message::Push { item, live: true } if item.content == "latest"));
+            assert_eq!(checkpoint(Some(messages.recv().await.unwrap().0)), Some(3));
+            sender.abort();
+        });
+        block_on(core.shutdown()).unwrap();
     }
 
     #[test]
