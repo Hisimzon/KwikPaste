@@ -367,7 +367,8 @@ pub fn start<V: Render>(
     autostart::sync_at_startup(cx);
 
     // Host 请求（托盘、快捷键、第二次启动和备份文件）统一交给偏好窗口。
-    // 注册必须先于 `queue_launch_arguments`，这样冷启动携带的备份文件不会退回面板。
+    // 冷启动携带的备份文件先排队，注册时立即交给处理函数。
+    host::queue_launch_arguments(cx);
     host::set_handler(cx, |request, cx| {
         // 与 1.x 相同：面板置顶，不收起会一直压在偏好窗口上（盖住标题栏的关闭按钮）。按点击外部处理，
         // 固定面板时照旧保留。
@@ -387,7 +388,6 @@ pub fn start<V: Render>(
             log::error!("could not handle host request {request:?}: {err:#}");
         }
     });
-    host::queue_launch_arguments(cx);
     let should_open_onboarding = (!selftest::active()
         && !host::auto_launch()
         && core_host::core(cx).is_some_and(|core| !core.settings().onboarding.completed))
