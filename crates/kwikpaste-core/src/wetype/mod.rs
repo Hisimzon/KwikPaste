@@ -521,10 +521,17 @@ fn truncate_name(mut name: String, bytes: usize) -> String {
 }
 
 /// 同一台电脑上的官方微信输入法会把收到的内容写进剪贴板（文字原样，图片以文件形式）。
-/// 本扩展开着时这些内容扩展自己会收到并带上来源，不再当作本机复制记录和转发：
+/// 本扩展就绪且已配对时会收到这些内容并带上来源，不再当作本机复制记录和转发：
 /// 否则会多一条重复记录，转发出去还会顶掉设备组里手机发来的那条最新内容。
 pub(crate) fn written_by_official_client(core: &CoreInner, owner: Option<&Path>) -> bool {
-    owner.is_some_and(is_official_client_exe) && core.extensions.enabled("wetype")
+    if !owner.is_some_and(is_official_client_exe)
+        || !core.extensions.enabled("wetype")
+        || !core.wetype.ready.load(Ordering::Acquire)
+    {
+        return false;
+    }
+    let state = lock(&core.wetype.state);
+    state.running && state.paired
 }
 
 const OFFICIAL_CLIENT_PROCESS: &str = "wetype_server.exe";

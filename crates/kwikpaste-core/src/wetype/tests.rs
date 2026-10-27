@@ -560,3 +560,33 @@ fn rejected_images_are_cleaned_and_acknowledged_before_the_next_text() -> anyhow
     block_on(core.shutdown())?;
     Ok(())
 }
+
+#[test]
+fn official_clipboard_is_suppressed_only_while_the_bridge_can_receive() -> anyhow::Result<()> {
+    let fixture = Fixture::new();
+    let dir = fixture.paths.extensions_dir();
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(
+        dir.join("installed.json"),
+        serde_json::to_vec(&json!({
+            "wetype": { "version": "1.0.0", "protocol": kwikpaste_ext_protocol::WETYPE_PROTOCOL, "enabled": true }
+        }))?,
+    )?;
+    let core = fixture.start();
+    fixture.runtime.handle().block_on(core.0.wetype.stop());
+    let receiver = fake(&core);
+    let owner = Path::new(r"C:\Program Files\Tencent\WeType\wetype_server.exe");
+    assert!(written_by_official_client(&core.0, Some(owner)));
+    assert!(!written_by_official_client(&core.0, None));
+    lock(&core.0.wetype.state).paired = false;
+    assert!(!written_by_official_client(&core.0, Some(owner)));
+    lock(&core.0.wetype.state).paired = true;
+    core.0.wetype.ready.store(false, Ordering::Release);
+    assert!(!written_by_official_client(&core.0, Some(owner)));
+    core.0.wetype.ready.store(true, Ordering::Release);
+    lock(&core.0.wetype.state).running = false;
+    assert!(!written_by_official_client(&core.0, Some(owner)));
+    drop(receiver);
+    block_on(core.shutdown())?;
+    Ok(())
+}
