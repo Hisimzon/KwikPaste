@@ -244,6 +244,35 @@ fn legacy_layout_is_priority_only_and_failed_rerun_keeps_text() {
 }
 
 #[test]
+fn exhausted_legacy_layout_keeps_text_without_requeuing() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let item = seed(&fixture, &core, "exhausted-legacy-layout", 1_800_000_001);
+    legacy_layout(&fixture, &core, &item);
+    enable_paused(&core);
+    for _ in 0..3 {
+        save_outcome(
+            &fixture,
+            &core,
+            &item,
+            &Outcome::Failed {
+                reason: "missing image".into(),
+            },
+        );
+    }
+    for _ in 0..2 {
+        finish_priority(&core.0, &item.id);
+        assert!(block_on(core.image_text_lines(&item.id)).unwrap().is_none());
+        assert!(core.0.ocr.state().priority.is_none());
+    }
+    assert_eq!(
+        block_on(core.image_text(&item.id)).unwrap().as_deref(),
+        Some("legacy searchable text")
+    );
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
 fn terminal_layout_rows_do_not_schedule() {
     let fixture = Fixture::new();
     let core = fixture.start();
