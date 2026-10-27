@@ -15,7 +15,8 @@
         "0010-symmetric-text-antialiasing.diff",
         "0011-alpha-over-blend.diff",
         "0012-mouse-leave-moves-outside.diff",
-        "0013-gpu-recovery-unlock-before-notify.diff"
+        "0013-gpu-recovery-unlock-before-notify.diff",
+        "0014-vsync-refresh-ratio-arithmetic.diff"
       ],
       "sha256": "f05592a6f9e3e6bb7a9f2a0d4779271cf747a948db1c07b02448de777ffff8f3",
       "version": "0.3.7",

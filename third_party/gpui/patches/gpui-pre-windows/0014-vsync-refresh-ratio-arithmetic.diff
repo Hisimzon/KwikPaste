@@ -1,0 +1,48 @@
+diff --git a/src/vsync.rs b/src/vsync.rs
+--- a/src/vsync.rs
++++ b/src/vsync.rs
+@@ -152,21 +152,38 @@
+         ..Default::default()
+     };
+     unsafe { DwmGetCompositionTimingInfo(HWND::default(), &mut timing_info) }?;
+-    let interval = retrieve_duration(timing_info.qpcRefreshPeriod, *QPC_TICKS_PER_SECOND);
++    let interval = retrieve_duration(timing_info.qpcRefreshPeriod, *QPC_TICKS_PER_SECOND)?;
+     // Check for interval values that are impossibly low. A 29 microsecond
+     // interval was seen (from a qpcRefreshPeriod of 60).
+     if interval < VSYNC_INTERVAL_THRESHOLD {
+-        Ok(retrieve_duration(
++        retrieve_duration(
+             timing_info.rateRefresh.uiDenominator as u64,
+             timing_info.rateRefresh.uiNumerator as u64,
+-        ))
++        )
+     } else {
+         Ok(interval)
+     }
+ }
+ 
+ #[inline]
+-fn retrieve_duration(counts: u64, ticks_per_second: u64) -> Duration {
+-    let ticks_per_microsecond = ticks_per_second / 1_000_000;
+-    Duration::from_micros(counts / ticks_per_microsecond)
++fn retrieve_duration(counts: u64, ticks_per_second: u64) -> Result<Duration> {
++    // [kwikpaste patch 0014] 刷新率分数的分母可能小于一百万，不能先截断频率再除。
++    anyhow::ensure!(ticks_per_second != 0, "refresh frequency is zero");
++    let seconds = counts / ticks_per_second;
++    let nanos = (counts % ticks_per_second) as u128 * 1_000_000_000 / ticks_per_second as u128;
++    Ok(Duration::new(seconds, nanos as u32))
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn refresh_ratios_and_qpc_counts_preserve_fractional_seconds() {
++        assert_eq!(retrieve_duration(1, 60).unwrap(), Duration::from_nanos(16_666_666));
++        assert_eq!(retrieve_duration(1001, 60_000).unwrap(), Duration::from_nanos(16_683_333));
++        assert_eq!(retrieve_duration(166_666, 10_000_000).unwrap(), Duration::from_nanos(16_666_600));
++        assert_eq!(retrieve_duration(u64::MAX, 1).unwrap(), Duration::from_secs(u64::MAX));
++        assert!(retrieve_duration(1, 0).is_err());
++    }
++}
