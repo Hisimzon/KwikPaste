@@ -2108,12 +2108,19 @@ mod tests {
             shared.core = Arc::downgrade(&core.0);
             trust(&shared, "peer");
             async move {
+                sqlx::query(
+                    "CREATE TRIGGER fail_sync_receive BEFORE INSERT ON clipboard_items \
+                    BEGIN SELECT RAISE(ABORT, 'storage temporarily unavailable'); END",
+                )
+                .execute(&core.0.db.pool().await)
+                .await
+                .unwrap();
                 let (mut sender, mut receiver) = secure_pair().await;
-                let invalid = Message::Push {
+                let push = Message::Push {
                     item: super::super::protocol::WireItem {
                         kind: crate::db::models::ClipboardKind::Text,
                         sub_kind: None,
-                        content: String::new(),
+                        content: "received while storage is unavailable".to_owned(),
                         search_text: None,
                         summary: None,
                         width: None,
@@ -2121,7 +2128,7 @@ mod tests {
                     },
                     live: false,
                 };
-                sender.writer.send_message(&invalid, &[]).await.unwrap();
+                sender.writer.send_message(&push, &[]).await.unwrap();
                 sender
                     .writer
                     .send_message(

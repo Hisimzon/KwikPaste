@@ -127,10 +127,17 @@ pub async fn wire_from_item(
                 return Ok(None);
             }
             let path = core.images.origin_path(&item.content);
-            let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
+            let bytes = match tokio::task::spawn_blocking(move || std::fs::read(&path))
                 .await
                 .context("image read task failed")?
-                .context("failed to read image for sync")?;
+            {
+                Ok(bytes) => bytes,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    log::warn!("lan sync skips missing image {}", item.content);
+                    return Ok(None);
+                }
+                Err(err) => return Err(err).context("failed to read image for sync"),
+            };
             if bytes.len() as u64 > attachment_limit {
                 log::info!(
                     "lan sync skips image of {} bytes over the size limit",
@@ -269,18 +276,29 @@ pub(crate) async fn receive_with_options(
 ) -> anyhow::Result<()> {
     let settings = core.settings.snapshot();
     let payload = match wire.kind {
-        ClipboardKind::Text if options.text => text_payload(&wire)?,
+        ClipboardKind::Text if options.text => match text_payload(&wire) {
+            Ok(payload) => payload,
+            Err(err) => {
+                log::warn!("lan sync skips invalid text: {err:#}");
+                return Ok(());
+            }
+        },
         ClipboardKind::Image if options.image => {
             if attachment.len() as u64 > options.max_image_bytes {
                 log::info!("lan sync drops image over the size limit");
                 return Ok(());
             }
             let allow_jpeg = options.allow_jpeg;
-            ClipboardPayload::Image(
-                tokio::task::spawn_blocking(move || received_image(attachment, allow_jpeg))
-                    .await
-                    .context("received image decode task failed")??,
-            )
+            match tokio::task::spawn_blocking(move || received_image(attachment, allow_jpeg))
+                .await
+                .context("received image decode task failed")?
+            {
+                Ok(image) => ClipboardPayload::Image(image),
+                Err(err) => {
+                    log::warn!("lan sync skips invalid image: {err:#}");
+                    return Ok(());
+                }
+            }
         }
         _ => return Ok(()),
     };
@@ -454,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn catch_up_retries_image_read_failures() {
+    fn catch_up_skips_missing_images_but_retries_other_read_failures() {
         let fixture = Fixture::new();
         let core = fixture.start();
         let bytes = sample_png(2, 2);
@@ -467,17 +485,77 @@ mod tests {
             .unwrap()
             .unwrap();
         let path = core.image_origin_path(&item.content).unwrap();
-        block_on(core.store_item(item, None)).unwrap();
+        block_on(core.store_item(item.clone(), None)).unwrap();
         std::fs::remove_file(&path).unwrap();
 
         block_on(core.hop({
             let core = core.clone();
             async move {
+                assert!(wire_from_item(&core.0, &item, u64::MAX)
+                    .await
+                    .unwrap()
+                    .is_none());
+                let page = collect_catch_up(&core.0, 0, None, u64::MAX).await.unwrap();
+                assert!(page.items.is_empty());
+                assert_eq!(page.until, 1);
+
+                std::fs::create_dir(&path).unwrap();
+                assert!(wire_from_item(&core.0, &item, u64::MAX).await.is_err());
                 assert!(collect_catch_up(&core.0, 0, None, u64::MAX).await.is_err());
+                std::fs::remove_dir(&path).unwrap();
                 std::fs::write(path, bytes).unwrap();
                 let page = collect_catch_up(&core.0, 0, None, u64::MAX).await.unwrap();
                 assert_eq!(page.items.len(), 1);
                 assert_eq!(page.until, 1);
+                Ok(())
+            }
+        }))
+        .unwrap();
+        block_on(core.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn invalid_received_payloads_are_skipped() {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        block_on(core.hop({
+            let core = core.clone();
+            async move {
+                let mut image = wire(None, "", None);
+                image.kind = ClipboardKind::Image;
+                let echo = std::sync::Mutex::new(EchoFilter::default());
+                for (item, attachment) in [
+                    (wire(None, "", None), Vec::new()),
+                    (
+                        wire(Some(ClipboardSubKind::Html), "<b>hi</b>", None),
+                        Vec::new(),
+                    ),
+                    (image, vec![0; 4]),
+                ] {
+                    receive_with_options(
+                        &core.0,
+                        &echo,
+                        "peer",
+                        Platform::Windows,
+                        item,
+                        attachment,
+                        false,
+                        ReceiveOptions {
+                            text: true,
+                            image: true,
+                            write_clipboard: false,
+                            max_image_bytes: u64::MAX,
+                            allow_jpeg: true,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                }
+                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clipboard_items")
+                    .fetch_one(&core.0.db.pool().await)
+                    .await
+                    .unwrap();
+                assert_eq!(count, 0);
                 Ok(())
             }
         }))
