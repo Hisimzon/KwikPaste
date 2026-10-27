@@ -1094,10 +1094,10 @@ fn overwrite_adopts_migration_checksums_of_the_other_platform() {
     let temp = tempdir().unwrap();
     let backup = craft_backup(temp.path(), |pool| {
         Box::pin(async move {
-            for (version, lf, crlf) in crate::db::init::PUBLISHED {
-                let embedded = crate::db::MIGRATOR
+            for embedded in crate::db::MIGRATOR.iter() {
+                let &(version, lf, crlf) = crate::db::init::PUBLISHED
                     .iter()
-                    .find(|migration| migration.version == version)
+                    .find(|(version, _, _)| *version == embedded.version)
                     .unwrap();
                 let embedded_hex: String = embedded
                     .checksum
