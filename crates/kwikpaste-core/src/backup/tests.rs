@@ -440,6 +440,72 @@ async fn merge_preserves_is_sensitive_flag() {
 
 // ---- 端到端：两个 core 实例之间导出、导入 ----
 
+#[tokio::test]
+async fn merge_preserves_last_use_and_falls_back_for_old_backups() {
+    let now = Utc::now();
+    let old = now - chrono::Duration::days(30);
+    let recent = now.to_rfc3339();
+    for (last_used, missing_column) in [
+        (Some(recent.as_str()), false),
+        (None, false),
+        (Some("invalid"), false),
+        (None, true),
+    ] {
+        let current = crate::db::test_support::memory_pool().await;
+        let backup = crate::db::test_support::memory_pool().await;
+        sqlx::query(
+            "INSERT INTO clipboard_items \
+             (id, kind, content, content_hash, platform, created_at, updated_at, last_used_at) \
+             VALUES ('reused', 'text', 'old text', 'hash', 'windows', ?, ?, ?)",
+        )
+        .bind(old)
+        .bind(old)
+        .bind(last_used)
+        .execute(&backup)
+        .await
+        .unwrap();
+        if missing_column {
+            sqlx::query("DROP INDEX idx_clipboard_items_pinned_last_used")
+                .execute(&backup)
+                .await
+                .unwrap();
+            sqlx::query("ALTER TABLE clipboard_items DROP COLUMN last_used_at")
+                .execute(&backup)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            merge_history(&current, &backup)
+                .await
+                .unwrap()
+                .imported_items,
+            1
+        );
+        let (updated, used): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+            "SELECT updated_at, last_used_at FROM clipboard_items WHERE id = 'reused'",
+        )
+        .fetch_one(&current)
+        .await
+        .unwrap();
+        let is_recent = last_used == Some(recent.as_str());
+        assert_eq!(updated, old);
+        assert_eq!(used, if is_recent { now } else { old });
+        let plan = crate::db::retention::AgePlan {
+            fallback_cutoff: Some(now - chrono::Duration::days(7)),
+            ..Default::default()
+        };
+        crate::db::retention::delete_expired(&mut current.acquire().await.unwrap(), &plan)
+            .await
+            .unwrap();
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clipboard_items")
+            .fetch_one(&current)
+            .await
+            .unwrap();
+        assert_eq!(remaining, i64::from(is_recent));
+    }
+}
+
 fn store(core: &Core, state: MemoryState) -> String {
     let clipboard = MemoryClipboard::with_state(state);
     let item = core

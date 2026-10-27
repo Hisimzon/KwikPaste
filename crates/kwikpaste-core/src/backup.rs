@@ -1769,7 +1769,12 @@ async fn merge_items(
             continue;
         }
 
-        // 备份可能来自还没有 last_used_at 的旧版本，统一以 updated_at 作为最后使用时间。
+        // 旧备份缺列或没有有效的使用时间时，才回落到列表更新时间。
+        let last_used_at = row
+            .last_used_at
+            .as_deref()
+            .and_then(|value| value.parse::<DateTime<Utc>>().ok())
+            .unwrap_or(row.updated_at);
         sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
@@ -1803,7 +1808,7 @@ async fn merge_items(
         .bind(row.note)
         .bind(row.created_at)
         .bind(row.updated_at)
-        .bind(row.updated_at)
+        .bind(last_used_at)
         .bind(row.original_content)
         .execute(&mut **tx)
         .await
@@ -1840,6 +1845,8 @@ struct BackupItemRow {
     note: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    #[sqlx(default)]
+    last_used_at: Option<String>,
     /// 已发布的旧备份没有此列；SELECT * 配合缺列默认值保留旧库合并能力。
     #[sqlx(default)]
     original_content: Option<String>,
