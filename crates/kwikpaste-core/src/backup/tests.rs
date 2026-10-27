@@ -663,6 +663,59 @@ fn backup_preserves_original_content_for_merge_and_overwrite() {
 }
 
 #[test]
+fn merge_keeps_edited_versions_with_the_same_id() {
+    let source = source();
+    let id = store(&source.core, text("shared text"));
+    block_on(source.core.update_text_content(&id, "version B".into())).unwrap();
+    let backup = export(&source, BackupExportMode::Plain, None);
+    block_on(source.core.update_text_content(&id, "version C".into())).unwrap();
+
+    let result = block_on(
+        source
+            .core
+            .import_history_backup(input(&backup, None), BackupImportStrategy::Merge),
+    )
+    .unwrap();
+    assert_eq!((result.imported_items, result.skipped_items), (1, 2));
+    assert_eq!(
+        contents(&source.core),
+        ["only in the backup", "version B", "version C"]
+    );
+    assert_eq!(
+        block_on(source.core.find_item(&id))
+            .unwrap()
+            .unwrap()
+            .content,
+        "version C"
+    );
+    let again = block_on(
+        source
+            .core
+            .import_history_backup(input(&backup, None), BackupImportStrategy::Merge),
+    )
+    .unwrap();
+    assert_eq!((again.imported_items, again.skipped_items), (0, 3));
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[tokio::test]
+async fn merge_does_not_count_ignored_rows_as_imported() {
+    let current = crate::db::test_support::memory_pool().await;
+    let backup = crate::db::test_support::memory_pool().await;
+    sqlx::query("PRAGMA ignore_check_constraints = ON")
+        .execute(&backup)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO clipboard_items (id, kind, content, content_hash, platform, created_at, updated_at) \
+         VALUES ('empty', 'files', '', 'hash', 'windows', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    ).execute(&backup).await.unwrap();
+
+    let result = merge_history(&current, &backup).await.unwrap();
+    assert_eq!((result.imported_items, result.skipped_items), (0, 1));
+}
+
+#[test]
 fn plain_export_merges_into_another_instance() {
     let source = source();
     let backup = export(&source, BackupExportMode::Plain, None);

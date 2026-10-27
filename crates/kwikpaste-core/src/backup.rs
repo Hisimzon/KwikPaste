@@ -1836,13 +1836,26 @@ async fn merge_items(
             continue;
         }
 
+        // 同一记录编辑后 id 不变；内容不同的备份版本作为新记录保留。
+        let id_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE id = ?)")
+                .bind(&row.id)
+                .fetch_one(&mut **tx)
+                .await
+                .context("failed to check imported item id")?;
+        let id = if id_exists {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            row.id
+        };
+
         // 旧备份缺列或没有有效的使用时间时，才回落到列表更新时间。
         let last_used_at = row
             .last_used_at
             .as_deref()
             .and_then(|value| value.parse::<DateTime<Utc>>().ok())
             .unwrap_or(row.updated_at);
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
               summary, file_types, size, width, height, use_count, is_favorite, is_pinned, favorite_order, pin_order, is_sensitive, platform, note, \
@@ -1852,7 +1865,7 @@ async fn merge_items(
                      CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(pin_order) FROM clipboard_items), 0) END,
                      ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(row.id)
+        .bind(id)
         .bind(row.kind)
         .bind(row.sub_kind)
         .bind(row.group_id)
@@ -1879,8 +1892,10 @@ async fn merge_items(
         .bind(row.original_content)
         .execute(&mut **tx)
         .await
-        .context("failed to import item")?;
-        imported_items += 1;
+        .context("failed to import item")?
+        .rows_affected();
+        imported_items += inserted;
+        skipped_items += u64::from(inserted == 0);
     }
 
     Ok(MergeOutcome {
