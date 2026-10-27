@@ -514,3 +514,49 @@ fn official_client_is_recognized_by_its_executable() {
         r"C:\Program Files\Tencent\WeChat\WeChat.exe"
     )));
 }
+
+#[test]
+fn rejected_images_are_cleaned_and_acknowledged_before_the_next_text() -> anyhow::Result<()> {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let receiver = fake(&core);
+    block_on(core.update_settings(json!({"extensions":{"wetype":{"writeClipboard":false}}})))?;
+    let inbox = fixture.paths.extensions_dir().join("wetype/state/inbox");
+    std::fs::create_dir_all(&inbox)?;
+    let path = inbox.join("rejected");
+    for bytes in [
+        sample_png(1, crate::imaging::MAX_DIMENSION + 1),
+        b"not an image".to_vec(),
+        vec![0xff, 0xd8, 0xff, 0xe0],
+    ] {
+        std::fs::write(&path, bytes)?;
+        event(
+            &core,
+            Event::Received {
+                from_uin: 77,
+                from_name: "Phone".into(),
+                content: Content::Image {
+                    path: path.to_string_lossy().into_owned(),
+                },
+            },
+        )?;
+        assert_eq!(receiver.try_recv()?, Command::Acknowledge);
+        assert!(!path.exists());
+    }
+    event(
+        &core,
+        Event::Received {
+            from_uin: 77,
+            from_name: "Phone".into(),
+            content: Content::Text {
+                text: "after rejected images".into(),
+            },
+        },
+    )?;
+    assert_eq!(receiver.try_recv()?, Command::Acknowledge);
+    let list = block_on(core.list_items(ClipboardItemQuery::default()))?.list;
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].item.kind, ClipboardKind::Text);
+    block_on(core.shutdown())?;
+    Ok(())
+}
