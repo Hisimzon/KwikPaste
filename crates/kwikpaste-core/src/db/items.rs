@@ -186,14 +186,16 @@ pub async fn query_items_page(
 }
 
 /// 按剪贴板窗口「全部」视图的顺序（置顶在前，其余按 `sort`）取第 `offset` 条（从 0 起）的 id，
-/// 超出历史条数时返回 `None`。
+/// `favorite` 与列表使用同一收藏过滤条件，超出历史条数时返回 `None`。
 pub async fn find_item_id_at(
     pool: &SqlitePool,
     sort: ClipboardItemSort,
     offset: i64,
+    favorite: Option<bool>,
 ) -> Result<Option<String>> {
     let query = ClipboardItemQuery {
         group: Some(ClipboardGroupFilter::All),
+        favorite,
         sort,
         limit: 1,
         offset,
@@ -993,7 +995,7 @@ mod tests {
         let mut ordered = Vec::new();
         for offset in 0..5 {
             ordered.push(
-                find_item_id_at(&pool, ClipboardItemSort::UpdatedAt, offset)
+                find_item_id_at(&pool, ClipboardItemSort::UpdatedAt, offset, None)
                     .await
                     .unwrap(),
             );

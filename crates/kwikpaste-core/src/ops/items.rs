@@ -643,7 +643,8 @@ impl Core {
         self.hop(async move {
             let pool = core.0.db.pool().await;
             let content = core.0.settings.snapshot().clipboard.content;
-            let Some(id) = find_item_id_at(&pool, content.sort, offset).await? else {
+            let favorite = content.hide_favorites_in_all.then_some(false);
+            let Some(id) = find_item_id_at(&pool, content.sort, offset, favorite).await? else {
                 return Ok(None);
             };
             let Some(item) = find_item_by_id(&pool, &id).await? else {

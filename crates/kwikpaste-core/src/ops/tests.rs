@@ -619,6 +619,36 @@ fn quick_paste_writes_the_nth_record_once_at_a_time() {
 }
 
 #[test]
+fn quick_paste_respects_hidden_favorites_in_all() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let visible = copy_in(&core, text("visible")).unwrap();
+    let favorite = copy_in(&core, text("favorite")).unwrap();
+    block_on(core.toggle_favorite(&favorite)).unwrap();
+    block_on(core.toggle_pinned(&favorite)).unwrap();
+    block_on(core.update_settings(json!({"clipboard": {"content": {"hideFavoritesInAll": true}}})))
+        .unwrap();
+
+    let ticket = block_on(core.prepare_quick_paste(0)).unwrap().unwrap();
+    assert_eq!(ticket.item_id, visible);
+    assert_eq!(
+        fixture.clipboard.snapshot().text.as_deref(),
+        Some("visible")
+    );
+    drop(ticket);
+    assert!(block_on(core.prepare_quick_paste(1)).unwrap().is_none());
+
+    block_on(
+        core.update_settings(json!({"clipboard": {"content": {"hideFavoritesInAll": false}}})),
+    )
+    .unwrap();
+    let ticket = block_on(core.prepare_quick_paste(0)).unwrap().unwrap();
+    assert_eq!(ticket.item_id, favorite);
+    drop(ticket);
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
 fn notes_marks_and_groups() {
     let fixture = Fixture::new();
     let core = fixture.start();
