@@ -246,6 +246,7 @@ impl ListModel {
     /// 删掉一行并把后面的下标前移（单条删除、在收藏里取消收藏、移出当前分组，1.x `removeItemById`）。
     pub fn remove_by_id(&mut self, id: &str) -> Option<Removed> {
         let removed = self.index_of(id)?;
+        self.bump_token();
 
         let old = std::mem::take(&mut self.items);
         for (index, item) in old {
@@ -717,6 +718,25 @@ mod tests {
         assert!(model.get(29).is_none());
         assert_eq!(removed.refetch.map(|request| request.range), Some(0..60));
         assert!(model.remove_by_id("missing").is_none());
+    }
+
+    #[test]
+    fn removal_rejects_responses_from_before_the_delete() {
+        let mut ids = backend(100);
+        let mut model = ListModel::new();
+        let first = model.reset_and_reload();
+        load(&mut model, &ids, 0, &first);
+        let old = model.load_range(20..40).expect("prefetch");
+        let stale_page = page(&ids, 0, &old.range);
+        let removed = model.remove_by_id("r3").expect("cached");
+        ids.remove(3);
+        let refetch = removed.refetch.expect("replacement range");
+        load(&mut model, &ids, 0, &refetch);
+
+        assert!(model.apply(&old, stale_page).is_none());
+        assert!(model.find("r3").is_none());
+        assert_eq!(model.total(), 99);
+        assert!(!model.is_loading());
     }
 
     #[test]
