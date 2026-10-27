@@ -502,23 +502,12 @@ pub async fn unprotected_file_items(pool: &SqlitePool) -> Result<Vec<(String, St
 
 /// 按 id 批量删除，返回删除行数与被删图片文件名（供调用方删图）；不存在的 id 忽略。
 /// 所有分批在同一事务里完成，中途失败时一条都不删。
-pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<CleanupOutcome> {
-    delete_items_inner(pool, ids, false).await
-}
-
-/// 清理缺失文件记录时，在删除语句里重新检查收藏与置顶，保留扫描期间刚受保护的记录。
-pub(crate) async fn delete_unprotected_file_items(
+/// 收藏 / 置顶保护在删除语句里按最新标记检查，选中或扫描之后才受保护的记录不会被删。
+pub async fn delete_items(
     pool: &SqlitePool,
     ids: &[String],
-) -> Result<CleanupOutcome> {
-    delete_items_inner(pool, ids, true).await
-}
-
-/// 共用分批事务；只有缓存清理限制为未受保护的文件记录，手动删除仍按传入 id 执行。
-async fn delete_items_inner(
-    pool: &SqlitePool,
-    ids: &[String],
-    unprotected_files_only: bool,
+    delete_favorites: bool,
+    delete_pinned: bool,
 ) -> Result<CleanupOutcome> {
     let mut outcome = CleanupOutcome::default();
     if ids.is_empty() {
@@ -530,16 +519,20 @@ async fn delete_items_inner(
         .await
         .context("failed to begin delete clipboard items transaction")?;
     for chunk in ids.chunks(DELETE_BATCH_SIZE) {
-        let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new("DELETE FROM clipboard_items WHERE ");
-        if unprotected_files_only {
-            qb.push("kind = 'files' AND is_favorite = 0 AND is_pinned = 0 AND ");
-        }
-        qb.push("id IN (");
+        let mut qb: QueryBuilder<Sqlite> =
+            QueryBuilder::new("DELETE FROM clipboard_items WHERE id IN (");
         let mut separated = qb.separated(", ");
         for id in chunk {
             separated.push_bind(id.as_str());
         }
-        qb.push(") RETURNING kind, content, size");
+        qb.push(")");
+        if !delete_favorites {
+            qb.push(" AND is_favorite = 0");
+        }
+        if !delete_pinned {
+            qb.push(" AND is_pinned = 0");
+        }
+        qb.push(" RETURNING kind, content, size");
 
         let rows = qb
             .build_query_as::<DeletedRow>()
@@ -1775,7 +1768,7 @@ mod tests {
         mark_item_favorite(&pool, "favorite").await.unwrap();
         toggle_item_pinned(&pool, "pinned").await.unwrap();
 
-        let outcome = delete_unprotected_file_items(&pool, &ids).await.unwrap();
+        let outcome = delete_items(&pool, &ids, false, false).await.unwrap();
 
         assert_eq!(outcome.removed, 1);
         assert!(find_item_by_id(&pool, "missing").await.unwrap().is_none());
@@ -1796,7 +1789,10 @@ mod tests {
         img.content_hash = content_hash(ClipboardKind::Image, "deadbeef.png");
         insert_item(&pool, &img).await.unwrap();
 
-        assert_eq!(delete_items(&pool, &[]).await.unwrap().removed, 0);
+        assert_eq!(
+            delete_items(&pool, &[], true, true).await.unwrap().removed,
+            0
+        );
 
         let outcome = delete_items(
             &pool,
@@ -1806,6 +1802,8 @@ mod tests {
                 "b".to_owned(),
                 "missing".to_owned(),
             ],
+            true,
+            true,
         )
         .await
         .unwrap();
@@ -1820,6 +1818,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_delete_checks_current_protection_and_returns_only_deleted_images() {
+        let pool = memory_pool().await;
+        let ids: Vec<String> = ["plain", "pinned", "favorite", "both"]
+            .map(str::to_owned)
+            .into();
+        for id in &ids {
+            let mut item = sample_item(id);
+            item.kind = ClipboardKind::Image;
+            item.content = format!("{id}.png");
+            item.content_hash = content_hash(item.kind, &item.content);
+            insert_item(&pool, &item).await.unwrap();
+        }
+        sqlx::query("UPDATE clipboard_items SET is_pinned = id IN ('pinned', 'both'), is_favorite = id IN ('favorite', 'both')")
+            .execute(&pool).await.unwrap();
+        let outcome = delete_items(&pool, &ids, false, false).await.unwrap();
+        assert_eq!(outcome.removed, 1);
+        assert_eq!(outcome.image_files, ["plain.png"]);
+        let outcome = delete_items(&pool, &ids, true, false).await.unwrap();
+        assert_eq!(outcome.image_files, ["favorite.png"]);
+        let outcome = delete_items(&pool, &ids, false, true).await.unwrap();
+        assert_eq!(outcome.image_files, ["pinned.png"]);
+        assert!(find_item_by_id(&pool, "both").await.unwrap().is_some());
+        let outcome = delete_items(&pool, &ids, true, true).await.unwrap();
+        assert_eq!(outcome.image_files, ["both.png"]);
+    }
+
+    #[tokio::test]
     async fn delete_items_spans_several_batches() {
         let pool = memory_pool().await;
         let all: Vec<String> = (0..DELETE_BATCH_SIZE + 3)
@@ -1829,7 +1854,7 @@ mod tests {
             insert_item(&pool, &sample_item(id)).await.unwrap();
         }
 
-        let outcome = delete_items(&pool, &all[1..]).await.unwrap();
+        let outcome = delete_items(&pool, &all[1..], true, true).await.unwrap();
         assert_eq!(outcome.removed, (all.len() - 1) as u64);
         assert_eq!(
             ids(&query_items(&pool, &ClipboardItemQuery::default())

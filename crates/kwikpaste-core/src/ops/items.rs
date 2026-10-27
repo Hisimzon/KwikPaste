@@ -892,14 +892,19 @@ impl Core {
     }
 
     /// 批量删除多选的记录，连带删除图片文件，返回实际删除条数。不发事件；
-    /// 收藏 / 置顶保护由界面在选择时过滤。
-    pub async fn delete_items(&self, ids: Vec<String>) -> Result<u64> {
+    /// 删除时按传入的有效策略检查数据库中的最新收藏 / 置顶标记。
+    pub async fn delete_items(
+        &self,
+        ids: Vec<String>,
+        delete_favorites: bool,
+        delete_pinned: bool,
+    ) -> Result<u64> {
         let core = self.clone();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
             let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
-            let outcome = delete_items(&pool, &ids).await?;
+            let outcome = delete_items(&pool, &ids, delete_favorites, delete_pinned).await?;
 
             for file_name in &outcome.image_files {
                 if let Err(err) = core.0.images.remove(file_name) {

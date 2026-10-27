@@ -180,7 +180,7 @@ fn image_publication_blocks_storage_mutations_until_capture_is_persisted() {
                             1 => core.clean_resource_cache().await.map(|_| ()),
                             2 => core.delete_item("missing").await,
                             3 => core
-                                .delete_items(vec!["missing".to_owned()])
+                                .delete_items(vec!["missing".to_owned()], true, true)
                                 .await
                                 .map(|_| ()),
                             4 => core

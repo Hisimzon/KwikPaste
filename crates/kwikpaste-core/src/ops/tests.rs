@@ -802,7 +802,7 @@ fn deletes_remove_image_files_and_clears_notify() {
     block_on(core.delete_item(&image)).unwrap();
     assert!(!origin.exists());
     assert_eq!(
-        block_on(core.delete_items(vec![a, "missing".to_owned()])).unwrap(),
+        block_on(core.delete_items(vec![a, "missing".to_owned()], true, true)).unwrap(),
         1
     );
 

@@ -318,11 +318,21 @@ impl ClipboardSource for CoreSource {
         async move { Ok(core.delete_item(&id).await?) }.boxed()
     }
 
-    fn delete_many(&self, ids: Vec<Arc<str>>) -> BoxFuture<'static, anyhow::Result<u64>> {
+    fn delete_many(
+        &self,
+        ids: Vec<Arc<str>>,
+        delete_favorites: bool,
+        delete_pinned: bool,
+    ) -> BoxFuture<'static, anyhow::Result<u64>> {
         let core = self.core.clone();
         let ids = ids.iter().map(|id| id.to_string()).collect();
 
-        async move { Ok(core.delete_items(ids).await?) }.boxed()
+        async move {
+            Ok(core
+                .delete_items(ids, delete_favorites, delete_pinned)
+                .await?)
+        }
+        .boxed()
     }
 
     fn open_target(
