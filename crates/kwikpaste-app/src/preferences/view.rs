@@ -174,6 +174,7 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     let window_id = handle.window_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
+            hotkey::resume(cx);
             let _ = cx.remove_global::<PreferencesWindow>();
         }
     })
@@ -213,6 +214,7 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     let window_id = handle.window_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
+            hotkey::resume(cx);
             let _ = cx.remove_global::<PreferencesWindow>();
         }
     })
@@ -2924,6 +2926,9 @@ impl Preferences {
         self.tab = tab;
         self.shortcut_detail = None;
         self.shortcut_conflict = None;
+        if self.recording.is_some() {
+            self.finish_recording(cx);
+        }
         if self.recording_panel.is_some() {
             self.finish_panel_recording(cx);
         }
