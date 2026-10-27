@@ -204,6 +204,13 @@ pub struct Launch {
     core: StartedCore,
 }
 
+impl Launch {
+    #[cfg(target_os = "macos")]
+    pub fn invocation_sender(&self) -> async_channel::Sender<Invocation> {
+        self.invocations.0.clone()
+    }
+}
+
 /// 单实例判重并启动 core。本进程是第二实例时把参数转交给主实例并返回 `None`，调用方应直接退出。
 ///
 /// 必须在 [`create`] 之前调用：第二实例不初始化 GPU，也不碰数据库。
