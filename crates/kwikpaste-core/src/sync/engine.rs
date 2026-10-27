@@ -303,6 +303,7 @@ pub(crate) async fn receive_with_options(
         _ => return Ok(()),
     };
 
+    let publication = core.cleanup.image_publication().await;
     let capture = settings.clipboard.capture.clone();
     let sensitive = settings.clipboard.sensitive;
     let plain_only = settings.clipboard.content.copy_plain;
@@ -340,6 +341,7 @@ pub(crate) async fn receive_with_options(
     // 补齐的是历史记录，不代表对方剪贴板的现状，不参与回声判断，也不写剪贴板。
     // 实时记录先记回声再写剪贴板：写回被本机监听到时要能认出来。
     crate::clipboard::persist::store_and_emit(core, &item).await?;
+    drop(publication);
 
     let fresh = live
         && echo

@@ -154,6 +154,77 @@ fn change_and_reset_storage_location_move_data_and_rebase_every_store() {
 }
 
 #[test]
+fn image_publication_blocks_storage_mutations_until_capture_is_persisted() {
+    for operation in 0..7 {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let reader =
+            crate::clipboard::ClipboardReader::with_backend(MemoryClipboard::with_state(image()));
+        let (item, source, publication) = crate::clipboard::watcher::capture_change(
+            &core.0,
+            &reader,
+            &[],
+            &mut crate::clipboard::watcher::RepeatFilter::new(Duration::ZERO),
+        )
+        .unwrap();
+        let file_name = item.content.clone();
+        let parent = fixture.root().join("moved");
+        block_on(core.hop({
+            let core = core.clone();
+            async move {
+                let mut mutation = tokio::spawn({
+                    let core = core.clone();
+                    async move {
+                        match operation {
+                            0 => core.run_cleanup_now().await.map(|_| ()),
+                            1 => core.clean_resource_cache().await.map(|_| ()),
+                            2 => core.delete_item("missing").await,
+                            3 => core
+                                .delete_items(vec!["missing".to_owned()])
+                                .await
+                                .map(|_| ()),
+                            4 => core
+                                .clear_items_in_scope(
+                                    crate::db::overview::ClearScope::UnknownSource,
+                                )
+                                .await
+                                .map(|_| ()),
+                            5 => core.clear_items(true, true).await.map(|_| ()),
+                            _ => core.change_storage_location(parent).await.map(|_| ()),
+                        }
+                    }
+                });
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), &mut mutation)
+                        .await
+                        .is_err()
+                );
+                crate::clipboard::persist::persist_and_notify(&core.0, &item, source.as_ref())
+                    .await
+                    .unwrap();
+                drop(publication);
+                mutation.await.unwrap().unwrap();
+                Ok(())
+            }
+        }))
+        .unwrap();
+
+        let deleted = matches!(operation, 4 | 5);
+        assert_eq!(
+            core.image_origin_path(&file_name).unwrap().is_file(),
+            !deleted
+        );
+        assert_eq!(
+            block_on(core.list_items(ClipboardItemQuery::default()))
+                .unwrap()
+                .total,
+            if deleted { 0 } else { 1 }
+        );
+        block_on(core.shutdown()).unwrap();
+    }
+}
+
+#[test]
 fn storage_switch_keeps_the_hosts_capture_pause() {
     let fixture = Fixture::new();
     let core = fixture.start();

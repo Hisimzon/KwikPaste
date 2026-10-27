@@ -698,6 +698,7 @@ impl Core {
     pub async fn read_clipboard_now(&self) -> Result<Option<CapturedItem>> {
         let core = self.clone();
         self.hop(async move {
+            let _publication = core.0.cleanup.image_publication().await;
             let source = core.0.platform().frontmost_app();
             let settings = core.0.settings.snapshot();
             let item = {
@@ -870,6 +871,7 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
+            let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
             if let Some(file_name) = delete_item(&pool, &id).await? {
                 if let Err(err) = core.0.images.remove(&file_name) {
@@ -887,6 +889,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
+            let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
             let outcome = delete_items(&pool, &ids).await?;
 
@@ -905,6 +908,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
+            let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
             let outcome = clear_items(&pool, delete_favorites, delete_pinned).await?;
 
@@ -927,6 +931,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
+            let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
             let outcome = clear_scope(&pool, &scope).await?;
             clipboard::cleanup::apply_outcome(&core.0, &outcome, "scoped");

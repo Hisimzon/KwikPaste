@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use clipboard_rs::{ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext, WatcherShutdown};
+use tokio::sync::OwnedRwLockReadGuard;
 
 use super::apps_registry::materialize_source;
 use super::backend::{ClipboardBackend, SystemClipboard};
@@ -150,12 +151,17 @@ impl Drop for PauseGuard {
 ///
 /// **先**抓来源应用：Windows 优先用剪贴板所有者，其它情况用前台。自身写回的事件会在 guard 处丢弃，
 /// 但顺序换不得：guard 判定依赖 content_hash，必须先把内容读出来才能判，而读取期间用户可能已经切走前台。
+/// 在监听线程调用；返回的图片发布 guard 必须随记录保留到异步入库完成。
 pub(crate) fn capture_change<B: ClipboardBackend>(
     core: &CoreInner,
     reader: &ClipboardReader<B>,
     retry_delays: &[Duration],
     repeats: &mut RepeatFilter,
-) -> Option<(ClipboardItem, Option<ClipboardApp>)> {
+) -> Option<(
+    ClipboardItem,
+    Option<ClipboardApp>,
+    OwnedRwLockReadGuard<()>,
+)> {
     if core.watcher_pause.is_paused() {
         return None;
     }
@@ -193,6 +199,7 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         return None;
     }
 
+    let publication = core.rt.block_on(core.cleanup.image_publication());
     let mut item = match build_item_with_settings(
         &core.images,
         &payload,
@@ -226,13 +233,19 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         item.source_app_id = Some(src.id.clone());
     }
 
-    Some((item, source_app))
+    Some((item, source_app, publication))
 }
 
 /// 把 [`capture_change`] 的结果交给 core runtime 入库并通知宿主；失败只记日志（监听场景无人接收结果）。
-fn persist_captured(core: Arc<CoreInner>, item: ClipboardItem, source_app: Option<ClipboardApp>) {
+fn persist_captured(
+    core: Arc<CoreInner>,
+    item: ClipboardItem,
+    source_app: Option<ClipboardApp>,
+    publication: OwnedRwLockReadGuard<()>,
+) {
     let rt = core.rt.clone();
     rt.spawn(async move {
+        let _publication = publication;
         if let Err(err) =
             super::persist::persist_and_notify(&core, &item, source_app.as_ref()).await
         {
@@ -317,13 +330,13 @@ impl ClipboardHandler for ClipboardChangeHandler {
             return;
         };
 
-        if let Some((item, source_app)) = capture_change(
+        if let Some((item, source_app, publication)) = capture_change(
             &core,
             &self.reader,
             &CLIPBOARD_READ_RETRY_DELAYS,
             &mut self.repeats,
         ) {
-            persist_captured(core, item, source_app);
+            persist_captured(core, item, source_app, publication);
         }
     }
 }

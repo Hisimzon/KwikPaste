@@ -290,8 +290,8 @@ async fn export_history_backup(
     let target = normalize_backup_path(target)?;
     let password = validate_password_options(&options)?;
     let exported_at = Utc::now();
-    // 自动清理与「清理缓存」都持有此锁，归档完成前不能删掉库中引用的图片。
-    let _exclusive = core.cleanup.exclusive().await;
+    // 删图片的清理与删除都要独占锁；导出持共享锁即可挡住它们，采集照常进行。
+    let _publication = core.cleanup.image_publication().await;
     let pool = core.db.pool().await;
     // 部分备份的源文件在临时目录里，打包完才能删。
     let mut _staged = None;
@@ -1256,6 +1256,7 @@ async fn import_ecopaste_history(
     let mut imported_items = 0;
     let mut skipped_items = 0;
     {
+        let _publication = core.cleanup.image_publication().await;
         let _upsert = core.upsert_lock.lock().await;
         let pool = core.db.pool().await;
         for row in rows {
@@ -1383,6 +1384,7 @@ async fn merge_import(
     root: &Path,
     import_settings: bool,
 ) -> Result<ImportHistoryBackupResult> {
+    let _publication = core.cleanup.image_publication().await;
     let pool = core.db.pool().await;
     let db_path = root.join(DB_ARCHIVE_DIR).join(DB_FILENAME);
     let backup_pool = open_backup_db(&db_path).await?;
@@ -1455,8 +1457,8 @@ async fn overwrite_import(
         // 先停新的采集，再等在途的入库与清理结束，换库期间没有人写库或删图片文件。
         let _pause = core.watcher_pause.pause_scoped();
         let _ocr = core.ocr.suspend().await;
-        let _upsert = core.upsert_lock.lock().await;
         let _exclusive = core.cleanup.exclusive().await;
+        let _upsert = core.upsert_lock.lock().await;
 
         let live = crate::db::db_path(&core.paths)?;
         let staged =

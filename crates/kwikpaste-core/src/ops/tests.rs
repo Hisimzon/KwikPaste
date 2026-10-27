@@ -29,7 +29,7 @@ fn copy_in(core: &Core, state: MemoryState) -> Option<String> {
 /// 一次剪贴板通知按监听路径入库；`repeats` 跨调用保留时，同一次复制的重复通知会被合并。
 fn notify_in(core: &Core, state: MemoryState, repeats: &mut RepeatFilter) -> Option<String> {
     let reader = ClipboardReader::with_backend(MemoryClipboard::with_state(state));
-    let (item, source) =
+    let (item, source, _publication) =
         crate::clipboard::watcher::capture_change(&core.0, &reader, &NO_RETRY, repeats)?;
     let result = block_on(core.hop({
         let core = core.clone();
