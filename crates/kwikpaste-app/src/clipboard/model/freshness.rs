@@ -1,8 +1,7 @@
 //! 列表数据追没追上 core：作用于“当前项”的按键（Enter、Mod+Enter、Mod+数字）只在追上之后执行。
 //!
-//! 每收到一个会影响当前视图的变化（新记录、清理、导入）记一笔；第一页的请求发出时记下它覆盖到第几笔，
-//! 落地后才算追上。还没追上时按键先挂起，等第一页落地再按那时的第一行执行，所以面板刚显示就按
-//! Enter 粘贴的也是最新第一页的首项（包含置顶行），而不是刷新前留在缓存里的旧第一行。
+//! 每收到一个会影响当前视图的变化记一笔；替换请求发出时记下它覆盖到第几笔，接受响应后才算追上。
+//! 替换可以是第一页，也可以是复用记录后的当前范围；按键等目标范围落地，不把滚动中的列表换回第一页。
 
 /// 挂起的“作用于当前项”的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,9 +16,9 @@ pub enum Activation {
 pub struct Freshness {
     /// 收到的变化笔数。
     changes: u64,
-    /// 已落地的第一页覆盖到的笔数。
+    /// 已落地的替换范围覆盖到的笔数。
     applied: u64,
-    /// 在路上的第一页请求：(请求令牌, 发出时的笔数)。
+    /// 在路上的替换请求：(请求令牌, 发出时的笔数)。
     in_flight: Option<(u64, u64)>,
 }
 
@@ -29,12 +28,12 @@ impl Freshness {
         self.changes += 1;
     }
 
-    /// 发出了一个第一页请求（整体替换缓存的那种）。
+    /// 发出了一个整体替换缓存的请求。
     pub fn first_page_sent(&mut self, token: u64) {
         self.in_flight = Some((token, self.changes));
     }
 
-    /// 第一页请求结束（落地或失败都算：失败时没有更新的数据可等，不让按键一直挂着）。
+    /// 替换请求结束；失败时沿用旧缓存，不让按键一直挂起。
     pub fn first_page_done(&mut self, token: u64) {
         if let Some((sent, covers)) = self.in_flight
             && sent == token
@@ -44,12 +43,12 @@ impl Freshness {
         }
     }
 
-    /// 缓存里的第一页已经反映了收到的全部变化。
+    /// 缓存里的替换范围已经反映了收到的全部变化。
     pub fn fresh(&self) -> bool {
         self.applied >= self.changes
     }
 
-    /// 已经有一个覆盖全部变化的第一页请求在路上（不用再发）。
+    /// 已经有一个覆盖全部变化的替换请求在路上（不用再发）。
     pub fn awaiting(&self) -> bool {
         self.in_flight
             .is_some_and(|(_, covers)| covers >= self.changes)

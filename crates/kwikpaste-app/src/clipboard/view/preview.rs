@@ -431,6 +431,7 @@ impl PreviewPanel {
         };
         let scale = window.scale_factor();
         let key = ImageKey {
+            modified: None,
             path: path_of(path),
             width: (width * scale).round().max(1.) as u32,
             height: (height * scale).round().max(1.) as u32,
@@ -853,6 +854,7 @@ impl PreviewPanel {
         .ceil()
         .max(1.) as u32;
         let key = ImageKey {
+            modified: None,
             path: path_of(path),
             width: physical,
             height: physical,

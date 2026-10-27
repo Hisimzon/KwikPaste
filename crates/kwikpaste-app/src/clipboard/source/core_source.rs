@@ -656,6 +656,7 @@ impl From<FileEntry> for FileRow {
             is_dir: entry.is_dir,
             is_image: entry.is_image,
             exists: entry.exists,
+            modified: entry.modified,
             icon_path: entry.icon_path.map(shared),
             width: None,
             height: None,

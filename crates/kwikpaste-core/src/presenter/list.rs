@@ -384,7 +384,7 @@ async fn attach_file_entries(
 
     let mut entries = Vec::with_capacity(paths.len());
     for (index, path) in paths.iter().enumerate() {
-        let (icon_path, exists) =
+        let (icon_path, exists, modified) =
             resolve_file_icon_path(pool, store, path, item.file_types.as_deref(), index).await?;
         let is_dir = types.get(index).copied() == Some("d");
         let name = std::path::Path::new(path)
@@ -400,6 +400,7 @@ async fn attach_file_entries(
             is_dir,
             is_image,
             exists,
+            modified,
             icon_path,
         });
     }
@@ -452,6 +453,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(view.file_entries.as_ref().unwrap().len(), 1);
+            assert!(view.file_entries.as_ref().unwrap()[0].modified.is_some());
             assert_eq!(view.files_preview_kind, Some(expected));
         }
     }

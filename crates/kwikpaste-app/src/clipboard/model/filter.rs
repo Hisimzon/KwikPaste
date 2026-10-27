@@ -179,6 +179,11 @@ impl ListFilter {
             return false;
         }
 
+        self.may_include_existing(kind)
+    }
+
+    /// 已有记录变化可能影响当前分类；收藏和分组成员资格由重查确认。
+    pub fn may_include_existing(&self, kind: Option<ItemKind>) -> bool {
         match (self.category, kind) {
             (None, _) => true,
             (Some(_), None) => false,

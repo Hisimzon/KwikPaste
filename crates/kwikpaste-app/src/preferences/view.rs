@@ -346,6 +346,7 @@ impl Preferences {
         let state = self.icons.update(cx, |icons, cx| {
             icons.request(
                 ImageKey {
+                    modified: None,
                     path: path_of(path),
                     width: physical,
                     height: physical,
@@ -4626,6 +4627,7 @@ impl SourceAppsDialog {
         let state = self.icons.update(cx, |icons, cx| {
             icons.request(
                 ImageKey {
+                    modified: None,
                     path: path_of(path),
                     width: physical,
                     height: physical,

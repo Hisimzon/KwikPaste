@@ -286,12 +286,28 @@ impl ClipboardList {
         }));
     }
 
-    /// 数据追上之后执行挂起的按键（第一页落地时调用）。
+    /// 替换范围落地后执行挂起的按键；可见目标尚未加载时先补齐。
     pub(super) fn run_pending_activation(&mut self, cx: &mut Context<Self>) {
         if !self.freshness.fresh() {
             return;
         }
-        if let Some(activation) = self.pending_activation.take() {
+        if let Some(activation) = self.pending_activation {
+            let index = match activation {
+                Activation::Paste { .. } => self.controller.active_index(&self.model),
+                Activation::QuickPaste { key } => {
+                    let Some(index) = self.controller.hint_index(key) else {
+                        return;
+                    };
+                    index
+                }
+            };
+            if index < self.model.total() && self.model.get(index).is_none() {
+                if let Some(request) = self.model.load_range(index..index + 1) {
+                    self.fetch(request, cx);
+                }
+                return;
+            }
+            self.pending_activation = None;
             self.activation_timeout = None;
             self.run_activation(activation, cx);
         }

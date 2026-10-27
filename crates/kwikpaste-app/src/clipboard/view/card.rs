@@ -377,6 +377,7 @@ pub fn image_target(item: &ListItem, layout: &LayoutSpec) -> Option<ImageTarget>
     match item.kind {
         ItemKind::Image => Some(ImageTarget {
             path: item.image_thumbnail_path.clone(),
+            modified: None,
             file_name: Some(item.content.clone()),
             display: item.image_display.unwrap_or_else(|| {
                 predict_image_box(item.width, item.height, layout.image_max_height)
@@ -386,6 +387,7 @@ pub fn image_target(item: &ListItem, layout: &LayoutSpec) -> Option<ImageTarget>
             let row = item.file_rows().first()?;
             Some(ImageTarget {
                 path: Some(row.path.clone()),
+                modified: row.modified,
                 file_name: None,
                 display: predict_image_box(row.width, row.height, layout.image_max_height),
             })
@@ -398,6 +400,8 @@ pub fn image_target(item: &ListItem, layout: &LayoutSpec) -> Option<ImageTarget>
 pub struct ImageTarget {
     /// 已知的图片文件路径；图片记录还没有缩略图时为空。
     pub path: Option<Arc<str>>,
+    /// 可变原文件的修改时间；捕获图片的缩略图为空。
+    pub modified: Option<i64>,
     /// 缺缩略图时向数据源要缩略图用的文件名（图片记录的 `content`）。
     pub file_name: Option<Arc<str>>,
     pub display: ImageBox,
