@@ -242,7 +242,21 @@ impl Handoff<'_> {
         let bytes = fs::read(&package.file)
             .with_context(|| format!("failed to read {:?}", package.file))?;
         crate::verify::verify(&bytes, &package.signature, &package.public_key)?;
-        let extracted = package.dir.join("KwikPaste.app");
+        // 可写安装先在目标卷解包，后续两个 rename 都不跨卷；管理员目录由提权脚本暂存。
+        let staged = match tempfile::Builder::new()
+            .prefix(".KwikPaste-update-")
+            .tempdir_in(bundle.parent().context("app bundle has no parent")?)
+        {
+            Ok(dir) => Some(dir),
+            Err(err) if !self.silent && err.kind() == std::io::ErrorKind::PermissionDenied => None,
+            Err(err) => {
+                return Err(err).context("failed to stage the new app beside the installed app");
+            }
+        };
+        let extracted = staged.as_ref().map_or_else(
+            || package.dir.join("KwikPaste.app"),
+            |dir| dir.path().join("KwikPaste.app"),
+        );
         if extracted.exists() {
             fs::remove_dir_all(&extracted).ok();
         }

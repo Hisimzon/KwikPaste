@@ -228,6 +228,7 @@ fn mac_handoff_swaps_the_bundle_and_schedules_a_relaunch() {
     update.args = crate::restart_args(Vec::new(), true);
     test.block_on(update.mac_app(&bundle, &package(&archive)))
         .unwrap();
+    assert!(!work.join("KwikPaste.app").exists());
 
     assert_eq!(
         fs::read(bundle.join("Contents/MacOS/KwikPaste")).unwrap(),
