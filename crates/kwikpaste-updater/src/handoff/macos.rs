@@ -170,12 +170,16 @@ fn previous_path(bundle: &Path) -> PathBuf {
     bundle.with_file_name(name)
 }
 
-/// `do shell script "rm -rf '<app>' && mv -f '<new>' '<app>'" with administrator privileges`，
-/// 路径先按 shell 单引号转义，再按 AppleScript 字符串转义。
+/// 提权后仍先留底，替换失败时恢复；路径先按 shell 单引号转义，再按 AppleScript 字符串转义。
 pub(crate) fn privileged_script(bundle: &Path, new_bundle: &Path) -> String {
     let app = shell_quote(&bundle.to_string_lossy());
     let new = shell_quote(&new_bundle.to_string_lossy());
-    let command = format!("rm -rf {app} && mv -f {new} {app}");
+    let backup = shell_quote(&previous_path(bundle).to_string_lossy());
+    let command = format!(
+        "rm -rf {backup} && mv -f {app} {backup} && \
+         if mv -f {new} {app}; then rm -rf {backup}; \
+         else status=$?; rm -rf {app}; mv -f {backup} {app}; exit $status; fi"
+    );
     format!(
         "do shell script \"{}\" with administrator privileges",
         command.replace('\\', "\\\\").replace('"', "\\\"")
@@ -405,7 +409,7 @@ mod tests {
 
         assert_eq!(
             script,
-            "do shell script \"rm -rf '/Applications/Kwik '\\\\''Paste\\\".app' && mv -f '/tmp/new.app' '/Applications/Kwik '\\\\''Paste\\\".app'\" with administrator privileges"
+            "do shell script \"rm -rf '/Applications/Kwik '\\\\''Paste\\\".app.previous' && mv -f '/Applications/Kwik '\\\\''Paste\\\".app' '/Applications/Kwik '\\\\''Paste\\\".app.previous' && if mv -f '/tmp/new.app' '/Applications/Kwik '\\\\''Paste\\\".app'; then rm -rf '/Applications/Kwik '\\\\''Paste\\\".app.previous'; else status=$?; rm -rf '/Applications/Kwik '\\\\''Paste\\\".app'; mv -f '/Applications/Kwik '\\\\''Paste\\\".app.previous' '/Applications/Kwik '\\\\''Paste\\\".app'; exit $status; fi\" with administrator privileges"
         );
     }
 
