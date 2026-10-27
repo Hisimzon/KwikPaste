@@ -17,6 +17,7 @@
 //! [`ImageStore::ensure_thumbnail_async`] 在前端首次展示时按需生成并缓存，
 //! 同时生成的张数受信号量限制，一屏图片首次出现时不会起几十个解码线程。
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -92,7 +93,7 @@ impl ImageStore {
         Ok(())
     }
 
-    /// 落盘原图，返回 [`StoredImage`]。已存在的文件跳过写入（幂等）。
+    /// 落盘原图，返回 [`StoredImage`]。已存在且大小一致的文件跳过写入（幂等）。
     ///
     /// 缩略图**不在此生成**——它已移出复制热路径，改由 [`Self::ensure_thumbnail`] 在
     /// 前端首次预览时按需生成并缓存。复制路径只做「哈希 + 写原图」，避免大图编解码卡顿。
@@ -309,16 +310,25 @@ fn blake3_hex(bytes: &[u8]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-/// 写文件（自动建分片目录）；目标已存在则跳过，保证幂等且不重复 IO。
+/// 写完同目录临时文件再原子替换；大小一致时复用，旧的残缺文件在重新采集时修复。
 fn write_if_absent(path: &Path, bytes: &[u8]) -> Result<()> {
-    if path.exists() {
+    if path
+        .metadata()
+        .is_ok_and(|meta| meta.len() == bytes.len() as u64)
+    {
         return Ok(());
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create image dir {parent:?}"))?;
     }
-    std::fs::write(path, bytes).with_context(|| format!("failed to write image {path:?}"))?;
+    let mut temp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))
+        .with_context(|| format!("failed to create temporary image for {path:?}"))?;
+    temp.write_all(bytes)
+        .with_context(|| format!("failed to write image {path:?}"))?;
+    temp.persist(path)
+        .map_err(|err| err.error)
+        .with_context(|| format!("failed to publish image {path:?}"))?;
     Ok(())
 }
 
@@ -611,6 +621,35 @@ mod tests {
         // 同字节 → 同文件名 / 同 digest，幂等。
         assert_eq!(a.file_name, b.file_name);
         assert_eq!(a.content_digest, b.content_digest);
+    }
+
+    #[test]
+    fn recapture_repairs_truncated_origin() {
+        let (_dir, store) = temp_store();
+        let payload = ImagePayload {
+            bytes: sample_png(32, 32),
+            width: 32,
+            height: 32,
+        };
+        let stored = store.store(&payload).unwrap();
+        let origin = store.origin_path(&stored.file_name);
+
+        for partial in [b"".as_slice(), &payload.bytes[..payload.bytes.len() / 2]] {
+            std::fs::write(&origin, partial).unwrap();
+            store.store(&payload).unwrap();
+            assert_eq!(std::fs::read(&origin).unwrap(), payload.bytes);
+        }
+    }
+
+    #[test]
+    fn failed_publish_removes_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("image.png");
+        std::fs::create_dir(&target).unwrap();
+
+        assert!(write_if_absent(&target, b"image bytes").is_err());
+        assert!(target.is_dir());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
