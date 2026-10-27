@@ -207,6 +207,28 @@ fn storage_switch_rejects_existing_kwikpaste_data_target() {
 }
 
 #[test]
+fn reset_storage_preserves_existing_fallback_history() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let id = store(&core, text("custom history"));
+    block_on(core.change_storage_location(fixture.root().join("usb"))).unwrap();
+    let custom = fixture.paths.app_data_dir().unwrap();
+    let fallback_db = fixture.paths.default_data_dir().join("db/clipboard.db");
+    fs::create_dir_all(fallback_db.parent().unwrap()).unwrap();
+    fs::write(&fallback_db, b"fallback history").unwrap();
+
+    let error = block_on(core.reset_storage_location())
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(error, label(core.language(), Key::StorageTargetHasData));
+    assert_eq!(fs::read(&fallback_db).unwrap(), b"fallback history");
+    assert_eq!(fixture.paths.app_data_dir().unwrap(), custom);
+    assert!(block_on(core.find_item(&id)).unwrap().is_some());
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
 fn unavailable_custom_storage_can_only_be_reset_to_default() {
     let mut fixture = Fixture::new();
     let local = fixture.root().join("local");

@@ -293,9 +293,9 @@ async fn switch_storage_location(
     let target_preexisting = target.exists();
     if target != paths.default_data_dir() {
         paths.validate_storage_target(&target)?;
-        if paths.storage_target_has_data(&target)? {
-            return Err(anyhow::anyhow!(label(core.language(), Key::StorageTargetHasData)).into());
-        }
+    }
+    if paths.storage_target_has_data(&target)? {
+        return Err(anyhow::anyhow!(label(core.language(), Key::StorageTargetHasData)).into());
     }
     let bytes_to_copy = storage_bytes_to_copy(&current)?;
     let available = available_space(&target).map_err(|error| {
