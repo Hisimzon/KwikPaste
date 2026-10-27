@@ -457,7 +457,7 @@ impl Preferences {
                             selects.insert(setting.id, state);
                         }
                         Control::GroupSelect => {
-                            let options = ["all", "preserve", "missingGroup"]
+                            let options = ["all", "preserve"]
                                 .into_iter()
                                 .map(|value| {
                                     SelectOption::new(
@@ -592,6 +592,12 @@ impl Preferences {
                     }
                     if matches!(
                         event,
+                        CoreEvent::GroupsUpdated | CoreEvent::ClipboardReloaded
+                    ) {
+                        this.refresh_startup_groups(window, cx);
+                    }
+                    if matches!(
+                        event,
                         CoreEvent::LanSyncChanged | CoreEvent::LanDevicePaired { .. }
                     ) && let Some(core) = core_host::core(cx)
                     {
@@ -663,7 +669,7 @@ impl Preferences {
             .flat_map(|section| section.settings)
             .map(|setting| (setting.id, ScrollAnchor::for_handle(scroll.clone())))
             .collect();
-        Self {
+        let mut preferences = Self {
             tab: initial_tab(),
             advanced_expanded: Default::default(),
             setting_anchors,
@@ -695,7 +701,44 @@ impl Preferences {
             lan_name,
             lan_max_image,
             icons,
-        }
+        };
+        preferences.refresh_startup_groups(window, cx);
+        preferences
+    }
+
+    /// 分组增删、改名或导入后刷新启动分组；已删除的保存值只作占位显示。
+    fn refresh_startup_groups(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let groups = match core.list_groups().await {
+                Ok(groups) => groups,
+                Err(error) => {
+                    log::warn!("startup groups could not be loaded: {error:#}");
+                    return;
+                }
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                let Some(state) = this.selects.get("window.selectGroupOnOpen") else {
+                    return;
+                };
+                let mut options = ["all", "preserve"]
+                    .into_iter()
+                    .map(|value| SelectOption::new(value, startup_group_label(value)))
+                    .collect::<Vec<_>>();
+                options.extend(
+                    groups
+                        .into_iter()
+                        .map(|group| SelectOption::new(format!("group:{}", group.id), group.name)),
+                );
+                state.set_options(options, window, cx);
+                let selected = &this.settings.clipboard.window.select_group_on_open;
+                state.set_value(selected, window, cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 导入或其它入口更新设置后，同步快照及独立持有状态的控件。
@@ -735,6 +778,7 @@ impl Preferences {
             .set_value(u64::from(self.settings.sync.lan.max_image_mb), window, cx);
         self.sidebar_collapsed = self.settings.appearance.preferences_sidebar_collapsed;
         self.sync_retention(window, cx);
+        self.refresh_startup_groups(window, cx);
         cx.notify();
     }
 
@@ -3256,6 +3300,9 @@ impl Preferences {
             Control::Select(_) | Control::GroupSelect => {
                 if let Some(state) = self.selects.get(setting.id) {
                     Select::new(state)
+                        .when(matches!(setting.control, Control::GroupSelect), |select| {
+                            select.placeholder(startup_group_label("missingGroup"))
+                        })
                         .width(CONTROL_WIDTH)
                         .disabled(setting.is_disabled(&self.settings))
                         .accessibility_label(title.clone())
@@ -5240,6 +5287,12 @@ fn retention_unit_key(unit: RetentionUnit) -> &'static str {
         RetentionUnit::Months => "months",
         RetentionUnit::Forever => "forever",
     }
+}
+
+fn startup_group_label(value: &str) -> gpui::SharedString {
+    i18n::t(&format!(
+        "preferences:schema.settings.window.selectGroupOnOpen.options.{value}"
+    ))
 }
 
 fn retention_unit_from_key(key: &str) -> RetentionUnit {
