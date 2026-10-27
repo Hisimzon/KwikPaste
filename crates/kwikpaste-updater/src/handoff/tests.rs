@@ -34,6 +34,7 @@ fn handoff<'a>(
         silent: false,
         from: "2.0.0".to_owned(),
         to: "2.0.1".to_owned(),
+        stop_scheduler: &|| {},
     }
 }
 

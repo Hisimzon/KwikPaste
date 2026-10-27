@@ -425,9 +425,9 @@ impl Updater {
             silent,
             from: inner.core.info().version.to_string(),
             to: version.to_owned(),
+            stop_scheduler: &|| self.stop(),
         };
         log::info!("installing update {version} ({:?})", inner.kind);
-        self.stop();
 
         let installed = match &inner.kind {
             #[cfg(any(target_os = "windows", test))]
@@ -438,6 +438,15 @@ impl Updater {
             InstallKind::MacApp { bundle } => handoff.mac_app(bundle, &package).await,
             other_kind => Err(anyhow!("{other_kind:?} cannot install updates here")),
         };
+        if installed.is_err() {
+            *lock(&inner.failed_silent_version) = Some(version.to_owned());
+            if let Some(pending) = lock(&inner.pending).as_mut()
+                && pending.candidate.version.to_string() == version
+            {
+                pending.silent = false;
+            }
+            inner.publish_status();
+        }
         installed.map_err(AppError::Other)
     }
 

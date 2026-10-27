@@ -156,6 +156,8 @@ pub(crate) struct Handoff<'a> {
     pub silent: bool,
     pub from: String,
     pub to: String,
+    /// 仅在准备和交接记录都成功后停止调度，失败时保留后台检查。
+    pub stop_scheduler: &'a (dyn Fn() + Sync),
 }
 
 impl Handoff<'_> {
@@ -279,6 +281,7 @@ impl Handoff<'_> {
 
     /// 停输入，再关停 core（剪贴板监听、同步、清理、WAL checkpoint 与关库），最多等 3 秒。
     async fn shutdown(&self) {
+        (self.stop_scheduler)();
         log::info!("update handoff: stopping input");
         self.host.stop_input().await;
         log::info!("update handoff: shutting down the core");
