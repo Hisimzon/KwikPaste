@@ -108,11 +108,7 @@ impl SettingsStore {
     /// 恢复默认设置并落盘，返回新的完整快照。
     pub fn reset(&self) -> Result<Settings> {
         let next = default_settings_with_system_locale(self.system_locale.as_deref());
-
-        let path = self.path();
-        self.persist(&path, &next, &SettingsDelta::replaced())?;
-        *self.current.write().expect("settings poisoned") = next.clone();
-        Ok(next)
+        self.replace(next)
     }
 
     /// 用 JSON patch 深度合并到当前设置，落盘后返回新快照。
@@ -150,9 +146,10 @@ impl SettingsStore {
 
     /// 用一份已校验的完整设置替换当前设置并落盘。
     pub(crate) fn replace(&self, next: Settings) -> Result<Settings> {
+        let mut guard = self.current.write().expect("settings poisoned");
         let path = self.path();
         self.persist(&path, &next, &SettingsDelta::replaced())?;
-        *self.current.write().expect("settings poisoned") = next.clone();
+        *guard = next.clone();
         Ok(next)
     }
 
@@ -415,6 +412,47 @@ fn deep_merge(base: &mut serde_json::Value, patch: serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_holds_memory_lock_until_persistence_finishes() {
+        use std::sync::{mpsc, Arc};
+        use std::time::{Duration, Instant};
+
+        for reset in [true, false] {
+            let fixture = crate::testing::Fixture::new();
+            let store = Arc::new(SettingsStore::new(&fixture.paths, None).unwrap());
+            store
+                .update(serde_json::json!({"general": {"trayIcon": false}}))
+                .unwrap();
+            // 挡住写盘，确认整份替换与 update 一样先锁内存，再锁磁盘。
+            let disk = store.disk();
+            let (started, ready) = mpsc::channel();
+            let writer = Arc::clone(&store);
+            let worker = std::thread::spawn(move || {
+                started.send(()).unwrap();
+                if reset {
+                    writer.reset()
+                } else {
+                    writer.replace(Settings::default())
+                }
+            });
+            ready.recv().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let locked = loop {
+                if store.current.try_read().is_err() {
+                    break true;
+                }
+                if Instant::now() >= deadline {
+                    break false;
+                }
+                std::thread::yield_now();
+            };
+            drop(disk);
+            worker.join().unwrap().unwrap();
+            assert!(locked, "replacement must lock memory before writing disk");
+            assert_eq!(read_replacement(&store.path()).unwrap(), store.snapshot());
+        }
+    }
 
     #[test]
     fn null_patch_resets_one_panel_override_without_touching_others() {
