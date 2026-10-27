@@ -6,8 +6,8 @@
 //! 回环抑制：写回前向 [`WritebackGuard`] 登记将写入内容的 `content_hash`，
 //! OS 监听重新读到同内容时跳过入库，避免「点击粘贴 → 自动新增一条」回环。
 //! 哈希必须与 [`crate::clipboard::build_item_with_settings`] 在 watcher 路径上将算出的哈希一致：
-//! - text / html / rtf：watcher 拿到的 plain/html/rtf 经 `draft_from_text` 后 `content` 即我们写入的串，
-//!   `content_hash(Text, written)` 自然匹配；
+//! - text：按 watcher 的 trim 规则登记哈希，不改变实际写入的文本；
+//! - html / rtf：登记原始富文本与 trim 后纯文本回退的哈希；
 //! - files：watcher 把路径列表用 `\n` 连接后哈希，与我们 `item.content` 一致；
 //! - image：watcher 走 PNG 直通读回原始字节 → 文件名 → 哈希，所以写回必须把落盘的 PNG
 //!   原样放上剪贴板（见 [`ClipboardBackend::set_png`]）。重新编码会让浏览器等来源的图片读回后哈希对不上，
@@ -48,7 +48,7 @@ pub fn write_text_fragment(
     guard: &WritebackGuard,
     text: &str,
 ) -> Result<()> {
-    guard.suppress(content_hash(ClipboardKind::Text, text));
+    guard.suppress(content_hash(ClipboardKind::Text, text.trim()));
     backend.set(vec![ClipboardWrite::Text(text.to_owned())])
 }
 
@@ -67,17 +67,21 @@ fn write_text(
         (item.content.clone(), item.sub_kind)
     };
 
-    guard.suppress(content_hash(ClipboardKind::Text, &content));
-
     match sub_kind {
         // 纯文本模式必须只写 Text flavor，确保清掉剪贴板中可能残留的 HTML/RTF。
-        None if plain => backend.set(vec![ClipboardWrite::Text(content)])?,
+        None if plain => {
+            guard.suppress(content_hash(ClipboardKind::Text, content.trim()));
+            backend.set(vec![ClipboardWrite::Text(content)])?;
+        }
         // HTML / RTF 必须同时写入纯文本回退：clipboard-rs 的 set_html / set_rich_text
         // 会先 clearContents，单独写时只剩富格式，多数应用读 plain/text 拿不到就拒绝粘贴。
         // 走 set(Vec<..>) 一次写多格式（内部不再相互清空）。
         Some(ClipboardSubKind::Html) => {
             let plain = item.search_text.clone().unwrap_or_else(|| content.clone());
-            guard.suppress(content_hash(ClipboardKind::Text, &plain));
+            guard.suppress_alternatives(vec![
+                content_hash(ClipboardKind::Text, &content),
+                content_hash(ClipboardKind::Text, plain.trim()),
+            ]);
             backend.set(vec![
                 ClipboardWrite::Text(plain),
                 ClipboardWrite::Html(content),
@@ -85,14 +89,20 @@ fn write_text(
         }
         Some(ClipboardSubKind::Rtf) => {
             let plain = item.search_text.clone().unwrap_or_else(|| content.clone());
-            guard.suppress(content_hash(ClipboardKind::Text, &plain));
+            guard.suppress_alternatives(vec![
+                content_hash(ClipboardKind::Text, &content),
+                content_hash(ClipboardKind::Text, plain.trim()),
+            ]);
             backend.set(vec![
                 ClipboardWrite::Text(plain),
                 ClipboardWrite::Rtf(content),
             ])?;
         }
         // url / email / color / path 及无 sub_kind 都走纯文本通道。
-        _ => backend.set_text(content)?,
+        _ => {
+            guard.suppress(content_hash(ClipboardKind::Text, content.trim()));
+            backend.set_text(content)?;
+        }
     }
     Ok(())
 }
@@ -142,7 +152,7 @@ fn write_files_as_text(
 ) -> Result<()> {
     let text = item.content.clone();
 
-    guard.suppress(content_hash(ClipboardKind::Text, &text));
+    guard.suppress(content_hash(ClipboardKind::Text, text.trim()));
     backend.set_text(text)?;
     Ok(())
 }
@@ -266,6 +276,64 @@ mod tests {
         assert_eq!(clipboard.snapshot().text.as_deref(), Some("a\tb"));
     }
 
+    #[test]
+    fn whitespace_is_preserved_while_plain_capture_is_suppressed() {
+        let (_dir, store) = temp_store();
+
+        for plain in [false, true] {
+            let guard = WritebackGuard::new();
+            let clipboard = MemoryClipboard::new();
+            let item = text_item("  edited phrase \r\n", None, None);
+            write_to_clipboard(&clipboard, &store, &guard, &item, plain).unwrap();
+
+            let expected = if plain {
+                "  edited phrase"
+            } else {
+                "  edited phrase \r\n"
+            };
+            assert_eq!(clipboard.snapshot().text.as_deref(), Some(expected));
+            let read_item = read_back(&clipboard, &store);
+            assert_eq!(read_item.content, "edited phrase");
+            assert!(guard.should_skip(&read_item.content_hash));
+        }
+    }
+
+    #[test]
+    fn rich_writeback_suppresses_either_original_source_or_trimmed_plain() {
+        let (_dir, store) = temp_store();
+
+        for sub_kind in [ClipboardSubKind::Html, ClipboardSubKind::Rtf] {
+            for read_plain in [false, true] {
+                let guard = WritebackGuard::new();
+                let clipboard = MemoryClipboard::new();
+                let item = text_item("  rich source  ", Some(sub_kind), Some("  Hello \r\n"));
+                write_to_clipboard(&clipboard, &store, &guard, &item, false).unwrap();
+
+                assert_eq!(clipboard.snapshot().text.as_deref(), Some("  Hello \r\n"));
+                let captured = if read_plain {
+                    MemoryClipboard::with_state(MemoryState {
+                        text: clipboard.snapshot().text,
+                        ..MemoryState::default()
+                    })
+                } else {
+                    clipboard
+                };
+                let read_item = read_back(&captured, &store);
+                assert_eq!(
+                    read_item.content,
+                    if read_plain {
+                        "Hello"
+                    } else {
+                        "  rich source  "
+                    }
+                );
+                assert!(guard.should_skip(&read_item.content_hash));
+                assert!(!guard.should_skip(&item.content_hash));
+                assert!(!guard.should_skip(&content_hash(ClipboardKind::Text, "Hello")));
+            }
+        }
+    }
+
     // HTML 写回同时带纯文本回退，两种表示的哈希都登记，读回 HTML 时被抑制。
     #[test]
     fn html_is_written_with_plain_fallback() {
@@ -291,7 +359,7 @@ mod tests {
         let read_item = read_back(&clipboard, &store);
         assert_eq!(read_item.content_hash, item.content_hash);
         assert!(guard.should_skip(&read_item.content_hash));
-        assert!(guard.should_skip(&content_hash(ClipboardKind::Text, "Hello World")));
+        assert!(!guard.should_skip(&content_hash(ClipboardKind::Text, "Hello World")));
     }
 
     #[test]
@@ -327,9 +395,9 @@ mod tests {
         let guard = WritebackGuard::new();
         let clipboard = MemoryClipboard::new();
 
-        write_text_fragment(&clipboard, &guard, "W2000").unwrap();
+        write_text_fragment(&clipboard, &guard, "  W2000 \n").unwrap();
 
-        assert_eq!(clipboard.snapshot().text.as_deref(), Some("W2000"));
+        assert_eq!(clipboard.snapshot().text.as_deref(), Some("  W2000 \n"));
         assert!(guard.should_skip(&content_hash(ClipboardKind::Text, "W2000")));
     }
 
