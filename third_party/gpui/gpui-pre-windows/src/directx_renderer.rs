@@ -44,6 +44,8 @@ pub(crate) struct DirectXRenderer {
     globals: DirectXGlobalElements,
     pipelines: DirectXRenderPipelines,
     direct_composition: Option<DirectComposition>,
+    // [kwikpaste patch 0015] 配置独立于可失效的资源，恢复失败后的重试仍使用构造时的模式。
+    disable_direct_composition: bool,
     font_info: &'static FontInfo,
 
     width: u32,
@@ -194,6 +196,7 @@ impl DirectXRenderer {
             globals,
             pipelines,
             direct_composition,
+            disable_direct_composition,
             font_info: Self::get_font_info(),
             width: 1,
             height: 1,
@@ -272,7 +275,7 @@ impl DirectXRenderer {
     }
 
     fn handle_device_lost_impl(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
-        let disable_direct_composition = self.direct_composition.is_none();
+        let disable_direct_composition = self.disable_direct_composition;
 
         unsafe {
             #[cfg(debug_assertions)]
