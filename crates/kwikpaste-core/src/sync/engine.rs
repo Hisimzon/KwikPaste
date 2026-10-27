@@ -340,7 +340,9 @@ pub(crate) async fn receive_with_options(
             if let Err(err) = written {
                 log::warn!("lan sync write clipboard failed: {err}");
             }
-        });
+        })
+        .await
+        .context("write received clipboard task failed")?;
     }
 
     Ok(())
@@ -396,6 +398,60 @@ fn text_payload(wire: &WireItem) -> anyhow::Result<ClipboardPayload> {
 mod tests {
     use super::*;
     use crate::testing::{block_on, sample_png, Fixture};
+
+    #[test]
+    fn receive_waits_for_clipboard_writeback() {
+        use crate::clipboard::{ClipboardBackend, ClipboardProvider, MemoryClipboard};
+
+        struct DelayedClipboard {
+            clipboard: MemoryClipboard,
+            started: std::sync::mpsc::Sender<()>,
+            release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        }
+
+        impl ClipboardProvider for DelayedClipboard {
+            fn open(&self) -> crate::error::Result<Box<dyn ClipboardBackend>> {
+                self.started.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                Ok(Box::new(self.clipboard.clone()))
+            }
+        }
+
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        core.set_clipboard_provider(Arc::new(DelayedClipboard {
+            clipboard: fixture.clipboard.clone(),
+            started: started_tx,
+            release: std::sync::Mutex::new(release_rx),
+        }));
+        let receive = core.0.rt.spawn({
+            let core = core.clone();
+            async move {
+                let mut image = wire(None, "", None);
+                image.kind = ClipboardKind::Image;
+                receive(
+                    &core.0,
+                    &std::sync::Mutex::new(EchoFilter::default()),
+                    "peer",
+                    Platform::Windows,
+                    image,
+                    sample_png(2, 2),
+                    true,
+                )
+                .await
+            }
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let returned_early = receive.is_finished();
+        release_tx.send(()).unwrap();
+        block_on(receive).unwrap().unwrap();
+        assert!(!returned_early);
+        assert_eq!(fixture.clipboard.snapshot().png, Some(sample_png(2, 2)));
+        block_on(core.shutdown()).unwrap();
+    }
 
     #[test]
     fn catch_up_retries_image_read_failures() {
