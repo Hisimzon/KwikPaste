@@ -160,6 +160,9 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
         return None;
     }
 
+    #[cfg(target_os = "windows")]
+    let sequence = clipboard_win::seq_num();
+
     let owner = core.platform().clipboard_owner();
     let source = core.platform().clipboard_source_app(owner.as_deref());
     log::debug!("clipboard change: owner {owner:?}");
@@ -183,6 +186,12 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
             return None;
         }
     };
+
+    // 归属识别或重试期间内容已变，交给下一条变化通知重新过滤来源，不能沿用旧归属。
+    #[cfg(target_os = "windows")]
+    if sequence.is_none() || clipboard_win::seq_num() != sequence {
+        return None;
+    }
 
     let mut item = match build_item_with_settings(
         &core.images,
