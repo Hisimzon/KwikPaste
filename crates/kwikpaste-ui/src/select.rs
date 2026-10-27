@@ -65,6 +65,13 @@ impl SelectState {
         self.state.read(cx).selected_value().cloned()
     }
 
+    /// 外部设置更新时同步选中值，不触发用户提交。
+    pub fn set_value(&self, value: &str, window: &mut Window, cx: &mut App) {
+        self.state.update(cx, |state, cx| {
+            state.set_selected_value(&SharedString::from(value.to_owned()), window, cx);
+        });
+    }
+
     /// 替换选项（例如切换语言后文字变了），保留同值的选中项。
     pub fn set_options(&self, options: Vec<SelectOption>, window: &mut Window, cx: &mut App) {
         let selected = self.selected_value(cx);

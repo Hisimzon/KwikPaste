@@ -587,7 +587,10 @@ impl Preferences {
         let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
         let subscriptions: Vec<Subscription> = core_events(cx)
             .map(|events| {
-                cx.subscribe(&events, |this, _, event: &CoreEvent, cx| {
+                cx.subscribe_in(&events, window, |this, _, event: &CoreEvent, window, cx| {
+                    if matches!(event, CoreEvent::SettingsUpdated { .. }) {
+                        this.sync_settings(window, cx);
+                    }
                     if matches!(
                         event,
                         CoreEvent::LanSyncChanged | CoreEvent::LanDevicePaired { .. }
@@ -692,6 +695,57 @@ impl Preferences {
             lan_name,
             lan_max_image,
             icons,
+        }
+    }
+
+    /// 导入或其它入口更新设置后，同步快照及独立持有状态的控件。
+    fn sync_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx) else {
+            return;
+        };
+        self.settings = core.settings();
+        let settings = values::to_json(&self.settings);
+        let portable = core.paths().is_portable();
+        for setting in schema::tabs(portable)
+            .into_iter()
+            .flat_map(|tab| tab.sections)
+            .flat_map(|section| section.settings)
+        {
+            let Some(path) = setting.path else { continue };
+            if let Some(state) = self.selects.get(setting.id)
+                && let Some(value) = values::get_choice(&settings, path)
+            {
+                state.set_value(&value, window, cx);
+            }
+            if let Some(state) = self.number_inputs.get(setting.id) {
+                state.set_value(values::get_u64(&settings, path), window, cx);
+            }
+            if let Some(state) = self.sliders.get(setting.id) {
+                state.set_value(values::get_u64(&settings, path).min(100) as u8, window, cx);
+            }
+        }
+        if let Some(value) = values::get_choice(&settings, "appearance.language") {
+            self.language.set_value(&value, window, cx);
+        }
+        if self.lan_name.value(cx).as_ref() != self.settings.sync.lan.device_name {
+            self.lan_name
+                .set_value(self.settings.sync.lan.device_name.clone(), window, cx);
+        }
+        self.lan_max_image
+            .set_value(u64::from(self.settings.sync.lan.max_image_mb), window, cx);
+        self.sidebar_collapsed = self.settings.appearance.preferences_sidebar_collapsed;
+        self.sync_retention(window, cx);
+        cx.notify();
+    }
+
+    /// 取消保留策略编辑或外部更新后，两个控件都回到已保存的值。
+    fn sync_retention(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let retention = &self.settings.clipboard.history.retention;
+        if let Some(state) = self.number_inputs.get("history.retention.value") {
+            state.set_value(u64::from(retention.value), window, cx);
+        }
+        if let Some(state) = self.selects.get("history.retention.unit") {
+            state.set_value(retention_unit_key(retention.unit), window, cx);
         }
     }
 
