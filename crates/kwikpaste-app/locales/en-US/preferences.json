@@ -489,6 +489,10 @@
     "title": "Export to files",
     "ungrouped": "Include ungrouped records"
   },
+  "retentionConfirm": {
+    "content": "This policy will permanently delete {{count}} records. Save it?",
+    "title": "Change retention policy"
+  },
   "retentionRules": {
     "add": "Add Rule",
     "addCustom": "Custom rule…",

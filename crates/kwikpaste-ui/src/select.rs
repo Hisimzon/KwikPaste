@@ -82,6 +82,23 @@ impl SelectState {
         });
     }
 
+    /// 用户选定后在所在窗口回调，用于需要确认框的设置。
+    pub fn on_change_in<V: 'static>(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<V>,
+        handler: impl Fn(&mut V, Option<SharedString>, &mut Window, &mut Context<V>) + 'static,
+    ) -> Subscription {
+        cx.subscribe_in(
+            &self.state,
+            window,
+            move |view, _, event: &SelectEvent<Vec<SelectOption>>, window, cx| {
+                let SelectEvent::Confirm(value) = event;
+                handler(view, value.clone(), window, cx);
+            },
+        )
+    }
+
     /// 用户选定后回调。返回的订阅要由视图保存。
     pub fn on_change<V: 'static>(
         &self,

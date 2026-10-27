@@ -484,6 +484,10 @@
     "title": "导出为文件",
     "ungrouped": "包含未分组记录"
   },
+  "retentionConfirm": {
+    "content": "此策略将永久删除 {{count}} 条记录，是否保存？",
+    "title": "更改保留策略"
+  },
   "retentionRules": {
     "add": "添加规则",
     "addCustom": "自定义规则…",

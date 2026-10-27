@@ -283,6 +283,7 @@ struct Preferences {
     /// 侧栏宽度过渡的开始时间；过渡结束后清掉。
     sidebar_transition: Option<Instant>,
     settings: Settings,
+    retention_pending: bool,
     search: TextInput,
     _subscriptions: Vec<Subscription>,
     language: SelectState,
@@ -526,9 +527,10 @@ impl Preferences {
             window,
             cx,
         );
-        let retention_value_sub = retention_value.on_commit(window, cx, |this, value, _, cx| {
-            this.update("clipboard.history.retention.value", json!(value), cx);
-        });
+        let retention_value_sub =
+            retention_value.on_commit(window, cx, |this, value, window, cx| {
+                this.change_retention(Some(value as u32), None, window, cx);
+            });
         number_inputs.insert("history.retention.value", retention_value);
         let retention_unit = match settings.clipboard.history.retention.unit {
             kwikpaste_core::settings::RetentionUnit::Minutes => "minutes",
@@ -552,15 +554,12 @@ impl Preferences {
             window,
             cx,
         );
-        let retention_unit_sub = retention_unit_state.on_change(cx, |this, value, cx| {
-            if let Some(value) = value {
-                this.update(
-                    "clipboard.history.retention.unit",
-                    json!(value.as_ref()),
-                    cx,
-                );
-            }
-        });
+        let retention_unit_sub =
+            retention_unit_state.on_change_in(window, cx, |this, value, window, cx| {
+                if let Some(value) = value {
+                    this.change_retention(None, Some(retention_unit_from_key(&value)), window, cx);
+                }
+            });
         selects.insert("history.retention.unit", retention_unit_state);
         // 材质切换后窗口重套背板，分层底色也要跟着重画；选项显示的仍是用户的设置值（同 1.x）。
         let material_subscription =
@@ -671,6 +670,7 @@ impl Preferences {
             sidebar_collapsed: settings.appearance.preferences_sidebar_collapsed,
             sidebar_transition: None,
             settings,
+            retention_pending: false,
             search,
             _subscriptions: subscriptions,
             language,
@@ -747,6 +747,105 @@ impl Preferences {
         if let Some(state) = self.selects.get("history.retention.unit") {
             state.set_value(retention_unit_key(retention.unit), window, cx);
         }
+    }
+
+    /// 先按候选策略预演；会删除历史时，确认之前不落盘。
+    fn change_retention(
+        &mut self,
+        value: Option<u32>,
+        unit: Option<RetentionUnit>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.retention_pending {
+            return;
+        }
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let mut history = core.settings().clipboard.history;
+        let saved = history.retention.clone();
+        if let Some(value) = value {
+            history.retention.value = value;
+        }
+        if let Some(unit) = unit {
+            history.retention.unit = unit;
+        }
+        if history.retention == saved {
+            return;
+        }
+        self.retention_pending = true;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let preview = core.preview_cleanup(history.clone()).await;
+            let confirmed = match preview {
+                Ok(preview) if preview.removed > 0 => {
+                    let Ok(answer) = this.update_in(cx, |_, window, cx| {
+                        kwikpaste_ui::confirm(
+                            ConfirmSpec::new(i18n::t("preferences:retentionConfirm.title"))
+                                .content(i18n::t_args(
+                                    "preferences:retentionConfirm.content",
+                                    &[("count", &preview.removed.to_string())],
+                                ))
+                                .danger(),
+                            window,
+                            cx,
+                        )
+                    }) else {
+                        return;
+                    };
+                    answer.await.unwrap_or(false)
+                }
+                Ok(_) => true,
+                Err(error) => {
+                    let _ = cx.update(|window, cx| {
+                        toast::show(
+                            Toast::error(i18n::t_args(
+                                "commands:error",
+                                &[
+                                    ("label", &i18n::t("commands:labels.previewHistoryCleanup")),
+                                    ("message", &error.to_string()),
+                                ],
+                            )),
+                            window,
+                            cx,
+                        )
+                    });
+                    false
+                }
+            };
+            let result = if confirmed {
+                Some(
+                    core.update_settings(values::patch(
+                        "clipboard.history.retention",
+                        json!(history.retention),
+                    ))
+                    .await,
+                )
+            } else {
+                None
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.retention_pending = false;
+                this.settings = core.settings();
+                this.sync_retention(window, cx);
+                if let Some(Err(error)) = result {
+                    toast::show(
+                        Toast::error(i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.saveSettings")),
+                                ("message", &error.to_string()),
+                            ],
+                        )),
+                        window,
+                        cx,
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn update(&mut self, path: &'static str, value: serde_json::Value, cx: &mut Context<Self>) {
@@ -1935,10 +2034,15 @@ impl Preferences {
             .items_center()
             .gap(space(2.))
             .when(!keep_forever, |row| {
-                row.child(NumberInput::new(value_state).width(rems(4.5)))
+                row.child(
+                    NumberInput::new(value_state)
+                        .width(rems(4.5))
+                        .disabled(self.retention_pending),
+                )
             })
             .child(
                 Select::new(unit_state)
+                    .disabled(self.retention_pending)
                     .width(if keep_forever {
                         CONTROL_WIDTH
                     } else {
