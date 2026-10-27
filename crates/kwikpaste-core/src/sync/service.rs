@@ -1683,14 +1683,24 @@ async fn write_loop(
     ping.tick().await;
 
     loop {
-        let result = tokio::select! {
+        let (message, attachment) = tokio::select! {
             outgoing = rx.recv() => match outgoing {
-                Some((message, attachment)) => writer.send_message(&message, &attachment).await,
+                Some(outgoing) => outgoing,
                 None => break,
             },
-            _ = ping.tick() => writer.send_message(&Message::Ping, &[]).await,
+            _ = ping.tick() => (Message::Ping, Arc::new(Vec::new())),
             _ = kill.changed() => break,
             _ = shutdown.changed() => break,
+        };
+        // 写到一半取消或超时后直接丢弃流，不能继续复用部分写出的消息。
+        let result = tokio::select! {
+            biased;
+            _ = kill.changed() => break,
+            _ = shutdown.changed() => break,
+            result = tokio::time::timeout(
+                IDLE_TIMEOUT,
+                writer.send_message(&message, &attachment),
+            ) => result.unwrap_or_else(|_| Err(anyhow!("sync write timed out"))),
         };
         if let Err(err) = result {
             log::info!("lan sync write failed: {err:#}");
@@ -1982,6 +1992,53 @@ mod tests {
             kill.send_replace(true);
             assert!(*kill.borrow());
             shared.unregister("peer", 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn blocked_writer_stops_on_kill_and_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = identity::load_or_create(dir.path()).unwrap().identity;
+        for stop_service in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (client, server) = tokio::join!(
+                TcpStream::connect(listener.local_addr().unwrap()),
+                listener.accept(),
+            );
+            let (sender, receiver) = tokio::join!(
+                handshake(client.unwrap(), &identity, true),
+                handshake(server.unwrap().0, &identity, false),
+            );
+            let _receiver = receiver.unwrap();
+            let (tx, rx) = mpsc::channel(1);
+            let (kill_tx, kill) = watch::channel(false);
+            let kill_tx = Arc::new(kill_tx);
+            let (shutdown_tx, shutdown) = watch::channel(false);
+            tx.send((Message::Ping, Arc::new(vec![0; 32 * 1024 * 1024])))
+                .await
+                .unwrap();
+            let writer = tokio::spawn(write_loop(
+                sender.unwrap().writer,
+                rx,
+                kill_tx.clone(),
+                kill,
+                shutdown,
+            ));
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(!writer.is_finished());
+
+            if stop_service {
+                shutdown_tx.send(true).unwrap();
+            } else {
+                kill_tx.send(true).unwrap();
+            }
+
+            tokio::time::timeout(Duration::from_secs(2), writer)
+                .await
+                .expect("blocked write ignored cancellation")
+                .unwrap();
+            assert!(*kill_tx.borrow());
+            assert!(tx.is_closed());
         }
     }
 
