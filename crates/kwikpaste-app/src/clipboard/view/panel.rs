@@ -283,7 +283,9 @@ impl ClipboardPanel {
             if self.side_active {
                 self.focus_list(window, cx);
             }
-            self.side = None;
+            if let Some(side) = self.side.take() {
+                side.list.update(cx, |list, cx| list.dispose_preview(cx));
+            }
             self.side_active = false;
             cx.notify();
             return;

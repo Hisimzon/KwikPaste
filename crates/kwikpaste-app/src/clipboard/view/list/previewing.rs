@@ -500,6 +500,25 @@ impl ClipboardList {
         .detach();
     }
 
+    /// 丢弃列表前销毁它独占的预览窗，连隐藏窗口也一起释放。
+    pub fn dispose_preview(&mut self, cx: &mut Context<Self>) {
+        let mut previewing = std::mem::take(&mut self.previewing);
+        self.previewing.request = previewing.request + 1;
+        self.previewing.unavailable = true;
+        if let Some(preview) = previewing.window.take() {
+            preview
+                .handle
+                .update(cx, |_, window, cx| {
+                    preview.panel.update(cx, |panel, cx| {
+                        panel.release(window, cx);
+                        panel.forget();
+                    });
+                    window.remove_window();
+                })
+                .ok();
+        }
+    }
+
     /// 关掉预览（返回是否有预览开着）。
     pub fn close_preview(&mut self, cx: &mut Context<Self>) -> bool {
         self.previewing.hover_timer = None;
