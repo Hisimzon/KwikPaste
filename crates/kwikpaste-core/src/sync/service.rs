@@ -494,12 +494,11 @@ impl LanSyncService {
 
     /// 取消配对：先从本机移除（避免断开后又自动重连），在线时再通知对方。
     pub(super) async fn remove_device(&self, device_id: &str) {
-        self.peers.remove(device_id);
-
         let Some(shared) = self.shared() else {
+            self.peers.remove(device_id);
             return;
         };
-        let Some((tx, kill)) = shared.connection_handles(device_id) else {
+        let Some((tx, kill)) = shared.revoke(device_id) else {
             return;
         };
 
@@ -722,9 +721,12 @@ impl Shared {
 
     /// 登记一条已认证的连接。同一台设备已有连接时，保留设备 id 较小一方发起的那条；
     /// 发起方相同（旧连接还没发现断开）时新的替换旧的。
-    fn register(&self, peer_id: &str, connection: Connection) -> bool {
+    fn register(&self, peer_id: &str, public_key: &str, connection: Connection) -> bool {
         let preferred_dialer_is_me = self.identity.device_id() < peer_id;
         let mut connections = self.connections.lock().expect("lan sync poisoned");
+        if !self.peers.is_trusted(peer_id, public_key) {
+            return false;
+        }
         if let Some(existing) = connections.get(peer_id) {
             let existing_preferred = existing.dialer_is_me == preferred_dialer_is_me;
             let new_preferred = connection.dialer_is_me == preferred_dialer_is_me;
@@ -747,13 +749,11 @@ impl Shared {
         }
     }
 
-    fn connection_handles(
-        &self,
-        peer_id: &str,
-    ) -> Option<(mpsc::Sender<Outgoing>, Arc<watch::Sender<bool>>)> {
-        self.connections
-            .lock()
-            .expect("lan sync poisoned")
+    /// 移除信任与登记连接共用一把锁，握手期间取消配对也不能再登记会话。
+    fn revoke(&self, peer_id: &str) -> Option<(mpsc::Sender<Outgoing>, Arc<watch::Sender<bool>>)> {
+        let connections = self.connections.lock().expect("lan sync poisoned");
+        self.peers.remove(peer_id);
+        connections
             .get(peer_id)
             .map(|connection| (connection.tx.clone(), connection.kill.clone()))
     }
@@ -1056,7 +1056,16 @@ async fn handle_incoming(
     }
 
     drop(permit);
-    run_session(shared, remote_id, device, reader, writer, false, addr).await;
+    run_session(
+        shared,
+        remote_public_key,
+        device,
+        reader,
+        writer,
+        false,
+        addr,
+    )
+    .await;
     Ok(())
 }
 
@@ -1304,7 +1313,16 @@ async fn dial(
     let name = device.name.clone();
     let shared = shared.clone();
     tokio::spawn(async move {
-        run_session(shared, remote_id, device, reader, writer, true, addr).await;
+        run_session(
+            shared,
+            remote_public_key,
+            device,
+            reader,
+            writer,
+            true,
+            addr,
+        )
+        .await;
     });
     Ok(name)
 }
@@ -1409,7 +1427,7 @@ async fn dial_peer(shared: Arc<Shared>, peer: TrustedPeer, addresses: Vec<Socket
             Err(DialError::Rejected(RejectReason::NotPaired)) => {
                 // 对方已经取消了和本机的配对（离线时发不了 Unpair），本机也跟着移除。
                 log::info!("{} no longer trusts this device, removing it", peer.name);
-                shared.peers.remove(&peer.device_id);
+                shared.revoke(&peer.device_id);
                 shared.emit_state();
                 break;
             }
@@ -1422,19 +1440,21 @@ async fn dial_peer(shared: Arc<Shared>, peer: TrustedPeer, addresses: Vec<Socket
 /// 已认证连接上的同步会话：登记连接、按水位线请求补齐，然后收发直到断开。
 async fn run_session(
     shared: Arc<Shared>,
-    peer_id: String,
+    remote_public_key: [u8; 32],
     device: DeviceInfo,
     mut reader: SecureReader,
     writer: SecureWriter,
     dialer_is_me: bool,
     addr: SocketAddr,
 ) {
+    let peer_id = device_id_for(&remote_public_key);
     let connection_id = shared.next_conn_id.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel::<Outgoing>(OUTGOING_QUEUE);
     let (kill_tx, kill_rx) = watch::channel(false);
     let kill_tx = Arc::new(kill_tx);
     let registered = shared.register(
         &peer_id,
+        &to_hex(&remote_public_key),
         Connection {
             id: connection_id,
             dialer_is_me,
@@ -1445,7 +1465,7 @@ async fn run_session(
         },
     );
     if !registered {
-        log::debug!("lan sync keeps the existing connection to {peer_id}");
+        log::debug!("lan sync declined session registration for {peer_id}");
         return;
     }
 
@@ -1591,7 +1611,7 @@ async fn read_loop(
             }
             Message::Unpair => {
                 log::info!("lan sync peer {peer_id} removed this device");
-                shared.peers.remove(peer_id);
+                shared.revoke(peer_id);
                 shared.emit_state();
                 return;
             }
@@ -1904,6 +1924,67 @@ mod tests {
         (connection, rx)
     }
 
+    fn test_shared(dir: &std::path::Path) -> Shared {
+        let (_shutdown, shutdown) = watch::channel(false);
+        Shared {
+            core: Weak::new(),
+            app_version: "test".to_owned(),
+            supported: SUPPORTED,
+            identity: identity::load_or_create(dir).unwrap().identity,
+            peers: Arc::new(PeerStore::load(dir)),
+            port: 0,
+            connections: Mutex::new(HashMap::new()),
+            nearby: Mutex::new(HashMap::new()),
+            pairing: Mutex::new(PairingCode::new()),
+            echo: Mutex::new(EchoFilter::default()),
+            dials: Mutex::new(HashMap::new()),
+            dial_now: Notify::new(),
+            handshakes: Arc::new(Semaphore::new(1)),
+            shutdown,
+            next_conn_id: AtomicU64::new(1),
+        }
+    }
+
+    fn trust(shared: &Shared, id: &str) {
+        shared.peers.add(TrustedPeer {
+            device_id: id.to_owned(),
+            public_key: "key".to_owned(),
+            name: id.to_owned(),
+            platform: Platform::Windows,
+            address: None,
+            paired_at: Utc::now(),
+            last_seen_at: None,
+            watermark: 0,
+            epoch: None,
+        });
+    }
+
+    #[test]
+    fn registration_rechecks_pinned_key_after_unpairing() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = test_shared(dir.path());
+        for dialer_is_me in [true, false] {
+            trust(&shared, "peer");
+            let (mut pending, _rx) = connection(1, 0);
+            pending.dialer_is_me = dialer_is_me;
+            assert!(!shared.register("peer", "wrong-key", pending));
+            assert!(shared.revoke("peer").is_none());
+
+            let (mut pending, _rx) = connection(2, 0);
+            pending.dialer_is_me = dialer_is_me;
+            assert!(!shared.register("peer", "key", pending));
+            assert!(!shared.is_connected("peer"));
+
+            trust(&shared, "peer");
+            let (registered, _rx) = connection(3, 0);
+            assert!(shared.register("peer", "key", registered));
+            let (_, kill) = shared.revoke("peer").unwrap();
+            kill.send_replace(true);
+            assert!(*kill.borrow());
+            shared.unregister("peer", 3);
+        }
+    }
+
     fn checkpoint(message: Option<Message>) -> Option<u64> {
         match message? {
             Message::CatchUpPage {
@@ -1934,28 +2015,13 @@ mod tests {
     #[test]
     fn broadcast_skips_attachments_over_each_peers_limit() {
         let dir = tempfile::tempdir().unwrap();
-        let (_shutdown, shutdown) = watch::channel(false);
-        let shared = Shared {
-            core: Weak::new(),
-            app_version: "test".to_owned(),
-            supported: SUPPORTED,
-            identity: identity::load_or_create(dir.path()).unwrap().identity,
-            peers: Arc::new(PeerStore::load(dir.path())),
-            port: 0,
-            connections: Mutex::new(HashMap::new()),
-            nearby: Mutex::new(HashMap::new()),
-            pairing: Mutex::new(PairingCode::new()),
-            echo: Mutex::new(EchoFilter::default()),
-            dials: Mutex::new(HashMap::new()),
-            dial_now: Notify::new(),
-            handshakes: Arc::new(Semaphore::new(1)),
-            shutdown,
-            next_conn_id: AtomicU64::new(1),
-        };
+        let shared = test_shared(dir.path());
         let (small, mut small_rx) = connection(1, 10);
         let (large, mut large_rx) = connection(2, 100);
-        assert!(shared.register("small", small));
-        assert!(shared.register("large", large));
+        trust(&shared, "small");
+        trust(&shared, "large");
+        assert!(shared.register("small", "key", small));
+        assert!(shared.register("large", "key", large));
 
         shared.deliver(None, Some((Message::Ping, Arc::new(vec![0; 50]))));
         shared.deliver(None, Some((Message::Unpair, Arc::new(vec![0; 10]))));
