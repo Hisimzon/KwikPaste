@@ -194,8 +194,9 @@ pub(crate) fn capture_change<B: ClipboardBackend>(
     };
 
     // 归属识别或重试期间内容已变，交给下一条变化通知重新过滤来源，不能沿用旧归属。
+    // 没有剪贴板权限时两次都取不到序号，照常采集。
     #[cfg(target_os = "windows")]
-    if sequence.is_none() || clipboard_win::seq_num() != sequence {
+    if clipboard_win::seq_num() != sequence {
         return None;
     }
 
