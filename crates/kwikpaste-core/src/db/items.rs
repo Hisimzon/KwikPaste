@@ -501,6 +501,23 @@ pub async fn unprotected_file_items(pool: &SqlitePool) -> Result<Vec<(String, St
 /// 按 id 批量删除，返回删除行数与被删图片文件名（供调用方删图）；不存在的 id 忽略。
 /// 所有分批在同一事务里完成，中途失败时一条都不删。
 pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<CleanupOutcome> {
+    delete_items_inner(pool, ids, false).await
+}
+
+/// 清理缺失文件记录时，在删除语句里重新检查收藏与置顶，保留扫描期间刚受保护的记录。
+pub(crate) async fn delete_unprotected_file_items(
+    pool: &SqlitePool,
+    ids: &[String],
+) -> Result<CleanupOutcome> {
+    delete_items_inner(pool, ids, true).await
+}
+
+/// 共用分批事务；只有缓存清理限制为未受保护的文件记录，手动删除仍按传入 id 执行。
+async fn delete_items_inner(
+    pool: &SqlitePool,
+    ids: &[String],
+    unprotected_files_only: bool,
+) -> Result<CleanupOutcome> {
     let mut outcome = CleanupOutcome::default();
     if ids.is_empty() {
         return Ok(outcome);
@@ -511,8 +528,11 @@ pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<CleanupOu
         .await
         .context("failed to begin delete clipboard items transaction")?;
     for chunk in ids.chunks(DELETE_BATCH_SIZE) {
-        let mut qb: QueryBuilder<Sqlite> =
-            QueryBuilder::new("DELETE FROM clipboard_items WHERE id IN (");
+        let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new("DELETE FROM clipboard_items WHERE ");
+        if unprotected_files_only {
+            qb.push("kind = 'files' AND is_favorite = 0 AND is_pinned = 0 AND ");
+        }
+        qb.push("id IN (");
         let mut separated = qb.separated(", ");
         for id in chunk {
             separated.push_bind(id.as_str());
@@ -1738,6 +1758,28 @@ mod tests {
             Some("deadbeef.png")
         );
         assert!(find_item_by_id(&pool, "img").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn cache_delete_rechecks_protection_after_candidate_scan() {
+        let pool = memory_pool().await;
+        for id in ["missing", "favorite", "pinned"] {
+            let mut item = sample_item(id);
+            item.kind = ClipboardKind::Files;
+            insert_item(&pool, &item).await.unwrap();
+        }
+        let candidates = unprotected_file_items(&pool).await.unwrap();
+        let ids: Vec<_> = candidates.into_iter().map(|(id, _)| id).collect();
+        mark_item_favorite(&pool, "favorite").await.unwrap();
+        toggle_item_pinned(&pool, "pinned").await.unwrap();
+
+        let outcome = delete_unprotected_file_items(&pool, &ids).await.unwrap();
+
+        assert_eq!(outcome.removed, 1);
+        assert!(find_item_by_id(&pool, "missing").await.unwrap().is_none());
+        for id in ["favorite", "pinned"] {
+            assert!(find_item_by_id(&pool, id).await.unwrap().is_some());
+        }
     }
 
     #[tokio::test]
