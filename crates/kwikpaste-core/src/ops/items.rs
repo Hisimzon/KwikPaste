@@ -433,11 +433,13 @@ impl Core {
     }
 
     /// 把多选合并后一次写回：文本写成一段纯文本，图片 / 文件写成一份文件列表，逐条记录复用。
+    /// `files_as_paths` 将全文件选区写成换行分隔的路径文本，不改变图片的写回方式。
     /// 不足两条时不写剪贴板，返回 `None`，调用方继续原来的单条操作。`query` 必须与列表一致。
     pub async fn copy_selection(
         &self,
         ids: Vec<String>,
         mut query: ClipboardItemQuery,
+        files_as_paths: bool,
     ) -> Result<Option<CopyOutcome>> {
         let core = self.clone();
         self.hop(async move {
@@ -449,6 +451,12 @@ impl Core {
 
             match merged {
                 MergedSelection::Text(text) => write_fragment(&core.0, &text)?,
+                MergedSelection::Files(paths)
+                    if files_as_paths
+                        && items.iter().all(|item| item.kind == ClipboardKind::Files) =>
+                {
+                    write_fragment(&core.0, &paths.join("\n"))?;
+                }
                 MergedSelection::Files(paths) => write_file_list(&core.0, paths)?,
             }
             for item in items {

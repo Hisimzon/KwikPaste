@@ -59,7 +59,10 @@ pub fn paste_selection(
         let _phase = super::enter_phase(crate::health::Phase::Paste);
         let started = Instant::now();
         let merged = if let Some((ids, query)) = selection {
-            core.copy_selection(ids, query).await?.is_some()
+            let files_as_paths = plain || core.settings().clipboard.content.paste_files_as_path;
+            core.copy_selection(ids, query, files_as_paths)
+                .await?
+                .is_some()
         } else {
             false
         };
@@ -133,7 +136,7 @@ pub fn copy_selection(
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         let merged = if let Some((ids, query)) = selection {
-            core.copy_selection(ids, query).await?
+            core.copy_selection(ids, query, plain).await?
         } else {
             None
         };

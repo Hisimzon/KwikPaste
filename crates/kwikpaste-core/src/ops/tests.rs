@@ -395,7 +395,7 @@ fn text_selection_joins_in_list_order_using_full_plain_text() {
         .join("\n");
     let reversed = refs.iter().rev().map(|item| item.id.clone()).collect();
 
-    let outcome = block_on(core.copy_selection(reversed, query))
+    let outcome = block_on(core.copy_selection(reversed, query, false))
         .unwrap()
         .unwrap();
     assert!(outcome.hide_window);
@@ -455,6 +455,7 @@ fn selection_of_images_and_files_becomes_one_file_list() {
     assert!(block_on(core.copy_selection(
         vec![image.clone(), files.clone()],
         ClipboardItemQuery::default(),
+        false,
     ))
     .unwrap()
     .is_some());
@@ -466,6 +467,47 @@ fn selection_of_images_and_files_becomes_one_file_list() {
         }
     );
     assert!(copy_in(&core, fixture.clipboard.snapshot()).is_none());
+}
+
+#[test]
+fn file_selection_can_write_paths_without_changing_ordinary_copy() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let dir = tempfile::tempdir().unwrap();
+    let mut ids = Vec::new();
+    for name in ["first.txt", "second.txt"] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, name).unwrap();
+        ids.push(
+            copy_in(
+                &core,
+                MemoryState {
+                    files: Some(vec![path.to_string_lossy().into_owned()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+    }
+    let query = ClipboardItemQuery::default();
+    let paths: Vec<String> = block_on(core.list_item_refs(query.clone()))
+        .unwrap()
+        .iter()
+        .map(|item| block_on(core.find_item(&item.id)).unwrap().unwrap().content)
+        .collect();
+
+    block_on(core.copy_selection(ids.clone(), query.clone(), true)).unwrap();
+    assert_eq!(fixture.clipboard.snapshot(), text(&paths.join("\n")));
+    assert!(copy_in(&core, fixture.clipboard.snapshot()).is_none());
+
+    block_on(core.copy_selection(ids, query, false)).unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot(),
+        MemoryState {
+            files: Some(paths),
+            ..Default::default()
+        }
+    );
 }
 
 #[test]
@@ -483,9 +525,11 @@ fn mixed_selection_is_refused_without_writing() {
     .unwrap();
     fixture.clipboard.set_text("unchanged".into()).unwrap();
 
-    assert!(block_on(
-        core.copy_selection(vec![first, image.clone()], ClipboardItemQuery::default(),)
-    )
+    assert!(block_on(core.copy_selection(
+        vec![first, image.clone()],
+        ClipboardItemQuery::default(),
+        false
+    ))
     .is_err());
     assert_eq!(fixture.clipboard.snapshot(), text("unchanged"));
     assert_eq!(use_count(&core, &image), 1);
