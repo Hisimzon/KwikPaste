@@ -5455,7 +5455,7 @@ pub(crate) fn shortcut_from_keystroke(keystroke: &Keystroke) -> Option<String> {
     Some(modifiers.join("+"))
 }
 
-fn shortcut_path(id: &str) -> Option<&'static str> {
+pub(super) fn shortcut_path(id: &str) -> Option<&'static str> {
     match id {
         "shortcuts.openClipboard" => Some("shortcuts.openClipboard"),
         "shortcuts.openPreference" => Some("shortcuts.openPreference"),
@@ -5802,6 +5802,17 @@ mod tests {
             shortcut_from_keystroke(&keystroke).as_deref(),
             Some("Alt+Shift+X")
         );
+    }
+
+    #[test]
+    fn every_onboarding_shortcut_has_a_settings_path() {
+        for id in [
+            "shortcuts.openClipboard",
+            "shortcuts.openPreference",
+            "shortcuts.pastePlain",
+        ] {
+            assert_eq!(super::shortcut_path(id), Some(id));
+        }
     }
 
     #[test]

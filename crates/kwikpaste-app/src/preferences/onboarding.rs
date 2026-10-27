@@ -358,7 +358,7 @@ impl Onboarding {
     }
 
     fn save_shortcut(&mut self, id: &'static str, value: String, cx: &mut Context<Self>) {
-        let Some(path) = shortcut_path(id) else {
+        let Some(path) = view::shortcut_path(id) else {
             self.finish_recording(cx);
             return;
         };
@@ -1124,13 +1124,5 @@ impl Render for Onboarding {
                         ]),
                     ),
             )
-    }
-}
-
-fn shortcut_path(id: &str) -> Option<&'static str> {
-    match id {
-        "shortcuts.openClipboard" => Some("shortcuts.openClipboard"),
-        "shortcuts.openPreference" => Some("shortcuts.openPreference"),
-        _ => None,
     }
 }
