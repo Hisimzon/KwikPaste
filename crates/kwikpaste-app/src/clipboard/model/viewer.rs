@@ -144,6 +144,20 @@ mod tests {
     const STAGE: Size = (800., 600.);
 
     #[test]
+    fn manual_zoom_keeps_physical_scale_across_device_changes() {
+        let pixels = (1600., 1200.);
+        let mut camera = Camera::fit(pixels, STAGE);
+        camera.zoom_at(1., (400., 300.), pixels, STAGE);
+        for device in [2., 1.] {
+            let logical = (pixels.0 / device, pixels.1 / device);
+            camera.resize(logical, STAGE);
+            assert_eq!(camera.scale, 1.);
+            assert_eq!(logical.0 * camera.scale * device, pixels.0);
+            assert_eq!(logical.1 * camera.scale * device, pixels.1);
+        }
+    }
+
+    #[test]
     fn fit_shrinks_large_images_and_centers_small_ones() {
         let large = Camera::fit((4000., 3000.), STAGE);
         assert!((large.scale - (552. / 3000.)).abs() < 1e-4);
