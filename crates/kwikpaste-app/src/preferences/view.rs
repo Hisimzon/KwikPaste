@@ -4114,7 +4114,22 @@ async fn export_readable_files(
     };
     match core.export_readable_data(options, fingerprint, path).await {
         Ok(result) => log::info!("readable export written: {}", result.path),
-        Err(error) => log::warn!("readable export failed: {error:#}"),
+        Err(error) => {
+            log::warn!("readable export failed: {error:#}");
+            let _ = cx.update(|window, cx| {
+                toast::show(
+                    Toast::error(i18n::t_args(
+                        "commands:error",
+                        &[
+                            ("label", &i18n::t("commands:labels.exportReadableData")),
+                            ("message", &error.to_string()),
+                        ],
+                    )),
+                    window,
+                    cx,
+                )
+            });
+        }
     }
 }
 
@@ -4131,6 +4146,7 @@ struct ReadableExportDialog {
     include_ungrouped: bool,
     split_by_group: bool,
     preview: Option<ExportPreview>,
+    preview_generation: u64,
     preview_failed: bool,
 }
 
@@ -4164,6 +4180,7 @@ impl ReadableExportDialog {
             include_ungrouped: true,
             split_by_group: false,
             preview: None,
+            preview_generation: 0,
             preview_failed: false,
         }
     }
@@ -4188,6 +4205,7 @@ impl ReadableExportDialog {
     }
 
     fn invalidate_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_generation = self.preview_generation.wrapping_add(1);
         self.preview = None;
         self.preview_failed = false;
         cx.notify();
@@ -4196,12 +4214,14 @@ impl ReadableExportDialog {
     fn prepare_preview(&mut self, cx: &mut Context<Self>) {
         let options = self.export_options(cx);
         let core = self.core.clone();
-        self.preview = None;
-        self.preview_failed = false;
-        cx.notify();
+        self.invalidate_preview(cx);
+        let generation = self.preview_generation;
         cx.spawn(async move |this, cx| {
             let result = core.preview_readable_export(options).await;
             let _ = this.update(cx, |dialog, cx| {
+                if dialog.preview_generation != generation {
+                    return;
+                }
                 match result {
                     Ok(preview) => dialog.preview = Some(preview),
                     Err(error) => {
