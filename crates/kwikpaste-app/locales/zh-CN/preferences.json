@@ -3,6 +3,18 @@
     "checkUpdates": "检查更新",
     "portable": "便携版"
   },
+  "autoGroup": {
+    "add": "添加规则",
+    "apps": "来源应用",
+    "delete": "删除",
+    "edit": "编辑规则",
+    "empty": "还没有自动分组规则",
+    "group": "放入分组",
+    "missingGroup": "分组已删除",
+    "newGroup": "新建分组",
+    "pickGroup": "选择分组",
+    "required": "请选择分组，并至少勾选一个应用"
+  },
   "backup": {
     "export": {
       "confirmPassword": "确认密码",
@@ -578,6 +590,9 @@
       "appearance": {
         "title": "外观"
       },
+      "autoGroup": {
+        "title": "自动分组"
+      },
       "backup": {
         "description": "导出或导入 快贴 备份包。",
         "title": "备份迁移"
@@ -799,6 +814,10 @@
           },
           "title": "主题"
         }
+      },
+      "autoGroupRules": {
+        "description": "从选定应用复制的内容自动放进指定分组；已在其他分组的内容不变。分组里的内容不参与自动清理。",
+        "title": "按来源应用自动分组"
       },
       "backup": {
         "export": {

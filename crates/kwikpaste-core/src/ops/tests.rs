@@ -214,6 +214,165 @@ fn capture_skips_excluded_apps_self_writes_and_pauses() {
     assert_eq!(copy_in(&core, state), Some(id));
 }
 
+#[test]
+fn local_captures_auto_group_by_first_enabled_app_match() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let group = block_on(core.create_group(ClipboardGroupInput {
+        name: "Work".to_owned(),
+        icon: String::new(),
+        is_hidden: false,
+    }))
+    .unwrap();
+    let old = r"C:\Apps\Editor\app-1.0.0\Editor.exe";
+    let new = r"C:\Apps\Editor\app-2.0.0\Editor.exe";
+    block_on(core.update_settings(json!({"clipboard": {"autoGroupRules": [
+        {"id": "disabled", "enabled": false, "groupId": "missing", "appIds": [old, "disabled.app"]},
+        {"id": "first", "groupId": group.id, "appIds": [old]},
+        {"id": "later", "groupId": "missing", "appIds": [old]}
+    ]}})))
+    .unwrap();
+
+    for (app, content, expected) in [
+        (old, "matching", Some(group.id.clone())),
+        (new, "new version", Some(group.id.clone())),
+        ("other.app", "nonmatching", None),
+        ("disabled.app", "disabled", None),
+    ] {
+        fixture.platform.set_frontmost(app, "Test app");
+        let id = copy_in(&core, text(content)).unwrap();
+        assert_eq!(
+            block_on(core.find_item(&id)).unwrap().unwrap().group_id,
+            expected
+        );
+    }
+
+    fixture.platform.set_frontmost(new, "Editor");
+    ClipboardBackend::set_text(&fixture.clipboard, "manual grouped read".to_owned()).unwrap();
+    let manual = block_on(core.read_clipboard_now()).unwrap().unwrap();
+    assert_eq!(
+        block_on(core.find_item(&manual.id))
+            .unwrap()
+            .unwrap()
+            .group_id,
+        Some(group.id)
+    );
+}
+
+#[test]
+fn recopy_auto_groups_only_ungrouped_items_and_notifies_effective_id() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let groups = ["Automatic", "Chosen"].map(|name| {
+        block_on(core.create_group(ClipboardGroupInput {
+            name: name.to_owned(),
+            icon: String::new(),
+            is_hidden: false,
+        }))
+        .unwrap()
+    });
+    fixture.platform.set_frontmost("other.app", "Other");
+    let ungrouped = copy_in(&core, text("initially ungrouped")).unwrap();
+    let chosen = copy_in(&core, text("user grouped")).unwrap();
+    block_on(core.set_item_group(&chosen, &groups[1].id)).unwrap();
+    block_on(
+        core.update_settings(json!({"clipboard": {"autoGroupRules": [
+            {"id": "editor", "groupId": groups[0].id, "appIds": ["editor.app"]}
+        ]}})),
+    )
+    .unwrap();
+    fixture.platform.set_frontmost("editor.app", "Editor");
+    fixture.take_events();
+
+    for (content, id, expected_group) in [
+        ("initially ungrouped", &ungrouped, &groups[0].id),
+        ("user grouped", &chosen, &groups[1].id),
+    ] {
+        assert_eq!(copy_in(&core, text(content)).as_ref(), Some(id));
+        let stored = block_on(core.find_item(id)).unwrap().unwrap();
+        assert_eq!(stored.group_id.as_ref(), Some(expected_group));
+        assert_eq!(stored.use_count, 2);
+        let events = fixture.take_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            CoreEvent::ClipboardUpserted { id: event_id, deduplicated: true, .. }
+                if event_id == id
+        )));
+        let refreshed = block_on(core.list_item(id)).unwrap().unwrap();
+        assert_eq!(refreshed.item.group_id.as_ref(), Some(expected_group));
+    }
+}
+
+#[test]
+fn stale_auto_group_rule_keeps_new_and_recopied_content_ungrouped() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    fixture.platform.set_frontmost("editor.app", "Editor");
+    let existing = copy_in(&core, text("existing content")).unwrap();
+    block_on(
+        core.update_settings(json!({"clipboard": {"autoGroupRules": [
+            {"id": "stale", "groupId": "missing-group", "appIds": ["editor.app"]}
+        ]}})),
+    )
+    .unwrap();
+
+    let new = copy_in(&core, text("new content")).unwrap();
+    assert_eq!(
+        copy_in(&core, text("existing content")),
+        Some(existing.clone())
+    );
+    for (id, content, count) in [(new, "new content", 1), (existing, "existing content", 2)] {
+        let stored = block_on(core.find_item(&id)).unwrap().unwrap();
+        assert_eq!(stored.content, content);
+        assert_eq!(stored.group_id, None);
+        assert_eq!(stored.use_count, count);
+    }
+}
+
+#[test]
+fn delete_group_removes_targeting_rules_and_persists_settings_event() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let group = block_on(core.create_group(ClipboardGroupInput {
+        name: "Delete me".to_owned(),
+        icon: String::new(),
+        is_hidden: false,
+    }))
+    .unwrap();
+    block_on(
+        core.update_settings(json!({"clipboard": {"autoGroupRules": [
+            {"id": "remove-enabled", "groupId": group.id, "appIds": ["editor.app"]},
+            {"id": "keep", "groupId": "another-group", "appIds": ["terminal.app"]},
+            {"id": "remove-disabled", "enabled": false, "groupId": group.id, "appIds": []}
+        ]}})),
+    )
+    .unwrap();
+    fixture.platform.set_frontmost("editor.app", "Editor");
+    let item = copy_in(&core, text("keep when group deleted")).unwrap();
+    fixture.take_events();
+
+    block_on(core.delete_group(&group.id)).unwrap();
+    let rules = core.settings().clipboard.auto_group_rules;
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].id, "keep");
+    assert_eq!(
+        block_on(core.find_item(&item)).unwrap().unwrap().group_id,
+        None
+    );
+    let saved = crate::settings::SettingsStore::new(&fixture.paths, None).unwrap();
+    assert_eq!(saved.snapshot().clipboard.auto_group_rules, rules);
+    let events = fixture.take_events();
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, CoreEvent::GroupsUpdated)));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoreEvent::SettingsUpdated { settings, delta }
+            if settings.clipboard.auto_group_rules == rules
+                && delta.touches("clipboard.autoGroupRules")
+    )));
+}
+
 /// 勾选时存下的是商店应用旧版本的路径；应用升级换了包目录后，新版本复制的内容照样不入库。
 #[test]
 fn capture_skips_later_versions_of_excluded_apps() {

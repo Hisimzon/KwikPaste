@@ -52,6 +52,7 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
+mod auto_group;
 pub(super) mod choices;
 mod custom_rules;
 mod extensions;
@@ -314,6 +315,10 @@ struct Preferences {
     lan_name: TextInput,
     lan_max_image: NumberInputState,
     icons: gpui::Entity<KpImageCache>,
+    /// 全部分组：启动分组下拉与自动归组规则共用，分组变化时刷新。
+    groups: Vec<kwikpaste_core::db::models::ClipboardGroup>,
+    /// 自动归组规则行显示应用名用；有规则时打开窗口取一次，编辑规则时更新。
+    auto_group_apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
 }
 
 impl Preferences {
@@ -702,12 +707,15 @@ impl Preferences {
             lan_name,
             lan_max_image,
             icons,
+            groups: Vec::new(),
+            auto_group_apps: Vec::new(),
         };
         preferences.refresh_startup_groups(window, cx);
+        preferences.refresh_auto_group_apps(window, cx);
         preferences
     }
 
-    /// 分组增删、改名或导入后刷新启动分组；已删除的保存值只作占位显示。
+    /// 分组增删、改名或导入后刷新分组列表与启动分组；已删除的保存值只作占位显示。
     fn refresh_startup_groups(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(core) = core_host::core(cx).cloned() else {
             return;
@@ -721,6 +729,8 @@ impl Preferences {
                 }
             };
             let _ = this.update_in(cx, |this, window, cx| {
+                this.groups = groups.clone();
+                cx.notify();
                 let Some(state) = this.selects.get("window.selectGroupOnOpen") else {
                     return;
                 };
@@ -3404,6 +3414,7 @@ impl Preferences {
             Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
             Control::CustomRules => self.render_custom_rules(cx),
+            Control::AutoGroupRules => self.render_auto_group_rules(cx),
             Control::PanelShortcuts => self.render_panel_shortcuts(cx),
             Control::AppExclusion => self.render_app_exclusion(setting.id, value, cx),
             Control::Action { danger } => self.render_action(setting.id, danger, cx),
@@ -4909,6 +4920,53 @@ impl Render for SourceAppsDialog {
     }
 }
 
+/// 应用列表弹框页脚的「添加应用」：选一个应用文件加进列表，已列出的同一应用不重复加。
+fn add_app_button(
+    adder: WeakEntity<SourceAppsDialog>,
+    core: kwikpaste_core::Core,
+) -> gpui::AnyElement {
+    Button::new(
+        "source-app-add",
+        i18n::t("preferences:schema.settings.source.appTransfer.addApp"),
+    )
+    .ghost()
+    .on_click(move |_, _, cx| {
+        let prompt = clipboard::view::pin::prompt_for_paths(
+            gpui::PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: None,
+            },
+            cx,
+        );
+        let adder = adder.clone();
+        let core = core.clone();
+        cx.spawn(async move |cx| {
+            let Some(path) = prompt.await.and_then(|paths| paths.into_iter().next()) else {
+                return;
+            };
+            match core.add_app_from_path(path).await {
+                Ok(app) => {
+                    let _ = adder.update(cx, |dialog, cx| {
+                        if !dialog
+                            .apps
+                            .iter()
+                            .any(|known| app_ids::same_app(&known.id, &app.id))
+                        {
+                            dialog.apps.push(app);
+                        }
+                        cx.notify();
+                    });
+                }
+                Err(error) => log::warn!("could not add source app: {error:#}"),
+            }
+        })
+        .detach();
+    })
+    .into_any_element()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn open_source_apps_dialog(
     apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
@@ -4935,51 +4993,7 @@ fn open_source_apps_dialog(
         DialogSpec::new(i18n::t(title_key))
             .ok_text(i18n::t("common:actions.save"))
             .cancel_text(i18n::t("common:actions.cancel"))
-            .footer_extra(move |_, _cx| {
-                let adder = adder.clone();
-                let core = core.clone();
-                Button::new(
-                    "source-app-add",
-                    i18n::t("preferences:schema.settings.source.appTransfer.addApp"),
-                )
-                .ghost()
-                .on_click(move |_, _, cx| {
-                    let prompt = clipboard::view::pin::prompt_for_paths(
-                        gpui::PathPromptOptions {
-                            files: true,
-                            directories: false,
-                            multiple: false,
-                            prompt: None,
-                        },
-                        cx,
-                    );
-                    let adder = adder.clone();
-                    let core = core.clone();
-                    cx.spawn(async move |cx| {
-                        let Some(path) = prompt.await.and_then(|paths| paths.into_iter().next())
-                        else {
-                            return;
-                        };
-                        match core.add_app_from_path(path).await {
-                            Ok(app) => {
-                                let _ = adder.update(cx, |dialog, cx| {
-                                    if !dialog
-                                        .apps
-                                        .iter()
-                                        .any(|known| app_ids::same_app(&known.id, &app.id))
-                                    {
-                                        dialog.apps.push(app);
-                                    }
-                                    cx.notify();
-                                });
-                            }
-                            Err(error) => log::warn!("could not add source app: {error:#}"),
-                        }
-                    })
-                    .detach();
-                })
-                .into_any_element()
-            }),
+            .footer_extra(move |_, _| add_app_button(adder.clone(), core.clone())),
         move |_, _| content.clone().into_any_element(),
         window,
         cx,

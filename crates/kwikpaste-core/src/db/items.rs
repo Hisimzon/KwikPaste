@@ -39,7 +39,7 @@ const LIST_SELECT_ITEM: &str = "SELECT clipboard_items.id, clipboard_items.kind,
      LEFT JOIN clipboard_apps ON clipboard_apps.id = clipboard_items.source_app_id";
 
 /// 入库去重的结果：`id` 为生效行的主键（命中时是已有行，未命中时是新插入行），
-/// `deduplicated` 表示是否命中了已有内容（命中则只 `use_count + 1` 未插入新行）。
+/// `deduplicated` 表示是否命中了已有内容（命中则更新已有记录，不插入新行）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpsertResult {
     pub id: String,
@@ -82,10 +82,23 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
 
 /// 入库主入口：按 `item.content_hash` 去重。
 /// 命中已有记录 → 复用 [`increment_item_use_count`] 累加并刷新 `updated_at`，不插入新行；
+/// 同时补齐未分组记录的分组，保留已有分组；不存在的目标分组按未分组处理。
 /// 未命中 → 调用 [`insert_item`] 插入。返回生效行 id 与是否去重。
 pub async fn upsert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<UpsertResult> {
     if let Some(existing) = find_item_by_content_hash(pool, &item.content_hash).await? {
         increment_item_use_count(pool, &existing).await?;
+        if let Some(group_id) = item.group_id.as_deref() {
+            sqlx::query(
+                "UPDATE clipboard_items
+                 SET group_id = (SELECT id FROM clipboard_groups WHERE id = ?)
+                 WHERE id = ? AND group_id IS NULL",
+            )
+            .bind(group_id)
+            .bind(&existing)
+            .execute(pool)
+            .await
+            .context("failed to group recopied item")?;
+        }
         // 规则新增后再次复制同一内容，也要收紧敏感标记；不清除历史敏感状态。
         if item.is_sensitive {
             sqlx::query(
@@ -128,7 +141,7 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
           summary, file_types, size, width, height, use_count, is_favorite, is_pinned, favorite_order, pin_order, is_sensitive, platform, note, \
           created_at, updated_at, last_used_at, origin_device_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         VALUES (?, ?, ?, (SELECT id FROM clipboard_groups WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                  CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(favorite_order) FROM clipboard_items), 0) END,
                  CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(pin_order) FROM clipboard_items), 0) END,
                  ?, ?, ?, ?, ?, ?, ?)",

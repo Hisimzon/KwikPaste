@@ -140,6 +140,8 @@ pub enum Control {
     RetentionRules,
     /// 用户文本匹配规则列表。
     CustomRules,
+    /// 按来源应用自动归入分组的规则列表。
+    AutoGroupRules,
     /// 清理状态与「立即清理」。
     CleanupStatus,
     /// 数据概览。
@@ -167,6 +169,7 @@ impl Control {
                 | Self::CaptureOrder
                 | Self::RetentionRules
                 | Self::CustomRules
+                | Self::AutoGroupRules
                 | Self::LanSync
                 | Self::Extensions
                 | Self::PanelShortcuts
@@ -1034,6 +1037,14 @@ fn capture_sections() -> Vec<Section> {
                 Setting::new("source.excludedApps", Control::AppExclusion)
                     .path("clipboard.filters.excludedAppIds")
                     .keywords(&["exclude", "ignore", "app", "source"]),
+            ],
+        },
+        Section {
+            id: "autoGroup",
+            settings: vec![
+                Setting::new("autoGroupRules", Control::AutoGroupRules)
+                    .path("clipboard.autoGroupRules")
+                    .keywords(&["group", "app", "source", "code", "editor", "snippet"]),
             ],
         },
         Section {
