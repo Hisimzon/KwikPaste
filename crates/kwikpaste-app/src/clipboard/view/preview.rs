@@ -62,7 +62,7 @@ pub enum PreviewEvent {
     Snippet(Arc<str>),
     /// 快捷信息右键菜单里选了粘贴。
     PasteSnippet(Arc<str>),
-    /// 中键点了链接 / 邮箱快捷信息，或在右键菜单里选了打开。
+    /// 中键或按住修饰键点了链接 / 邮箱快捷信息，或在右键菜单里选了打开。
     OpenSnippet(Arc<str>, SnippetKind),
     /// 点了链接、邮箱记录的正文：打开链接或写邮件。
     Open(OpenTarget),
@@ -95,6 +95,8 @@ pub struct PreviewPanel {
     image_text: Option<ImageTextView>,
     /// 快捷信息按类型着色（「快捷信息颜色」设置），列表在 [Self::set] 前更新。
     pub snippet_colors: bool,
+    /// 按住修饰键：快捷信息里的链接、邮箱显示成链接，点了打开。列表的数字角标开关时同步。
+    pub links: bool,
     images: Entity<KpImageCache>,
     /// 预览文件图标的独立有界缓存；关闭预览时不清空，避免再次打开时闪烁。
     icons: Entity<KpImageCache>,
@@ -120,6 +122,7 @@ impl PreviewPanel {
             image_box: None,
             image_text: None,
             snippet_colors: true,
+            links: false,
             images,
             icons,
             text_scroll: UniformListScrollHandle::new(),
@@ -617,8 +620,9 @@ impl PreviewPanel {
             .into_any_element()
     }
 
-    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段，右键在它上方弹出菜单；
-    /// 一行放不下的（多为长链接）折行显示全文。片段多时封顶，区内滚动。
+    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段（按住修饰键时链接、
+    /// 邮箱是打开），右键在它上方弹出菜单；一行放不下的（多为长链接）折行显示全文。
+    /// 片段多时封顶，区内滚动。
     fn snippets(&self, preview: &Preview, cx: &mut Context<Self>) -> Option<AnyElement> {
         let snippets = &preview.payload.snippets;
         if snippets.is_empty() {
@@ -643,6 +647,7 @@ impl PreviewPanel {
                     snippets.iter().enumerate().map(|(index, snippet)| {
                         let text: Arc<str> = Arc::from(snippet.text.as_str());
                         let kind = snippet.kind;
+                        let open = self.links && card::snippet_open_url(kind, &text).is_some();
                         let open_text = text.clone();
                         let menu_text = text.clone();
                         let panel = cx.entity().downgrade();
@@ -676,6 +681,9 @@ impl PreviewPanel {
                             .child(
                                 div()
                                     .min_w_0()
+                                    .when(open, |text| {
+                                        text.text_color(tokens.text.link).underline()
+                                    })
                                     .child(SharedString::from(snippet.text.clone())),
                             )
                             .when(card::snippet_open_url(kind, &text).is_some(), |chip| {
@@ -687,7 +695,11 @@ impl PreviewPanel {
                                 )
                             })
                             .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(PreviewEvent::Snippet(text.clone()));
+                                if open {
+                                    cx.emit(PreviewEvent::OpenSnippet(text.clone(), kind));
+                                } else {
+                                    cx.emit(PreviewEvent::Snippet(text.clone()));
+                                }
                             }))
                             .right_click_menu(move |_, _| snippet_menu(&panel, &menu_text, kind))
                     }),

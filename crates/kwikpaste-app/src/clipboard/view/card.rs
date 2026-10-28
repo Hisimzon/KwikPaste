@@ -88,6 +88,7 @@ pub struct CardState {
     /// 点卡片下方的快捷信息；多选时为空，快捷信息不响应点击。
     pub on_snippet: Option<SnippetHandler>,
     /// 按住修饰键时链接、邮箱卡片的正文是可点的链接（1.x `isLinkActive`）：点了打开。
+    /// 有它时快捷信息里的链接、邮箱也一样。
     pub on_link: Option<LinkHandler>,
     /// 当前条目在无障碍列表中的 1-based 位置。
     pub position: usize,
@@ -103,7 +104,7 @@ pub struct CardState {
 pub enum SnippetEvent {
     /// 左键点了：按「点击」设置复制或粘贴这一段。
     Pick(Arc<str>),
-    /// 中键点了链接 / 邮箱：直接打开。
+    /// 中键点了链接 / 邮箱，或按住修饰键左键点了：直接打开。
     Open(Arc<str>, SnippetKind),
     /// 指针进出这一块：右键菜单按指针下的那一块给出动作。
     Hover {
@@ -136,6 +137,7 @@ pub fn card(
 ) -> gpui::Stateful<Div> {
     let tokens = env.tokens;
     let layout = env.layout;
+    let links = state.on_link.is_some();
     let body = content(
         env,
         item,
@@ -215,7 +217,7 @@ pub fn card(
                 status_marks(tokens, pinned, sensitive, true),
             ))
             .child(body)
-            .children(snippets(env, item, 0, on_snippet))
+            .children(snippets(env, item, 0, links, on_snippet))
     } else {
         frame
             .items_start()
@@ -236,7 +238,7 @@ pub fn card(
                     .min_w_0()
                     .gap(space((2.) / 4.))
                     .child(body)
-                    .children(snippets(env, item, 0, on_snippet)),
+                    .children(snippets(env, item, 0, links, on_snippet)),
             )
             .when(pinned || sensitive, |frame| {
                 frame.child(status_marks(tokens, pinned, sensitive, true))
@@ -924,11 +926,12 @@ fn files_body(env: &CardEnv<'_>, rows: &[FileRow], file_icons: &[Option<Visual>]
 }
 
 /// 卡片下方的快捷信息：一行放得下的片段，放不下的整个隐藏（1.x `QuickSnippets`）。
-/// `marks` 是右下角水印的个数，给水印留出位置。
+/// `marks` 是右下角水印的个数，给水印留出位置；`links` 时链接、邮箱显示成链接，点了打开。
 fn snippets(
     env: &CardEnv<'_>,
     item: &ListItem,
     marks: usize,
+    links: bool,
     on_pick: Option<SnippetHandler>,
 ) -> Option<AnyElement> {
     if item.quick_snippets.is_empty() {
@@ -955,6 +958,7 @@ fn snippets(
                     .enumerate()
                     .map(|(index, snippet)| {
                         let long = snippet.text.chars().count() >= SNIPPET_TOOLTIP_MIN_CHARS;
+                        let open = links && snippet_open_url(snippet.kind, &snippet.text).is_some();
                         let chip = div()
                             .id(ElementId::NamedInteger("snippet".into(), index as u64))
                             .flex()
@@ -978,6 +982,9 @@ fn snippets(
                                         index as u64,
                                     ))
                                     .truncate()
+                                    .when(open, |text| {
+                                        text.text_color(tokens.accent.solid).underline()
+                                    })
                                     .child(SharedString::from(snippet.text.clone()))
                                     .when(long && on_pick.is_some(), |text| {
                                         text.kp_tooltip(SharedString::from(snippet.text.clone()))
@@ -1021,7 +1028,12 @@ fn snippets(
                             })
                             .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
-                                on_pick(SnippetEvent::Pick(text.clone()), window, cx);
+                                let event = if open {
+                                    SnippetEvent::Open(text.clone(), kind)
+                                } else {
+                                    SnippetEvent::Pick(text.clone())
+                                };
+                                on_pick(event, window, cx);
                             })
                             .into_any_element()
                     }),

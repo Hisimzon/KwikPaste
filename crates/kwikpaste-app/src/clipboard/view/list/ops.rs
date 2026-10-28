@@ -150,10 +150,11 @@ impl ClipboardList {
         cx.notify();
     }
 
-    /// 按住修饰键：显示数字角标。
+    /// 按住修饰键：显示数字角标，预览里的快捷信息链接可点。
     pub fn set_key_hints(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.key_hints != on {
             self.key_hints = on;
+            self.set_preview_links(on, cx);
             cx.notify();
         }
     }
@@ -398,7 +399,8 @@ impl ClipboardList {
         cx.notify();
     }
 
-    /// 用浏览器 / 邮件客户端打开快捷信息里的链接或邮箱（中键、右键菜单）；别的类型不响应。
+    /// 用浏览器 / 邮件客户端打开快捷信息里的链接或邮箱（中键、修饰键 + 单击、右键菜单）；
+    /// 别的类型不响应。
     pub fn open_snippet(
         &mut self,
         id: &Arc<str>,

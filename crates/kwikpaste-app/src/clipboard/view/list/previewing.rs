@@ -595,6 +595,16 @@ impl ClipboardList {
         (!words.is_empty()).then(|| (id.clone(), words))
     }
 
+    /// 按住 / 松开修饰键：预览快捷信息里的链接、邮箱跟着变成可点的链接或复原。
+    pub(super) fn set_preview_links(&self, on: bool, cx: &mut Context<Self>) {
+        if let Some(preview) = &self.previewing.window {
+            preview.panel.update(cx, |panel, cx| {
+                panel.links = on;
+                cx.notify();
+            });
+        }
+    }
+
     /// 复制预览快捷信息区点中的一段，预览保持打开。
     fn copy_preview_snippet(&mut self, text: Arc<str>, cx: &mut Context<Self>) {
         let Some((id, _)) = self.previewing.session.clone() else {
@@ -803,8 +813,10 @@ impl ClipboardList {
             .as_ref()
             .and_then(|preview| image_box(preview, geometry.panel, text_scale));
         let preview_window = self.previewing.window.as_ref()?;
+        let links = self.key_hints;
         preview_window.panel.update(cx, |panel, cx| {
             panel.snippet_colors = snippet_colors;
+            panel.links = links;
             panel.set(preview, rows, text_view, image_box, image_text, cx)
         });
 
