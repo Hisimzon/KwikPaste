@@ -281,6 +281,8 @@ pub struct ClipboardList {
     copied_reset: Option<Task<()>>,
     /// 批量删除后第一页落地时再补拉视图范围。
     refetch_view_after_first_page: bool,
+    /// 复用后原地刷新的请求令牌：落地时保留行号，不跟着顶行的 id 走。
+    in_place_token: Option<u64>,
     note: Option<NoteEdit>,
     /// 粘贴、复制交给谁做（平台层的粘贴链路，或夹具的替身）。
     host: Rc<dyn ItemHost>,
@@ -371,6 +373,7 @@ impl ClipboardList {
             copied: None,
             copied_reset: None,
             refetch_view_after_first_page: false,
+            in_place_token: None,
             note: None,
             host,
             freshness: Freshness::default(),
@@ -486,7 +489,12 @@ impl ClipboardList {
         }
         match action {
             UpdateAction::ReloadNow { .. } => self.reload(cx),
-            UpdateAction::RefreshInPlace => self.refresh(cx),
+            UpdateAction::RefreshInPlace => {
+                if let Some(request) = self.model.reload_current_range() {
+                    self.in_place_token = Some(request.token);
+                    self.fetch(request, cx);
+                }
+            }
             UpdateAction::Defer { .. } | UpdateAction::Ignore => {}
         }
         cx.notify();
@@ -597,10 +605,14 @@ impl ClipboardList {
         match result {
             Ok(page) => {
                 // 排序刷新时保留视口锚点；置顶切换不能让正在浏览的卡片上下跳一行。
+                // 复用把卡片挪到最前时保留行号：点击处上方的卡片下移一格、下方不动，
+                // 点的若是顶行也不会跟着它跳回顶部。
                 let top = self.state.logical_scroll_top();
-                let anchor = (request.replace && !self.at_top())
-                    .then(|| self.model.get(top.item_ix).map(|item| item.id.clone()))
-                    .flatten();
+                let anchor = (request.replace
+                    && !self.at_top()
+                    && self.in_place_token != Some(request.token))
+                .then(|| self.model.get(top.item_ix).map(|item| item.id.clone()))
+                .flatten();
                 if let Some(applied) = self.model.apply(&request, page) {
                     self.sync_rows(Some(&applied));
                     if let Some(index) = anchor.and_then(|id| self.model.index_of(&id)) {
