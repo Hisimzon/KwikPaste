@@ -2,6 +2,25 @@
 
 All notable changes to KwikPaste are documented here.
 
+## 2.0.9 - 2026-10-30
+
+- Added Group by Source App: items copied from the chosen apps go into a group automatically; items already in another group stay there.
+- Appearance lets you choose which group bar buttons appear after All and drag them into order; the selected group button stays icon-only instead of expanding with its name.
+- Ctrl+click (Cmd+click on macOS) a link or email in quick snippets to open it.
+- Global shortcuts can be recorded with punctuation, Shift+digits and arrow keys.
+- Sensitive masking covers only secrets and credential header values, so the rest of a curl command stays readable; passwords and keys right next to Chinese text are now detected too.
+- Split Words breaks at underscores, so text like 123-456_654-321 is no longer one piece.
+- The preview closes once the pointer leaves and stays open over the quick snippet menu; long quick snippets wrap.
+- Shortening history retention asks for confirmation before deleting the items outside the new range.
+- More reliable auto-update: installer signatures are checked again right before installing, macOS restores the original app if replacing it fails, and update checks keep running after a failed preparation.
+- More reliable backup import and export: an overwrite import keeps the existing history until it completes, a merge keeps last-used times, settings refresh right after an import, and on macOS backups open straight from Finder.
+- More stable LAN sync: fixed items missed after a failed transfer, stalled connections, and unpaired devices still connecting.
+- Fixed the list jumping up when reusing the top visible item after scrolling.
+- Fixed batch deletion possibly removing items that had just been pinned or favorited.
+- Fixed V being typed into other apps when Win is released first while holding Win+V on Windows, and windows freezing or losing transparency after a graphics driver recovery.
+- Fixed global shortcuts staying off after closing Preferences while recording one, the F key alone being accepted as a shortcut, and Enter in a dialog text field closing the dialog.
+- Fixed the full-size viewer changing size when moved between displays with different scaling, and long context menus running outside the window.
+
 ## 2.0.8 - 2026-10-24
 
 - Text items can be edited in a separate, resizable window; double-click the text in the preview to edit it directly.
