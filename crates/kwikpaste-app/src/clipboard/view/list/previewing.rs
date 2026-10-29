@@ -214,6 +214,8 @@ impl ClipboardList {
 
     fn on_preview_event(&mut self, event: &PreviewEvent, cx: &mut Context<Self>) {
         match event {
+            // 关上后（异步隐藏前后）预览窗还可能收到指针移动，不能把下一次预览的状态带偏。
+            PreviewEvent::Pointer(_) if self.previewing.session.is_none() => {}
             PreviewEvent::Pointer(inside) => {
                 self.previewing.pointer_inside = *inside;
                 if *inside {
@@ -498,6 +500,25 @@ impl ClipboardList {
         .detach();
     }
 
+    /// 丢弃列表前销毁它独占的预览窗，连隐藏窗口也一起释放。
+    pub fn dispose_preview(&mut self, cx: &mut Context<Self>) {
+        let mut previewing = std::mem::take(&mut self.previewing);
+        self.previewing.request = previewing.request + 1;
+        self.previewing.unavailable = true;
+        if let Some(preview) = previewing.window.take() {
+            preview
+                .handle
+                .update(cx, |_, window, cx| {
+                    preview.panel.update(cx, |panel, cx| {
+                        panel.release(window, cx);
+                        panel.forget();
+                    });
+                    window.remove_window();
+                })
+                .ok();
+        }
+    }
+
     /// 关掉预览（返回是否有预览开着）。
     pub fn close_preview(&mut self, cx: &mut Context<Self>) -> bool {
         self.previewing.hover_timer = None;
@@ -572,6 +593,16 @@ impl ClipboardList {
         }
         let words = panel.selected_words();
         (!words.is_empty()).then(|| (id.clone(), words))
+    }
+
+    /// 按住 / 松开修饰键：预览快捷信息里的链接、邮箱跟着变成可点的链接或复原。
+    pub(super) fn set_preview_links(&self, on: bool, cx: &mut Context<Self>) {
+        if let Some(preview) = &self.previewing.window {
+            preview.panel.update(cx, |panel, cx| {
+                panel.links = on;
+                cx.notify();
+            });
+        }
     }
 
     /// 复制预览快捷信息区点中的一段，预览保持打开。
@@ -738,12 +769,13 @@ impl ClipboardList {
             Some(preview)
                 if matches!(measured_metrics, Some(PreviewContentMetrics::Text { .. })) =>
             {
-                let chips: Vec<f64> = preview
+                let content_width = preview::snippets_content_width(&place.monitor, text_scale);
+                let chips: Vec<(f64, usize)> = preview
                     .payload
                     .snippets
                     .iter()
                     .map(|snippet| {
-                        preview::snippet_chip_width(
+                        preview::snippet_chip(
                             &snippet
                                 .label
                                 .clone()
@@ -751,15 +783,14 @@ impl ClipboardList {
                                 .unwrap_or_else(|| t(snippet_label(snippet.kind))),
                             &snippet.text,
                             snippet_colors,
+                            content_width,
                             text_scale,
                             window,
+                            cx,
                         )
                     })
                     .collect();
-                preview::snippets_height(
-                    &chips,
-                    preview::snippets_content_width(&place.monitor, text_scale),
-                )
+                preview::snippets_height(&chips, content_width)
             }
             _ => 0.,
         };
@@ -782,8 +813,10 @@ impl ClipboardList {
             .as_ref()
             .and_then(|preview| image_box(preview, geometry.panel, text_scale));
         let preview_window = self.previewing.window.as_ref()?;
+        let links = self.key_hints;
         preview_window.panel.update(cx, |panel, cx| {
             panel.snippet_colors = snippet_colors;
+            panel.links = links;
             panel.set(preview, rows, text_view, image_box, image_text, cx)
         });
 

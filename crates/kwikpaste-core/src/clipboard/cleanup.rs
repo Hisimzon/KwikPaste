@@ -46,8 +46,8 @@ pub struct CleanupScheduler {
     wake: Notify,
     pending: Mutex<Pending>,
     status: Mutex<CleanupStatus>,
-    /// 串行化后台清理、手动清理与预演，避免两轮同时删同一批记录。
-    running: tokio::sync::Mutex<()>,
+    /// 图片从落盘到入库持共享锁；清理、删除与换库持独占锁，且都先于 upsert_lock 获取。
+    running: Arc<tokio::sync::RwLock<()>>,
 }
 
 #[derive(Default)]
@@ -206,7 +206,7 @@ pub(crate) async fn run_now(core: &CoreInner) -> Result<CleanupReport> {
     }
 
     let _ocr = core.ocr.suspend().await;
-    let _running = core.cleanup.running.lock().await;
+    let _running = core.cleanup.exclusive().await;
     let paused = core.settings.cleanup_paused();
     let (report, storage) = execute(core, PassScope::FULL, false).await?;
     core.cleanup.record(core, &report, storage, paused);
@@ -215,7 +215,7 @@ pub(crate) async fn run_now(core: &CoreInner) -> Result<CleanupReport> {
 
 /// 按候选设置在事务里预演一轮完整清理后回滚，不删除任何记录或文件。
 pub(crate) async fn preview(core: &CoreInner, history: &History) -> Result<CleanupPreview> {
-    let _running = core.cleanup.running.lock().await;
+    let _running = core.cleanup.exclusive().await;
     let pool = core.db.pool().await;
     let rules = enabled_rules(history).collect::<Vec<_>>();
     let plan = age_plan(history, Utc::now());
@@ -299,10 +299,15 @@ pub(crate) fn apply_outcome(core: &CoreInner, outcome: &CleanupOutcome, reason: 
 }
 
 impl CleanupScheduler {
+    /// 跨图片落盘与异步入库持有；拿到此锁之后才能获取 upsert_lock。
+    pub(crate) async fn image_publication(&self) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        self.running.clone().read_owned().await
+    }
+
     /// 独占清理锁：持有期间后台清理、手动清理与预演都会等待。VACUUM、切换存储位置、
     /// 覆盖导入备份时持有，避免和清理同时改数据库与资源文件。
-    pub(crate) async fn exclusive(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.running.lock().await
+    pub(crate) async fn exclusive(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
+        self.running.write().await
     }
 
     fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
@@ -369,7 +374,7 @@ impl CleanupScheduler {
 pub(crate) async fn run_due(core: &CoreInner) {
     let scope = core.cleanup.take_due();
     let _ocr = core.ocr.suspend().await;
-    let _running = core.cleanup.running.lock().await;
+    let _running = core.cleanup.exclusive().await;
     let paused = core.settings.cleanup_paused();
 
     match execute(core, scope, paused).await {

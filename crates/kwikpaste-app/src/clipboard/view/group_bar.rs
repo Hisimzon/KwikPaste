@@ -75,24 +75,10 @@ pub struct GroupBar {
 
 impl EventEmitter<GroupBarEvent> for GroupBar {}
 
-/// 选中项胶囊里名称的最大宽度（同 [`super::chrome`] 里的 `max_w`）。
-const CHIP_LABEL_MAX: f32 = 72.;
-
 /// 一行能放下几个自定义分组（宽度为设计 px，`start` 是第一个自定义分组的起点）。
 fn capacity_from(width: f32, start: f32) -> usize {
     let available = (width - start - ACTION_SLOT).max(0.);
     ((available + GAP) / (BUTTON + GAP)).floor().max(0.) as usize
-}
-
-/// 选中项是带名称的胶囊（左右各 8、图标 16、间距 4 再加名称），比普通按钮宽出的部分（设计 px）。
-/// 名称宽度按 12 px 字估：全角字 12、其余 7，宁可多算，不能让末尾的按钮被裁掉。
-fn chip_extra(label: &str) -> f32 {
-    let text: f32 = label
-        .chars()
-        .map(|c| if u32::from(c) >= 0x2E80 { 12. } else { 7. })
-        .sum();
-
-    36. + text.min(CHIP_LABEL_MAX) - BUTTON
 }
 
 impl GroupBar {
@@ -398,44 +384,7 @@ impl Render for GroupBar {
             .collect();
         let side = self.mode == BarMode::Side;
         let start = if side { SIDE_START } else { CUSTOM_START };
-        // 选中的范围、分类和自定义分组都是带名称的胶囊，先扣掉它们多占的宽度再算放得下几个。
-        let mut chips = if side {
-            0.
-        } else {
-            chip_extra(&match self.range {
-                Range::All => t("clipboard:groups.all"),
-                Range::Favorite => t("clipboard:groups.favorite"),
-            })
-        };
-        if side && self.group_id.is_none() {
-            chips += chip_extra(&t("clipboard:groups.favorite"));
-        }
-        if let Some(kind) = self.category.filter(|_| !side) {
-            chips += chip_extra(&t(match kind {
-                ItemKind::Text => "clipboard:groups.text",
-                ItemKind::Image => "clipboard:groups.image",
-                ItemKind::Files => "clipboard:groups.files",
-            }));
-        }
-        // 选中的自定义分组先按它自己的胶囊预留；这样仍放不下它时，它收进“更多”，换成“更多”的胶囊。
-        let selected = self
-            .group_id
-            .as_ref()
-            .and_then(|id| visible.iter().position(|group| group.id == *id));
-        let mut fits = capacity_from(width - chips, start);
-        if let Some(index) = selected {
-            let with_chip = visible
-                .get(index)
-                .map_or(0., |group| chip_extra(&group.name));
-            fits = capacity_from(width - chips - with_chip, start);
-            if index >= fits {
-                fits = capacity_from(
-                    width - chips - chip_extra(&t("clipboard:groups.more")),
-                    start,
-                );
-            }
-        }
-        let inline = visible.len().min(fits);
+        let inline = visible.len().min(capacity_from(width, start));
         let overflow: Vec<Group> = visible.iter().skip(inline).cloned().collect();
 
         let customs: Vec<AnyElement> = visible
@@ -476,13 +425,5 @@ mod tests {
         assert_eq!(capacity_from(360., CUSTOM_START), 5);
         assert_eq!(capacity_from(200., CUSTOM_START), 0);
         assert_eq!(capacity_from(500., CUSTOM_START), 10);
-    }
-
-    /// 胶囊多占的宽度：两个全角字 24、两个半角字 14，名称再长也只算到上限。
-    #[test]
-    fn chips_reserve_their_label_width() {
-        assert_eq!(chip_extra("全部"), 36.);
-        assert_eq!(chip_extra("All"), 33.);
-        assert_eq!(chip_extra("一个很长很长很长很长的分组名称"), 84.);
     }
 }

@@ -327,7 +327,7 @@ async fn build_preview_file_entries(
 
     let mut entries = Vec::with_capacity(paths.len());
     for (index, path) in paths.iter().enumerate() {
-        let (icon_path, exists) =
+        let (icon_path, exists, _) =
             resolve_file_icon_path(pool, store, path, item.file_types.as_deref(), index).await?;
         let path_obj = Path::new(path);
         let is_dir = resolve_preview_file_is_dir(path_obj, item.file_types.as_deref(), index);

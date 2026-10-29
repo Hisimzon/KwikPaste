@@ -63,6 +63,12 @@ static SPACED_DIGITS_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// 空格分组的数字至少要这么多位才当成一个号码，否则 `100 200 300` 这类并列数字会被连成一个。
 const MIN_SPACED_DIGITS: usize = 10;
 
+/// UAX #29 算作词内连接符、在中文文本里却几乎总是分隔符的字符（`SKU:AB123`、`1，2，3`）。
+const WORD_BREAKS: &[char] = &[':', '：', '，', '；'];
+
+/// 拆词面板还从下划线处断开（`456_654`）：拆细了照样能拖选连续几个词，按原文取回整段。
+const SPLIT_BREAKS: &[char] = &[':', '：', '，', '；', '_'];
+
 /// 快捷信息所属的识别规则，不按片段内容二次猜测类型。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -256,7 +262,7 @@ fn extract_snippets(
         }
         push_span(&mut spans, found.range(), SnippetKind::Number);
     }
-    for (start, word) in word_segments(text) {
+    for (start, word) in word_segments(text, WORD_BREAKS) {
         if is_info_word(word) {
             push_span(&mut spans, start..start + word.len(), SnippetKind::Number);
         }
@@ -379,15 +385,14 @@ fn is_info_word(word: &str) -> bool {
     digits > 0 && chars >= 2 && (digits >= 2 || chars >= 3)
 }
 
-/// 按 UAX #29 切词，再从冒号和全角逗号 / 分号处断开：标准把它们算作词内连接符
-/// （`SKU:AB123`、`1，2，3` 会连成一个词），而在中文文本里它们几乎总是分隔符。
-fn word_segments(text: &str) -> Vec<(usize, &str)> {
+/// 按 UAX #29 切词，再从 `breaks` 里的字符处断开，断开的字符单独成词。
+fn word_segments<'a>(text: &'a str, breaks: &[char]) -> Vec<(usize, &'a str)> {
     let mut segments = Vec::new();
 
     for (start, segment) in text.split_word_bound_indices() {
         let mut piece_start = 0;
         for (offset, c) in segment.char_indices() {
-            if !matches!(c, ':' | '：' | '，' | '；') {
+            if !breaks.contains(&c) {
                 continue;
             }
 
@@ -412,7 +417,7 @@ pub fn split_words(text: &str) -> WordSplit {
     let mut tokens: Vec<WordToken> = Vec::new();
     let mut pending_line_break = false;
 
-    for (start, segment) in word_segments(head) {
+    for (start, segment) in word_segments(head, SPLIT_BREAKS) {
         if segment.chars().all(char::is_whitespace) {
             pending_line_break |= segment.contains('\n');
             continue;
@@ -862,6 +867,17 @@ mod tests {
             ["型", "号", "SKU", "：", "AB123", ";", "tel", ":", "10086", "，", "1", "，", "2"]
         );
         assert_eq!(snippet_texts("SKU:AB123 规格", false), ["AB123"]);
+    }
+
+    #[test]
+    fn splits_words_at_underscores() {
+        let text = "123-456_654-321";
+
+        assert_eq!(
+            token_texts(text),
+            ["123", "-", "456", "_", "654", "-", "321"]
+        );
+        assert_eq!(select_words(text, &[0, 1, 2]).as_deref(), Some("123-456"));
     }
 
     #[test]

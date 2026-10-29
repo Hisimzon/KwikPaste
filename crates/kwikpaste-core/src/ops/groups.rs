@@ -144,13 +144,20 @@ impl Core {
         .await
     }
 
-    /// 删除分组（组内记录回到未分组），发 [`CoreEvent::GroupsUpdated`]。
+    /// 删除分组（组内记录回到未分组）及指向它的自动分组规则，通知分组与设置刷新。
     pub async fn delete_group(&self, id: &str) -> Result<()> {
         let core = self.clone();
         let id = id.to_owned();
         self.hop(async move {
             groups::delete_group(&core.0.db.pool().await, &id).await?;
             core.0.events.emit(CoreEvent::GroupsUpdated);
+            let mut rules = core.settings().clipboard.auto_group_rules;
+            let previous_len = rules.len();
+            rules.retain(|rule| rule.group_id != id);
+            if rules.len() != previous_len {
+                core.update_settings(serde_json::json!({"clipboard": {"autoGroupRules": rules}}))
+                    .await?;
+            }
             Ok(())
         })
         .await

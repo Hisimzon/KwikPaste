@@ -241,16 +241,16 @@ fn handle(message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
     }
 
     if matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN) {
+        // 已吞掉的 V 持续到松开，期间释放 Win 或按下其它修饰键都不能泄漏重复按下。
+        if V_CONSUMED.load(Ordering::SeqCst) {
+            return true;
+        }
         if !key_down(VK_LWIN) && !key_down(VK_RWIN) {
             return false;
         }
         // 只接管单纯的 Win+V：Win+Shift+V 等组合属于系统或其它应用。
         if key_down(VK_SHIFT) || key_down(VK_CONTROL) || key_down(VK_MENU) {
             return false;
-        }
-        // 按住 V 会重复触发按下：只在第一次开合，重复期间仍然吞掉。
-        if V_CONSUMED.load(Ordering::SeqCst) {
-            return true;
         }
         // 让给前台应用时按下不吞，松开随之放行，系统照常处理 Win+V。
         if super::trigger_pause::recheck_for_input() {
@@ -294,6 +294,20 @@ fn suppress_start_menu() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consumed_v_repeats_stay_consumed_until_release() {
+        let event = KBDLLHOOKSTRUCT {
+            vkCode: VK_V,
+            ..Default::default()
+        };
+        V_CONSUMED.store(true, Ordering::SeqCst);
+
+        assert!(handle(WM_KEYDOWN, &event));
+        assert!(handle(WM_SYSKEYDOWN, &event));
+        assert!(handle(WM_KEYUP, &event));
+        assert!(!handle(WM_KEYUP, &event));
+    }
 
     #[test]
     fn sided_virtual_keys_map_to_physical_modifiers() {

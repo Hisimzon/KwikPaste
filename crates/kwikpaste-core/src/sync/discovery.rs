@@ -82,6 +82,7 @@ impl Discovery {
                                 .iter()
                                 .filter_map(|ip| socket_addr(ip, port));
                             let Some(found) = parse_service(
+                                service.get_fullname(),
                                 TxtRecord {
                                     id: service.get_property_val_str(TXT_ID),
                                     name: service.get_property_val_str(TXT_NAME),
@@ -192,11 +193,12 @@ fn socket_addr(ip: &ScopedIp, port: u16) -> Option<SocketAddr> {
 }
 
 fn parse_service(
+    fullname: &str,
     txt: TxtRecord<'_>,
     addresses: impl Iterator<Item = SocketAddr>,
 ) -> Option<Discovered> {
-    let device_id = txt.id?.trim();
-    if device_id.is_empty() {
+    let device_id = instance_name(fullname)?;
+    if device_id.is_empty() || txt.id?.trim() != device_id {
         return None;
     }
     let max = txt.version?.trim().parse::<u16>().ok()?;
@@ -221,9 +223,10 @@ fn parse_service(
         return None;
     }
 
+    let name = txt.name.unwrap_or(&device_id).to_owned();
     Some(Discovered {
-        device_id: device_id.to_owned(),
-        name: txt.name.unwrap_or(device_id).to_owned(),
+        device_id,
+        name,
         platform,
         protocol: VersionRange { min, max },
         addresses: unique,
@@ -252,6 +255,8 @@ mod tests {
 
     use super::*;
 
+    const FULLNAME: &str = "abc._kwikpaste._tcp.local.";
+
     fn txt<'a>(version: Option<&'a str>, min_version: Option<&'a str>) -> TxtRecord<'a> {
         TxtRecord {
             id: Some("abc"),
@@ -273,7 +278,8 @@ mod tests {
             link_local,
         ];
 
-        let found = parse_service(txt(Some("3"), Some("2")), addresses.into_iter()).unwrap();
+        let found =
+            parse_service(FULLNAME, txt(Some("3"), Some("2")), addresses.into_iter()).unwrap();
 
         assert_eq!(found.device_id, "abc");
         assert_eq!(found.platform, Platform::Macos);
@@ -289,11 +295,11 @@ mod tests {
     fn reads_version_ranges_from_old_and_new_devices() {
         let addresses = || vec!["192.168.1.8:41573".parse().unwrap()].into_iter();
 
-        let old = parse_service(txt(Some("1"), None), addresses()).unwrap();
+        let old = parse_service(FULLNAME, txt(Some("1"), None), addresses()).unwrap();
         assert_eq!(old.protocol, VersionRange { min: 1, max: 1 });
 
-        assert!(parse_service(txt(Some("x"), None), addresses()).is_none());
-        assert!(parse_service(txt(None, Some("2")), addresses()).is_none());
+        assert!(parse_service(FULLNAME, txt(Some("x"), None), addresses()).is_none());
+        assert!(parse_service(FULLNAME, txt(None, Some("2")), addresses()).is_none());
     }
 
     #[test]
@@ -303,5 +309,18 @@ mod tests {
             Some("abc")
         );
         assert_eq!(instance_name("abc._other._tcp.local."), None);
+    }
+
+    #[test]
+    fn resolved_identity_matches_the_removal_key() {
+        let addresses = || vec!["192.168.1.8:41573".parse().unwrap()].into_iter();
+        let found = parse_service(FULLNAME, txt(Some("2"), None), addresses()).unwrap();
+        assert_eq!(Some(found.device_id), instance_name(FULLNAME));
+
+        for id in ["other", "fresh-id", ""] {
+            let mut record = txt(Some("2"), None);
+            record.id = Some(id);
+            assert!(parse_service(FULLNAME, record, addresses()).is_none());
+        }
     }
 }

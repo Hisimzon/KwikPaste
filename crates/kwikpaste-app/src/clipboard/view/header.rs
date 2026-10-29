@@ -367,6 +367,7 @@ impl Header {
         .max(1.) as u32;
 
         ImageKey {
+            modified: None,
             path: path_of(path),
             width: side,
             height: side,

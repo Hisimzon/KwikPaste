@@ -136,6 +136,9 @@ pub struct FileEntry {
     pub is_image: bool,
     /// 组装时实时检测：路径是否仍存在于磁盘，界面据此对失效条目划删除线并回退预览。
     pub exists: bool,
+    /// 文件修改时间（Unix 毫秒）；无法读取时为空，供原文件缩略图识别内容变化。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_path: Option<String>,
 }

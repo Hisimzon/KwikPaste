@@ -38,12 +38,12 @@ fn has_known_prefixed_token(text: &str) -> bool {
             Regex::new(
                 r"(?x)
                 (?i:
-                    \bgh[pousr]_[A-Za-z0-9_]{36,}\b
-                  | \bgithub_pat_[A-Za-z0-9_]{40,}\b
-                  | \bsk-[A-Za-z0-9_-]{32,}\b
-                  | \bsk-proj-[A-Za-z0-9_-]{32,}\b
-                  | \bxox[baprs]-[A-Za-z0-9-]{20,}\b
-                  | \b(?:api|access|refresh|secret)[_-]?token_[A-Za-z0-9_-]{24,}\b
+                    (?-u:\b)gh[pousr]_[A-Za-z0-9_]{36,}(?-u:\b)
+                  | (?-u:\b)github_pat_[A-Za-z0-9_]{40,}(?-u:\b)
+                  | (?-u:\b)sk-[A-Za-z0-9_-]{32,}(?-u:\b)
+                  | (?-u:\b)sk-proj-[A-Za-z0-9_-]{32,}(?-u:\b)
+                  | (?-u:\b)xox[baprs]-[A-Za-z0-9-]{20,}(?-u:\b)
+                  | (?-u:\b)(?:api|access|refresh|secret)[_-]?token_[A-Za-z0-9_-]{24,}(?-u:\b)
                 )
                 ",
             )
@@ -56,7 +56,9 @@ fn has_known_prefixed_token(text: &str) -> bool {
 fn has_aws_access_key(text: &str) -> bool {
     static AWS_KEY_RE: OnceLock<Regex> = OnceLock::new();
     AWS_KEY_RE
-        .get_or_init(|| Regex::new(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b").expect("valid regex"))
+        .get_or_init(|| {
+            Regex::new(r"(?-u:\b)(?:AKIA|ASIA)[A-Z0-9]{16}(?-u:\b)").expect("valid regex")
+        })
         .is_match(text)
 }
 
@@ -65,8 +67,10 @@ fn has_jwt(text: &str) -> bool {
     static JWT_RE: OnceLock<Regex> = OnceLock::new();
     JWT_RE
         .get_or_init(|| {
-            Regex::new(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
-                .expect("valid regex")
+            Regex::new(
+                r"(?-u:\b)eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?-u:\b)",
+            )
+            .expect("valid regex")
         })
         .is_match(text)
 }
@@ -79,9 +83,9 @@ fn has_labeled_secret(text: &str) -> bool {
         .get_or_init(|| {
             Regex::new(
                 r#"(?ix)
-                \b
+                (?-u:\b)
                 (?:api[_-]?key|secret[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|auth[_-]?token|bearer)
-                \b
+                (?-u:\b)
                 ['"]?\s*[:=]\s*
                 ['"]?
                 [A-Za-z0-9][A-Za-z0-9._~+/=-]{23,}
@@ -106,6 +110,21 @@ mod tests {
         assert!(contains_secret(&github_token));
         assert!(contains_secret(&openai_token));
         assert!(contains_secret(&slack_token));
+    }
+
+    #[test]
+    fn detects_ascii_credentials_next_to_cjk_but_not_inside_ascii_identifiers() {
+        let credentials = [
+            ["ghp", "_abcdefghijklmnopqrstuvwxyzABCDE1234567890"].concat(),
+            ["AKIA", "IOSFODNN7EXAMPLE"].concat(),
+            "eyJhbGciOiJIUzI1NiJ9.abcdefghijk.abcdefghijk".to_owned(),
+            "api_key=abcdefghijklmnopqrstuvwxyz123456".to_owned(),
+        ];
+
+        for credential in credentials {
+            assert!(contains_secret(&format!("密钥{credential}结束")));
+            assert!(!contains_secret(&format!("prefix_{credential}")));
+        }
     }
 
     #[test]

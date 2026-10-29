@@ -254,6 +254,7 @@ impl QuickPasteModifiers {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Clipboard {
+    pub auto_group_rules: Vec<AutoGroupRule>,
     pub custom_rules: Vec<crate::clipboard::rules::CustomRule>,
     #[serde(skip)]
     pub rule_cache: crate::clipboard::rules::RuleCache,
@@ -267,6 +268,27 @@ pub struct Clipboard {
     pub preview: Preview,
     pub feedback: Feedback,
     pub filters: Filters,
+}
+
+/// 将指定来源应用的内容自动放入分组；第一个启用且匹配的规则生效。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AutoGroupRule {
+    pub id: String,
+    pub enabled: bool,
+    pub group_id: String,
+    pub app_ids: Vec<String>,
+}
+
+impl Default for AutoGroupRule {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            enabled: true,
+            group_id: String::new(),
+            app_ids: Vec::new(),
+        }
+    }
 }
 
 impl Clipboard {

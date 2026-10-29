@@ -571,7 +571,7 @@ impl ClipboardList {
     // ---------------------------------------------------------------- 数据
 
     pub(super) fn fetch(&mut self, request: FetchRequest, cx: &mut Context<Self>) {
-        if request.replace && request.range.start == 0 {
+        if request.replace {
             self.freshness.first_page_sent(request.token);
         }
         let future = self.source.list(ListQuery {
@@ -617,6 +617,10 @@ impl ClipboardList {
                     {
                         self.fetch(request, cx);
                     }
+                    if request.replace {
+                        self.freshness.first_page_done(request.token);
+                    }
+                    self.run_pending_activation(cx);
                 }
             }
             Err(err) => {
@@ -624,11 +628,11 @@ impl ClipboardList {
                 if self.model.fail(&request) {
                     self.sync_rows(None);
                 }
+                if request.replace {
+                    self.freshness.first_page_done(request.token);
+                    self.run_pending_activation(cx);
+                }
             }
-        }
-        if request.replace && request.range.start == 0 {
-            self.freshness.first_page_done(request.token);
-            self.run_pending_activation(cx);
         }
         cx.notify();
     }
@@ -1436,6 +1440,7 @@ impl ClipboardList {
         };
         let key = ImageKey {
             path: path_of(&path),
+            modified: target.modified,
             width: to_physical(target.display.width),
             height: to_physical(target.display.height),
             resize: ResizeMode::Exact,
@@ -1465,6 +1470,7 @@ impl ClipboardList {
             .ceil()
             .max(1.) as u32;
         let key = ImageKey {
+            modified: None,
             path: path_of(path),
             width: physical,
             height: physical,

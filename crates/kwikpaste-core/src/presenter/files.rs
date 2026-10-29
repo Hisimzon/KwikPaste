@@ -67,7 +67,7 @@ pub fn is_image_path(path: &str) -> bool {
 }
 
 /// 解析文件 icon 路径：优先命中缓存，未命中时在路径存在的前提下抽取并落盘缓存。
-/// 返回 `(icon_path, exists)`，其中 `icon_path` 可能为 `None`（抽取失败或已删除且无缓存）。
+/// 返回 `(icon_path, exists, modified)`，其中修改时间为 Unix 毫秒，无法读取时为空。
 /// 抽取在阻塞线程池里做，必须在 core runtime 里调用。
 pub(crate) async fn resolve_file_icon_path(
     pool: &SqlitePool,
@@ -75,9 +75,13 @@ pub(crate) async fn resolve_file_icon_path(
     path: &str,
     file_types: Option<&str>,
     index: usize,
-) -> Result<(Option<String>, bool)> {
+) -> Result<(Option<String>, bool, Option<i64>)> {
     let path_obj = Path::new(path);
-    let exists = path_obj.exists();
+    let metadata = path_obj.metadata().ok();
+    let exists = metadata.is_some();
+    let modified = metadata
+        .and_then(|metadata| metadata.modified().ok())
+        .map(|time| chrono::DateTime::<chrono::Utc>::from(time).timestamp_millis());
     let platform = if cfg!(target_os = "macos") {
         Platform::Macos
     } else {
@@ -100,12 +104,12 @@ pub(crate) async fn resolve_file_icon_path(
     if let Some(icon_file) = crate::db::file_icons::get_icon(pool, &cache_key, platform).await? {
         let icon_path = file_icon_store.icon_path(&icon_file);
         if icon_path.exists() {
-            return Ok((icon_path.to_str().map(str::to_owned), exists));
+            return Ok((icon_path.to_str().map(str::to_owned), exists, modified));
         }
     }
 
     if !exists {
-        return Ok((None, false));
+        return Ok((None, false, None));
     }
 
     let path_for_extract = path_obj.to_path_buf();
@@ -114,14 +118,14 @@ pub(crate) async fn resolve_file_icon_path(
         .map_err(|err| AppError::Clipboard(format!("icon extract task join failed: {err}")))?;
 
     let Some(png) = png_bytes else {
-        return Ok((None, exists));
+        return Ok((None, exists, modified));
     };
 
     let icon_file = file_icon_store.store(&png)?;
     crate::db::file_icons::upsert_icon(pool, &cache_key, platform, &icon_file).await?;
 
     let icon_path = file_icon_store.icon_path(&icon_file);
-    Ok((icon_path.to_str().map(str::to_owned), exists))
+    Ok((icon_path.to_str().map(str::to_owned), exists, modified))
 }
 
 #[cfg(test)]

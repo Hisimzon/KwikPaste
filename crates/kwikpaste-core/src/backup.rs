@@ -290,6 +290,8 @@ async fn export_history_backup(
     let target = normalize_backup_path(target)?;
     let password = validate_password_options(&options)?;
     let exported_at = Utc::now();
+    // 删图片的清理与删除都要独占锁；导出持共享锁即可挡住它们，采集照常进行。
+    let _publication = core.cleanup.image_publication().await;
     let pool = core.db.pool().await;
     // 部分备份的源文件在临时目录里，打包完才能删。
     let mut _staged = None;
@@ -1254,6 +1256,7 @@ async fn import_ecopaste_history(
     let mut imported_items = 0;
     let mut skipped_items = 0;
     {
+        let _publication = core.cleanup.image_publication().await;
         let _upsert = core.upsert_lock.lock().await;
         let pool = core.db.pool().await;
         for row in rows {
@@ -1381,6 +1384,7 @@ async fn merge_import(
     root: &Path,
     import_settings: bool,
 ) -> Result<ImportHistoryBackupResult> {
+    let _publication = core.cleanup.image_publication().await;
     let pool = core.db.pool().await;
     let db_path = root.join(DB_ARCHIVE_DIR).join(DB_FILENAME);
     let backup_pool = open_backup_db(&db_path).await?;
@@ -1432,13 +1436,29 @@ async fn overwrite_import(
     } else {
         None
     };
+    // 先在目标卷复制资源，空间不足时还没有动当前库与资源目录。
+    let resources_src = root.join(RESOURCES_ARCHIVE_DIR);
+    let staged_resources = if resources_src.exists() {
+        let parent = core.paths.app_data_dir()?;
+        Some(
+            blocking(move || {
+                let staged =
+                    tempfile::tempdir_in(parent).context("failed to stage backup resources")?;
+                copy_dir_all(&resources_src, staged.path())?;
+                Ok(staged)
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
 
     {
         // 先停新的采集，再等在途的入库与清理结束，换库期间没有人写库或删图片文件。
         let _pause = core.watcher_pause.pause_scoped();
         let _ocr = core.ocr.suspend().await;
-        let _upsert = core.upsert_lock.lock().await;
         let _exclusive = core.cleanup.exclusive().await;
+        let _upsert = core.upsert_lock.lock().await;
 
         let live = crate::db::db_path(&core.paths)?;
         let staged =
@@ -1446,20 +1466,21 @@ async fn overwrite_import(
         let counter = crate::db::sync::sync_counter(&core.db.pool().await).await?;
         let swap_error = Mutex::new(None::<AppError>);
         core.db
-            .close_and_replace(|| swap_in_staged_database(core, &live, &staged, &swap_error))
+            .close_and_replace(|| {
+                swap_in_staged_database(
+                    core,
+                    &live,
+                    &staged,
+                    staged_resources.as_ref().map(TempDir::path),
+                    settings.as_ref(),
+                    counter,
+                    &swap_error,
+                )
+            })
             .await?;
         if let Some(err) = lock(&swap_error).take() {
             return Err(err);
         }
-        // 导入的记录都不是这台电脑复制的：不能当成本机采集补齐给已配对设备；计数器不回退。
-        crate::db::sync::reset_after_import(&core.db.pool().await, counter).await?;
-
-        let resources_src = root.join(RESOURCES_ARCHIVE_DIR);
-        if resources_src.exists() {
-            let resources_dir = core.paths.resources_dir()?;
-            blocking(move || replace_dir(&resources_src, &resources_dir)).await?;
-        }
-
         refresh_apps_registry(core).await;
         core.events.emit(CoreEvent::ClipboardReloaded);
         core.ocr.nudge();
@@ -1467,8 +1488,7 @@ async fn overwrite_import(
 
     let imported_settings = settings.is_some();
     if let Some(settings) = settings {
-        let next = core.settings.replace(settings)?;
-        apply_imported_settings(core, next, SettingsDelta::replaced());
+        apply_imported_settings(core, settings, SettingsDelta::replaced());
     }
 
     Ok(ImportHistoryBackupResult {
@@ -1532,25 +1552,64 @@ async fn migrate_staged_database(staged: &Path) -> Result<()> {
     migrated
 }
 
-/// 当前库连同 sidecar 改名留底，换上暂存库并重新打开。任何一步失败都把原来的库换回去重新打开，
+/// 当前库连同 sidecar 与资源目录改名留底，换上暂存数据并保存设置后才删除旧数据。
+/// 任何一步失败都把原来的库与资源换回去重新打开，
 /// 错误记进 `failure`：连接池总要换上一个能用的，不能留下已关闭的那个。
 async fn swap_in_staged_database(
     core: &CoreInner,
     live: &Path,
     staged: &Path,
+    resources: Option<&Path>,
+    settings: Option<&crate::settings::Settings>,
+    counter: i64,
     failure: &Mutex<Option<AppError>>,
 ) -> Result<SqlitePool> {
     let previous = sibling(live, PREVIOUS_DB_SUFFIX);
+    let live_resources = core.paths.resources_dir()?;
+    let previous_resources = sibling(&live_resources, PREVIOUS_DB_SUFFIX);
+    let mut resources_changed = false;
     let swapped = async {
         remove_database_files(&previous)?;
         move_database_files(live, &previous)?;
         move_database_files(staged, live)?;
-        crate::db::init(&core.paths, core.db_max_connections).await
+        let pool = crate::db::init(&core.paths, core.db_max_connections).await?;
+        let finish = async {
+            // 导入记录不作为本机采集同步，计数器不回退；失败时也恢复原库。
+            crate::db::sync::reset_after_import(&pool, counter).await?;
+            if let Some(resources) = resources {
+                if previous_resources.exists() {
+                    fs::remove_dir_all(&previous_resources)
+                        .context("failed to remove previous backup resources")?;
+                }
+                if live_resources.exists() {
+                    fs::rename(&live_resources, &previous_resources)
+                        .context("failed to retain current resources")?;
+                }
+                resources_changed = true;
+                fs::rename(resources, &live_resources)
+                    .context("failed to install staged resources")?;
+            }
+            if let Some(settings) = settings {
+                core.settings.replace(settings.clone())?;
+            }
+            Ok::<_, AppError>(())
+        }
+        .await;
+        if let Err(err) = finish {
+            pool.close().await;
+            return Err(err);
+        }
+        Ok(pool)
     }
     .await;
 
     match swapped {
         Ok(pool) => {
+            if resources_changed && previous_resources.exists() {
+                if let Err(err) = fs::remove_dir_all(&previous_resources) {
+                    log::warn!("remove previous resources after backup overwrite failed: {err}");
+                }
+            }
             if let Err(err) = remove_database_files(&previous) {
                 log::warn!("remove previous database after backup overwrite failed: {err}");
             }
@@ -1559,6 +1618,16 @@ async fn swap_in_staged_database(
         Err(err) => {
             log::error!("swap in the imported database failed, restoring the previous one: {err}");
             *lock(failure) = Some(err);
+            if resources_changed {
+                if live_resources.exists() {
+                    fs::remove_dir_all(&live_resources)
+                        .context("failed to remove imported resources during rollback")?;
+                }
+                if previous_resources.exists() {
+                    fs::rename(&previous_resources, &live_resources)
+                        .context("failed to restore previous resources")?;
+                }
+            }
             if previous.exists() {
                 remove_database_files(live)?;
                 move_database_files(&previous, live)?;
@@ -1769,8 +1838,26 @@ async fn merge_items(
             continue;
         }
 
-        // 备份可能来自还没有 last_used_at 的旧版本，统一以 updated_at 作为最后使用时间。
-        sqlx::query(
+        // 同一记录编辑后 id 不变；内容不同的备份版本作为新记录保留。
+        let id_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE id = ?)")
+                .bind(&row.id)
+                .fetch_one(&mut **tx)
+                .await
+                .context("failed to check imported item id")?;
+        let id = if id_exists {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            row.id
+        };
+
+        // 旧备份缺列或没有有效的使用时间时，才回落到列表更新时间。
+        let last_used_at = row
+            .last_used_at
+            .as_deref()
+            .and_then(|value| value.parse::<DateTime<Utc>>().ok())
+            .unwrap_or(row.updated_at);
+        let inserted = sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
               summary, file_types, size, width, height, use_count, is_favorite, is_pinned, favorite_order, pin_order, is_sensitive, platform, note, \
@@ -1780,7 +1867,7 @@ async fn merge_items(
                      CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(pin_order) FROM clipboard_items), 0) END,
                      ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(row.id)
+        .bind(id)
         .bind(row.kind)
         .bind(row.sub_kind)
         .bind(row.group_id)
@@ -1803,12 +1890,14 @@ async fn merge_items(
         .bind(row.note)
         .bind(row.created_at)
         .bind(row.updated_at)
-        .bind(row.updated_at)
+        .bind(last_used_at)
         .bind(row.original_content)
         .execute(&mut **tx)
         .await
-        .context("failed to import item")?;
-        imported_items += 1;
+        .context("failed to import item")?
+        .rows_affected();
+        imported_items += inserted;
+        skipped_items += u64::from(inserted == 0);
     }
 
     Ok(MergeOutcome {
@@ -1840,6 +1929,8 @@ struct BackupItemRow {
     note: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    #[sqlx(default)]
+    last_used_at: Option<String>,
     /// 已发布的旧备份没有此列；SELECT * 配合缺列默认值保留旧库合并能力。
     #[sqlx(default)]
     original_content: Option<String>,
@@ -1895,10 +1986,8 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<u64> {
     }
 
     let mut copied = 0;
-    for entry in WalkDir::new(src)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-    {
+    for entry in WalkDir::new(src) {
+        let entry = entry.with_context(|| format!("failed to enumerate {src:?}"))?;
         let path = entry.path();
         let relative = path
             .strip_prefix(src)
@@ -1949,15 +2038,6 @@ fn copy_dir_missing(src: &Path, dst: &Path) -> Result<u64> {
     }
 
     Ok(copied)
-}
-
-fn replace_dir(src: &Path, dst: &Path) -> Result<()> {
-    if dst.exists() {
-        fs::remove_dir_all(dst).with_context(|| format!("failed to remove {dst:?}"))?;
-    }
-    copy_dir_all(src, dst)?;
-
-    Ok(())
 }
 
 fn copy_file_into_writer<W: Write>(path: &Path, writer: &mut W) -> Result<()> {

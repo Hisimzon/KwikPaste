@@ -90,6 +90,9 @@ pub struct FileRow {
     /// 路径是否仍在磁盘上；不在时文件名划删除线。
     #[serde(default = "default_true")]
     pub exists: bool,
+    /// 文件修改时间（Unix 毫秒）；未知时不参与原文件缩略图的版本区分。
+    #[serde(default)]
+    pub modified: Option<i64>,
     /// 文件类型图标（PNG 绝对路径）。
     #[serde(default)]
     pub icon_path: Option<Arc<str>>,

@@ -585,7 +585,7 @@ impl Core {
         let file_types = file_types.map(str::to_owned);
         self.hop(async move {
             let pool = core.0.db.pool().await;
-            let (icon_path, exists) = presenter::resolve_file_icon_path(
+            let (icon_path, exists, _) = presenter::resolve_file_icon_path(
                 &pool,
                 &core.0.file_icons,
                 &path,

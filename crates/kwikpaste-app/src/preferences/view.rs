@@ -52,6 +52,7 @@ use crate::{
     platform::{core_events, hotkey},
 };
 
+mod auto_group;
 pub(super) mod choices;
 mod custom_rules;
 mod extensions;
@@ -174,6 +175,7 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     let window_id = handle.window_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
+            hotkey::resume(cx);
             let _ = cx.remove_global::<PreferencesWindow>();
         }
     })
@@ -213,6 +215,7 @@ pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
     let window_id = handle.window_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
+            hotkey::resume(cx);
             let _ = cx.remove_global::<PreferencesWindow>();
         }
     })
@@ -281,6 +284,7 @@ struct Preferences {
     /// 侧栏宽度过渡的开始时间；过渡结束后清掉。
     sidebar_transition: Option<Instant>,
     settings: Settings,
+    retention_pending: bool,
     search: TextInput,
     _subscriptions: Vec<Subscription>,
     language: SelectState,
@@ -311,6 +315,10 @@ struct Preferences {
     lan_name: TextInput,
     lan_max_image: NumberInputState,
     icons: gpui::Entity<KpImageCache>,
+    /// 全部分组：启动分组下拉与自动归组规则共用，分组变化时刷新。
+    groups: Vec<kwikpaste_core::db::models::ClipboardGroup>,
+    /// 自动归组规则行显示应用名用；有规则时打开窗口取一次，编辑规则时更新。
+    auto_group_apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
 }
 
 impl Preferences {
@@ -343,6 +351,7 @@ impl Preferences {
         let state = self.icons.update(cx, |icons, cx| {
             icons.request(
                 ImageKey {
+                    modified: None,
                     path: path_of(path),
                     width: physical,
                     height: physical,
@@ -454,7 +463,7 @@ impl Preferences {
                             selects.insert(setting.id, state);
                         }
                         Control::GroupSelect => {
-                            let options = ["all", "preserve", "missingGroup"]
+                            let options = ["all", "preserve"]
                                 .into_iter()
                                 .map(|value| {
                                     SelectOption::new(
@@ -524,9 +533,10 @@ impl Preferences {
             window,
             cx,
         );
-        let retention_value_sub = retention_value.on_commit(window, cx, |this, value, _, cx| {
-            this.update("clipboard.history.retention.value", json!(value), cx);
-        });
+        let retention_value_sub =
+            retention_value.on_commit(window, cx, |this, value, window, cx| {
+                this.change_retention(Some(value as u32), None, window, cx);
+            });
         number_inputs.insert("history.retention.value", retention_value);
         let retention_unit = match settings.clipboard.history.retention.unit {
             kwikpaste_core::settings::RetentionUnit::Minutes => "minutes",
@@ -550,15 +560,12 @@ impl Preferences {
             window,
             cx,
         );
-        let retention_unit_sub = retention_unit_state.on_change(cx, |this, value, cx| {
-            if let Some(value) = value {
-                this.update(
-                    "clipboard.history.retention.unit",
-                    json!(value.as_ref()),
-                    cx,
-                );
-            }
-        });
+        let retention_unit_sub =
+            retention_unit_state.on_change_in(window, cx, |this, value, window, cx| {
+                if let Some(value) = value {
+                    this.change_retention(None, Some(retention_unit_from_key(&value)), window, cx);
+                }
+            });
         selects.insert("history.retention.unit", retention_unit_state);
         // 材质切换后窗口重套背板，分层底色也要跟着重画；选项显示的仍是用户的设置值（同 1.x）。
         let material_subscription =
@@ -585,7 +592,16 @@ impl Preferences {
         let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
         let subscriptions: Vec<Subscription> = core_events(cx)
             .map(|events| {
-                cx.subscribe(&events, |this, _, event: &CoreEvent, cx| {
+                cx.subscribe_in(&events, window, |this, _, event: &CoreEvent, window, cx| {
+                    if matches!(event, CoreEvent::SettingsUpdated { .. }) {
+                        this.sync_settings(window, cx);
+                    }
+                    if matches!(
+                        event,
+                        CoreEvent::GroupsUpdated | CoreEvent::ClipboardReloaded
+                    ) {
+                        this.refresh_startup_groups(window, cx);
+                    }
                     if matches!(
                         event,
                         CoreEvent::LanSyncChanged | CoreEvent::LanDevicePaired { .. }
@@ -659,13 +675,14 @@ impl Preferences {
             .flat_map(|section| section.settings)
             .map(|setting| (setting.id, ScrollAnchor::for_handle(scroll.clone())))
             .collect();
-        Self {
+        let mut preferences = Self {
             tab: initial_tab(),
             advanced_expanded: Default::default(),
             setting_anchors,
             sidebar_collapsed: settings.appearance.preferences_sidebar_collapsed,
             sidebar_transition: None,
             settings,
+            retention_pending: false,
             search,
             _subscriptions: subscriptions,
             language,
@@ -690,7 +707,200 @@ impl Preferences {
             lan_name,
             lan_max_image,
             icons,
+            groups: Vec::new(),
+            auto_group_apps: Vec::new(),
+        };
+        preferences.refresh_startup_groups(window, cx);
+        preferences.refresh_auto_group_apps(window, cx);
+        preferences
+    }
+
+    /// 分组增删、改名或导入后刷新分组列表与启动分组；已删除的保存值只作占位显示。
+    fn refresh_startup_groups(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let groups = match core.list_groups().await {
+                Ok(groups) => groups,
+                Err(error) => {
+                    log::warn!("startup groups could not be loaded: {error:#}");
+                    return;
+                }
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.groups = groups.clone();
+                cx.notify();
+                let Some(state) = this.selects.get("window.selectGroupOnOpen") else {
+                    return;
+                };
+                let mut options = ["all", "preserve"]
+                    .into_iter()
+                    .map(|value| SelectOption::new(value, startup_group_label(value)))
+                    .collect::<Vec<_>>();
+                options.extend(
+                    groups
+                        .into_iter()
+                        .map(|group| SelectOption::new(format!("group:{}", group.id), group.name)),
+                );
+                state.set_options(options, window, cx);
+                let selected = &this.settings.clipboard.window.select_group_on_open;
+                state.set_value(selected, window, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 导入或其它入口更新设置后，同步快照及独立持有状态的控件。
+    fn sync_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = core_host::core(cx) else {
+            return;
+        };
+        self.settings = core.settings();
+        let settings = values::to_json(&self.settings);
+        let portable = core.paths().is_portable();
+        for setting in schema::tabs(portable)
+            .into_iter()
+            .flat_map(|tab| tab.sections)
+            .flat_map(|section| section.settings)
+        {
+            let Some(path) = setting.path else { continue };
+            if let Some(state) = self.selects.get(setting.id)
+                && let Some(value) = values::get_choice(&settings, path)
+            {
+                state.set_value(&value, window, cx);
+            }
+            if let Some(state) = self.number_inputs.get(setting.id) {
+                state.set_value(values::get_u64(&settings, path), window, cx);
+            }
+            if let Some(state) = self.sliders.get(setting.id) {
+                state.set_value(values::get_u64(&settings, path).min(100) as u8, window, cx);
+            }
         }
+        if let Some(value) = values::get_choice(&settings, "appearance.language") {
+            self.language.set_value(&value, window, cx);
+        }
+        if self.lan_name.value(cx).as_ref() != self.settings.sync.lan.device_name {
+            self.lan_name
+                .set_value(self.settings.sync.lan.device_name.clone(), window, cx);
+        }
+        self.lan_max_image
+            .set_value(u64::from(self.settings.sync.lan.max_image_mb), window, cx);
+        self.sidebar_collapsed = self.settings.appearance.preferences_sidebar_collapsed;
+        self.sync_retention(window, cx);
+        self.refresh_startup_groups(window, cx);
+        cx.notify();
+    }
+
+    /// 取消保留策略编辑或外部更新后，两个控件都回到已保存的值。
+    fn sync_retention(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let retention = &self.settings.clipboard.history.retention;
+        if let Some(state) = self.number_inputs.get("history.retention.value") {
+            state.set_value(u64::from(retention.value), window, cx);
+        }
+        if let Some(state) = self.selects.get("history.retention.unit") {
+            state.set_value(retention_unit_key(retention.unit), window, cx);
+        }
+    }
+
+    /// 先按候选策略预演；会删除历史时，确认之前不落盘。
+    fn change_retention(
+        &mut self,
+        value: Option<u32>,
+        unit: Option<RetentionUnit>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.retention_pending {
+            return;
+        }
+        let Some(core) = core_host::core(cx).cloned() else {
+            return;
+        };
+        let mut history = core.settings().clipboard.history;
+        let saved = history.retention.clone();
+        if let Some(value) = value {
+            history.retention.value = value;
+        }
+        if let Some(unit) = unit {
+            history.retention.unit = unit;
+        }
+        if history.retention == saved {
+            return;
+        }
+        self.retention_pending = true;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let preview = core.preview_cleanup(history.clone()).await;
+            let confirmed = match preview {
+                Ok(preview) if preview.removed > 0 => {
+                    let Ok(answer) = this.update_in(cx, |_, window, cx| {
+                        kwikpaste_ui::confirm(
+                            ConfirmSpec::new(i18n::t("preferences:retentionConfirm.title"))
+                                .content(i18n::t_args(
+                                    "preferences:retentionConfirm.content",
+                                    &[("count", &preview.removed.to_string())],
+                                ))
+                                .danger(),
+                            window,
+                            cx,
+                        )
+                    }) else {
+                        return;
+                    };
+                    answer.await.unwrap_or(false)
+                }
+                Ok(_) => true,
+                Err(error) => {
+                    let _ = cx.update(|window, cx| {
+                        toast::show(
+                            Toast::error(i18n::t_args(
+                                "commands:error",
+                                &[
+                                    ("label", &i18n::t("commands:labels.previewHistoryCleanup")),
+                                    ("message", &error.to_string()),
+                                ],
+                            )),
+                            window,
+                            cx,
+                        )
+                    });
+                    false
+                }
+            };
+            let result = if confirmed {
+                Some(
+                    core.update_settings(values::patch(
+                        "clipboard.history.retention",
+                        json!(history.retention),
+                    ))
+                    .await,
+                )
+            } else {
+                None
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.retention_pending = false;
+                this.settings = core.settings();
+                this.sync_retention(window, cx);
+                if let Some(Err(error)) = result {
+                    toast::show(
+                        Toast::error(i18n::t_args(
+                            "commands:error",
+                            &[
+                                ("label", &i18n::t("commands:labels.saveSettings")),
+                                ("message", &error.to_string()),
+                            ],
+                        )),
+                        window,
+                        cx,
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn update(&mut self, path: &'static str, value: serde_json::Value, cx: &mut Context<Self>) {
@@ -1879,10 +2089,15 @@ impl Preferences {
             .items_center()
             .gap(space(2.))
             .when(!keep_forever, |row| {
-                row.child(NumberInput::new(value_state).width(rems(4.5)))
+                row.child(
+                    NumberInput::new(value_state)
+                        .width(rems(4.5))
+                        .disabled(self.retention_pending),
+                )
             })
             .child(
                 Select::new(unit_state)
+                    .disabled(self.retention_pending)
                     .width(if keep_forever {
                         CONTROL_WIDTH
                     } else {
@@ -2924,6 +3139,9 @@ impl Preferences {
         self.tab = tab;
         self.shortcut_detail = None;
         self.shortcut_conflict = None;
+        if self.recording.is_some() {
+            self.finish_recording(cx);
+        }
         if self.recording_panel.is_some() {
             self.finish_panel_recording(cx);
         }
@@ -3093,6 +3311,9 @@ impl Preferences {
             Control::Select(_) | Control::GroupSelect => {
                 if let Some(state) = self.selects.get(setting.id) {
                     Select::new(state)
+                        .when(matches!(setting.control, Control::GroupSelect), |select| {
+                            select.placeholder(startup_group_label("missingGroup"))
+                        })
                         .width(CONTROL_WIDTH)
                         .disabled(setting.is_disabled(&self.settings))
                         .accessibility_label(title.clone())
@@ -3193,6 +3414,7 @@ impl Preferences {
             Control::Retention => self.render_retention(cx),
             Control::RetentionRules => self.render_retention_rules(cx),
             Control::CustomRules => self.render_custom_rules(cx),
+            Control::AutoGroupRules => self.render_auto_group_rules(cx),
             Control::PanelShortcuts => self.render_panel_shortcuts(cx),
             Control::AppExclusion => self.render_app_exclusion(setting.id, value, cx),
             Control::Action { danger } => self.render_action(setting.id, danger, cx),
@@ -3951,7 +4173,22 @@ async fn export_readable_files(
     };
     match core.export_readable_data(options, fingerprint, path).await {
         Ok(result) => log::info!("readable export written: {}", result.path),
-        Err(error) => log::warn!("readable export failed: {error:#}"),
+        Err(error) => {
+            log::warn!("readable export failed: {error:#}");
+            let _ = cx.update(|window, cx| {
+                toast::show(
+                    Toast::error(i18n::t_args(
+                        "commands:error",
+                        &[
+                            ("label", &i18n::t("commands:labels.exportReadableData")),
+                            ("message", &error.to_string()),
+                        ],
+                    )),
+                    window,
+                    cx,
+                )
+            });
+        }
     }
 }
 
@@ -3968,6 +4205,7 @@ struct ReadableExportDialog {
     include_ungrouped: bool,
     split_by_group: bool,
     preview: Option<ExportPreview>,
+    preview_generation: u64,
     preview_failed: bool,
 }
 
@@ -4001,6 +4239,7 @@ impl ReadableExportDialog {
             include_ungrouped: true,
             split_by_group: false,
             preview: None,
+            preview_generation: 0,
             preview_failed: false,
         }
     }
@@ -4025,6 +4264,7 @@ impl ReadableExportDialog {
     }
 
     fn invalidate_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_generation = self.preview_generation.wrapping_add(1);
         self.preview = None;
         self.preview_failed = false;
         cx.notify();
@@ -4033,12 +4273,14 @@ impl ReadableExportDialog {
     fn prepare_preview(&mut self, cx: &mut Context<Self>) {
         let options = self.export_options(cx);
         let core = self.core.clone();
-        self.preview = None;
-        self.preview_failed = false;
-        cx.notify();
+        self.invalidate_preview(cx);
+        let generation = self.preview_generation;
         cx.spawn(async move |this, cx| {
             let result = core.preview_readable_export(options).await;
             let _ = this.update(cx, |dialog, cx| {
+                if dialog.preview_generation != generation {
+                    return;
+                }
                 match result {
                     Ok(preview) => dialog.preview = Some(preview),
                     Err(error) => {
@@ -4396,6 +4638,7 @@ impl SourceAppsDialog {
         let state = self.icons.update(cx, |icons, cx| {
             icons.request(
                 ImageKey {
+                    modified: None,
                     path: path_of(path),
                     width: physical,
                     height: physical,
@@ -4677,6 +4920,53 @@ impl Render for SourceAppsDialog {
     }
 }
 
+/// 应用列表弹框页脚的「添加应用」：选一个应用文件加进列表，已列出的同一应用不重复加。
+fn add_app_button(
+    adder: WeakEntity<SourceAppsDialog>,
+    core: kwikpaste_core::Core,
+) -> gpui::AnyElement {
+    Button::new(
+        "source-app-add",
+        i18n::t("preferences:schema.settings.source.appTransfer.addApp"),
+    )
+    .ghost()
+    .on_click(move |_, _, cx| {
+        let prompt = clipboard::view::pin::prompt_for_paths(
+            gpui::PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: None,
+            },
+            cx,
+        );
+        let adder = adder.clone();
+        let core = core.clone();
+        cx.spawn(async move |cx| {
+            let Some(path) = prompt.await.and_then(|paths| paths.into_iter().next()) else {
+                return;
+            };
+            match core.add_app_from_path(path).await {
+                Ok(app) => {
+                    let _ = adder.update(cx, |dialog, cx| {
+                        if !dialog
+                            .apps
+                            .iter()
+                            .any(|known| app_ids::same_app(&known.id, &app.id))
+                        {
+                            dialog.apps.push(app);
+                        }
+                        cx.notify();
+                    });
+                }
+                Err(error) => log::warn!("could not add source app: {error:#}"),
+            }
+        })
+        .detach();
+    })
+    .into_any_element()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn open_source_apps_dialog(
     apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
@@ -4703,51 +4993,7 @@ fn open_source_apps_dialog(
         DialogSpec::new(i18n::t(title_key))
             .ok_text(i18n::t("common:actions.save"))
             .cancel_text(i18n::t("common:actions.cancel"))
-            .footer_extra(move |_, _cx| {
-                let adder = adder.clone();
-                let core = core.clone();
-                Button::new(
-                    "source-app-add",
-                    i18n::t("preferences:schema.settings.source.appTransfer.addApp"),
-                )
-                .ghost()
-                .on_click(move |_, _, cx| {
-                    let prompt = clipboard::view::pin::prompt_for_paths(
-                        gpui::PathPromptOptions {
-                            files: true,
-                            directories: false,
-                            multiple: false,
-                            prompt: None,
-                        },
-                        cx,
-                    );
-                    let adder = adder.clone();
-                    let core = core.clone();
-                    cx.spawn(async move |cx| {
-                        let Some(path) = prompt.await.and_then(|paths| paths.into_iter().next())
-                        else {
-                            return;
-                        };
-                        match core.add_app_from_path(path).await {
-                            Ok(app) => {
-                                let _ = adder.update(cx, |dialog, cx| {
-                                    if !dialog
-                                        .apps
-                                        .iter()
-                                        .any(|known| app_ids::same_app(&known.id, &app.id))
-                                    {
-                                        dialog.apps.push(app);
-                                    }
-                                    cx.notify();
-                                });
-                            }
-                            Err(error) => log::warn!("could not add source app: {error:#}"),
-                        }
-                    })
-                    .detach();
-                })
-                .into_any_element()
-            }),
+            .footer_extra(move |_, _| add_app_button(adder.clone(), core.clone())),
         move |_, _| content.clone().into_any_element(),
         window,
         cx,
@@ -5057,6 +5303,12 @@ fn retention_unit_key(unit: RetentionUnit) -> &'static str {
         RetentionUnit::Months => "months",
         RetentionUnit::Forever => "forever",
     }
+}
+
+fn startup_group_label(value: &str) -> gpui::SharedString {
+    i18n::t(&format!(
+        "preferences:schema.settings.window.selectGroupOnOpen.options.{value}"
+    ))
 }
 
 fn retention_unit_from_key(key: &str) -> RetentionUnit {
@@ -5438,18 +5690,24 @@ pub(crate) fn shortcut_from_keystroke(keystroke: &Keystroke) -> Option<String> {
     if keystroke.modifiers.alt {
         modifiers.push("Alt");
     }
-    if keystroke.modifiers.shift {
+    let (key, shifted) = normalize_recorded_key(keystroke.key.as_str())?;
+    if keystroke.modifiers.shift || shifted {
         modifiers.push("Shift");
     }
-    let key = normalize_recorded_key(keystroke.key.as_str())?;
-    if modifiers.is_empty() && !key.starts_with('F') {
+    if modifiers.is_empty()
+        && !key.strip_prefix('F').is_some_and(|number| {
+            number
+                .parse::<u8>()
+                .is_ok_and(|number| (1..=24).contains(&number))
+        })
+    {
         return None;
     }
     modifiers.push(key.as_str());
     Some(modifiers.join("+"))
 }
 
-fn shortcut_path(id: &str) -> Option<&'static str> {
+pub(super) fn shortcut_path(id: &str) -> Option<&'static str> {
     match id {
         "shortcuts.openClipboard" => Some("shortcuts.openClipboard"),
         "shortcuts.openPreference" => Some("shortcuts.openPreference"),
@@ -5458,16 +5716,48 @@ fn shortcut_path(id: &str) -> Option<&'static str> {
     }
 }
 
-fn normalize_recorded_key(key: &str) -> Option<String> {
+/// GPUI 把标点键报成字符本身，Shift+数字/标点报成上档字符并去掉 Shift；
+/// 按美式键位还原成 1.x 的主键写法，第二项表示需要补回 Shift。
+fn normalize_recorded_key(key: &str) -> Option<(String, bool)> {
+    const SHIFTED: [(char, char); 21] = [
+        ('~', '`'),
+        ('!', '1'),
+        ('@', '2'),
+        ('#', '3'),
+        ('$', '4'),
+        ('%', '5'),
+        ('^', '6'),
+        ('&', '7'),
+        ('*', '8'),
+        ('(', '9'),
+        (')', '0'),
+        ('_', '-'),
+        ('+', '='),
+        ('{', '['),
+        ('}', ']'),
+        ('|', '\\'),
+        (':', ';'),
+        ('"', '\''),
+        ('<', ','),
+        ('>', '.'),
+        ('?', '/'),
+    ];
     let lower = key.to_ascii_lowercase();
-    if lower.len() == 1 && lower.as_bytes()[0].is_ascii_alphanumeric() {
-        return Some(lower.to_ascii_uppercase());
+    let mut chars = lower.chars();
+    if let (Some(key), None) = (chars.next(), chars.next()) {
+        if key.is_ascii_alphanumeric() || "`-=[]\\;',./".contains(key) {
+            return Some((key.to_ascii_uppercase().to_string(), false));
+        }
+        return SHIFTED
+            .iter()
+            .find(|(shifted, _)| *shifted == key)
+            .map(|(_, base)| (base.to_string(), true));
     }
     if let Some(number) = lower.strip_prefix('f')
         && let Ok(number) = number.parse::<u8>()
         && (1..=24).contains(&number)
     {
-        return Some(format!("F{number}"));
+        return Some((format!("F{number}"), false));
     }
     let name = match lower.as_str() {
         "backspace" => "Backspace",
@@ -5479,26 +5769,15 @@ fn normalize_recorded_key(key: &str) -> Option<String> {
         "insert" => "Insert",
         "pageup" | "page_up" => "PageUp",
         "pagedown" | "page_down" => "PageDown",
-        "arrowup" => "ArrowUp",
-        "arrowdown" => "ArrowDown",
-        "arrowleft" => "ArrowLeft",
-        "arrowright" => "ArrowRight",
+        "up" => "ArrowUp",
+        "down" => "ArrowDown",
+        "left" => "ArrowLeft",
+        "right" => "ArrowRight",
         "space" => "Space",
         "tab" => "Tab",
-        "backquote" | "grave" => "Backquote",
-        "backslash" => "Backslash",
-        "bracketleft" => "BracketLeft",
-        "bracketright" => "BracketRight",
-        "comma" => "Comma",
-        "equal" => "Equal",
-        "minus" => "Minus",
-        "period" => "Period",
-        "quote" => "Quote",
-        "semicolon" => "Semicolon",
-        "slash" => "Slash",
         _ => return None,
     };
-    Some(name.to_owned())
+    Some((name.to_owned(), false))
 }
 
 /// 录制按钮的提示和行内提示共用原因；自身冲突优先于系统注册失败。
@@ -5774,6 +6053,60 @@ mod tests {
         assert_eq!(
             shortcut_from_keystroke(&keystroke).as_deref(),
             Some("Alt+Shift+X")
+        );
+    }
+
+    #[test]
+    fn every_onboarding_shortcut_has_a_settings_path() {
+        for id in [
+            "shortcuts.openClipboard",
+            "shortcuts.openPreference",
+            "shortcuts.pastePlain",
+        ] {
+            assert_eq!(super::shortcut_path(id), Some(id));
+        }
+    }
+
+    #[test]
+    fn modifier_free_recording_accepts_only_function_keys() {
+        for (key, expected) in [
+            ("f", None),
+            ("F", None),
+            ("f1", Some("F1")),
+            ("f24", Some("F24")),
+            ("f25", None),
+        ] {
+            assert_eq!(
+                shortcut_from_keystroke(&Keystroke {
+                    modifiers: Modifiers::default(),
+                    key: key.to_owned(),
+                    key_char: None,
+                })
+                .as_deref(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_punctuation_restores_the_shift_gpui_folds_into_the_key() {
+        let recorded = |key: &str, shift: bool| {
+            shortcut_from_keystroke(&Keystroke {
+                modifiers: Modifiers {
+                    control: true,
+                    shift,
+                    ..Modifiers::default()
+                },
+                key: key.to_owned(),
+                key_char: None,
+            })
+        };
+        assert_eq!(recorded("`", false).as_deref(), Some("Control+`"));
+        assert_eq!(recorded("~", false).as_deref(), Some("Control+Shift+`"));
+        assert_eq!(recorded("!", false).as_deref(), Some("Control+Shift+1"));
+        assert_eq!(
+            recorded("up", true).as_deref(),
+            Some("Control+Shift+ArrowUp")
         );
     }
 

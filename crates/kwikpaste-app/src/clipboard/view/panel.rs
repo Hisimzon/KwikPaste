@@ -74,6 +74,7 @@ pub struct ClipboardPanel {
     header: Entity<Header>,
     groups: Entity<GroupBar>,
     group_list: Vec<Group>,
+    groups_loaded: bool,
     key_hints: bool,
     /// 双栏布局的右栏；单栏时为 `None`。
     side: Option<SidePane>,
@@ -134,6 +135,7 @@ impl ClipboardPanel {
             header,
             groups,
             group_list: Vec::new(),
+            groups_loaded: false,
             key_hints: false,
             side: None,
             side_active: false,
@@ -281,7 +283,9 @@ impl ClipboardPanel {
             if self.side_active {
                 self.focus_list(window, cx);
             }
-            self.side = None;
+            if let Some(side) = self.side.take() {
+                side.list.update(cx, |list, cx| list.dispose_preview(cx));
+            }
             self.side_active = false;
             cx.notify();
             return;
@@ -463,6 +467,7 @@ impl ClipboardPanel {
             self.select_side_tab(None, cx);
         }
 
+        self.groups_loaded = true;
         self.group_list = groups.clone();
         self.groups
             .update(cx, |bar, cx| bar.set_groups(groups.clone(), cx));
@@ -793,21 +798,30 @@ impl ClipboardPanel {
             self.header
                 .update(cx, |header, cx| header.clear(window, cx));
         }
+        let startup_group = startup_group(
+            &window_settings.select_group_on_open,
+            &self.group_list,
+            self.groups_loaded,
+        );
         // 双栏时「打开时选中的分组」作用于右栏的页签，左栏始终是全部。
         if split {
-            let group = window_settings
-                .select_group_on_open
-                .strip_prefix(WINDOW_OPEN_GROUP_PREFIX)
-                .map(Arc::from);
+            let group = startup_group.clone();
             self.update_side_filter(
                 |filter| {
                     if clear {
                         filter.keyword = Arc::from("");
                         filter.search = SearchFilters::default();
                     }
-                    if let Some(group) = group {
-                        filter.range = Range::All;
-                        filter.group_id = Some(group);
+                    if window_settings
+                        .select_group_on_open
+                        .starts_with(WINDOW_OPEN_GROUP_PREFIX)
+                    {
+                        filter.range = if group.is_some() {
+                            Range::All
+                        } else {
+                            Range::Favorite
+                        };
+                        filter.group_id = group;
                     }
                 },
                 cx,
@@ -837,8 +851,8 @@ impl ClipboardPanel {
                     filter.group_id = None;
                 } else if group == WINDOW_OPEN_SELECTION_ALL {
                     filter.group_id = None;
-                } else if let Some(id) = group.strip_prefix(WINDOW_OPEN_GROUP_PREFIX) {
-                    filter.group_id = Some(Arc::from(id));
+                } else if group.starts_with(WINDOW_OPEN_GROUP_PREFIX) {
+                    filter.group_id = startup_group;
                 }
             },
             cx,
@@ -1157,5 +1171,37 @@ impl ClipboardPanel {
         if let Some(next) = adjacent_group(&visible, current.as_deref(), reverse) {
             self.toggle_group(next, cx);
         }
+    }
+}
+
+/// 首次分组加载完成前沿用保存值，加载后只允许仍存在的分组。
+fn startup_group(selection: &str, groups: &[Group], loaded: bool) -> Option<Arc<str>> {
+    let id = selection.strip_prefix(WINDOW_OPEN_GROUP_PREFIX)?;
+    (!loaded || groups.iter().any(|group| group.id.as_ref() == id)).then(|| Arc::from(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_group_drops_deleted_ids_after_loading() {
+        let groups = vec![Group {
+            id: Arc::from("kept"),
+            name: Arc::from("Kept"),
+            icon: Arc::from(""),
+            is_hidden: false,
+        }];
+        assert_eq!(
+            startup_group("group:kept", &groups, true).as_deref(),
+            Some("kept")
+        );
+        assert_eq!(startup_group("group:deleted", &groups, true), None);
+        assert_eq!(
+            startup_group("group:kept", &[], false).as_deref(),
+            Some("kept")
+        );
+        assert_eq!(startup_group("all", &groups, true), None);
+        assert_eq!(startup_group("preserve", &groups, true), None);
     }
 }

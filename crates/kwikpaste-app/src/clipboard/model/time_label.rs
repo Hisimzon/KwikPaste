@@ -6,7 +6,7 @@
 
 use std::fmt::Display;
 
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 
 /// 按 `now` 所在时区格式化 `created_at`。
 pub fn time_label<Tz>(created_at: DateTime<Utc>, now: &DateTime<Tz>) -> String
@@ -14,15 +14,7 @@ where
     Tz: TimeZone,
     Tz::Offset: Display,
 {
-    let local = created_at.with_timezone(&now.timezone());
-
-    if local.date_naive() == now.date_naive() {
-        local.format("%H:%M").to_string()
-    } else if local.year() == now.year() {
-        local.format("%m-%d %H:%M").to_string()
-    } else {
-        local.format("%Y-%m-%d %H:%M").to_string()
-    }
+    kwikpaste_core::presenter::display_created_at(&created_at, now)
 }
 
 #[cfg(test)]
@@ -58,5 +50,15 @@ mod tests {
 
         assert_eq!(time_label(utc("2026-10-01T15:50:00Z"), &now), "10-01 23:50");
         assert_eq!(time_label(utc("2026-10-01T16:05:00Z"), &now), "00:05");
+    }
+    #[test]
+    fn extreme_timestamps_survive_both_offset_directions() {
+        for seconds in [-8 * 3600, 8 * 3600] {
+            let offset = FixedOffset::east_opt(seconds).expect("valid offset");
+            let now = utc("2026-10-02T04:00:00Z").with_timezone(&offset);
+            for created_at in [DateTime::<Utc>::MIN_UTC, DateTime::<Utc>::MAX_UTC] {
+                assert!(!time_label(created_at, &now).is_empty());
+            }
+        }
     }
 }

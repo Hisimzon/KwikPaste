@@ -65,6 +65,13 @@ impl SelectState {
         self.state.read(cx).selected_value().cloned()
     }
 
+    /// 外部设置更新时同步选中值，不触发用户提交。
+    pub fn set_value(&self, value: &str, window: &mut Window, cx: &mut App) {
+        self.state.update(cx, |state, cx| {
+            state.set_selected_value(&SharedString::from(value.to_owned()), window, cx);
+        });
+    }
+
     /// 替换选项（例如切换语言后文字变了），保留同值的选中项。
     pub fn set_options(&self, options: Vec<SelectOption>, window: &mut Window, cx: &mut App) {
         let selected = self.selected_value(cx);
@@ -73,6 +80,23 @@ impl SelectState {
             state.set_items(options, window, cx);
             state.set_selected_index(index, window, cx);
         });
+    }
+
+    /// 用户选定后在所在窗口回调，用于需要确认框的设置。
+    pub fn on_change_in<V: 'static>(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<V>,
+        handler: impl Fn(&mut V, Option<SharedString>, &mut Window, &mut Context<V>) + 'static,
+    ) -> Subscription {
+        cx.subscribe_in(
+            &self.state,
+            window,
+            move |view, _, event: &SelectEvent<Vec<SelectOption>>, window, cx| {
+                let SelectEvent::Confirm(value) = event;
+                handler(view, value.clone(), window, cx);
+            },
+        )
     }
 
     /// 用户选定后回调。返回的订阅要由视图保存。

@@ -3,8 +3,8 @@
 //! 夹具按 1.4.0 的加工规则录制，之后任何改动都必须让输出保持不变。设置环境变量
 //! `KWIKPASTE_UPDATE_GOLDEN=1` 运行时重写夹具（只有确认行为应当改变时才这么做）。
 //!
-//! 比较前做三处与平台无关的归一化：临时数据目录换成 `<root>`、其下路径的分隔符换成 `/`，
-//! macOS 的 `revealInFinder` 换成 Windows 的 `revealInExplorer`。
+//! 比较前将临时数据目录和路径分隔符归一化，忽略文件的实时修改时间，
+//! 并把 macOS 的 `revealInFinder` 换成 Windows 的 `revealInExplorer`。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -391,6 +391,7 @@ fn normalize(value: Value, root: &str) -> Value {
         Value::Object(fields) => Value::Object(
             fields
                 .into_iter()
+                .filter(|(key, _)| key != "modified")
                 .map(|(key, v)| (key, normalize(v, root)))
                 .collect(),
         ),

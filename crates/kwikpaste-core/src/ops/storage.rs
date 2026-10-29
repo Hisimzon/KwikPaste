@@ -293,9 +293,9 @@ async fn switch_storage_location(
     let target_preexisting = target.exists();
     if target != paths.default_data_dir() {
         paths.validate_storage_target(&target)?;
-        if paths.storage_target_has_data(&target)? {
-            return Err(anyhow::anyhow!(label(core.language(), Key::StorageTargetHasData)).into());
-        }
+    }
+    if paths.storage_target_has_data(&target)? {
+        return Err(anyhow::anyhow!(label(core.language(), Key::StorageTargetHasData)).into());
     }
     let bytes_to_copy = storage_bytes_to_copy(&current)?;
     let available = available_space(&target).map_err(|error| {
@@ -312,8 +312,8 @@ async fn switch_storage_location(
         // 先停新的采集，再等在途的入库与清理结束，复制期间没有人写库或删图片文件。
         let _pause = core.watcher_pause.pause_scoped();
         let _ocr = core.ocr.suspend().await;
-        let _upsert = core.upsert_lock.lock().await;
         let _exclusive = core.cleanup.exclusive().await;
+        let _upsert = core.upsert_lock.lock().await;
         let switch_error = Mutex::new(None::<AppError>);
 
         core.db
@@ -550,7 +550,7 @@ async fn remove_missing_file_items(core: &CoreInner, pool: &SqlitePool) -> Resul
     .await
     .context("failed to check file paths")?;
 
-    let outcome = crate::db::items::delete_items(pool, &missing).await?;
+    let outcome = crate::db::items::delete_items(pool, &missing, false, false).await?;
     clipboard::cleanup::apply_outcome(core, &outcome, "missing files");
     Ok(())
 }

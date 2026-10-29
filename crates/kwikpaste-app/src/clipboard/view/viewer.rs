@@ -470,12 +470,8 @@ impl ImageViewer {
         if stage == self.stage && device == self.device {
             return;
         }
-        let rescale = self.device / device;
         self.stage = stage;
         self.device = device;
-        if !self.camera.fitted {
-            self.camera.scale *= rescale;
-        }
         self.camera.resize(self.image_size(), stage);
         self.camera_changed(window, cx);
     }

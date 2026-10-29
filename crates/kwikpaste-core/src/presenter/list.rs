@@ -368,12 +368,9 @@ async fn attach_file_entries(
         return Ok(());
     }
 
-    let paths: Vec<&str> = item
-        .content
-        .split('\n')
-        .filter(|p| !p.is_empty())
-        .take(limit)
-        .collect();
+    let mut paths: Vec<&str> = item.content.split('\n').filter(|p| !p.is_empty()).collect();
+    let single_file = paths.len() == 1;
+    paths.truncate(limit);
     if paths.is_empty() {
         return Ok(());
     }
@@ -387,7 +384,7 @@ async fn attach_file_entries(
 
     let mut entries = Vec::with_capacity(paths.len());
     for (index, path) in paths.iter().enumerate() {
-        let (icon_path, exists) =
+        let (icon_path, exists, modified) =
             resolve_file_icon_path(pool, store, path, item.file_types.as_deref(), index).await?;
         let is_dir = types.get(index).copied() == Some("d");
         let name = std::path::Path::new(path)
@@ -403,13 +400,16 @@ async fn attach_file_entries(
             is_dir,
             is_image,
             exists,
+            modified,
             icon_path,
         });
     }
 
     view.file_entries = Some(entries);
     view.files_preview_kind = Some(match view.file_entries.as_deref() {
-        Some([only]) if only.is_image && only.exists => FilesPreviewKind::ImagePreview,
+        Some([only]) if single_file && only.is_image && only.exists => {
+            FilesPreviewKind::ImagePreview
+        }
         _ => FilesPreviewKind::List,
     });
     Ok(())
@@ -424,6 +424,38 @@ mod tests {
 
     fn view(item: ClipboardItem) -> ClipboardItemView {
         ClipboardItemView::bare(item)
+    }
+
+    #[tokio::test]
+    async fn one_displayed_entry_does_not_make_a_multi_file_payload_an_image() {
+        let temp = tempfile::tempdir().unwrap();
+        let image = temp.path().join("a.png");
+        std::fs::write(&image, crate::presenter::tests::sample_png(8, 8)).unwrap();
+        let text = temp.path().join("b.txt");
+        std::fs::write(&text, "text").unwrap();
+        let pool = crate::db::test_support::memory_pool().await;
+        let icons = FileIconStore::for_test(temp.path().join("icons"));
+        let mut item = text_item(None, false);
+        item.kind = ClipboardKind::Files;
+        for (content, expected) in [
+            (
+                format!("{}\n{}", image.display(), text.display()),
+                FilesPreviewKind::List,
+            ),
+            (
+                format!("\n{}\n", image.display()),
+                FilesPreviewKind::ImagePreview,
+            ),
+        ] {
+            item.content = content;
+            let mut view = view(item.clone());
+            attach_file_entries(&pool, &icons, &mut view, 1)
+                .await
+                .unwrap();
+            assert_eq!(view.file_entries.as_ref().unwrap().len(), 1);
+            assert!(view.file_entries.as_ref().unwrap()[0].modified.is_some());
+            assert_eq!(view.files_preview_kind, Some(expected));
+        }
     }
 
     #[test]

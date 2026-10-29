@@ -155,7 +155,12 @@ pub trait ClipboardSource: Send + Sync + 'static {
     fn delete(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>>;
 
     /// 批量删除，返回实际删除条数。
-    fn delete_many(&self, ids: Vec<Arc<str>>) -> BoxFuture<'static, anyhow::Result<u64>>;
+    fn delete_many(
+        &self,
+        ids: Vec<Arc<str>>,
+        delete_favorites: bool,
+        delete_pinned: bool,
+    ) -> BoxFuture<'static, anyhow::Result<u64>>;
 
     /// “打开”的目标：链接、`mailto:` 地址或要在文件管理器里定位的路径；内容为空时为 `None`。
     fn open_target(

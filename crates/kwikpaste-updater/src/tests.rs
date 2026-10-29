@@ -633,3 +633,70 @@ fn background_checks_publish_pending_and_withdrawn_updates_and_keep_failures() {
     assert!(snapshots[1].update.is_some());
     assert!(snapshots[2].update.is_none());
 }
+
+#[test]
+fn staging_failure_keeps_scheduler_alive_and_exposes_a_manual_retry() {
+    use std::io::Write;
+    let key = TestKey::generate();
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file(
+        "KwikPaste/KwikPaste.exe",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(b"MZ new").unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let files = Server::start(vec![Reply::ok(bytes.clone())]);
+    let body = manifest(
+        "2.0.1",
+        &files.url("/portable.zip"),
+        &key.sign(&bytes, true),
+    );
+    let manifests = Server::start(vec![Reply::ok(body.clone()), Reply::ok(body)]);
+    let Setup {
+        test,
+        updater,
+        journal,
+        ui,
+    } = setup_writable(
+        InstallKind::Portable,
+        Url::parse(&manifests.url("/latest.json")).unwrap(),
+        &key,
+        false,
+        true,
+    );
+    std::fs::write(&updater.0.exe, b"MZ old").unwrap();
+    assert!(test.block_on(updater.run_auto_check()));
+    *ui.idle.lock().unwrap() = Some(Duration::from_secs(600));
+    *lock(&updater.0.scheduler) = Some(test.core.runtime().spawn(std::future::pending()));
+    let staged = updater.0.exe.with_extension("exe.new");
+    std::fs::create_dir(&staged).unwrap();
+    assert!(test.block_on(updater.install_when_idle()).is_err());
+    assert!(
+        lock(&updater.0.scheduler)
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+    );
+    assert!(journal.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read(&updater.0.exe).unwrap(), b"MZ old");
+    assert!(test.block_on(test.core.storage_usage()).is_ok());
+    assert!(
+        ui.available
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .update
+            .as_ref()
+            .unwrap()
+            .downloaded
+    );
+    assert!(updater.silent_ready_version().is_none());
+    assert!(test.block_on(updater.run_auto_check()));
+    assert!(updater.silent_ready_version().is_none());
+    std::fs::remove_dir(&staged).unwrap();
+    test.block_on(updater.install("2.0.1".into())).unwrap();
+    assert!(lock(&updater.0.scheduler).is_none());
+    assert_eq!(std::fs::read(&updater.0.exe).unwrap(), b"MZ new");
+    remove_package(&updater);
+}

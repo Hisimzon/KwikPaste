@@ -6,7 +6,7 @@ use gpui::{
     prelude::FluentBuilder as _, svg,
 };
 
-use crate::{Icon, IconName, KeyHint, KpStyled as _, TooltipExt as _, theme};
+use crate::{Icon, IconName, KeyHint, TooltipExt as _, theme};
 
 /// 按钮里的图标：内置图标（可旋转）或资源路径（自定义分组图标）。
 #[derive(Clone)]
@@ -42,7 +42,7 @@ pub enum Look {
     Text,
     /// 选中：淡主色底、主色图标（固定窗口按钮）。
     Selected,
-    /// 分组栏选中项：中性填充底的胶囊。
+    /// 分组栏选中项：中性填充底。
     Chip,
 }
 
@@ -70,8 +70,6 @@ pub fn icon_button(
             button.chip_hover,
         ),
     };
-    let chip = look == Look::Chip;
-    let chip_label = chip.then(|| label.clone());
     let hinted = hint.is_some();
     let keyshortcuts = hint.clone();
 
@@ -83,11 +81,7 @@ pub fn icon_button(
         .relative()
         .flex()
         .flex_none()
-        .h(theme::space(6.))
-        .when(!chip, |button| button.w(theme::space(6.)))
-        .when(chip, |button| {
-            button.px(theme::space(2.)).gap(theme::space(1.))
-        })
+        .size(theme::space(6.))
         .items_center()
         .justify_center()
         .rounded(theme::space(1.75))
@@ -100,17 +94,6 @@ pub fn icon_button(
                 .when(hinted, |icon| icon.opacity(0.))
                 .child(glyph.render(theme::TextSize::Base.font_size(), color)),
         )
-        .when_some(chip_label, |button, label| {
-            button.child(
-                div()
-                    .kp_text(theme::TextSize::Xs)
-                    .text_color(color)
-                    .max_w(theme::space(18.))
-                    .truncate()
-                    .when(hinted, |text| text.opacity(0.))
-                    .child(label),
-            )
-        })
         .when_some(hint, |button, key| {
             button.child(
                 div()
