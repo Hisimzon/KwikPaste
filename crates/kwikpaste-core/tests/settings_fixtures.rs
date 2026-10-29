@@ -232,6 +232,8 @@ fn customized_settings_round_trip_exactly() {
     expected["clipboard"]["customRules"] = Value::Array(Vec::new());
     expected["clipboard"]["autoGroupRules"] = Value::Array(Vec::new());
     expected["clipboard"]["preview"]["gap"] = Value::from(28);
+    expected["clipboard"]["window"]["groupBar"] =
+        serde_json::json!(["favorite", "text", "image", "files"]);
     expected["appearance"]["preferencesSidebarCollapsed"] = Value::from(false);
     expected["extensions"] =
         serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});
