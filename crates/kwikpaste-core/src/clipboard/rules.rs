@@ -123,10 +123,6 @@ impl CompiledRules {
         }
     }
 
-    pub fn has_action(&self, action: RuleAction) -> bool {
-        self.rules.iter().any(|(rule, _)| rule.action == action)
-    }
-
     pub fn matches(&self, action: RuleAction, text: &str) -> bool {
         self.rules
             .iter()
@@ -148,41 +144,6 @@ impl CompiledRules {
                     .filter(|found| !found.is_empty())
                     .map(move |found| (found.range(), rule.name.as_str()))
             })
-    }
-
-    /// 合并敏感规则的重叠区间，保留其他文字；无匹配由调用者使用旧遮罩。
-    pub fn mask(&self, text: &str) -> Option<String> {
-        let mut spans: Vec<_> = self
-            .spans(RuleAction::Sensitive, text)
-            .map(|(range, _)| range)
-            .collect();
-        spans.sort_by_key(|span| span.start);
-        let mut merged: Vec<Range<usize>> = Vec::new();
-        for span in spans {
-            match merged.last_mut() {
-                Some(last) if span.start < last.end => last.end = last.end.max(span.end),
-                _ => merged.push(span),
-            }
-        }
-        if merged.is_empty() {
-            return None;
-        }
-        let mut result = String::new();
-        let mut cursor = 0;
-        for span in merged {
-            result.push_str(&text[cursor..span.start]);
-            let chars: Vec<_> = text[span.clone()].chars().collect();
-            if chars.len() <= 8 {
-                result.push_str(&"*".repeat(chars.len()));
-            } else {
-                result.extend(&chars[..3]);
-                result.push_str(&"*".repeat((chars.len() - 7).min(8)));
-                result.extend(&chars[chars.len() - 4..]);
-            }
-            cursor = span.end;
-        }
-        result.push_str(&text[cursor..]);
-        Some(result)
     }
 }
 
@@ -249,19 +210,6 @@ pub(crate) mod tests {
             Err(RuleError::Identity)
         );
         assert_eq!(validate_rules(&vec![value; 51]), Err(RuleError::TooMany));
-    }
-    #[test]
-    fn masks_unicode_short_long_overlapping_and_disjoint_spans() {
-        let rules = CompiledRules::new(&[rule(r"[0-9]+|秘密中文内容", RuleAction::Sensitive)]);
-        assert_eq!(
-            rules.mask("电话12345678，号码12345678901234567890。秘密中文内容。"),
-            Some("电话********，号码123********7890。******。".into())
-        );
-        assert_eq!(rules.mask("nothing"), None);
-        let mut second = rule("3456789", RuleAction::Sensitive);
-        second.id = "second".into();
-        let rules = CompiledRules::new(&[rule("123456", RuleAction::Sensitive), second]);
-        assert_eq!(rules.mask("a123456789b"), Some("a123**6789b".into()));
     }
     #[test]
     fn disabled_rules_do_not_execute() {
