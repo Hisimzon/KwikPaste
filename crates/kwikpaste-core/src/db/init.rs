@@ -168,8 +168,9 @@ async fn reconcile_legacy_pinyin_migration(pool: &SqlitePool) -> Result<u64> {
 /// 把另一个平台写下的已发布迁移校验和改成本平台的值，返回改了几条。
 ///
 /// 迁移账按检出字节算校验和：macOS 建的库记的是 LF 版本，Windows 记的是 CRLF 版本。
-/// 跨平台覆盖导入备份时原样打开会因校验和不符而迁移失败，这里只改那些恰好等于
-/// 「已发布迁移的另一平台版本」的行，其它不认识的值保持原样，仍由迁移检查报错。
+/// 库被另一台机器或另一个检出形态创建时（跨平台拷库、换行符随 git 检出变化），
+/// 原样打开会因校验和不符而迁移失败，这里只改那些恰好等于「已发布迁移的另一平台版本」
+/// 的行，其它不认识的值保持原样，仍由迁移检查报错。
 pub(crate) async fn adopt_published_checksums(pool: &SqlitePool) -> Result<u64> {
     let has_ledger: Option<i64> = sqlx::query_scalar(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
@@ -246,6 +247,8 @@ pub async fn init(paths: &CorePaths, max_connections: u32) -> Result<SqlitePool>
         .with_context(|| format!("failed to open sqlite database at {path:?}"))?;
 
     reconcile_legacy_pinyin_migration(&pool).await?;
+    // 检出形态变化（换行符随平台或 git 配置变）后，账本里可能记着另一平台的校验和。
+    adopt_published_checksums(&pool).await?;
 
     MIGRATOR
         .run(&pool)
