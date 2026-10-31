@@ -29,7 +29,7 @@ fn copy_in(core: &Core, state: MemoryState) -> Option<String> {
 /// 一次剪贴板通知按监听路径入库；`repeats` 跨调用保留时，同一次复制的重复通知会被合并。
 fn notify_in(core: &Core, state: MemoryState, repeats: &mut RepeatFilter) -> Option<String> {
     let reader = ClipboardReader::with_backend(MemoryClipboard::with_state(state));
-    let (item, source) =
+    let (item, source, _publication) =
         crate::clipboard::watcher::capture_change(&core.0, &reader, &NO_RETRY, repeats)?;
     let result = block_on(core.hop({
         let core = core.clone();
@@ -214,6 +214,165 @@ fn capture_skips_excluded_apps_self_writes_and_pauses() {
     assert_eq!(copy_in(&core, state), Some(id));
 }
 
+#[test]
+fn local_captures_auto_group_by_first_enabled_app_match() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let group = block_on(core.create_group(ClipboardGroupInput {
+        name: "Work".to_owned(),
+        icon: String::new(),
+        is_hidden: false,
+    }))
+    .unwrap();
+    let old = r"C:\Apps\Editor\app-1.0.0\Editor.exe";
+    let new = r"C:\Apps\Editor\app-2.0.0\Editor.exe";
+    block_on(core.update_settings(json!({"clipboard": {"autoGroupRules": [
+        {"id": "disabled", "enabled": false, "groupId": "missing", "appIds": [old, "disabled.app"]},
+        {"id": "first", "groupId": group.id, "appIds": [old]},
+        {"id": "later", "groupId": "missing", "appIds": [old]}
+    ]}})))
+    .unwrap();
+
+    for (app, content, expected) in [
+        (old, "matching", Some(group.id.clone())),
+        (new, "new version", Some(group.id.clone())),
+        ("other.app", "nonmatching", None),
+        ("disabled.app", "disabled", None),
+    ] {
+        fixture.platform.set_frontmost(app, "Test app");
+        let id = copy_in(&core, text(content)).unwrap();
+        assert_eq!(
+            block_on(core.find_item(&id)).unwrap().unwrap().group_id,
+            expected
+        );
+    }
+
+    fixture.platform.set_frontmost(new, "Editor");
+    ClipboardBackend::set_text(&fixture.clipboard, "manual grouped read".to_owned()).unwrap();
+    let manual = block_on(core.read_clipboard_now()).unwrap().unwrap();
+    assert_eq!(
+        block_on(core.find_item(&manual.id))
+            .unwrap()
+            .unwrap()
+            .group_id,
+        Some(group.id)
+    );
+}
+
+#[test]
+fn recopy_auto_groups_only_ungrouped_items_and_notifies_effective_id() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let groups = ["Automatic", "Chosen"].map(|name| {
+        block_on(core.create_group(ClipboardGroupInput {
+            name: name.to_owned(),
+            icon: String::new(),
+            is_hidden: false,
+        }))
+        .unwrap()
+    });
+    fixture.platform.set_frontmost("other.app", "Other");
+    let ungrouped = copy_in(&core, text("initially ungrouped")).unwrap();
+    let chosen = copy_in(&core, text("user grouped")).unwrap();
+    block_on(core.set_item_group(&chosen, &groups[1].id)).unwrap();
+    block_on(
+        core.update_settings(json!({"clipboard": {"autoGroupRules": [
+            {"id": "editor", "groupId": groups[0].id, "appIds": ["editor.app"]}
+        ]}})),
+    )
+    .unwrap();
+    fixture.platform.set_frontmost("editor.app", "Editor");
+    fixture.take_events();
+
+    for (content, id, expected_group) in [
+        ("initially ungrouped", &ungrouped, &groups[0].id),
+        ("user grouped", &chosen, &groups[1].id),
+    ] {
+        assert_eq!(copy_in(&core, text(content)).as_ref(), Some(id));
+        let stored = block_on(core.find_item(id)).unwrap().unwrap();
+        assert_eq!(stored.group_id.as_ref(), Some(expected_group));
+        assert_eq!(stored.use_count, 2);
+        let events = fixture.take_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            CoreEvent::ClipboardUpserted { id: event_id, deduplicated: true, .. }
+                if event_id == id
+        )));
+        let refreshed = block_on(core.list_item(id)).unwrap().unwrap();
+        assert_eq!(refreshed.item.group_id.as_ref(), Some(expected_group));
+    }
+}
+
+#[test]
+fn stale_auto_group_rule_keeps_new_and_recopied_content_ungrouped() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    fixture.platform.set_frontmost("editor.app", "Editor");
+    let existing = copy_in(&core, text("existing content")).unwrap();
+    block_on(
+        core.update_settings(json!({"clipboard": {"autoGroupRules": [
+            {"id": "stale", "groupId": "missing-group", "appIds": ["editor.app"]}
+        ]}})),
+    )
+    .unwrap();
+
+    let new = copy_in(&core, text("new content")).unwrap();
+    assert_eq!(
+        copy_in(&core, text("existing content")),
+        Some(existing.clone())
+    );
+    for (id, content, count) in [(new, "new content", 1), (existing, "existing content", 2)] {
+        let stored = block_on(core.find_item(&id)).unwrap().unwrap();
+        assert_eq!(stored.content, content);
+        assert_eq!(stored.group_id, None);
+        assert_eq!(stored.use_count, count);
+    }
+}
+
+#[test]
+fn delete_group_removes_targeting_rules_and_persists_settings_event() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let group = block_on(core.create_group(ClipboardGroupInput {
+        name: "Delete me".to_owned(),
+        icon: String::new(),
+        is_hidden: false,
+    }))
+    .unwrap();
+    block_on(
+        core.update_settings(json!({"clipboard": {"autoGroupRules": [
+            {"id": "remove-enabled", "groupId": group.id, "appIds": ["editor.app"]},
+            {"id": "keep", "groupId": "another-group", "appIds": ["terminal.app"]},
+            {"id": "remove-disabled", "enabled": false, "groupId": group.id, "appIds": []}
+        ]}})),
+    )
+    .unwrap();
+    fixture.platform.set_frontmost("editor.app", "Editor");
+    let item = copy_in(&core, text("keep when group deleted")).unwrap();
+    fixture.take_events();
+
+    block_on(core.delete_group(&group.id)).unwrap();
+    let rules = core.settings().clipboard.auto_group_rules;
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].id, "keep");
+    assert_eq!(
+        block_on(core.find_item(&item)).unwrap().unwrap().group_id,
+        None
+    );
+    let saved = crate::settings::SettingsStore::new(&fixture.paths, None).unwrap();
+    assert_eq!(saved.snapshot().clipboard.auto_group_rules, rules);
+    let events = fixture.take_events();
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, CoreEvent::GroupsUpdated)));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoreEvent::SettingsUpdated { settings, delta }
+            if settings.clipboard.auto_group_rules == rules
+                && delta.touches("clipboard.autoGroupRules")
+    )));
+}
+
 /// 勾选时存下的是商店应用旧版本的路径；应用升级换了包目录后，新版本复制的内容照样不入库。
 #[test]
 fn capture_skips_later_versions_of_excluded_apps() {
@@ -395,7 +554,7 @@ fn text_selection_joins_in_list_order_using_full_plain_text() {
         .join("\n");
     let reversed = refs.iter().rev().map(|item| item.id.clone()).collect();
 
-    let outcome = block_on(core.copy_selection(reversed, query))
+    let outcome = block_on(core.copy_selection(reversed, query, false))
         .unwrap()
         .unwrap();
     assert!(outcome.hide_window);
@@ -455,6 +614,7 @@ fn selection_of_images_and_files_becomes_one_file_list() {
     assert!(block_on(core.copy_selection(
         vec![image.clone(), files.clone()],
         ClipboardItemQuery::default(),
+        false,
     ))
     .unwrap()
     .is_some());
@@ -466,6 +626,47 @@ fn selection_of_images_and_files_becomes_one_file_list() {
         }
     );
     assert!(copy_in(&core, fixture.clipboard.snapshot()).is_none());
+}
+
+#[test]
+fn file_selection_can_write_paths_without_changing_ordinary_copy() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let dir = tempfile::tempdir().unwrap();
+    let mut ids = Vec::new();
+    for name in ["first.txt", "second.txt"] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, name).unwrap();
+        ids.push(
+            copy_in(
+                &core,
+                MemoryState {
+                    files: Some(vec![path.to_string_lossy().into_owned()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+    }
+    let query = ClipboardItemQuery::default();
+    let paths: Vec<String> = block_on(core.list_item_refs(query.clone()))
+        .unwrap()
+        .iter()
+        .map(|item| block_on(core.find_item(&item.id)).unwrap().unwrap().content)
+        .collect();
+
+    block_on(core.copy_selection(ids.clone(), query.clone(), true)).unwrap();
+    assert_eq!(fixture.clipboard.snapshot(), text(&paths.join("\n")));
+    assert!(copy_in(&core, fixture.clipboard.snapshot()).is_none());
+
+    block_on(core.copy_selection(ids, query, false)).unwrap();
+    assert_eq!(
+        fixture.clipboard.snapshot(),
+        MemoryState {
+            files: Some(paths),
+            ..Default::default()
+        }
+    );
 }
 
 #[test]
@@ -483,9 +684,11 @@ fn mixed_selection_is_refused_without_writing() {
     .unwrap();
     fixture.clipboard.set_text("unchanged".into()).unwrap();
 
-    assert!(block_on(
-        core.copy_selection(vec![first, image.clone()], ClipboardItemQuery::default(),)
-    )
+    assert!(block_on(core.copy_selection(
+        vec![first, image.clone()],
+        ClipboardItemQuery::default(),
+        false
+    ))
     .is_err());
     assert_eq!(fixture.clipboard.snapshot(), text("unchanged"));
     assert_eq!(use_count(&core, &image), 1);
@@ -619,6 +822,36 @@ fn quick_paste_writes_the_nth_record_once_at_a_time() {
 }
 
 #[test]
+fn quick_paste_respects_hidden_favorites_in_all() {
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let visible = copy_in(&core, text("visible")).unwrap();
+    let favorite = copy_in(&core, text("favorite")).unwrap();
+    block_on(core.toggle_favorite(&favorite)).unwrap();
+    block_on(core.toggle_pinned(&favorite)).unwrap();
+    block_on(core.update_settings(json!({"clipboard": {"content": {"hideFavoritesInAll": true}}})))
+        .unwrap();
+
+    let ticket = block_on(core.prepare_quick_paste(0)).unwrap().unwrap();
+    assert_eq!(ticket.item_id, visible);
+    assert_eq!(
+        fixture.clipboard.snapshot().text.as_deref(),
+        Some("visible")
+    );
+    drop(ticket);
+    assert!(block_on(core.prepare_quick_paste(1)).unwrap().is_none());
+
+    block_on(
+        core.update_settings(json!({"clipboard": {"content": {"hideFavoritesInAll": false}}})),
+    )
+    .unwrap();
+    let ticket = block_on(core.prepare_quick_paste(0)).unwrap().unwrap();
+    assert_eq!(ticket.item_id, favorite);
+    drop(ticket);
+    block_on(core.shutdown()).unwrap();
+}
+
+#[test]
 fn notes_marks_and_groups() {
     let fixture = Fixture::new();
     let core = fixture.start();
@@ -728,7 +961,7 @@ fn deletes_remove_image_files_and_clears_notify() {
     block_on(core.delete_item(&image)).unwrap();
     assert!(!origin.exists());
     assert_eq!(
-        block_on(core.delete_items(vec![a, "missing".to_owned()])).unwrap(),
+        block_on(core.delete_items(vec![a, "missing".to_owned()], true, true)).unwrap(),
         1
     );
 

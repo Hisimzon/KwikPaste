@@ -650,9 +650,23 @@ impl ClipboardSource for FixtureSource {
         })
     }
 
-    fn delete_many(&self, ids: Vec<Arc<str>>) -> BoxFuture<'static, anyhow::Result<u64>> {
+    fn delete_many(
+        &self,
+        ids: Vec<Arc<str>>,
+        delete_favorites: bool,
+        delete_pinned: bool,
+    ) -> BoxFuture<'static, anyhow::Result<u64>> {
         self.with_store(move |store| {
-            let removed = ids.iter().filter(|id| store.remove(id).is_some()).count();
+            let removed = ids
+                .iter()
+                .filter(|id| {
+                    let allowed = store.find(id).is_some_and(|item| {
+                        (delete_favorites || !item.is_favorite)
+                            && (delete_pinned || !item.is_pinned)
+                    });
+                    allowed && store.remove(id).is_some()
+                })
+                .count();
             Ok(removed as u64)
         })
     }
@@ -962,9 +976,12 @@ mod tests {
         .total;
         assert_eq!(after, if favorite { before + 1 } else { before - 1 });
 
-        let removed =
-            futures::executor::block_on(source.delete_many(vec![first.clone(), "nope".into()]))
-                .expect("deletes");
+        let removed = futures::executor::block_on(source.delete_many(
+            vec![first.clone(), "nope".into()],
+            true,
+            true,
+        ))
+        .expect("deletes");
         assert_eq!(removed, 1);
         assert_eq!(list(ListFilter::default()).total, total - 1);
 

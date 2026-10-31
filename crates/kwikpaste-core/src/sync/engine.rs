@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 
-use super::protocol::{WireItem, MAX_HEADER_BYTES};
+use super::protocol::{Message, WireItem, MAX_HEADER_BYTES};
 use crate::clipboard::{
     build_item_with_settings, png_dimensions, write_to_clipboard, ClipboardPayload, ImagePayload,
     TextPayload,
@@ -22,8 +22,6 @@ use crate::settings::LanSync;
 const CATCH_UP_DAYS: i64 = 7;
 const CATCH_UP_TOTAL: i64 = 500;
 const CATCH_UP_PAGE: i64 = 50;
-/// 文本放在 JSON 头里，给其余字段留出余量。
-const MAX_TEXT_BYTES: usize = MAX_HEADER_BYTES - 64 * 1024;
 /// 最近一次同步过的内容在这段时间内视为回声。
 const ECHO_WINDOW: Duration = Duration::from_secs(60);
 
@@ -102,25 +100,26 @@ pub async fn wire_from_item(
 ) -> anyhow::Result<Option<(WireItem, Vec<u8>)>> {
     match item.kind {
         ClipboardKind::Text => {
-            let text_bytes = item.content.len()
-                + item.search_text.as_ref().map_or(0, String::len)
-                + item.summary.as_ref().map_or(0, String::len);
-            if text_bytes > MAX_TEXT_BYTES {
-                log::info!("lan sync skips text of {text_bytes} bytes over the message limit");
+            let wire = WireItem {
+                kind: item.kind,
+                sub_kind: item.sub_kind,
+                content: item.content.clone(),
+                search_text: item.search_text.clone(),
+                summary: item.summary.clone(),
+                width: None,
+                height: None,
+            };
+            // false 比 true 多一个字节，按补齐的头大小检查也覆盖实时推送。
+            let header_bytes = serde_json::to_vec(&Message::Push {
+                item: wire.clone(),
+                live: false,
+            })?
+            .len();
+            if header_bytes > MAX_HEADER_BYTES {
+                log::info!("lan sync skips text with a header of {header_bytes} bytes over the message limit");
                 return Ok(None);
             }
-            Ok(Some((
-                WireItem {
-                    kind: item.kind,
-                    sub_kind: item.sub_kind,
-                    content: item.content.clone(),
-                    search_text: item.search_text.clone(),
-                    summary: item.summary.clone(),
-                    width: None,
-                    height: None,
-                },
-                Vec::new(),
-            )))
+            Ok(Some((wire, Vec::new())))
         }
         ClipboardKind::Image => {
             if crate::clipboard::validate_image_file_name(&item.content).is_err() {
@@ -128,10 +127,17 @@ pub async fn wire_from_item(
                 return Ok(None);
             }
             let path = core.images.origin_path(&item.content);
-            let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
+            let bytes = match tokio::task::spawn_blocking(move || std::fs::read(&path))
                 .await
                 .context("image read task failed")?
-                .context("failed to read image for sync")?;
+            {
+                Ok(bytes) => bytes,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    log::warn!("lan sync skips missing image {}", item.content);
+                    return Ok(None);
+                }
+                Err(err) => return Err(err).context("failed to read image for sync"),
+            };
             if bytes.len() as u64 > attachment_limit {
                 log::info!(
                     "lan sync skips image of {} bytes over the size limit",
@@ -203,10 +209,8 @@ pub async fn collect_catch_up(
             continue;
         }
         let limit = attachment_limit.min(lan.max_image_bytes());
-        match wire_from_item(core, &item, limit).await {
-            Ok(Some(wire)) => items.push(wire),
-            Ok(None) => {}
-            Err(err) => log::warn!("lan sync catch-up skips item {id}: {err:#}"),
+        if let Some(wire) = wire_from_item(core, &item, limit).await? {
+            items.push(wire);
         }
     }
 
@@ -272,22 +276,34 @@ pub(crate) async fn receive_with_options(
 ) -> anyhow::Result<()> {
     let settings = core.settings.snapshot();
     let payload = match wire.kind {
-        ClipboardKind::Text if options.text => text_payload(&wire)?,
+        ClipboardKind::Text if options.text => match text_payload(&wire) {
+            Ok(payload) => payload,
+            Err(err) => {
+                log::warn!("lan sync skips invalid text: {err:#}");
+                return Ok(());
+            }
+        },
         ClipboardKind::Image if options.image => {
             if attachment.len() as u64 > options.max_image_bytes {
                 log::info!("lan sync drops image over the size limit");
                 return Ok(());
             }
             let allow_jpeg = options.allow_jpeg;
-            ClipboardPayload::Image(
-                tokio::task::spawn_blocking(move || received_image(attachment, allow_jpeg))
-                    .await
-                    .context("received image decode task failed")??,
-            )
+            match tokio::task::spawn_blocking(move || received_image(attachment, allow_jpeg))
+                .await
+                .context("received image decode task failed")?
+            {
+                Ok(image) => ClipboardPayload::Image(image),
+                Err(err) => {
+                    log::warn!("lan sync skips invalid image: {err:#}");
+                    return Ok(());
+                }
+            }
         }
         _ => return Ok(()),
     };
 
+    let publication = core.cleanup.image_publication().await;
     let capture = settings.clipboard.capture.clone();
     let sensitive = settings.clipboard.sensitive;
     let plain_only = settings.clipboard.content.copy_plain;
@@ -325,6 +341,7 @@ pub(crate) async fn receive_with_options(
     // 补齐的是历史记录，不代表对方剪贴板的现状，不参与回声判断，也不写剪贴板。
     // 实时记录先记回声再写剪贴板：写回被本机监听到时要能认出来。
     crate::clipboard::persist::store_and_emit(core, &item).await?;
+    drop(publication);
 
     let fresh = live
         && echo
@@ -343,7 +360,9 @@ pub(crate) async fn receive_with_options(
             if let Err(err) = written {
                 log::warn!("lan sync write clipboard failed: {err}");
             }
-        });
+        })
+        .await
+        .context("write received clipboard task failed")?;
     }
 
     Ok(())
@@ -398,6 +417,196 @@ fn text_payload(wire: &WireItem) -> anyhow::Result<ClipboardPayload> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{block_on, sample_png, Fixture};
+
+    #[test]
+    fn receive_waits_for_clipboard_writeback() {
+        use crate::clipboard::{ClipboardBackend, ClipboardProvider, MemoryClipboard};
+
+        struct DelayedClipboard {
+            clipboard: MemoryClipboard,
+            started: std::sync::mpsc::Sender<()>,
+            release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        }
+
+        impl ClipboardProvider for DelayedClipboard {
+            fn open(&self) -> crate::error::Result<Box<dyn ClipboardBackend>> {
+                self.started.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                Ok(Box::new(self.clipboard.clone()))
+            }
+        }
+
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        core.set_clipboard_provider(Arc::new(DelayedClipboard {
+            clipboard: fixture.clipboard.clone(),
+            started: started_tx,
+            release: std::sync::Mutex::new(release_rx),
+        }));
+        let receive = core.0.rt.spawn({
+            let core = core.clone();
+            async move {
+                let mut image = wire(None, "", None);
+                image.kind = ClipboardKind::Image;
+                receive(
+                    &core.0,
+                    &std::sync::Mutex::new(EchoFilter::default()),
+                    "peer",
+                    Platform::Windows,
+                    image,
+                    sample_png(2, 2),
+                    true,
+                )
+                .await
+            }
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let returned_early = receive.is_finished();
+        release_tx.send(()).unwrap();
+        block_on(receive).unwrap().unwrap();
+        assert!(!returned_early);
+        assert_eq!(fixture.clipboard.snapshot().png, Some(sample_png(2, 2)));
+        block_on(core.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn catch_up_skips_missing_images_but_retries_other_read_failures() {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let bytes = sample_png(2, 2);
+        let item = core
+            .build_item(&ClipboardPayload::Image(ImagePayload {
+                bytes: bytes.clone(),
+                width: 2,
+                height: 2,
+            }))
+            .unwrap()
+            .unwrap();
+        let path = core.image_origin_path(&item.content).unwrap();
+        block_on(core.store_item(item.clone(), None)).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        block_on(core.hop({
+            let core = core.clone();
+            async move {
+                assert!(wire_from_item(&core.0, &item, u64::MAX)
+                    .await
+                    .unwrap()
+                    .is_none());
+                let page = collect_catch_up(&core.0, 0, None, u64::MAX).await.unwrap();
+                assert!(page.items.is_empty());
+                assert_eq!(page.until, 1);
+
+                std::fs::create_dir(&path).unwrap();
+                assert!(wire_from_item(&core.0, &item, u64::MAX).await.is_err());
+                assert!(collect_catch_up(&core.0, 0, None, u64::MAX).await.is_err());
+                std::fs::remove_dir(&path).unwrap();
+                std::fs::write(path, bytes).unwrap();
+                let page = collect_catch_up(&core.0, 0, None, u64::MAX).await.unwrap();
+                assert_eq!(page.items.len(), 1);
+                assert_eq!(page.until, 1);
+                Ok(())
+            }
+        }))
+        .unwrap();
+        block_on(core.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn invalid_received_payloads_are_skipped() {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        block_on(core.hop({
+            let core = core.clone();
+            async move {
+                let mut image = wire(None, "", None);
+                image.kind = ClipboardKind::Image;
+                let echo = std::sync::Mutex::new(EchoFilter::default());
+                for (item, attachment) in [
+                    (wire(None, "", None), Vec::new()),
+                    (
+                        wire(Some(ClipboardSubKind::Html), "<b>hi</b>", None),
+                        Vec::new(),
+                    ),
+                    (image, vec![0; 4]),
+                ] {
+                    receive_with_options(
+                        &core.0,
+                        &echo,
+                        "peer",
+                        Platform::Windows,
+                        item,
+                        attachment,
+                        false,
+                        ReceiveOptions {
+                            text: true,
+                            image: true,
+                            write_clipboard: false,
+                            max_image_bytes: u64::MAX,
+                            allow_jpeg: true,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                }
+                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clipboard_items")
+                    .fetch_one(&core.0.db.pool().await)
+                    .await
+                    .unwrap();
+                assert_eq!(count, 0);
+                Ok(())
+            }
+        }))
+        .unwrap();
+        block_on(core.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn escaped_text_over_header_limit_is_skipped_with_its_checkpoint() {
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let item = core
+            .build_item(&ClipboardPayload::Text(TextPayload {
+                text: "\\".repeat(4 * 1024 * 1024),
+                html: None,
+                rtf: None,
+            }))
+            .unwrap()
+            .unwrap();
+        block_on(core.store_item(item.clone(), None)).unwrap();
+
+        block_on(core.hop({
+            let core = core.clone();
+            async move {
+                assert!(wire_from_item(&core.0, &item, 0).await.unwrap().is_none());
+                let page = collect_catch_up(&core.0, 0, None, 0).await.unwrap();
+                assert!(page.items.is_empty());
+                assert_eq!(page.until, 1);
+
+                let mut plain = item;
+                plain.content = "a".repeat(4 * 1024 * 1024);
+                plain.search_text = Some(plain.content.clone());
+                let (wire, attachment) = wire_from_item(&core.0, &plain, 0).await.unwrap().unwrap();
+                for live in [true, false] {
+                    assert!(super::super::protocol::encode(
+                        &Message::Push {
+                            item: wire.clone(),
+                            live,
+                        },
+                        &attachment
+                    )
+                    .is_ok());
+                }
+                Ok(())
+            }
+        }))
+        .unwrap();
+        block_on(core.shutdown()).unwrap();
+    }
 
     fn wire(sub_kind: Option<ClipboardSubKind>, content: &str, search: Option<&str>) -> WireItem {
         WireItem {

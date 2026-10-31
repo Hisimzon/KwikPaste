@@ -254,6 +254,7 @@ impl QuickPasteModifiers {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Clipboard {
+    pub auto_group_rules: Vec<AutoGroupRule>,
     pub custom_rules: Vec<crate::clipboard::rules::CustomRule>,
     #[serde(skip)]
     pub rule_cache: crate::clipboard::rules::RuleCache,
@@ -267,6 +268,27 @@ pub struct Clipboard {
     pub preview: Preview,
     pub feedback: Feedback,
     pub filters: Filters,
+}
+
+/// 将指定来源应用的内容自动放入分组；第一个启用且匹配的规则生效。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AutoGroupRule {
+    pub id: String,
+    pub enabled: bool,
+    pub group_id: String,
+    pub app_ids: Vec<String>,
+}
+
+impl Default for AutoGroupRule {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            enabled: true,
+            group_id: String::new(),
+            app_ids: Vec::new(),
+        }
+    }
 }
 
 impl Clipboard {
@@ -872,6 +894,8 @@ pub struct Window {
     pub select_category_on_open: WindowOpenCategorySelection,
     /// 打开剪贴板窗口时切换到指定自定义分组；可为 preserve / all / group:<id>。
     pub select_group_on_open: String,
+    /// 分组栏「全部」之后显示的内置按钮及顺序；不在列表里的不显示。
+    pub group_bar: Vec<GroupBarEntry>,
     /// 隐藏窗口轻量化：剪贴板窗口隐藏后进入 dormant，非剪贴板窗口空闲后释放 WebView。
     pub lightweight_mode: bool,
     /// 非剪贴板窗口隐藏后释放 WebView 的空闲秒数。
@@ -887,6 +911,7 @@ impl Default for Window {
             select_range_on_open: WindowOpenRangeSelection::All,
             select_category_on_open: WindowOpenCategorySelection::All,
             select_group_on_open: WINDOW_OPEN_SELECTION_ALL.to_owned(),
+            group_bar: GroupBarEntry::ALL.to_vec(),
             lightweight_mode: true,
             idle_destroy_seconds: 60,
         }
@@ -911,6 +936,21 @@ pub enum WindowOpenCategorySelection {
     Text,
     Image,
     Files,
+}
+
+/// 分组栏上可以隐藏和排序的内置按钮；「全部」始终显示，不在其中。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupBarEntry {
+    Favorite,
+    Text,
+    Image,
+    Files,
+}
+
+impl GroupBarEntry {
+    /// 默认顺序，也是旧版分组栏的样子。
+    pub const ALL: [Self; 4] = [Self::Favorite, Self::Text, Self::Image, Self::Files];
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

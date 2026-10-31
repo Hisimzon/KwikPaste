@@ -1,5 +1,7 @@
 //! 文本展示：敏感内容遮罩、预览文本与预览行数。
 
+use std::ops::Range;
+
 use crate::clipboard::fragment_source;
 use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind};
 
@@ -18,17 +20,56 @@ pub fn mask_sensitive_text(text: &str) -> String {
         .join("\n")
 }
 
-/// 内置密钥保持旧遮罩；自定义敏感记录只遮命中区间，规则删除后退回旧遮罩。
+/// 只遮内置密钥与自定义敏感规则的命中区间，外加凭据请求头的值，其余文字保留以便辨认；
+/// 一处都定位不到（标记它的自定义规则已删除）时退回整段遮罩。
 pub(crate) fn mask_with_rules(
     text: &str,
     rules: &crate::clipboard::rules::CompiledRules,
 ) -> String {
-    if crate::clipboard::contains_secret(text) {
+    use crate::clipboard::{credential_header_spans, rules::RuleAction, secret_spans};
+
+    let mut spans: Vec<_> = secret_spans(text)
+        .chain(
+            rules
+                .spans(RuleAction::Sensitive, text)
+                .map(|(range, _)| range),
+        )
+        .collect();
+    if spans.is_empty() {
         return mask_sensitive_text(text);
     }
-    rules
-        .mask(text)
-        .unwrap_or_else(|| mask_sensitive_text(text))
+    spans.extend(credential_header_spans(text));
+
+    mask_spans(text, spans)
+}
+
+/// 合并重叠区间后逐段遮罩：短区间全遮，长区间保留前 3 后 4 个字符。
+fn mask_spans(text: &str, mut spans: Vec<Range<usize>>) -> String {
+    spans.sort_by_key(|span| span.start);
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for span in spans {
+        match merged.last_mut() {
+            Some(last) if span.start < last.end => last.end = last.end.max(span.end),
+            _ => merged.push(span),
+        }
+    }
+
+    let mut result = String::new();
+    let mut cursor = 0;
+    for span in merged {
+        result.push_str(&text[cursor..span.start]);
+        let chars: Vec<_> = text[span.clone()].chars().collect();
+        if chars.len() <= 8 {
+            result.push_str(&"*".repeat(chars.len()));
+        } else {
+            result.extend(&chars[..3]);
+            result.push_str(&"*".repeat((chars.len() - 7).min(8)));
+            result.extend(&chars[chars.len() - 4..]);
+        }
+        cursor = span.end;
+    }
+    result.push_str(&text[cursor..]);
+    result
 }
 
 /// 遮罩单行敏感文本；短文本全量替换，长文本保留前后 4 个字符。
@@ -149,22 +190,62 @@ mod tests {
 
     // 行数统计要和前端的软切规则一致，并且在面板撑满后停手。
     #[test]
-    fn custom_masking_preserves_context_but_builtin_and_deleted_rules_use_legacy_mask() {
+    fn masking_preserves_context_but_deleted_rules_use_legacy_mask() {
         use crate::clipboard::rules::{tests::rule, CompiledRules, RuleAction};
         let rules = CompiledRules::new(&[rule("[0-9]+", RuleAction::Sensitive)]);
         assert_eq!(
             mask_with_rules("订单123456789012已发出", &rules),
             "订单123*****9012已发出"
         );
-        let builtin = "sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890";
         assert_eq!(
-            mask_with_rules(builtin, &rules),
-            mask_sensitive_text(builtin)
+            mask_with_rules("key sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890", &rules),
+            "key sk-********7890"
         );
         let plain = "订单123456789012已发出";
         assert_eq!(
             mask_with_rules(plain, &CompiledRules::default()),
             mask_sensitive_text(plain)
+        );
+    }
+
+    #[test]
+    fn masking_merges_overlapping_spans_and_counts_chars() {
+        use crate::clipboard::rules::{tests::rule, CompiledRules, RuleAction};
+        let rules = CompiledRules::new(&[rule(r"[0-9]+|秘密中文内容", RuleAction::Sensitive)]);
+        assert_eq!(
+            mask_with_rules(
+                "电话12345678，号码12345678901234567890。秘密中文内容。",
+                &rules
+            ),
+            "电话********，号码123********7890。******。"
+        );
+        let mut second = rule("3456789", RuleAction::Sensitive);
+        second.id = "second".into();
+        let rules = CompiledRules::new(&[rule("123456", RuleAction::Sensitive), second]);
+        assert_eq!(mask_with_rules("a123456789b", &rules), "a123**6789b");
+    }
+
+    // #51：浏览器复制的 curl 只遮令牌和 cookie，URL 与普通请求头保持可辨认。
+    #[test]
+    fn masking_a_curl_keeps_url_and_plain_headers() {
+        let curl = [
+            "curl 'https://api.example.com/v1/orders?page=1' \\\n",
+            "  -H 'accept: application/json' \\\n",
+            "  -H 'authorization: Bearer ",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijk' \\\n",
+            "  -b 'sid=abc123; theme=dark'",
+        ]
+        .concat();
+
+        assert_eq!(
+            mask_with_rules(&curl, &Default::default()),
+            [
+                "curl 'https://api.example.com/v1/orders?page=1' \\\n",
+                "  -H 'accept: application/json' \\\n",
+                "  -H 'authorization: Bea********hijk' \\\n",
+                "  -b 'sid********dark'",
+            ]
+            .concat()
         );
     }
 

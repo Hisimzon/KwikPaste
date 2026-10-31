@@ -3,6 +3,18 @@
     "checkUpdates": "Check for updates",
     "portable": "Portable"
   },
+  "autoGroup": {
+    "add": "Add rule",
+    "apps": "Source apps",
+    "delete": "Delete",
+    "edit": "Edit rule",
+    "empty": "No auto grouping rules yet",
+    "group": "Put into group",
+    "missingGroup": "Deleted group",
+    "newGroup": "New group",
+    "pickGroup": "Choose a group",
+    "required": "Choose a group and at least one app"
+  },
   "backup": {
     "export": {
       "confirmPassword": "Confirm password",
@@ -489,6 +501,10 @@
     "title": "Export to files",
     "ungrouped": "Include ungrouped records"
   },
+  "retentionConfirm": {
+    "content": "This policy will permanently delete {{count}} records. Save it?",
+    "title": "Change retention policy"
+  },
   "retentionRules": {
     "add": "Add Rule",
     "addCustom": "Custom rule…",
@@ -583,6 +599,9 @@
       },
       "appearance": {
         "title": "Appearance"
+      },
+      "autoGroup": {
+        "title": "Auto grouping"
       },
       "backup": {
         "description": "Export or import KwikPaste backup packages.",
@@ -720,6 +739,11 @@
         "fileMaxCount": {
           "title": "Maximum Files Shown"
         },
+        "groupBar": {
+          "controlLabel": "Manage",
+          "description": "Choose which buttons appear after All, and drag to reorder them.",
+          "title": "Group Bar Buttons"
+        },
         "headerRow": {
           "description": "Show source, type, and time above the content. Turn off for shorter records.",
           "title": "Show Header Row"
@@ -805,6 +829,10 @@
           },
           "title": "Theme"
         }
+      },
+      "autoGroupRules": {
+        "description": "Items copied from the chosen apps go into a group automatically. Items already in another group stay there. Grouped items are not removed by automatic cleanup.",
+        "title": "Group by source app"
       },
       "backup": {
         "export": {

@@ -42,7 +42,7 @@ pub enum ListUpdate {
     Cleaned { removed: u64 },
     /// 历史数据整体换了一份：导入备份、切换存储位置（core `ClipboardReloaded`，1.x `imported`）。
     Reloaded,
-    /// 图片文字识别有了进展或开关变了（core `OcrChanged`）：只影响带关键词的搜索结果。
+    /// 图片文字识别有了进展或开关变了（core `OcrChanged`）：刷新搜索结果和图片能力。
     ImageTextChanged,
 }
 
@@ -58,7 +58,7 @@ pub enum UpdateAction {
     },
     /// 不在顶部或面板隐藏：记成挂起，回到顶部再刷新。
     Defer { reset_selection: bool },
-    /// 显示中不在顶部时复用了已有记录：就地重拉当前范围，保持视口锚点。
+    /// 显示中不在顶部时复用了已有记录：就地重拉当前范围，保持顶行的行号。
     RefreshInPlace,
 }
 
@@ -127,13 +127,13 @@ impl ListController {
             .unwrap_or(self.first_visible)
     }
 
-    /// Enter 作用的记录（1.x：显式选中项，否则第一个可见项，再否则第 0 行）。
+    /// Enter 作用的记录：显式选中项，否则第一个可见项；未加载时不回退到屏外记录。
     pub fn active_item<'a>(&self, model: &'a ListModel) -> Option<&'a Arc<ListItem>> {
         if let Some(item) = self.selected.as_deref().and_then(|id| model.find(id)) {
             return Some(item);
         }
 
-        model.get(self.first_visible).or_else(|| model.get(0))
+        model.get(self.first_visible)
     }
 
     /// 处理 ↑/↓（1.x `getNextKeyboardIndex` + `getNextKeyboardTarget`）。
@@ -212,14 +212,19 @@ impl ListController {
     pub fn on_update(&mut self, update: ListUpdate, visible: bool, at_top: bool) -> UpdateAction {
         let reset_selection = match update {
             ListUpdate::Cleaned { .. } | ListUpdate::Reloaded => true,
-            ListUpdate::Upserted { kind, .. } => {
-                if !self.filter.may_include(Some(kind)) {
+            ListUpdate::Upserted { kind, deduplicated } => {
+                let relevant = if deduplicated {
+                    self.filter.may_include_existing(Some(kind))
+                } else {
+                    self.filter.may_include(Some(kind))
+                };
+                if !relevant {
                     return UpdateAction::Ignore;
                 }
                 false
             }
             ListUpdate::ImageTextChanged => {
-                if !self.filter.searching() || !self.filter.may_include(Some(ItemKind::Image)) {
+                if !self.filter.may_include_existing(Some(ItemKind::Image)) {
                     return UpdateAction::Ignore;
                 }
                 false
@@ -239,7 +244,7 @@ impl ListController {
                 ListUpdate::Upserted {
                     deduplicated: true,
                     ..
-                }
+                } | ListUpdate::ImageTextChanged
             )
         {
             return UpdateAction::RefreshInPlace;
@@ -361,6 +366,50 @@ mod tests {
         assert_eq!(
             controller.active_item(&model).map(|item| &*item.id),
             Some("r5")
+        );
+    }
+
+    #[test]
+    fn activation_after_current_range_refresh_uses_visible_rows() {
+        let mut model = model(500, 30, 0);
+        let mut controller = ListController::new();
+        controller.set_first_visible(200);
+        assert!(controller.active_item(&model).is_none());
+        model.load_range(200..210);
+        let request = model.reload_current_range().expect("current range");
+        let mut freshness = super::super::freshness::Freshness::default();
+        freshness.changed();
+        freshness.first_page_sent(request.token);
+        assert!(freshness.awaiting());
+        let rows = request
+            .range
+            .clone()
+            .map(|i| item(&format!("r{i}"), false))
+            .collect();
+        assert!(
+            model
+                .apply(
+                    &request,
+                    Page {
+                        items: rows,
+                        total: 500
+                    }
+                )
+                .is_some()
+        );
+        freshness.first_page_done(request.token);
+        assert!(freshness.fresh());
+        controller.hover(&"r203".into());
+        assert_eq!(
+            controller.active_item(&model).map(|item| &*item.id),
+            Some("r203")
+        );
+        assert_eq!(
+            controller
+                .hint_index('1')
+                .and_then(|i| model.get(i))
+                .map(|item| &*item.id),
+            Some("r200")
         );
     }
 
@@ -593,15 +642,34 @@ mod tests {
         assert!(controller.selected().is_none());
     }
 
-    /// 识别进展只刷新带关键词、可能含图片的结果，而且不清掉当前选中。
+    /// 识别进展刷新图片能力和搜索结果，而且不清掉当前选中。
     #[test]
-    fn image_text_progress_refreshes_only_image_searches() {
+    fn image_text_progress_refreshes_image_capabilities_without_a_search() {
         let mut controller = ListController::new();
         controller.hover(&"r1".into());
         assert_eq!(
             controller.on_update(ListUpdate::ImageTextChanged, true, true),
-            UpdateAction::Ignore
+            UpdateAction::ReloadNow {
+                reset_selection: false
+            }
         );
+
+        for filter in [
+            ListFilter {
+                range: super::super::filter::Range::Favorite,
+                ..ListFilter::default()
+            },
+            ListFilter {
+                group_id: Some("group".into()),
+                ..ListFilter::default()
+            },
+        ] {
+            controller.set_filter(filter);
+            assert_eq!(
+                controller.on_update(ListUpdate::ImageTextChanged, true, false),
+                UpdateAction::RefreshInPlace
+            );
+        }
 
         controller.set_filter(ListFilter {
             keyword: "发票".into(),
@@ -628,6 +696,37 @@ mod tests {
     }
 
     #[test]
+    fn group_reuse_refreshes_order_but_insertion_does_not() {
+        let mut controller = ListController::new();
+        controller.set_filter(ListFilter {
+            group_id: Some("group".into()),
+            ..ListFilter::default()
+        });
+        assert_eq!(
+            controller.on_update(
+                ListUpdate::Upserted {
+                    kind: ItemKind::Text,
+                    deduplicated: false
+                },
+                true,
+                false
+            ),
+            UpdateAction::Ignore
+        );
+        assert_eq!(
+            controller.on_update(
+                ListUpdate::Upserted {
+                    kind: ItemKind::Text,
+                    deduplicated: true
+                },
+                true,
+                false
+            ),
+            UpdateAction::RefreshInPlace
+        );
+    }
+
+    #[test]
     fn irrelevant_updates_are_ignored() {
         let mut controller = ListController::new();
         controller.set_filter(ListFilter {
@@ -638,7 +737,7 @@ mod tests {
         let action = controller.on_update(
             ListUpdate::Upserted {
                 kind: ItemKind::Text,
-                deduplicated: true,
+                deduplicated: false,
             },
             true,
             true,

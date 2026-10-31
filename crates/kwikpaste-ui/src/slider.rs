@@ -32,6 +32,13 @@ impl SliderState {
         integer_value(self.state.read(cx).value().end(), self.min, self.max)
     }
 
+    /// 外部设置更新时同步滑块，不触发用户提交。
+    pub fn set_value(&self, value: u8, window: &mut Window, cx: &mut App) {
+        self.state.update(cx, |state, cx| {
+            state.set_value(f32::from(value.clamp(self.min, self.max)), window, cx);
+        });
+    }
+
     /// 拖动事件只用于更新显示；返回的订阅须由视图保存。
     pub fn on_change<V: 'static>(
         &self,

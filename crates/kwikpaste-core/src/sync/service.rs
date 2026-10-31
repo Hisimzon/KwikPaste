@@ -278,6 +278,7 @@ impl LanSyncService {
         let (listeners, port) = bind_listeners(network)?;
         let supported = *self.supported.lock().expect("lan sync poisoned");
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (capture_tx, capture_rx) = mpsc::channel(OUTGOING_QUEUE);
         let shared = Arc::new(Shared {
             core: Arc::downgrade(core),
             app_version: core.info.version.to_string(),
@@ -294,6 +295,16 @@ impl LanSyncService {
             handshakes: Arc::new(Semaphore::new(MAX_PENDING_HANDSHAKES)),
             shutdown: shutdown_rx,
             next_conn_id: AtomicU64::new(1),
+            captures: capture_tx,
+        });
+
+        let sender_shared = shared.clone();
+        tokio::spawn(async move {
+            let mut shutdown = sender_shared.shutdown.clone();
+            tokio::select! {
+                _ = super::send_captures(sender_shared, capture_rx) => {}
+                _ = shutdown.changed() => {}
+            }
         });
 
         for listener in listeners {
@@ -494,12 +505,11 @@ impl LanSyncService {
 
     /// 取消配对：先从本机移除（避免断开后又自动重连），在线时再通知对方。
     pub(super) async fn remove_device(&self, device_id: &str) {
-        self.peers.remove(device_id);
-
         let Some(shared) = self.shared() else {
+            self.peers.remove(device_id);
             return;
         };
-        let Some((tx, kill)) = shared.connection_handles(device_id) else {
+        let Some((tx, kill)) = shared.revoke(device_id) else {
             return;
         };
 
@@ -608,6 +618,7 @@ pub(super) struct Shared {
     handshakes: Arc<Semaphore>,
     shutdown: watch::Receiver<bool>,
     next_conn_id: AtomicU64,
+    pub(super) captures: mpsc::Sender<super::LocalCapture>,
 }
 
 impl Shared {
@@ -722,9 +733,12 @@ impl Shared {
 
     /// 登记一条已认证的连接。同一台设备已有连接时，保留设备 id 较小一方发起的那条；
     /// 发起方相同（旧连接还没发现断开）时新的替换旧的。
-    fn register(&self, peer_id: &str, connection: Connection) -> bool {
+    fn register(&self, peer_id: &str, public_key: &str, connection: Connection) -> bool {
         let preferred_dialer_is_me = self.identity.device_id() < peer_id;
         let mut connections = self.connections.lock().expect("lan sync poisoned");
+        if !self.peers.is_trusted(peer_id, public_key) {
+            return false;
+        }
         if let Some(existing) = connections.get(peer_id) {
             let existing_preferred = existing.dialer_is_me == preferred_dialer_is_me;
             let new_preferred = connection.dialer_is_me == preferred_dialer_is_me;
@@ -747,13 +761,11 @@ impl Shared {
         }
     }
 
-    fn connection_handles(
-        &self,
-        peer_id: &str,
-    ) -> Option<(mpsc::Sender<Outgoing>, Arc<watch::Sender<bool>>)> {
-        self.connections
-            .lock()
-            .expect("lan sync poisoned")
+    /// 移除信任与登记连接共用一把锁，握手期间取消配对也不能再登记会话。
+    fn revoke(&self, peer_id: &str) -> Option<(mpsc::Sender<Outgoing>, Arc<watch::Sender<bool>>)> {
+        let connections = self.connections.lock().expect("lan sync poisoned");
+        self.peers.remove(peer_id);
+        connections
             .get(peer_id)
             .map(|connection| (connection.tx.clone(), connection.kill.clone()))
     }
@@ -1056,7 +1068,16 @@ async fn handle_incoming(
     }
 
     drop(permit);
-    run_session(shared, remote_id, device, reader, writer, false, addr).await;
+    run_session(
+        shared,
+        remote_public_key,
+        device,
+        reader,
+        writer,
+        false,
+        addr,
+    )
+    .await;
     Ok(())
 }
 
@@ -1304,7 +1325,16 @@ async fn dial(
     let name = device.name.clone();
     let shared = shared.clone();
     tokio::spawn(async move {
-        run_session(shared, remote_id, device, reader, writer, true, addr).await;
+        run_session(
+            shared,
+            remote_public_key,
+            device,
+            reader,
+            writer,
+            true,
+            addr,
+        )
+        .await;
     });
     Ok(name)
 }
@@ -1409,7 +1439,7 @@ async fn dial_peer(shared: Arc<Shared>, peer: TrustedPeer, addresses: Vec<Socket
             Err(DialError::Rejected(RejectReason::NotPaired)) => {
                 // 对方已经取消了和本机的配对（离线时发不了 Unpair），本机也跟着移除。
                 log::info!("{} no longer trusts this device, removing it", peer.name);
-                shared.peers.remove(&peer.device_id);
+                shared.revoke(&peer.device_id);
                 shared.emit_state();
                 break;
             }
@@ -1422,19 +1452,21 @@ async fn dial_peer(shared: Arc<Shared>, peer: TrustedPeer, addresses: Vec<Socket
 /// 已认证连接上的同步会话：登记连接、按水位线请求补齐，然后收发直到断开。
 async fn run_session(
     shared: Arc<Shared>,
-    peer_id: String,
+    remote_public_key: [u8; 32],
     device: DeviceInfo,
     mut reader: SecureReader,
     writer: SecureWriter,
     dialer_is_me: bool,
     addr: SocketAddr,
 ) {
+    let peer_id = device_id_for(&remote_public_key);
     let connection_id = shared.next_conn_id.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel::<Outgoing>(OUTGOING_QUEUE);
     let (kill_tx, kill_rx) = watch::channel(false);
     let kill_tx = Arc::new(kill_tx);
     let registered = shared.register(
         &peer_id,
+        &to_hex(&remote_public_key),
         Connection {
             id: connection_id,
             dialer_is_me,
@@ -1445,7 +1477,7 @@ async fn run_session(
         },
     );
     if !registered {
-        log::debug!("lan sync keeps the existing connection to {peer_id}");
+        log::debug!("lan sync declined session registration for {peer_id}");
         return;
     }
 
@@ -1551,6 +1583,7 @@ async fn read_loop(
                 .await
                 {
                     log::warn!("lan sync receive from {peer_id} failed: {err:#}");
+                    return;
                 }
             }
             Message::CatchUp { after, epoch } => {
@@ -1591,7 +1624,7 @@ async fn read_loop(
             }
             Message::Unpair => {
                 log::info!("lan sync peer {peer_id} removed this device");
-                shared.peers.remove(peer_id);
+                shared.revoke(peer_id);
                 shared.emit_state();
                 return;
             }
@@ -1663,14 +1696,24 @@ async fn write_loop(
     ping.tick().await;
 
     loop {
-        let result = tokio::select! {
+        let (message, attachment) = tokio::select! {
             outgoing = rx.recv() => match outgoing {
-                Some((message, attachment)) => writer.send_message(&message, &attachment).await,
+                Some(outgoing) => outgoing,
                 None => break,
             },
-            _ = ping.tick() => writer.send_message(&Message::Ping, &[]).await,
+            _ = ping.tick() => (Message::Ping, Arc::new(Vec::new())),
             _ = kill.changed() => break,
             _ = shutdown.changed() => break,
+        };
+        // 写到一半取消或超时后直接丢弃流，不能继续复用部分写出的消息。
+        let result = tokio::select! {
+            biased;
+            _ = kill.changed() => break,
+            _ = shutdown.changed() => break,
+            result = tokio::time::timeout(
+                IDLE_TIMEOUT,
+                writer.send_message(&message, &attachment),
+            ) => result.unwrap_or_else(|_| Err(anyhow!("sync write timed out"))),
         };
         if let Err(err) = result {
             log::info!("lan sync write failed: {err:#}");
@@ -1904,6 +1947,257 @@ mod tests {
         (connection, rx)
     }
 
+    fn test_shared(dir: &std::path::Path) -> Shared {
+        let (_shutdown, shutdown) = watch::channel(false);
+        Shared {
+            core: Weak::new(),
+            app_version: "test".to_owned(),
+            supported: SUPPORTED,
+            identity: identity::load_or_create(dir).unwrap().identity,
+            peers: Arc::new(PeerStore::load(dir)),
+            port: 0,
+            connections: Mutex::new(HashMap::new()),
+            nearby: Mutex::new(HashMap::new()),
+            pairing: Mutex::new(PairingCode::new()),
+            echo: Mutex::new(EchoFilter::default()),
+            dials: Mutex::new(HashMap::new()),
+            dial_now: Notify::new(),
+            handshakes: Arc::new(Semaphore::new(1)),
+            shutdown,
+            next_conn_id: AtomicU64::new(1),
+            captures: mpsc::channel(OUTGOING_QUEUE).0,
+        }
+    }
+
+    fn trust(shared: &Shared, id: &str) {
+        shared.peers.add(TrustedPeer {
+            device_id: id.to_owned(),
+            public_key: "key".to_owned(),
+            name: id.to_owned(),
+            platform: Platform::Windows,
+            address: None,
+            paired_at: Utc::now(),
+            last_seen_at: None,
+            watermark: 0,
+            epoch: None,
+        });
+    }
+
+    #[test]
+    fn registration_rechecks_pinned_key_after_unpairing() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = test_shared(dir.path());
+        for dialer_is_me in [true, false] {
+            trust(&shared, "peer");
+            let (mut pending, _rx) = connection(1, 0);
+            pending.dialer_is_me = dialer_is_me;
+            assert!(!shared.register("peer", "wrong-key", pending));
+            assert!(shared.revoke("peer").is_none());
+
+            let (mut pending, _rx) = connection(2, 0);
+            pending.dialer_is_me = dialer_is_me;
+            assert!(!shared.register("peer", "key", pending));
+            assert!(!shared.is_connected("peer"));
+
+            trust(&shared, "peer");
+            let (registered, _rx) = connection(3, 0);
+            assert!(shared.register("peer", "key", registered));
+            let (_, kill) = shared.revoke("peer").unwrap();
+            kill.send_replace(true);
+            assert!(*kill.borrow());
+            shared.unregister("peer", 3);
+        }
+    }
+
+    async fn secure_pair() -> (Handshaken, Handshaken) {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = identity::load_or_create(dir.path()).unwrap().identity;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, server) = tokio::join!(
+            TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept(),
+        );
+        let (sender, receiver) = tokio::join!(
+            handshake(client.unwrap(), &identity, true),
+            handshake(server.unwrap().0, &identity, false),
+        );
+        (sender.unwrap(), receiver.unwrap())
+    }
+
+    #[test]
+    fn live_captures_and_skips_wait_for_image_preparation() {
+        use crate::clipboard::{ClipboardPayload, ImagePayload};
+        use crate::db::models::ClipboardKind;
+        use crate::testing::{block_on, sample_png, Fixture};
+
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        let image = core
+            .build_item(&ClipboardPayload::Image(ImagePayload {
+                bytes: sample_png(2, 2),
+                width: 2,
+                height: 2,
+            }))
+            .unwrap()
+            .unwrap();
+        let mut text = image.clone();
+        text.kind = ClipboardKind::Text;
+        text.content = "latest".to_owned();
+        let mut shared = test_shared(fixture.root());
+        shared.core = Arc::downgrade(&core.0);
+        let (capture_tx, capture_rx) = mpsc::channel(3);
+        shared.captures = capture_tx;
+        trust(&shared, "peer");
+        let (mut connection, _) = connection(1, u64::MAX);
+        let (tx, mut messages) = mpsc::channel(8);
+        connection.tx = tx;
+        assert!(shared.register("peer", "key", connection));
+        shared.confirm_catch_up("peer", 1, "e".to_owned(), 0);
+        let shared = Arc::new(shared);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx.await.unwrap();
+            let sender = tokio::spawn(super::super::send_captures(shared.clone(), capture_rx));
+            shared
+                .captures
+                .try_send((Some(1), Some(image), u64::MAX))
+                .unwrap();
+            shared.captures.try_send((Some(2), None, u64::MAX)).unwrap();
+            shared
+                .captures
+                .try_send((Some(3), Some(text), u64::MAX))
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let overtook_image = messages.try_recv().is_ok();
+            release_tx.send(()).unwrap();
+            blocker.await.unwrap();
+            assert!(!overtook_image);
+
+            assert!(matches!(messages.recv().await.unwrap().0,
+                Message::Push { item, live: true } if item.kind == ClipboardKind::Image));
+            assert_eq!(checkpoint(Some(messages.recv().await.unwrap().0)), Some(1));
+            assert_eq!(checkpoint(Some(messages.recv().await.unwrap().0)), Some(2));
+            assert!(matches!(messages.recv().await.unwrap().0,
+                Message::Push { item, live: true } if item.content == "latest"));
+            assert_eq!(checkpoint(Some(messages.recv().await.unwrap().0)), Some(3));
+            sender.abort();
+        });
+        block_on(core.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn failed_receive_does_not_advance_watermark() {
+        use crate::testing::{block_on, Fixture};
+
+        let fixture = Fixture::new();
+        let core = fixture.start();
+        block_on(core.hop({
+            let core = core.clone();
+            let mut shared = test_shared(fixture.root());
+            shared.core = Arc::downgrade(&core.0);
+            trust(&shared, "peer");
+            async move {
+                sqlx::query(
+                    "CREATE TRIGGER fail_sync_receive BEFORE INSERT ON clipboard_items \
+                    BEGIN SELECT RAISE(ABORT, 'storage temporarily unavailable'); END",
+                )
+                .execute(&core.0.db.pool().await)
+                .await
+                .unwrap();
+                let (mut sender, mut receiver) = secure_pair().await;
+                let push = Message::Push {
+                    item: super::super::protocol::WireItem {
+                        kind: crate::db::models::ClipboardKind::Text,
+                        sub_kind: None,
+                        content: "received while storage is unavailable".to_owned(),
+                        search_text: None,
+                        summary: None,
+                        width: None,
+                        height: None,
+                    },
+                    live: false,
+                };
+                sender.writer.send_message(&push, &[]).await.unwrap();
+                sender
+                    .writer
+                    .send_message(
+                        &Message::CatchUpPage {
+                            until: 1,
+                            more: false,
+                            epoch: "e".to_owned(),
+                        },
+                        &[],
+                    )
+                    .await
+                    .unwrap();
+                drop(sender);
+                let (tx, _rx) = mpsc::channel(1);
+                let (_kill_tx, kill) = watch::channel(false);
+                let (_shutdown_tx, shutdown) = watch::channel(false);
+                shared.shutdown = shutdown;
+                let shared = Arc::new(shared);
+                let session = Session {
+                    peer_id: "peer",
+                    connection_id: 1,
+                    platform: Platform::Windows,
+                    peer_max_attachment: 0,
+                };
+                read_loop(&shared, &session, &mut receiver.reader, &tx, kill).await;
+                assert_eq!(shared.peers.get("peer").unwrap().watermark, 0);
+                Ok(())
+            }
+        }))
+        .unwrap();
+        block_on(core.shutdown()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn blocked_writer_stops_on_kill_and_shutdown() {
+        for stop_service in [false, true] {
+            let (sender, _receiver) = secure_pair().await;
+            let (tx, rx) = mpsc::channel(1);
+            let (kill_tx, kill) = watch::channel(false);
+            let kill_tx = Arc::new(kill_tx);
+            let (shutdown_tx, shutdown) = watch::channel(false);
+            tx.send((Message::Ping, Arc::new(vec![0; 32 * 1024 * 1024])))
+                .await
+                .unwrap();
+            let writer = tokio::spawn(write_loop(
+                sender.writer,
+                rx,
+                kill_tx.clone(),
+                kill,
+                shutdown,
+            ));
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(!writer.is_finished());
+
+            if stop_service {
+                shutdown_tx.send(true).unwrap();
+            } else {
+                kill_tx.send(true).unwrap();
+            }
+
+            tokio::time::timeout(Duration::from_secs(2), writer)
+                .await
+                .expect("blocked write ignored cancellation")
+                .unwrap();
+            assert!(*kill_tx.borrow());
+            assert!(tx.is_closed());
+        }
+    }
+
     fn checkpoint(message: Option<Message>) -> Option<u64> {
         match message? {
             Message::CatchUpPage {
@@ -1934,28 +2228,13 @@ mod tests {
     #[test]
     fn broadcast_skips_attachments_over_each_peers_limit() {
         let dir = tempfile::tempdir().unwrap();
-        let (_shutdown, shutdown) = watch::channel(false);
-        let shared = Shared {
-            core: Weak::new(),
-            app_version: "test".to_owned(),
-            supported: SUPPORTED,
-            identity: identity::load_or_create(dir.path()).unwrap().identity,
-            peers: Arc::new(PeerStore::load(dir.path())),
-            port: 0,
-            connections: Mutex::new(HashMap::new()),
-            nearby: Mutex::new(HashMap::new()),
-            pairing: Mutex::new(PairingCode::new()),
-            echo: Mutex::new(EchoFilter::default()),
-            dials: Mutex::new(HashMap::new()),
-            dial_now: Notify::new(),
-            handshakes: Arc::new(Semaphore::new(1)),
-            shutdown,
-            next_conn_id: AtomicU64::new(1),
-        };
+        let shared = test_shared(dir.path());
         let (small, mut small_rx) = connection(1, 10);
         let (large, mut large_rx) = connection(2, 100);
-        assert!(shared.register("small", small));
-        assert!(shared.register("large", large));
+        trust(&shared, "small");
+        trust(&shared, "large");
+        assert!(shared.register("small", "key", small));
+        assert!(shared.register("large", "key", large));
 
         shared.deliver(None, Some((Message::Ping, Arc::new(vec![0; 50]))));
         shared.deliver(None, Some((Message::Unpair, Arc::new(vec![0; 10]))));

@@ -39,7 +39,7 @@ const LIST_SELECT_ITEM: &str = "SELECT clipboard_items.id, clipboard_items.kind,
      LEFT JOIN clipboard_apps ON clipboard_apps.id = clipboard_items.source_app_id";
 
 /// 入库去重的结果：`id` 为生效行的主键（命中时是已有行，未命中时是新插入行），
-/// `deduplicated` 表示是否命中了已有内容（命中则只 `use_count + 1` 未插入新行）。
+/// `deduplicated` 表示是否命中了已有内容（命中则更新已有记录，不插入新行）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpsertResult {
     pub id: String,
@@ -82,10 +82,23 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
 
 /// 入库主入口：按 `item.content_hash` 去重。
 /// 命中已有记录 → 复用 [`increment_item_use_count`] 累加并刷新 `updated_at`，不插入新行；
+/// 同时补齐未分组记录的分组，保留已有分组；不存在的目标分组按未分组处理。
 /// 未命中 → 调用 [`insert_item`] 插入。返回生效行 id 与是否去重。
 pub async fn upsert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<UpsertResult> {
     if let Some(existing) = find_item_by_content_hash(pool, &item.content_hash).await? {
         increment_item_use_count(pool, &existing).await?;
+        if let Some(group_id) = item.group_id.as_deref() {
+            sqlx::query(
+                "UPDATE clipboard_items
+                 SET group_id = (SELECT id FROM clipboard_groups WHERE id = ?)
+                 WHERE id = ? AND group_id IS NULL",
+            )
+            .bind(group_id)
+            .bind(&existing)
+            .execute(pool)
+            .await
+            .context("failed to group recopied item")?;
+        }
         // 规则新增后再次复制同一内容，也要收紧敏感标记；不清除历史敏感状态。
         if item.is_sensitive {
             sqlx::query(
@@ -128,7 +141,7 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
           summary, file_types, size, width, height, use_count, is_favorite, is_pinned, favorite_order, pin_order, is_sensitive, platform, note, \
           created_at, updated_at, last_used_at, origin_device_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         VALUES (?, ?, ?, (SELECT id FROM clipboard_groups WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                  CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(favorite_order) FROM clipboard_items), 0) END,
                  CASE WHEN ? THEN 1 + COALESCE((SELECT MAX(pin_order) FROM clipboard_items), 0) END,
                  ?, ?, ?, ?, ?, ?, ?)",
@@ -186,14 +199,16 @@ pub async fn query_items_page(
 }
 
 /// 按剪贴板窗口「全部」视图的顺序（置顶在前，其余按 `sort`）取第 `offset` 条（从 0 起）的 id，
-/// 超出历史条数时返回 `None`。
+/// `favorite` 与列表使用同一收藏过滤条件，超出历史条数时返回 `None`。
 pub async fn find_item_id_at(
     pool: &SqlitePool,
     sort: ClipboardItemSort,
     offset: i64,
+    favorite: Option<bool>,
 ) -> Result<Option<String>> {
     let query = ClipboardItemQuery {
         group: Some(ClipboardGroupFilter::All),
+        favorite,
         sort,
         limit: 1,
         offset,
@@ -502,7 +517,13 @@ pub async fn unprotected_file_items(pool: &SqlitePool) -> Result<Vec<(String, St
 
 /// 按 id 批量删除，返回删除行数与被删图片文件名（供调用方删图）；不存在的 id 忽略。
 /// 所有分批在同一事务里完成，中途失败时一条都不删。
-pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<CleanupOutcome> {
+/// 收藏 / 置顶保护在删除语句里按最新标记检查，选中或扫描之后才受保护的记录不会被删。
+pub async fn delete_items(
+    pool: &SqlitePool,
+    ids: &[String],
+    delete_favorites: bool,
+    delete_pinned: bool,
+) -> Result<CleanupOutcome> {
     let mut outcome = CleanupOutcome::default();
     if ids.is_empty() {
         return Ok(outcome);
@@ -519,7 +540,14 @@ pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<CleanupOu
         for id in chunk {
             separated.push_bind(id.as_str());
         }
-        qb.push(") RETURNING kind, content, size");
+        qb.push(")");
+        if !delete_favorites {
+            qb.push(" AND is_favorite = 0");
+        }
+        if !delete_pinned {
+            qb.push(" AND is_pinned = 0");
+        }
+        qb.push(" RETURNING kind, content, size");
 
         let rows = qb
             .build_query_as::<DeletedRow>()
@@ -1023,7 +1051,7 @@ mod tests {
         let mut ordered = Vec::new();
         for offset in 0..5 {
             ordered.push(
-                find_item_id_at(&pool, ClipboardItemSort::UpdatedAt, offset)
+                find_item_id_at(&pool, ClipboardItemSort::UpdatedAt, offset, None)
                     .await
                     .unwrap(),
             );
@@ -1791,6 +1819,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cache_delete_rechecks_protection_after_candidate_scan() {
+        let pool = memory_pool().await;
+        for id in ["missing", "favorite", "pinned"] {
+            let mut item = sample_item(id);
+            item.kind = ClipboardKind::Files;
+            insert_item(&pool, &item).await.unwrap();
+        }
+        let candidates = unprotected_file_items(&pool).await.unwrap();
+        let ids: Vec<_> = candidates.into_iter().map(|(id, _)| id).collect();
+        mark_item_favorite(&pool, "favorite").await.unwrap();
+        toggle_item_pinned(&pool, "pinned").await.unwrap();
+
+        let outcome = delete_items(&pool, &ids, false, false).await.unwrap();
+
+        assert_eq!(outcome.removed, 1);
+        assert!(find_item_by_id(&pool, "missing").await.unwrap().is_none());
+        for id in ["favorite", "pinned"] {
+            assert!(find_item_by_id(&pool, id).await.unwrap().is_some());
+        }
+    }
+
+    #[tokio::test]
     async fn delete_items_returns_count_and_ignores_empty() {
         let pool = memory_pool().await;
         for id in ["a", "b", "c"] {
@@ -1802,7 +1852,10 @@ mod tests {
         img.content_hash = content_hash(ClipboardKind::Image, "deadbeef.png");
         insert_item(&pool, &img).await.unwrap();
 
-        assert_eq!(delete_items(&pool, &[]).await.unwrap().removed, 0);
+        assert_eq!(
+            delete_items(&pool, &[], true, true).await.unwrap().removed,
+            0
+        );
 
         let outcome = delete_items(
             &pool,
@@ -1812,6 +1865,8 @@ mod tests {
                 "b".to_owned(),
                 "missing".to_owned(),
             ],
+            true,
+            true,
         )
         .await
         .unwrap();
@@ -1826,6 +1881,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_delete_checks_current_protection_and_returns_only_deleted_images() {
+        let pool = memory_pool().await;
+        let ids: Vec<String> = ["plain", "pinned", "favorite", "both"]
+            .map(str::to_owned)
+            .into();
+        for id in &ids {
+            let mut item = sample_item(id);
+            item.kind = ClipboardKind::Image;
+            item.content = format!("{id}.png");
+            item.content_hash = content_hash(item.kind, &item.content);
+            insert_item(&pool, &item).await.unwrap();
+        }
+        sqlx::query("UPDATE clipboard_items SET is_pinned = id IN ('pinned', 'both'), is_favorite = id IN ('favorite', 'both')")
+            .execute(&pool).await.unwrap();
+        let outcome = delete_items(&pool, &ids, false, false).await.unwrap();
+        assert_eq!(outcome.removed, 1);
+        assert_eq!(outcome.image_files, ["plain.png"]);
+        let outcome = delete_items(&pool, &ids, true, false).await.unwrap();
+        assert_eq!(outcome.image_files, ["favorite.png"]);
+        let outcome = delete_items(&pool, &ids, false, true).await.unwrap();
+        assert_eq!(outcome.image_files, ["pinned.png"]);
+        assert!(find_item_by_id(&pool, "both").await.unwrap().is_some());
+        let outcome = delete_items(&pool, &ids, true, true).await.unwrap();
+        assert_eq!(outcome.image_files, ["both.png"]);
+    }
+
+    #[tokio::test]
     async fn delete_items_spans_several_batches() {
         let pool = memory_pool().await;
         let all: Vec<String> = (0..DELETE_BATCH_SIZE + 3)
@@ -1835,7 +1917,7 @@ mod tests {
             insert_item(&pool, &sample_item(id)).await.unwrap();
         }
 
-        let outcome = delete_items(&pool, &all[1..]).await.unwrap();
+        let outcome = delete_items(&pool, &all[1..], true, true).await.unwrap();
         assert_eq!(outcome.removed, (all.len() - 1) as u64);
         assert_eq!(
             ids(&query_items(&pool, &ClipboardItemQuery::default())

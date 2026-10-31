@@ -4264,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-app"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4291,12 +4291,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tray-icon",
+ "url",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "kwikpaste-core"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4361,7 +4362,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ext-protocol"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -4369,7 +4370,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-os"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4393,7 +4394,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ui"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "futures",
@@ -4402,11 +4403,12 @@ dependencies = [
  "gpui-kit-assets",
  "gpui-pre",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]
 name = "kwikpaste-updater"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4424,6 +4426,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tar",
  "tempfile",
  "thiserror 2.0.21",

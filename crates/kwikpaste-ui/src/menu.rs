@@ -4,12 +4,16 @@
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, Focusable as _, ImageSource, InteractiveElement,
-    Interactivity, IntoElement, ParentElement, Pixels, Rems, RenderImage, SharedString, Stateful,
-    StyleRefinement, Styled, Window, div, img, prelude::FluentBuilder as _,
+    Anchor, AnyElement, App, Context, DismissEvent, Div, ElementId, Entity, Focusable as _,
+    ImageSource, InteractiveElement, Interactivity, IntoElement, MouseButton, ParentElement,
+    Pixels, Rems, RenderImage, SharedString, Stateful, StatefulInteractiveElement, StyleRefinement,
+    Styled, Window, div, img, prelude::FluentBuilder as _,
 };
 use gpui_base::Selectable;
-use gpui_component::menu::{ContextMenuExt as _, DropdownMenu, PopupMenu, PopupMenuItem};
+use gpui_component::{
+    menu::{ContextMenuExt as _, DropdownMenu, PopupMenu, PopupMenuItem},
+    popover::Popover,
+};
 
 use crate::{
     icon::IconName,
@@ -166,6 +170,7 @@ fn build_menu(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    let menu = menu.scrollable(true);
     entries.into_iter().fold(menu, |menu, entry| match entry {
         MenuEntry::Separator => menu.separator(),
         MenuEntry::Submenu(submenu) => {
@@ -300,16 +305,19 @@ pub fn menu_open(window: &Window) -> bool {
         .any(|context| context.contains(POPUP_MENU_CONTEXT))
 }
 
-/// 下拉菜单的触发元素：一个可自由排版的容器，点击时打开菜单。
+/// 菜单的触发元素：一个可自由排版的容器，点击（或右键）时打开菜单。
 pub struct MenuTrigger {
     base: Stateful<Div>,
+    id: ElementId,
     selected: bool,
 }
 
 impl MenuTrigger {
     pub fn new(id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         Self {
-            base: div().id(id),
+            base: div().id(id.clone()),
+            id,
             selected: false,
         }
     }
@@ -325,6 +333,51 @@ impl MenuTrigger {
         })
         .into_any_element()
     }
+
+    /// 右键打开 `build` 给出的菜单，菜单左下角对齐触发元素左上角：开在它上方，不压住被右键的元素，
+    /// 放不下时贴着窗口边缘。触发元素在父元素里最多占满一行。
+    ///
+    /// 与 [`context_menu`] 不同，菜单按触发元素定位，不按指针位置；`build` 在每次打开时调用。
+    pub fn right_click_menu(
+        self,
+        build: impl Fn(&mut Window, &mut App) -> Vec<MenuEntry> + 'static,
+    ) -> AnyElement {
+        let id = Arc::new(self.id.clone());
+        let menu_id = ElementId::NamedChild(id.clone(), "menu".into());
+
+        Popover::new(ElementId::NamedChild(id, "popover".into()))
+            .appearance(false)
+            .overlay_closable(false)
+            .mouse_button(MouseButton::Right)
+            .anchor(Anchor::BottomLeft)
+            .trigger_style(StyleRefinement::default().max_w_full().min_w_0())
+            .trigger(self)
+            .content(move |_, window, cx| {
+                // 打开期间内容每帧都会调用，菜单只建一次；关上后这一格随之回收，下次打开重建。
+                let slot =
+                    window.use_keyed_state(menu_id.clone(), cx, |_, _| None::<Entity<PopupMenu>>);
+                if let Some(menu) = slot.read(cx).clone() {
+                    return menu;
+                }
+
+                let entries = build(window, cx);
+                let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
+                    build_menu(menu, entries, None, window, cx)
+                });
+                window.focus(&menu.focus_handle(cx), cx);
+                let popover = cx.entity().downgrade();
+                window
+                    .subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
+                        popover
+                            .update(cx, |state, cx| state.dismiss(window, cx))
+                            .ok();
+                    })
+                    .detach();
+                slot.update(cx, |slot, _| *slot = Some(menu.clone()));
+                menu
+            })
+            .into_any_element()
+    }
 }
 
 impl Styled for MenuTrigger {
@@ -338,6 +391,8 @@ impl InteractiveElement for MenuTrigger {
         self.base.interactivity()
     }
 }
+
+impl StatefulInteractiveElement for MenuTrigger {}
 
 impl ParentElement for MenuTrigger {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {

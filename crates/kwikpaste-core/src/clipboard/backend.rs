@@ -277,26 +277,43 @@ impl ClipboardBackend for SystemClipboard {
 mod windows_html {
     pub(super) const FORMAT: &str = "HTML Format";
 
-    /// 按 `StartHTML` / `EndHTML` 取出 HTML，规则与 clipboard-rs 相同（没有的键取整段的头或尾），
-    /// 偏移越界、倒置或不在字符边界上时返回 `None`。
+    /// 优先取 HTML 上下文；上下文偏移均为 -1 时取片段。已识别的传输头不能作为正文返回，
+    /// 缺少偏移、越界、倒置或不在字符边界上时返回 `None`。
     pub(super) fn extract(data: &str) -> Option<&str> {
-        let mut start = 0usize;
-        let mut end = data.len();
-        for line in data.lines() {
-            let mut split = line.split(':');
-            let (Some(key), Some(value)) = (split.next(), split.next()) else {
+        let (mut start, mut end, mut fragment_start, mut fragment_end) = (None, None, None, None);
+        let mut header_end = 0;
+        for line in data.split_inclusive('\n') {
+            let Some((key, value)) = line.trim_end().split_once(':') else {
                 break;
             };
             let target = match key {
                 "StartHTML" => &mut start,
                 "EndHTML" => &mut end,
-                _ => continue,
+                "StartFragment" => &mut fragment_start,
+                "EndFragment" => &mut fragment_end,
+                "Version" | "SourceURL" | "StartSelection" | "EndSelection" => {
+                    header_end += line.len();
+                    continue;
+                }
+                _ => break,
             };
-            match value.trim_start_matches('0').parse() {
-                Ok(value) => *target = value,
-                Err(_) => break,
-            }
+            *target = Some(value.trim().parse::<i64>().ok()?);
+            header_end += line.len();
         }
+        if header_end == 0 {
+            return Some(data);
+        }
+
+        let (start, end) = match (start?, end?) {
+            (-1, -1) => (fragment_start?, fragment_end?),
+            offsets => offsets,
+        };
+        let start = usize::try_from(start).ok()?;
+        let end = usize::try_from(end).ok()?;
+        if start < header_end {
+            return None;
+        }
+
         data.get(start..end)
     }
 
@@ -313,6 +330,43 @@ mod windows_html {
                 header_len + body.len()
             );
             assert_eq!(extract(&data), Some(body));
+        }
+
+        #[test]
+        fn extracts_fragment_when_html_context_is_absent() {
+            let body = "<b>你好 Hello</b>";
+            let header = "Version:1.0\r\nStartHTML:-1\r\nEndHTML:-1\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n";
+            let data = format!(
+                "Version:1.0\r\nStartHTML:-1\r\nEndHTML:-1\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n{body}\0",
+                header.len(),
+                header.len() + body.len()
+            );
+            assert_eq!(extract(&data), Some(body));
+
+            for (start, end) in [
+                (0, header.len()),
+                (header.len(), data.len() + 1),
+                (header.len() + 1, header.len()),
+                (header.len() + 4, header.len() + body.len()),
+            ] {
+                let invalid = format!(
+                    "Version:1.0\r\nStartHTML:-1\r\nEndHTML:-1\r\nStartFragment:{start:010}\r\nEndFragment:{end:010}\r\n{body}"
+                );
+                assert_eq!(extract(&invalid), None);
+            }
+        }
+
+        #[test]
+        fn invalid_transport_headers_are_not_returned_as_html() {
+            for data in [
+                "Version:1.0\r\nStartHTML:-1\r\nEndHTML:-1\r\n<b>Hello</b>",
+                "Version:1.0\r\nStartHTML:invalid\r\nEndHTML:999\r\n<b>Hello</b>",
+                "Version:1.0\r\n<b>Hello</b>",
+                "StartHTML:0\r\nEndHTML:0\r\n<b>Hello</b>",
+                "StartHTML:-2\r\nEndHTML:-2\r\nStartFragment:0\r\nEndFragment:0\r\n",
+            ] {
+                assert_eq!(extract(data), None);
+            }
         }
 
         #[test]

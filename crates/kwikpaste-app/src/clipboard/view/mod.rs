@@ -29,6 +29,7 @@ use kwikpaste_ui::INPUT_KEY_CONTEXT;
 
 pub(crate) use card::logo as app_logo;
 pub use editing::request_panel;
+pub(crate) use group_bar::entry_glyph as group_bar_glyph;
 pub(crate) use list::quick_action_glyph;
 pub use panel::{ClipboardPanel, PanelIntent};
 

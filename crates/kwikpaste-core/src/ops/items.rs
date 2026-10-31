@@ -433,11 +433,13 @@ impl Core {
     }
 
     /// 把多选合并后一次写回：文本写成一段纯文本，图片 / 文件写成一份文件列表，逐条记录复用。
+    /// `files_as_paths` 将全文件选区写成换行分隔的路径文本，不改变图片的写回方式。
     /// 不足两条时不写剪贴板，返回 `None`，调用方继续原来的单条操作。`query` 必须与列表一致。
     pub async fn copy_selection(
         &self,
         ids: Vec<String>,
         mut query: ClipboardItemQuery,
+        files_as_paths: bool,
     ) -> Result<Option<CopyOutcome>> {
         let core = self.clone();
         self.hop(async move {
@@ -449,6 +451,12 @@ impl Core {
 
             match merged {
                 MergedSelection::Text(text) => write_fragment(&core.0, &text)?,
+                MergedSelection::Files(paths)
+                    if files_as_paths
+                        && items.iter().all(|item| item.kind == ClipboardKind::Files) =>
+                {
+                    write_fragment(&core.0, &paths.join("\n"))?;
+                }
                 MergedSelection::Files(paths) => write_file_list(&core.0, paths)?,
             }
             for item in items {
@@ -643,7 +651,8 @@ impl Core {
         self.hop(async move {
             let pool = core.0.db.pool().await;
             let content = core.0.settings.snapshot().clipboard.content;
-            let Some(id) = find_item_id_at(&pool, content.sort, offset).await? else {
+            let favorite = content.hide_favorites_in_all.then_some(false);
+            let Some(id) = find_item_id_at(&pool, content.sort, offset, favorite).await? else {
                 return Ok(None);
             };
             let Some(item) = find_item_by_id(&pool, &id).await? else {
@@ -697,6 +706,7 @@ impl Core {
     pub async fn read_clipboard_now(&self) -> Result<Option<CapturedItem>> {
         let core = self.clone();
         self.hop(async move {
+            let _publication = core.0.cleanup.image_publication().await;
             let source = core.0.platform().frontmost_app();
             let settings = core.0.settings.snapshot();
             let item = {
@@ -869,6 +879,7 @@ impl Core {
         let id = id.to_owned();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
+            let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
             if let Some(file_name) = delete_item(&pool, &id).await? {
                 if let Err(err) = core.0.images.remove(&file_name) {
@@ -881,13 +892,19 @@ impl Core {
     }
 
     /// 批量删除多选的记录，连带删除图片文件，返回实际删除条数。不发事件；
-    /// 收藏 / 置顶保护由界面在选择时过滤。
-    pub async fn delete_items(&self, ids: Vec<String>) -> Result<u64> {
+    /// 删除时按传入的有效策略检查数据库中的最新收藏 / 置顶标记。
+    pub async fn delete_items(
+        &self,
+        ids: Vec<String>,
+        delete_favorites: bool,
+        delete_pinned: bool,
+    ) -> Result<u64> {
         let core = self.clone();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
+            let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
-            let outcome = delete_items(&pool, &ids).await?;
+            let outcome = delete_items(&pool, &ids, delete_favorites, delete_pinned).await?;
 
             for file_name in &outcome.image_files {
                 if let Err(err) = core.0.images.remove(file_name) {
@@ -904,6 +921,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
+            let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
             let outcome = clear_items(&pool, delete_favorites, delete_pinned).await?;
 
@@ -926,6 +944,7 @@ impl Core {
         let core = self.clone();
         self.hop(async move {
             let _ocr = core.0.ocr.suspend().await;
+            let _exclusive = core.0.cleanup.exclusive().await;
             let pool = core.0.db.pool().await;
             let outcome = clear_scope(&pool, &scope).await?;
             clipboard::cleanup::apply_outcome(&core.0, &outcome, "scoped");

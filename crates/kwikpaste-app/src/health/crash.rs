@@ -30,6 +30,8 @@ const FALLBACK_AFTER: Duration = Duration::from_secs(10);
 const RESTART_EXIT_CODE: i32 = 70;
 /// GPUI 读的环境变量：降级模式关掉 DirectComposition。
 const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
+/// 无法持久化记录时，重启计数随这一时间窗一起传给子进程。
+const FALLBACK_WINDOW_START: &str = "KWIKPASTE_CRASH_WINDOW_START";
 /// 剪贴板监听线程的名字（core 的 `clipboard::watcher`）。
 const WATCHER_THREAD: &str = "clipboard-watcher";
 
@@ -166,7 +168,7 @@ fn begin(info: CrashInfo) -> Option<Restart> {
     let recent: Vec<&CrashRecord> = recent(&log, now);
     let count = match file {
         Some(_) => u32::try_from(recent.len()).unwrap_or(u32::MAX) + 1,
-        None => super::relaunch_count() + 1,
+        None => fallback_relaunch_count(super::relaunch_count(), fallback_window_start(now)),
     };
     // 毒输入：连续两次都在启动阶段就崩（例如某个启动时读到的数据），第二次重启直接降级，
     // 不再浪费一次原样重启。
@@ -232,6 +234,24 @@ fn recent(log: &CrashLog, now: DateTime<Utc>) -> Vec<&CrashRecord> {
         .collect()
 }
 
+/// 没有持久化记录时也让继承的计数过期，不把一次重启链变成进程终身额度。
+fn fallback_window_start(now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let started = std::env::var(FALLBACK_WINDOW_START).ok()?.parse().ok()?;
+    active_fallback_window(started, now)
+}
+
+/// 仅保留尚未过期且不在未来的回退时间窗起点。
+fn active_fallback_window(started: DateTime<Utc>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    now.signed_duration_since(started)
+        .to_std()
+        .is_ok_and(|elapsed| elapsed < WINDOW)
+        .then_some(started)
+}
+
+fn fallback_relaunch_count(previous: u32, started: Option<DateTime<Utc>>) -> u32 {
+    started.map_or(1, |_| previous.saturating_add(1))
+}
+
 fn trim(log: &mut CrashLog) {
     let excess = log.crashes.len().saturating_sub(KEPT);
     log.crashes.drain(..excess);
@@ -273,6 +293,11 @@ pub fn spawn_relaunch(restart: &Restart) -> std::io::Result<u32> {
     }
     let spawned = std::env::current_exe().and_then(|exe| {
         let mut command = Command::new(exe);
+        let now = Utc::now();
+        command.env(
+            FALLBACK_WINDOW_START,
+            fallback_window_start(now).unwrap_or(now).to_rfc3339(),
+        );
         command.args(super::relaunch_args(
             std::env::args().skip(1),
             restart.relaunch,
@@ -353,19 +378,15 @@ pub(super) fn run_watchdog(
     if stop_file.exists() || !running_marker_matches(&running_file, pid) {
         return;
     }
-    let log = load(&crash_file);
-    if log.gave_up {
-        return;
-    }
-    let recent_count = u32::try_from(recent(&log, Utc::now()).len()).unwrap_or(u32::MAX);
-    let previous = super::parse_relaunch(original_args.iter().cloned());
-    let relaunch = recent_count
-        .saturating_add(1)
-        .max(previous.saturating_add(1));
+    let mut log = load(&crash_file);
+    let relaunch = record_watchdog_exit(&mut log, pid, Utc::now());
+    save(&crash_file, &log);
     if relaunch > MAX_RESTARTS {
+        log::warn!("external watchdog restart limit reached within ten minutes");
         return;
     }
     let degraded = relaunch >= DEGRADED_FROM;
+    let was_degraded = original_args.iter().any(|arg| arg == super::DEGRADED);
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
@@ -373,6 +394,8 @@ pub(super) fn run_watchdog(
     command.args(super::relaunch_args(original_args, relaunch, degraded));
     if degraded {
         command.env(DISABLE_DIRECT_COMPOSITION, "1");
+    } else if was_degraded {
+        command.env_remove(DISABLE_DIRECT_COMPOSITION);
     }
     match command.spawn() {
         Ok(child) => {
@@ -384,6 +407,31 @@ pub(super) fn run_watchdog(
         }
         Err(err) => log::error!("external watchdog could not relaunch the app: {err}"),
     }
+}
+
+/// 外部终止补记在失败当时；已有进程内记录时不重复计数，后续启动也不会再次补记。
+fn record_watchdog_exit(log: &mut CrashLog, pid: u32, now: DateTime<Utc>) -> u32 {
+    if !log.crashes.iter().any(|crash| crash.pid == pid) {
+        log.crashes.push(CrashRecord {
+            at: now,
+            pid,
+            version: String::new(),
+            phase: "unknown".to_owned(),
+            thread: "unknown".to_owned(),
+            location: String::new(),
+            message: "the process ended without shutting down".to_owned(),
+            action: "unclean-exit".to_owned(),
+        });
+    }
+    let count = u32::try_from(recent(log, now).len()).unwrap_or(u32::MAX);
+    log.gave_up = count > MAX_RESTARTS;
+    if log.gave_up
+        && let Some(crash) = log.crashes.iter_mut().find(|crash| crash.pid == pid)
+    {
+        crash.action = "give-up".to_owned();
+    }
+    trim(log);
+    count
 }
 
 fn running_marker_matches(path: &Path, pid: u32) -> bool {
@@ -537,6 +585,46 @@ mod tests {
             message: String::new(),
             action: "restart".to_owned(),
         }
+    }
+
+    #[test]
+    fn watchdog_counts_each_exit_once_and_expires_healthy_gaps() {
+        let now = Utc::now();
+        let mut log = CrashLog::default();
+        for pid in 1..=5 {
+            let at = now + chrono::Duration::minutes(i64::from(pid) * 11);
+            assert_eq!(record_watchdog_exit(&mut log, pid, at), 1);
+            assert_eq!(record_watchdog_exit(&mut log, pid, at), 1);
+            assert!(!log.gave_up);
+        }
+        assert_eq!(log.crashes.len(), 5);
+
+        let at = now + chrono::Duration::minutes(55);
+        assert_eq!(record_watchdog_exit(&mut log, 6, at), 2);
+        assert_eq!(record_watchdog_exit(&mut log, 7, at), 3);
+        assert_eq!(record_watchdog_exit(&mut log, 8, at), 4);
+        assert!(log.gave_up);
+        assert_eq!(log.crashes.last().unwrap().action, "give-up");
+        assert_eq!(
+            record_watchdog_exit(&mut log, 9, at + chrono::Duration::minutes(10)),
+            1
+        );
+        assert!(!log.gave_up);
+    }
+
+    #[test]
+    fn fallback_relaunch_counter_expires_with_its_window() {
+        let now = Utc::now();
+        assert_eq!(
+            fallback_relaunch_count(3, active_fallback_window(now, now)),
+            4
+        );
+        let later = now + chrono::Duration::minutes(10);
+        assert_eq!(
+            fallback_relaunch_count(3, active_fallback_window(now, later)),
+            1
+        );
+        assert_eq!(fallback_relaunch_count(3, None), 1);
     }
 
     #[test]

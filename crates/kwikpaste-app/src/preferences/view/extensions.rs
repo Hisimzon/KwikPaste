@@ -284,9 +284,14 @@ impl Preferences {
                     .as_ref()
                     .is_some_and(|installed| installed.enabled);
                 match status.id.as_str() {
-                    "ocr" if enabled => {
-                        rows.push(self.render_image_text_status(false, cx));
-                        if cfg!(target_os = "windows") {
+                    "ocr" => {
+                        if !enabled {
+                            rows.push(details("ocr", tokens));
+                        }
+                        if enabled || self.image_text_row_visible() {
+                            rows.push(self.render_image_text_status(false, cx));
+                        }
+                        if enabled && cfg!(target_os = "windows") {
                             rows.push(self.render_ocr_engines(&all, cx));
                         }
                     }

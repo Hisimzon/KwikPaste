@@ -9,13 +9,13 @@
 use std::{ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context, Div, ElementId,
-    Entity, EventEmitter, FontStyle, FontWeight, HighlightStyle, ImageSource,
-    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ParentElement as _, Render, ScrollHandle, SharedString, Stateful,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context, DispatchPhase,
+    Div, ElementId, Entity, EventEmitter, FontStyle, FontWeight, HighlightStyle, ImageSource,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseExitEvent,
+    MouseMoveEvent, ParentElement as _, Render, ScrollHandle, SharedString, Stateful,
     StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledText, UnderlineStyle,
-    UniformListScrollHandle, Window, WindowBounds, WindowKind, WindowOptions, div, img, point,
-    prelude::FluentBuilder as _, px, size, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, WindowBounds, WindowKind, WindowOptions, canvas,
+    div, img, point, prelude::FluentBuilder as _, px, size, uniform_list,
 };
 use kwikpaste_core::{
     clipboard::SnippetKind,
@@ -23,7 +23,7 @@ use kwikpaste_core::{
     presenter::{PreviewBlock, PreviewDocument, PreviewInline},
 };
 use kwikpaste_ui::{
-    Button, Icon, IconName, KpStyled as _, MenuEntry, MenuItem, context_menu, dismiss_menu,
+    Button, Icon, IconName, KpStyled as _, MenuEntry, MenuItem, MenuTrigger, dismiss_menu,
     theme::{self, TextSize, px_rems, radius, space},
 };
 
@@ -62,7 +62,7 @@ pub enum PreviewEvent {
     Snippet(Arc<str>),
     /// 快捷信息右键菜单里选了粘贴。
     PasteSnippet(Arc<str>),
-    /// 中键点了链接 / 邮箱快捷信息，或在右键菜单里选了打开。
+    /// 中键或按住修饰键点了链接 / 邮箱快捷信息，或在右键菜单里选了打开。
     OpenSnippet(Arc<str>, SnippetKind),
     /// 点了链接、邮箱记录的正文：打开链接或写邮件。
     Open(OpenTarget),
@@ -95,8 +95,8 @@ pub struct PreviewPanel {
     image_text: Option<ImageTextView>,
     /// 快捷信息按类型着色（「快捷信息颜色」设置），列表在 [Self::set] 前更新。
     pub snippet_colors: bool,
-    /// 指针下的那块快捷信息：右键菜单按它给出动作。
-    hovered_snippet: Option<(Arc<str>, SnippetKind)>,
+    /// 按住修饰键：快捷信息里的链接、邮箱显示成链接，点了打开。列表的数字角标开关时同步。
+    pub links: bool,
     images: Entity<KpImageCache>,
     /// 预览文件图标的独立有界缓存；关闭预览时不清空，避免再次打开时闪烁。
     icons: Entity<KpImageCache>,
@@ -122,7 +122,7 @@ impl PreviewPanel {
             image_box: None,
             image_text: None,
             snippet_colors: true,
-            hovered_snippet: None,
+            links: false,
             images,
             icons,
             text_scroll: UniformListScrollHandle::new(),
@@ -177,7 +177,6 @@ impl PreviewPanel {
     /// 释放图片（预览关上时），关掉开着的快捷信息菜单。
     pub fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         dismiss_menu(window, cx);
-        self.hovered_snippet = None;
         self.selection.clear();
         self.images
             .update(cx, |images, cx| images.clear(Some(window), cx));
@@ -435,6 +434,7 @@ impl PreviewPanel {
         };
         let scale = window.scale_factor();
         let key = ImageKey {
+            modified: None,
             path: path_of(path),
             width: (width * scale).round().max(1.) as u32,
             height: (height * scale).round().max(1.) as u32,
@@ -620,7 +620,9 @@ impl PreviewPanel {
             .into_any_element()
     }
 
-    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段；片段多时封顶，区内滚动。
+    /// 纯文本下方的快捷信息区：列出全文识别到的每一段，点一下只复制这一段（按住修饰键时链接、
+    /// 邮箱是打开），右键在它上方弹出菜单；一行放不下的（多为长链接）折行显示全文。
+    /// 片段多时封顶，区内滚动。
     fn snippets(&self, preview: &Preview, cx: &mut Context<Self>) -> Option<AnyElement> {
         let snippets = &preview.payload.snippets;
         if snippets.is_empty() {
@@ -628,123 +630,82 @@ impl PreviewPanel {
         }
         let tokens = theme::semantic(cx);
         let colors = self.snippet_colors.then(|| theme::components(cx).snippet);
-        let entity = cx.entity().downgrade();
+        // 小块的 id 带上记录：换了记录，上一条开着的右键菜单随旧小块一起消失，不会留着旧内容。
+        let chip_id: SharedString = format!("preview-snippet-{}", preview.payload.id).into();
 
-        let area = div()
-            .id("preview-snippets")
-            .flex_none()
-            .max_h(space((SNIPPETS_MAX_HEIGHT as f32) / 4.))
-            .overflow_y_scroll()
-            .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
-            .px(space((TEXT_PADDING_X as f32) / 4.))
-            .border_t_1()
-            .border_color(tokens.border.divider)
-            .child(div().flex().flex_wrap().gap(space(1.)).children(
-                snippets.iter().enumerate().map(|(index, snippet)| {
-                    let text: Arc<str> = Arc::from(snippet.text.as_str());
-                    let kind = snippet.kind;
-                    let hover_text = text.clone();
-                    let open_text = text.clone();
-                    div()
-                        .id(ElementId::NamedInteger(
-                            "preview-snippet".into(),
-                            index as u64,
-                        ))
-                        .flex()
-                        .items_center()
-                        .gap(space((SNIPPET_PART_GAP as f32) / 4.))
-                        .max_w_full()
-                        .h(space((SNIPPET_CHIP_HEIGHT as f32) / 4.))
-                        .px(space((SNIPPET_CHIP_PADDING_X as f32) / 4.))
-                        .rounded(radius::MD)
-                        .bg(tokens.fill.subtle)
-                        .kp_text(TextSize::Xs)
-                        .cursor_pointer()
-                        .hover(|style| style.bg(tokens.fill.default))
-                        .when_some(colors, |chip, colors| {
-                            chip.child(card::snippet_dot(card::snippet_color(
-                                &colors,
-                                snippet.kind,
-                            )))
-                        })
-                        .child(
-                            div().flex_none().text_color(tokens.text.secondary).child(
-                                snippet
-                                    .label
-                                    .clone()
-                                    .map(SharedString::from)
-                                    .unwrap_or_else(|| t(snippet_label(snippet.kind))),
-                            ),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .child(SharedString::from(snippet.text.clone())),
-                        )
-                        .on_hover(cx.listener(move |panel, hovered: &bool, _, _| {
-                            if *hovered {
-                                panel.hovered_snippet = Some((hover_text.clone(), kind));
-                            } else if panel
-                                .hovered_snippet
-                                .as_ref()
-                                .is_some_and(|(current, _)| *current == hover_text)
-                            {
-                                panel.hovered_snippet = None;
-                            }
-                        }))
-                        .when(card::snippet_open_url(kind, &text).is_some(), |chip| {
-                            chip.on_mouse_down(
-                                MouseButton::Middle,
-                                cx.listener(move |_, _, _, cx| {
-                                    cx.emit(PreviewEvent::OpenSnippet(open_text.clone(), kind));
-                                }),
+        Some(
+            div()
+                .id("preview-snippets")
+                .flex_none()
+                .max_h(space((SNIPPETS_MAX_HEIGHT as f32) / 4.))
+                .overflow_y_scroll()
+                .py(space((SNIPPETS_PADDING_Y as f32) / 4.))
+                .px(space((TEXT_PADDING_X as f32) / 4.))
+                .border_t_1()
+                .border_color(tokens.border.divider)
+                .child(div().flex().flex_wrap().gap(space(1.)).children(
+                    snippets.iter().enumerate().map(|(index, snippet)| {
+                        let text: Arc<str> = Arc::from(snippet.text.as_str());
+                        let kind = snippet.kind;
+                        let open = self.links && card::snippet_open_url(kind, &text).is_some();
+                        let open_text = text.clone();
+                        let menu_text = text.clone();
+                        let panel = cx.entity().downgrade();
+                        MenuTrigger::new(ElementId::NamedInteger(chip_id.clone(), index as u64))
+                            .flex()
+                            .items_start()
+                            .gap(space((SNIPPET_PART_GAP as f32) / 4.))
+                            .max_w_full()
+                            .min_h(space((SNIPPET_CHIP_HEIGHT as f32) / 4.))
+                            .py(space(1.))
+                            .px(space((SNIPPET_CHIP_PADDING_X as f32) / 4.))
+                            .rounded(radius::MD)
+                            .bg(tokens.fill.subtle)
+                            .kp_text(TextSize::Xs)
+                            .hover(|style| style.bg(tokens.fill.default))
+                            .when_some(colors, |chip, colors| {
+                                chip.child(
+                                    card::snippet_dot(card::snippet_color(&colors, snippet.kind))
+                                        .mt(space(1.25)),
+                                )
+                            })
+                            .child(
+                                div().flex_none().text_color(tokens.text.secondary).child(
+                                    snippet
+                                        .label
+                                        .clone()
+                                        .map(SharedString::from)
+                                        .unwrap_or_else(|| t(snippet_label(snippet.kind))),
+                                ),
                             )
-                        })
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(PreviewEvent::Snippet(text.clone()));
-                        }))
-                }),
-            ));
-
-        Some(context_menu(area, move |_, cx| {
-            entity
-                .update(cx, |panel, cx| panel.snippet_menu(cx))
-                .unwrap_or_default()
-        }))
-    }
-
-    /// 快捷信息的右键菜单：粘贴、复制指针下的那一段，链接 / 邮箱还能直接打开。
-    fn snippet_menu(&self, cx: &mut Context<Self>) -> Vec<MenuEntry> {
-        let Some((text, kind)) = self.hovered_snippet.clone() else {
-            return Vec::new();
-        };
-        let entity = cx.entity().downgrade();
-        let item = |label: &str, event: PreviewEvent| -> MenuEntry {
-            let entity = entity.clone();
-            MenuItem::new(t(label), move |_, cx| {
-                entity.update(cx, |_, cx| cx.emit(event.clone())).ok();
-            })
-            .into()
-        };
-        let mut entries = vec![
-            item(
-                "clipboard:menu.paste",
-                PreviewEvent::PasteSnippet(text.clone()),
-            ),
-            item("clipboard:menu.copy", PreviewEvent::Snippet(text.clone())),
-        ];
-        let open_label = match kind {
-            SnippetKind::Link => Some("clipboard:menu.openLink"),
-            SnippetKind::Email => Some("clipboard:menu.sendEmail"),
-            _ => None,
-        };
-        if let Some(label) = open_label.filter(|_| card::snippet_open_url(kind, &text).is_some()) {
-            entries.push(MenuEntry::Separator);
-            entries.push(item(label, PreviewEvent::OpenSnippet(text, kind)));
-        }
-
-        entries
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .when(open, |text| {
+                                        text.text_color(tokens.text.link).underline()
+                                    })
+                                    .child(SharedString::from(snippet.text.clone())),
+                            )
+                            .when(card::snippet_open_url(kind, &text).is_some(), |chip| {
+                                chip.on_mouse_down(
+                                    MouseButton::Middle,
+                                    cx.listener(move |_, _, _, cx| {
+                                        cx.emit(PreviewEvent::OpenSnippet(open_text.clone(), kind));
+                                    }),
+                                )
+                            })
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                if open {
+                                    cx.emit(PreviewEvent::OpenSnippet(text.clone(), kind));
+                                } else {
+                                    cx.emit(PreviewEvent::Snippet(text.clone()));
+                                }
+                            }))
+                            .right_click_menu(move |_, _| snippet_menu(&panel, &menu_text, kind))
+                    }),
+                ))
+                .into_any_element(),
+        )
     }
 
     fn words(&self, preview: &Preview, cx: &mut Context<Self>) -> AnyElement {
@@ -905,6 +866,7 @@ impl PreviewPanel {
         .ceil()
         .max(1.) as u32;
         let key = ImageKey {
+            modified: None,
             path: path_of(path),
             width: physical,
             height: physical,
@@ -1124,6 +1086,39 @@ pub fn snippet_label(kind: SnippetKind) -> &'static str {
     }
 }
 
+/// 快捷信息的右键菜单：粘贴、复制这一段，链接 / 邮箱还能直接打开。
+fn snippet_menu(
+    panel: &WeakEntity<PreviewPanel>,
+    text: &Arc<str>,
+    kind: SnippetKind,
+) -> Vec<MenuEntry> {
+    let item = |label: &str, event: PreviewEvent| -> MenuEntry {
+        let panel = panel.clone();
+        MenuItem::new(t(label), move |_, cx| {
+            panel.update(cx, |_, cx| cx.emit(event.clone())).ok();
+        })
+        .into()
+    };
+    let mut entries = vec![
+        item(
+            "clipboard:menu.paste",
+            PreviewEvent::PasteSnippet(text.clone()),
+        ),
+        item("clipboard:menu.copy", PreviewEvent::Snippet(text.clone())),
+    ];
+    let open_label = match kind {
+        SnippetKind::Link => Some("clipboard:menu.openLink"),
+        SnippetKind::Email => Some("clipboard:menu.sendEmail"),
+        _ => None,
+    };
+    if let Some(label) = open_label.filter(|_| card::snippet_open_url(kind, text).is_some()) {
+        entries.push(MenuEntry::Separator);
+        entries.push(item(label, PreviewEvent::OpenSnippet(text.clone(), kind)));
+    }
+
+    entries
+}
+
 /// 预览文档里的一块；列表项和引用里的块递归渲染。
 fn document_block(block: &PreviewBlock, cx: &App) -> AnyElement {
     let tokens = theme::semantic(cx);
@@ -1261,6 +1256,7 @@ impl Render for PreviewPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
         let content = self.content(window, cx);
+        let panel = cx.entity().downgrade();
 
         div()
             .id("preview-panel")
@@ -1275,16 +1271,46 @@ impl Render for PreviewPanel {
             .border_1()
             .border_color(tokens.border.subtle)
             .text_color(tokens.text.primary)
-            .on_hover(cx.listener(|_, hovered: &bool, _, cx| {
-                cx.emit(PreviewEvent::Pointer(*hovered));
-            }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|panel, _, _, _| panel.selection.release()),
             )
             .child(self.header(cx))
             .child(div().flex_1().min_h_0().relative().child(content))
+            .child(pointer_tracker(panel))
     }
+}
+
+/// 按整个窗口报告指针进出（[`PreviewEvent::Pointer`]），不看元素命中：快捷信息的右键菜单会挡住
+/// 下面的命中，指针在菜单上仍在预览窗里。
+fn pointer_tracker(panel: WeakEntity<PreviewPanel>) -> AnyElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, window, _| {
+            let moved = panel.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                if phase != DispatchPhase::Capture {
+                    return;
+                }
+                let inside = Bounds::new(point(px(0.), px(0.)), window.viewport_size())
+                    .contains(&event.position);
+                moved
+                    .update(cx, |_, cx| cx.emit(PreviewEvent::Pointer(inside)))
+                    .ok();
+            });
+            let exited = panel.clone();
+            window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
+                if phase == DispatchPhase::Capture {
+                    exited
+                        .update(cx, |_, cx| cx.emit(PreviewEvent::Pointer(false)))
+                        .ok();
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
 }
 
 /// 预览窗：GPUI 窗口、内容视图和原生句柄。

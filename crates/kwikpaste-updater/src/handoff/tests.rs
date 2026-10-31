@@ -7,6 +7,18 @@ use super::testing::recorders;
 use super::*;
 use crate::testing::TestCore;
 
+fn package(file: &Path) -> Package {
+    let bytes = fs::read(file).unwrap();
+    let key = crate::verify::testing::TestKey::generate();
+    Package {
+        dir: file.parent().unwrap().to_owned(),
+        file: file.to_owned(),
+        signature: key.sign(&bytes, true),
+        public_key: key.public_key(),
+        digest: Sha256::digest(&bytes).into(),
+    }
+}
+
 fn handoff<'a>(
     test: &'a TestCore,
     host: &'a dyn HandoffHost,
@@ -22,6 +34,7 @@ fn handoff<'a>(
         silent: false,
         from: "2.0.0".to_owned(),
         to: "2.0.1".to_owned(),
+        stop_scheduler: &|| {},
     }
 }
 
@@ -42,7 +55,7 @@ fn nsis_handoff_runs_the_installer_then_leaves() {
     fs::write(&installer, b"MZ installer").unwrap();
     let exe = test.root().join("KwikPaste.exe");
 
-    test.block_on(handoff(&test, &host, &launcher, exe).nsis(&installer))
+    test.block_on(handoff(&test, &host, &launcher, exe).nsis(&package(&installer)))
         .unwrap();
 
     assert_eq!(
@@ -78,7 +91,7 @@ fn nsis_handoff_restarts_the_current_version_when_the_installer_does_not_start()
     let exe = test.root().join("KwikPaste.exe");
 
     let err = test
-        .block_on(handoff(&test, &host, &launcher, exe).nsis(&installer))
+        .block_on(handoff(&test, &host, &launcher, exe).nsis(&package(&installer)))
         .unwrap_err();
 
     assert!(format!("{err:#}").contains("did not start"), "{err:#}");
@@ -105,7 +118,8 @@ fn nsis_handoff_refuses_a_file_that_is_not_an_installer() {
 
     assert!(
         test.block_on(
-            handoff(&test, &host, &launcher, test.root().join("KwikPaste.exe")).nsis(&installer)
+            handoff(&test, &host, &launcher, test.root().join("KwikPaste.exe"))
+                .nsis(&package(&installer))
         )
         .is_err()
     );
@@ -141,7 +155,8 @@ fn portable_handoff_swaps_the_exe_and_releases_the_single_instance_first() {
     let mut update = handoff(&test, &host, &launcher, exe.clone());
     update.silent = true;
     update.args = crate::restart_args(Vec::new(), true);
-    test.block_on(update.portable(&package)).unwrap();
+    test.block_on(update.portable(&self::package(&package)))
+        .unwrap();
 
     assert_eq!(fs::read(&exe).unwrap(), b"MZ new");
     assert_eq!(
@@ -168,8 +183,10 @@ fn portable_handoff_keeps_running_when_the_package_is_bad() {
     fs::write(&package, portable_package(b"not a program")).unwrap();
 
     assert!(
-        test.block_on(handoff(&test, &host, &launcher, exe.clone()).portable(&package))
-            .is_err()
+        test.block_on(
+            handoff(&test, &host, &launcher, exe.clone()).portable(&self::package(&package))
+        )
+        .is_err()
     );
     assert_eq!(fs::read(&exe).unwrap(), b"MZ old");
     assert!(journal.lock().unwrap().is_empty());
@@ -210,8 +227,9 @@ fn mac_handoff_swaps_the_bundle_and_schedules_a_relaunch() {
     let mut update = handoff(&test, &host, &launcher, exe);
     update.silent = true;
     update.args = crate::restart_args(Vec::new(), true);
-    test.block_on(update.mac_app(&bundle, &archive, &work))
+    test.block_on(update.mac_app(&bundle, &package(&archive)))
         .unwrap();
+    assert!(!work.join("KwikPaste.app").exists());
 
     assert_eq!(
         fs::read(bundle.join("Contents/MacOS/KwikPaste")).unwrap(),
@@ -243,4 +261,33 @@ fn unreadable_handoff_files_are_ignored() {
 
     assert!(take_handoff(test.core.paths()).is_none());
     assert!(!path.exists());
+}
+
+#[test]
+fn changed_packages_are_rejected_before_shutdown_or_replacement() {
+    let test = TestCore::start("2.0.0");
+    let (host, launcher, journal) = recorders(false);
+    let exe = test.root().join("KwikPaste.exe");
+    fs::write(&exe, b"MZ old").unwrap();
+    let file = test.root().join("update");
+    for kind in 0..3 {
+        let bytes = match kind {
+            0 => b"MZ authenticated installer".to_vec(),
+            1 => portable_package(b"MZ authenticated portable"),
+            _ => app_archive(),
+        };
+        fs::write(&file, &bytes).unwrap();
+        let package = package(&file);
+        fs::write(&file, b"MZ substituted executable").unwrap();
+        let update = handoff(&test, &host, &launcher, exe.clone());
+        let result = match kind {
+            0 => test.block_on(update.nsis(&package)),
+            1 => test.block_on(update.portable(&package)),
+            _ => test.block_on(update.mac_app(&test.root().join("KwikPaste.app"), &package)),
+        };
+        assert!(result.is_err());
+        assert!(journal.lock().unwrap().is_empty());
+        assert!(!core_is_closed(&test));
+        assert_eq!(fs::read(&exe).unwrap(), b"MZ old");
+    }
 }

@@ -220,7 +220,11 @@ impl ClipboardList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let future = self.source.delete_many(ids);
+        let future = self.source.delete_many(
+            ids,
+            self.can_delete(true, false),
+            self.can_delete(false, true),
+        );
         self.selection.set_busy(true);
         cx.notify();
 

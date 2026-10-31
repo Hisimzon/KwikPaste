@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSAppearanceNameDarkAqua, NSApplication, NSWorkspace,
     NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
 };
-use objc2_foundation::{NSNotification, NSNotificationCenter};
+use objc2_foundation::NSNotification;
 
 thread_local! {
     static DISPLAY_OPTIONS_OBSERVER: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
@@ -58,7 +58,7 @@ pub fn watch(on_change: impl Fn() + 'static) -> io::Result<()> {
             return Ok(());
         }
         let block = RcBlock::new(move |_notification: NonNull<NSNotification>| on_change());
-        let center = NSNotificationCenter::defaultCenter();
+        let center = NSWorkspace::sharedWorkspace().notificationCenter();
         let observer = unsafe {
             center.addObserverForName_object_queue_usingBlock(
                 Some(NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification),

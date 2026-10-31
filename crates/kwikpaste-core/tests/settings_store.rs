@@ -84,6 +84,7 @@ fn corrupt_file_is_backed_up_once_before_the_first_save() {
         .unwrap();
     assert_eq!(fixture.backups().len(), 1, "only the original is backed up");
     assert_eq!(store.snapshot().appearance.theme, Theme::Light);
+    assert!(fixture.store().cleanup_paused(), "restart keeps the pause");
 }
 
 #[test]
@@ -126,6 +127,16 @@ fn cleanup_stays_paused_until_history_settings_are_saved() {
         .update(json!({"general": {"trayIcon": false}}))
         .unwrap();
     assert!(store.cleanup_paused(), "unrelated saves keep the pause");
+    let saved: serde_json::Value = serde_json::from_str(&fixture.settings_file()).unwrap();
+    assert_eq!(saved["clipboard"]["history"]["storageLimitMb"], "lots");
+    let store = fixture.store();
+    assert!(store.cleanup_paused(), "restart keeps the pause");
+    store
+        .update(json!({"update": {"lastCheckedAt": "2026-10-27T00:00:00Z"}}))
+        .unwrap();
+    let store = fixture.store();
+    assert!(store.cleanup_paused(), "automatic saves keep the pause");
+    assert!(!store.snapshot().general.tray_icon);
 
     store
         .update(json!({"clipboard": {"history": {"storageLimitMb": 2048}}}))
@@ -135,6 +146,7 @@ fn cleanup_stays_paused_until_history_settings_are_saved() {
         store.load_report().history_degraded(),
         "the load report still describes the file as it was read"
     );
+    assert!(!fixture.store().cleanup_paused());
 }
 
 #[test]

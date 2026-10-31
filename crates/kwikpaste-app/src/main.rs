@@ -56,7 +56,21 @@ fn main() -> anyhow::Result<()> {
 
     let application = Application::with_platform(platform).with_assets(kwikpaste_ui::Assets);
     #[cfg(target_os = "macos")]
-    application.on_reopen(platform::reopen_from_dock);
+    {
+        application.on_reopen(platform::reopen_from_dock);
+        let invocations = launch.invocation_sender();
+        application.on_open_urls(move |urls| {
+            for url in urls {
+                if let Some(path) = platform::host::backup_path_from_url(&url) {
+                    // 复用第二实例队列，启动完成前收到的 Finder 请求也不会丢失。
+                    let _ = invocations.try_send(kwikpaste_os::single_instance::Invocation {
+                        cwd: String::new(),
+                        args: vec![String::new(), path.to_string_lossy().into_owned()],
+                    });
+                }
+            }
+        });
+    }
     application.run(move |cx: &mut App| {
         // macOS 的退出走 `[NSApp terminate:]` 直接结束进程，`run` 不会返回，下面那次 `clean_exit`
         // 到不了；不在这里清掉运行标记，外部看门狗会把每次正常退出（含 Homebrew 升级前的退出）当成崩溃重启。

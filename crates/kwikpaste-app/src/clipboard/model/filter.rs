@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Days, Local, NaiveTime, Utc};
+use kwikpaste_core::settings::GroupBarEntry;
 
 use super::item::{ItemKind, ListItem, SubKind};
 
@@ -25,8 +26,20 @@ impl Range {
     }
 }
 
-/// 分组栏里分类按钮的顺序（文本、图片、文件）。
-pub const CATEGORIES: [ItemKind; 3] = [ItemKind::Text, ItemKind::Image, ItemKind::Files];
+/// 分组栏按钮对应的分类；收藏不是分类。
+pub fn entry_category(entry: GroupBarEntry) -> Option<ItemKind> {
+    match entry {
+        GroupBarEntry::Favorite => None,
+        GroupBarEntry::Text => Some(ItemKind::Text),
+        GroupBarEntry::Image => Some(ItemKind::Image),
+        GroupBarEntry::Files => Some(ItemKind::Files),
+    }
+}
+
+/// 分组栏上显示的分类，按设置的顺序。
+pub fn bar_categories(entries: &[GroupBarEntry]) -> Vec<ItemKind> {
+    entries.iter().copied().filter_map(entry_category).collect()
+}
 
 /// 搜索框筛选里的时间范围：从本地某天零点起创建的记录。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,6 +192,11 @@ impl ListFilter {
             return false;
         }
 
+        self.may_include_existing(kind)
+    }
+
+    /// 已有记录变化可能影响当前分类；收藏和分组成员资格由重查确认。
+    pub fn may_include_existing(&self, kind: Option<ItemKind>) -> bool {
         match (self.category, kind) {
             (None, _) => true,
             (Some(_), None) => false,
@@ -216,12 +234,17 @@ impl ListFilter {
             || item.file_rows().iter().any(|row| contains(&row.name))
     }
 
-    /// ←/→：在固定分类序列里循环；还没选分类时从方向对应的一端进入（1.x `selectAdjacentCategory`）。
-    pub fn adjacent_category(&self, forward: bool) -> ItemKind {
-        let count = CATEGORIES.len();
+    /// ←/→：在分组栏显示的分类里循环；还没选分类时从方向对应的一端进入（1.x
+    /// `selectAdjacentCategory`）。分类都隐藏了时没有可选的。
+    pub fn adjacent_category(&self, forward: bool, categories: &[ItemKind]) -> Option<ItemKind> {
+        let count = categories.len();
+        if count == 0 {
+            return None;
+        }
+
         let next = match self
             .category
-            .and_then(|category| CATEGORIES.iter().position(|kind| *kind == category))
+            .and_then(|category| categories.iter().position(|kind| *kind == category))
         {
             Some(current) if forward => (current + 1) % count,
             Some(current) => (current + count - 1) % count,
@@ -229,7 +252,21 @@ impl ListFilter {
             None => count - 1,
         };
 
-        CATEGORIES.get(next).copied().unwrap_or(ItemKind::Text)
+        categories.get(next).copied()
+    }
+
+    /// 分组栏上隐藏的按钮不能停在选中状态：分类回到不限，收藏回到全部。
+    pub fn keep_to_bar(&mut self, entries: &[GroupBarEntry]) {
+        if self.category.is_some_and(|kind| {
+            !entries
+                .iter()
+                .any(|entry| entry_category(*entry) == Some(kind))
+        }) {
+            self.category = None;
+        }
+        if self.favorites() && !entries.contains(&GroupBarEntry::Favorite) {
+            self.range = Range::All;
+        }
     }
 }
 
@@ -262,22 +299,51 @@ mod tests {
 
     #[test]
     fn categories_cycle_from_the_matching_end() {
+        let all = bar_categories(&GroupBarEntry::ALL);
         let none = ListFilter::default();
-        assert_eq!(none.adjacent_category(true), ItemKind::Text);
-        assert_eq!(none.adjacent_category(false), ItemKind::Files);
+        assert_eq!(none.adjacent_category(true, &all), Some(ItemKind::Text));
+        assert_eq!(none.adjacent_category(false, &all), Some(ItemKind::Files));
 
         let image = ListFilter {
             category: Some(ItemKind::Image),
             ..ListFilter::default()
         };
-        assert_eq!(image.adjacent_category(true), ItemKind::Files);
-        assert_eq!(image.adjacent_category(false), ItemKind::Text);
+        assert_eq!(image.adjacent_category(true, &all), Some(ItemKind::Files));
+        assert_eq!(image.adjacent_category(false, &all), Some(ItemKind::Text));
 
         let files = ListFilter {
             category: Some(ItemKind::Files),
             ..ListFilter::default()
         };
-        assert_eq!(files.adjacent_category(true), ItemKind::Text, "wraps");
+        assert_eq!(
+            files.adjacent_category(true, &all),
+            Some(ItemKind::Text),
+            "wraps"
+        );
+
+        let reordered = bar_categories(&[GroupBarEntry::Files, GroupBarEntry::Text]);
+        assert_eq!(
+            files.adjacent_category(true, &reordered),
+            Some(ItemKind::Text)
+        );
+        assert_eq!(none.adjacent_category(true, &[]), None);
+    }
+
+    #[test]
+    fn hidden_bar_entries_are_not_left_selected() {
+        let mut filter = ListFilter {
+            range: Range::Favorite,
+            category: Some(ItemKind::Image),
+            ..ListFilter::default()
+        };
+        filter.keep_to_bar(&GroupBarEntry::ALL);
+        assert_eq!(
+            (filter.range, filter.category),
+            (Range::Favorite, Some(ItemKind::Image))
+        );
+
+        filter.keep_to_bar(&[GroupBarEntry::Text]);
+        assert_eq!((filter.range, filter.category), (Range::All, None));
     }
 
     #[test]

@@ -26,6 +26,19 @@ pub(crate) async fn persist_and_notify(
         }
     }
 
+    if item_to_write.group_id.is_none() {
+        if let Some(app_id) = item_to_write.source_app_id.as_deref() {
+            item_to_write.group_id = core
+                .settings
+                .snapshot()
+                .clipboard
+                .auto_group_rules
+                .iter()
+                .find(|rule| rule.enabled && crate::app_ids::contains_app(&rule.app_ids, app_id))
+                .map(|rule| rule.group_id.clone());
+        }
+    }
+
     let result = store_and_emit(core, &item_to_write).await?;
     // 本机复制的记录才有同步序号：对端补齐时按它取「上次之后本机复制过的」。
     let seq = match crate::db::sync::assign_sync_seq(&core.db.pool().await, &result.id).await {

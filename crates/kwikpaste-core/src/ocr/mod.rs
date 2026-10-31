@@ -335,7 +335,7 @@ fn run_jobs(
         }
         let priority = core.ocr.state().priority.clone();
         let job: Option<(String, String, String)> = if let Some(id) = &priority {
-            core.rt.block_on(sqlx::query_as("SELECT i.id, i.content, i.content_hash FROM clipboard_items i LEFT JOIN image_texts t ON t.item_id = i.id WHERE i.id = ? AND i.kind = 'image' AND (t.item_id IS NULL OR (t.status = 'done' AND t.lines IS NULL) OR (t.status = 'failed' AND t.attempts < 3))").bind(id).fetch_optional(&mut *connection))?
+            core.rt.block_on(sqlx::query_as("SELECT i.id, i.content, i.content_hash FROM clipboard_items i LEFT JOIN image_texts t ON t.item_id = i.id WHERE i.id = ? AND i.kind = 'image' AND (t.item_id IS NULL OR (t.status = 'done' AND t.lines IS NULL AND t.attempts < 3) OR (t.status = 'failed' AND t.attempts < 3))").bind(id).fetch_optional(&mut *connection))?
         } else {
             core.rt
                 .block_on(sqlx::query_as(db::NEXT_JOB).fetch_optional(&mut *connection))?
@@ -582,7 +582,7 @@ impl Core {
                 }
             }
             if status.as_deref() == Some("skipped")
-                || (status.as_deref() == Some("failed") && attempts.unwrap_or(0) >= 3)
+                || attempts.unwrap_or(0) >= 3
             {
                 return Ok(None);
             }

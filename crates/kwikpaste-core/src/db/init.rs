@@ -79,6 +79,7 @@ pub(crate) const PUBLISHED: [(i64, &str, &str); 11] = [
         "aa7f4f07fd1025a0a5bcde295839fa729d11be2030ea83d6b5e66e021c3451bb36ed1760a69444792f03e1b4fb186748",
         "dc559c2b9265035b3c7aa8aaa4224fb7720a6f823c60265e5c43db7653ab6f188c0b975bbb8b048bea717480881389ad",
     ),
+
 ];
 
 const LEGACY_PINYIN_MIGRATION_VERSION: i64 = 9;

@@ -159,12 +159,40 @@ fn backup_path(args: &[String], cwd: &Path) -> Option<PathBuf> {
     Some(path)
 }
 
+/// Finder 交来的本地文件 URL；解码转义后沿用命令行的备份扩展名规则。
+#[cfg(target_os = "macos")]
+pub fn backup_path_from_url(value: &str) -> Option<PathBuf> {
+    let url = url::Url::parse(value).ok()?;
+    if url.scheme() != "file" || url.host_str().is_some_and(|host| host != "localhost") {
+        return None;
+    }
+    let path = url.to_file_path().ok()?;
+    kwikpaste_core::backup::is_backup_path(&path).then_some(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn finder_urls_accept_only_local_backups_and_decode_paths() {
+        assert_eq!(
+            backup_path_from_url("file:///Users/test/history%20%E5%A4%87%E4%BB%BD.KwikPasteBak"),
+            Some(PathBuf::from("/Users/test/history 备份.KwikPasteBak"))
+        );
+        for value in [
+            "https://example.com/history.kwikpastebak",
+            "file://server/share/history.kwikpastebak",
+            "file:///Users/test/other.txt",
+            "not a URL",
+        ] {
+            assert_eq!(backup_path_from_url(value), None);
+        }
     }
 
     #[test]

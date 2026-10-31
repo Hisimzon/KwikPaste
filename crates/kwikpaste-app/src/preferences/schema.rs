@@ -125,6 +125,8 @@ pub enum Control {
     CaptureOrder,
     /// 卡片上显示哪些快捷按钮及顺序（1.x `sortableCheckboxTree`）。
     ActionVisibility,
+    /// 分组栏上显示哪些内置按钮及顺序，与 `ActionVisibility` 共用排序弹框。
+    GroupBarEntries,
     /// 忽略的应用：一行加「管理」对话框。
     AppExclusion,
     /// 打开时选中的分组。
@@ -140,6 +142,8 @@ pub enum Control {
     RetentionRules,
     /// 用户文本匹配规则列表。
     CustomRules,
+    /// 按来源应用自动归入分组的规则列表。
+    AutoGroupRules,
     /// 清理状态与「立即清理」。
     CleanupStatus,
     /// 数据概览。
@@ -167,6 +171,7 @@ impl Control {
                 | Self::CaptureOrder
                 | Self::RetentionRules
                 | Self::CustomRules
+                | Self::AutoGroupRules
                 | Self::LanSync
                 | Self::Extensions
                 | Self::PanelShortcuts
@@ -698,6 +703,20 @@ fn appearance_sections() -> Vec<Section> {
                 .path("clipboard.display.customLayout.paddingY")
                 .keywords(&["density", "padding", "height"])
                 .child_of("appearance.listDensity", not_custom_density),
+                Setting::new("appearance.groupBar", Control::GroupBarEntries)
+                    .path("clipboard.window.groupBar")
+                    .keywords(&[
+                        "group",
+                        "bar",
+                        "favorite",
+                        "category",
+                        "text",
+                        "image",
+                        "files",
+                        "order",
+                        "分组栏",
+                        "快捷入口",
+                    ]),
             ],
         },
         Section {
@@ -1039,6 +1058,14 @@ fn capture_sections() -> Vec<Section> {
                 Setting::new("source.excludedApps", Control::AppExclusion)
                     .path("clipboard.filters.excludedAppIds")
                     .keywords(&["exclude", "ignore", "app", "source"]),
+            ],
+        },
+        Section {
+            id: "autoGroup",
+            settings: vec![
+                Setting::new("autoGroupRules", Control::AutoGroupRules)
+                    .path("clipboard.autoGroupRules")
+                    .keywords(&["group", "app", "source", "code", "editor", "snippet"]),
             ],
         },
         Section {

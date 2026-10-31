@@ -1,5 +1,6 @@
 //! macOS 单实例：`/tmp/<identifier>_si.sock`，与 tauri-plugin-single-instance 相同。
 
+use std::fs::File;
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -19,12 +20,16 @@ pub struct PrimaryInstance {
 
 impl Drop for PrimaryInstance {
     fn drop(&mut self) {
+        let Ok(_lock) = lock_socket(&self.socket) else {
+            return;
+        };
         let _ = std::fs::remove_file(&self.socket);
     }
 }
 
 pub(crate) fn claim(identifier: &str, sink: Sink) -> io::Result<Claim> {
     let socket = socket_path(identifier);
+    let _lock = lock_socket(&socket)?;
 
     match forward(&socket, &current_invocation()) {
         Ok(()) => Ok(Claim::Forwarded),
@@ -44,6 +49,18 @@ pub(crate) fn claim(identifier: &str, sink: Sink) -> io::Result<Claim> {
         }
         Err(err) => Err(err),
     }
+}
+
+/// 串行化 socket 的检查、替换与清理；锁文件不删除，避免新文件绕过仍存活的旧锁。
+fn lock_socket(socket: &Path) -> io::Result<File> {
+    let file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(socket.with_extension("lock"))?;
+    file.lock()?;
+    Ok(file)
 }
 
 /// 崩溃重启的子进程用：先等前一个实例（父进程）退出——它退出后本进程被 launchd 收养，父 PID
@@ -80,5 +97,26 @@ fn listen(listener: UnixListener, sink: Sink) {
             continue;
         }
         sink(decode_nul(&text));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_claim_lock_serializes_independent_openers() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("instance.sock");
+        let lock = lock_socket(&socket).unwrap();
+        let contender = File::options()
+            .read(true)
+            .write(true)
+            .open(socket.with_extension("lock"))
+            .unwrap();
+
+        assert!(contender.try_lock().is_err());
+        drop(lock);
+        assert!(contender.try_lock().is_ok());
     }
 }

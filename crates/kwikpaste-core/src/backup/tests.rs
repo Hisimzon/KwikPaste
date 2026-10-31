@@ -440,6 +440,72 @@ async fn merge_preserves_is_sensitive_flag() {
 
 // ---- 端到端：两个 core 实例之间导出、导入 ----
 
+#[tokio::test]
+async fn merge_preserves_last_use_and_falls_back_for_old_backups() {
+    let now = Utc::now();
+    let old = now - chrono::Duration::days(30);
+    let recent = now.to_rfc3339();
+    for (last_used, missing_column) in [
+        (Some(recent.as_str()), false),
+        (None, false),
+        (Some("invalid"), false),
+        (None, true),
+    ] {
+        let current = crate::db::test_support::memory_pool().await;
+        let backup = crate::db::test_support::memory_pool().await;
+        sqlx::query(
+            "INSERT INTO clipboard_items \
+             (id, kind, content, content_hash, platform, created_at, updated_at, last_used_at) \
+             VALUES ('reused', 'text', 'old text', 'hash', 'windows', ?, ?, ?)",
+        )
+        .bind(old)
+        .bind(old)
+        .bind(last_used)
+        .execute(&backup)
+        .await
+        .unwrap();
+        if missing_column {
+            sqlx::query("DROP INDEX idx_clipboard_items_pinned_last_used")
+                .execute(&backup)
+                .await
+                .unwrap();
+            sqlx::query("ALTER TABLE clipboard_items DROP COLUMN last_used_at")
+                .execute(&backup)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            merge_history(&current, &backup)
+                .await
+                .unwrap()
+                .imported_items,
+            1
+        );
+        let (updated, used): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+            "SELECT updated_at, last_used_at FROM clipboard_items WHERE id = 'reused'",
+        )
+        .fetch_one(&current)
+        .await
+        .unwrap();
+        let is_recent = last_used == Some(recent.as_str());
+        assert_eq!(updated, old);
+        assert_eq!(used, if is_recent { now } else { old });
+        let plan = crate::db::retention::AgePlan {
+            fallback_cutoff: Some(now - chrono::Duration::days(7)),
+            ..Default::default()
+        };
+        crate::db::retention::delete_expired(&mut current.acquire().await.unwrap(), &plan)
+            .await
+            .unwrap();
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clipboard_items")
+            .fetch_one(&current)
+            .await
+            .unwrap();
+        assert_eq!(remaining, i64::from(is_recent));
+    }
+}
+
 fn store(core: &Core, state: MemoryState) -> String {
     let clipboard = MemoryClipboard::with_state(state);
     let item = core
@@ -597,6 +663,59 @@ fn backup_preserves_original_content_for_merge_and_overwrite() {
 }
 
 #[test]
+fn merge_keeps_edited_versions_with_the_same_id() {
+    let source = source();
+    let id = store(&source.core, text("shared text"));
+    block_on(source.core.update_text_content(&id, "version B".into())).unwrap();
+    let backup = export(&source, BackupExportMode::Plain, None);
+    block_on(source.core.update_text_content(&id, "version C".into())).unwrap();
+
+    let result = block_on(
+        source
+            .core
+            .import_history_backup(input(&backup, None), BackupImportStrategy::Merge),
+    )
+    .unwrap();
+    assert_eq!((result.imported_items, result.skipped_items), (1, 2));
+    assert_eq!(
+        contents(&source.core),
+        ["only in the backup", "version B", "version C"]
+    );
+    assert_eq!(
+        block_on(source.core.find_item(&id))
+            .unwrap()
+            .unwrap()
+            .content,
+        "version C"
+    );
+    let again = block_on(
+        source
+            .core
+            .import_history_backup(input(&backup, None), BackupImportStrategy::Merge),
+    )
+    .unwrap();
+    assert_eq!((again.imported_items, again.skipped_items), (0, 3));
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[tokio::test]
+async fn merge_does_not_count_ignored_rows_as_imported() {
+    let current = crate::db::test_support::memory_pool().await;
+    let backup = crate::db::test_support::memory_pool().await;
+    sqlx::query("PRAGMA ignore_check_constraints = ON")
+        .execute(&backup)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO clipboard_items (id, kind, content, content_hash, platform, created_at, updated_at) \
+         VALUES ('empty', 'files', '', 'hash', 'windows', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    ).execute(&backup).await.unwrap();
+
+    let result = merge_history(&current, &backup).await.unwrap();
+    assert_eq!((result.imported_items, result.skipped_items), (0, 1));
+}
+
+#[test]
 fn plain_export_merges_into_another_instance() {
     let source = source();
     let backup = export(&source, BackupExportMode::Plain, None);
@@ -641,6 +760,52 @@ fn plain_export_merges_into_another_instance() {
         CoreEvent::SettingsUpdated { delta, .. } if delta.touches("appearance.theme")
     )));
     block_on(core.shutdown()).unwrap();
+    block_on(source.core.shutdown()).unwrap();
+}
+
+#[test]
+fn full_export_excludes_cleanup_and_skips_missing_images() {
+    use std::future::{poll_fn, Future};
+    use std::task::Poll;
+
+    let source = source();
+    fs::remove_file(source.core.image_origin_path(&source.image_file).unwrap()).unwrap();
+    source.fixture.runtime.handle().block_on(async {
+        let core = &source.core.0;
+        let guard = core.cleanup.exclusive().await;
+        let mut export = std::pin::pin!(export_history_backup(
+            core,
+            source.fixture.root().join("locked-export"),
+            ExportHistoryBackupOptions {
+                mode: BackupExportMode::Plain,
+                password: None,
+                scope: BackupScope::default(),
+            },
+        ));
+        poll_fn(|cx| {
+            assert!(export.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let mut cleanup = std::pin::pin!(core.cleanup.exclusive());
+        poll_fn(|cx| {
+            assert!(cleanup.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(guard);
+        poll_fn(|cx| {
+            assert!(export.as_mut().poll(cx).is_pending());
+            assert!(
+                cleanup.as_mut().poll(cx).is_pending(),
+                "export keeps cleanup excluded"
+            );
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(export.await.unwrap().image_count, 1);
+        drop(cleanup.await);
+    });
     block_on(source.core.shutdown()).unwrap();
 }
 
@@ -1094,10 +1259,10 @@ fn overwrite_adopts_migration_checksums_of_the_other_platform() {
     let temp = tempdir().unwrap();
     let backup = craft_backup(temp.path(), |pool| {
         Box::pin(async move {
-            for (version, lf, crlf) in crate::db::init::PUBLISHED {
-                let embedded = crate::db::MIGRATOR
+            for embedded in crate::db::MIGRATOR.iter() {
+                let &(version, lf, crlf) = crate::db::init::PUBLISHED
                     .iter()
-                    .find(|migration| migration.version == version)
+                    .find(|(version, _, _)| *version == embedded.version)
                     .unwrap();
                 let embedded_hex: String = embedded
                     .checksum
@@ -1219,6 +1384,44 @@ fn overwrite_with_unreadable_settings_changes_nothing() {
     .is_err());
     assert_eq!(contents(&core), ["untouched"]);
     block_on(core.shutdown()).unwrap();
+}
+
+#[test]
+fn overwrite_settings_write_failure_restores_database_and_resources() {
+    let source = source();
+    let backup = export(&source, BackupExportMode::Plain, None);
+    let fixture = Fixture::new();
+    let core = fixture.start();
+    let image_id = store(&core, image(20));
+    let image_file = block_on(core.find_item(&image_id))
+        .unwrap()
+        .unwrap()
+        .content;
+    let image_path = core.image_origin_path(&image_file).unwrap();
+    let before = fs::read(&image_path).unwrap();
+    store(&core, text("local history"));
+    let sync_before = sync_state(&core);
+    let tmp = fixture
+        .paths
+        .config_dir()
+        .unwrap()
+        .join("settings.json.tmp");
+    fs::create_dir(&tmp).unwrap();
+
+    assert!(block_on(
+        core.import_history_backup(input(&backup, None), BackupImportStrategy::Overwrite,)
+    )
+    .is_err());
+    assert_eq!(contents(&core), ["local history"]);
+    assert_eq!(fs::read(&image_path).unwrap(), before);
+    assert!(!core.image_origin_path(&source.image_file).unwrap().exists());
+    assert_eq!(sync_state(&core), sync_before);
+    assert_eq!(core.settings().appearance.theme, Theme::Auto);
+    assert!(!core.0.watcher_pause.is_paused());
+    fs::remove_dir(&tmp).unwrap();
+    store(&core, text("still writable"));
+    block_on(core.shutdown()).unwrap();
+    block_on(source.core.shutdown()).unwrap();
 }
 
 // ---- 1.4.0 写出的备份 ----

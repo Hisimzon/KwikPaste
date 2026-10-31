@@ -21,10 +21,12 @@ use gpui::{App, Context, RenderImage, Task, Window};
 /// 缓存项上限（约 4 MB：64 张 64×300 级别的 BGRA 位图）。
 pub const CAPACITY: usize = 64;
 
-/// 缓存键：同一文件按不同显示尺寸分别缓存。
+/// 缓存键：同一文件按修改时间、显示尺寸分别缓存。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ImageKey {
     pub path: Arc<Path>,
+    /// 可变原文件的版本；捕获图片和图标为空。
+    pub modified: Option<i64>,
     /// 目标宽高（物理像素）。
     pub width: u32,
     pub height: u32,
@@ -315,6 +317,32 @@ pub fn path_of(text: &str) -> Arc<Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_image_cache_hits_only_when_the_modification_time_matches() {
+        let key = |modified| ImageKey {
+            path: path_of("mutable.png"),
+            modified,
+            width: 8,
+            height: 8,
+            resize: ResizeMode::Exact,
+        };
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(8, 8),
+        )]));
+        let mut cache = KpImageCache::new();
+        cache.entries.insert(
+            key(Some(1000)),
+            Entry {
+                slot: Slot::Ready(image.clone()),
+                used: 0,
+            },
+        );
+        assert!(
+            matches!(cache.entries.get(&key(Some(1000))), Some(Entry { slot: Slot::Ready(cached), .. }) if Arc::ptr_eq(cached, &image))
+        );
+        assert!(!cache.entries.contains_key(&key(Some(2000))));
+    }
 
     #[test]
     fn decode_resizes_and_swaps_to_bgra() {

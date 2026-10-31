@@ -23,6 +23,8 @@ pub(crate) mod portable;
 use std::ffi::OsString;
 use std::fs;
 use std::future::Future;
+#[cfg(any(target_os = "windows", test))]
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::Duration;
@@ -31,6 +33,10 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use kwikpaste_core::{Core, CorePaths};
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "windows", test))]
+use sha2::{Digest, Sha256};
+
+use crate::download::Package;
 
 /// 交接文件名，放在启动锚点目录（`<bootstrap>/update-handoff.json`）。
 const HANDOFF_FILENAME: &str = "update-handoff.json";
@@ -150,18 +156,34 @@ pub(crate) struct Handoff<'a> {
     pub silent: bool,
     pub from: String,
     pub to: String,
+    /// 仅在准备和交接记录都成功后停止调度，失败时保留后台检查。
+    pub stop_scheduler: &'a (dyn Fn() + Sync),
 }
 
 impl Handoff<'_> {
     /// Windows 安装版：拉起 NSIS 安装包。
     #[cfg(any(target_os = "windows", test))]
-    pub(crate) async fn nsis(&self, installer: &Path) -> anyhow::Result<()> {
-        let head = fs::read(installer)
-            .with_context(|| format!("failed to read {installer:?}"))?
-            .get(..2)
-            .map(<[u8]>::to_vec);
+    pub(crate) async fn nsis(&self, package: &Package) -> anyhow::Result<()> {
+        let installer = &package.file;
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        // 从校验到启动（含 UAC）期间禁止写入、删除或替换这个路径。
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(1); // FILE_SHARE_READ
+        }
+        let mut locked = options
+            .open(installer)
+            .with_context(|| format!("failed to open {installer:?}"))?;
+        let mut bytes = Vec::new();
+        locked.read_to_end(&mut bytes)?;
         anyhow::ensure!(
-            head.as_deref() == Some(b"MZ"),
+            <[u8; 32]>::from(Sha256::digest(&bytes)) == package.digest,
+            "installer changed after verification"
+        );
+        anyhow::ensure!(
+            bytes.starts_with(b"MZ"),
             "installer is not a Windows program"
         );
 
@@ -170,10 +192,11 @@ impl Handoff<'_> {
 
         let parameters = nsis::parameters(&self.args, self.silent);
         log::info!("starting installer {installer:?} {parameters}");
-        match self
+        let launched = self
             .launcher
-            .launch_installer(installer, &parameters, self.silent)
-        {
+            .launch_installer(installer, &parameters, self.silent);
+        drop(locked);
+        match launched {
             Ok(()) => {
                 self.leave().await;
                 Ok(())
@@ -196,8 +219,10 @@ impl Handoff<'_> {
 
     /// Windows 便携版：原地换 exe 后启动新 exe。
     #[cfg(any(target_os = "windows", test))]
-    pub(crate) async fn portable(&self, package: &Path) -> anyhow::Result<()> {
-        let bytes = fs::read(package).with_context(|| format!("failed to read {package:?}"))?;
+    pub(crate) async fn portable(&self, package: &Package) -> anyhow::Result<()> {
+        let bytes = fs::read(&package.file)
+            .with_context(|| format!("failed to read {:?}", package.file))?;
+        crate::verify::verify(&bytes, &package.signature, &package.public_key)?;
         let binary = portable::extract_binary(&bytes)?;
         portable::replace_binary(&self.exe, &binary)?;
         log::info!("replaced {:?} with {}", self.exe, self.to);
@@ -215,14 +240,25 @@ impl Handoff<'_> {
 
     /// macOS：换掉 `.app`，退出后由 `sh` 等本进程结束再 `open` 新包。
     #[cfg(any(target_os = "macos", test))]
-    pub(crate) async fn mac_app(
-        &self,
-        bundle: &Path,
-        archive: &Path,
-        work_dir: &Path,
-    ) -> anyhow::Result<()> {
-        let bytes = fs::read(archive).with_context(|| format!("failed to read {archive:?}"))?;
-        let extracted = work_dir.join("KwikPaste.app");
+    pub(crate) async fn mac_app(&self, bundle: &Path, package: &Package) -> anyhow::Result<()> {
+        let bytes = fs::read(&package.file)
+            .with_context(|| format!("failed to read {:?}", package.file))?;
+        crate::verify::verify(&bytes, &package.signature, &package.public_key)?;
+        // 可写安装先在目标卷解包，后续两个 rename 都不跨卷；管理员目录由提权脚本暂存。
+        let staged = match tempfile::Builder::new()
+            .prefix(".KwikPaste-update-")
+            .tempdir_in(bundle.parent().context("app bundle has no parent")?)
+        {
+            Ok(dir) => Some(dir),
+            Err(err) if !self.silent && err.kind() == std::io::ErrorKind::PermissionDenied => None,
+            Err(err) => {
+                return Err(err).context("failed to stage the new app beside the installed app");
+            }
+        };
+        let extracted = staged.as_ref().map_or_else(
+            || package.dir.join("KwikPaste.app"),
+            |dir| dir.path().join("KwikPaste.app"),
+        );
         if extracted.exists() {
             fs::remove_dir_all(&extracted).ok();
         }
@@ -245,6 +281,7 @@ impl Handoff<'_> {
 
     /// 停输入，再关停 core（剪贴板监听、同步、清理、WAL checkpoint 与关库），最多等 3 秒。
     async fn shutdown(&self) {
+        (self.stop_scheduler)();
         log::info!("update handoff: stopping input");
         self.host.stop_input().await;
         log::info!("update handoff: shutting down the core");
@@ -355,6 +392,11 @@ pub(crate) mod testing {
             parameters: &str,
             silent: bool,
         ) -> anyhow::Result<()> {
+            #[cfg(target_os = "windows")]
+            {
+                assert!(fs::OpenOptions::new().write(true).open(file).is_err());
+                assert!(fs::remove_file(file).is_err());
+            }
             assert_eq!(parameters.starts_with("/S "), silent);
             self.push(format!(
                 "shell_execute {} {parameters}",

@@ -1647,7 +1647,9 @@ fn handle_gpu_device_lost(
         text_system.handle_gpu_lost(&directx_devices)?;
     }
     if let Some(all_windows) = all_windows.upgrade() {
-        for window in all_windows.read().iter() {
+        // [kwikpaste patch 0013] 同步通知前释放窗口列表锁，避免 UI 线程增删窗口时互等。
+        let windows = all_windows.read().clone();
+        for window in windows.iter() {
             unsafe {
                 SendMessageW(
                     window.as_raw(),
@@ -1658,7 +1660,8 @@ fn handle_gpu_device_lost(
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
-        for window in all_windows.read().iter() {
+        let windows = all_windows.read().clone();
+        for window in windows.iter() {
             unsafe {
                 SendMessageW(
                     window.as_raw(),
