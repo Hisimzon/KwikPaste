@@ -94,24 +94,14 @@ where
         &ctx.rules,
     );
     let mut span_masked = false;
-    if ctx.redact_sensitive
-        && view.item.is_sensitive
-        && view.item.kind == ClipboardKind::Text
-        && ctx
-            .rules
-            .has_action(crate::clipboard::rules::RuleAction::Sensitive)
-    {
-        // 列表查询没有完整正文；只为需要区间遮罩的敏感项读取，避免截断匹配漏出前缀。
+    if ctx.redact_sensitive && view.item.is_sensitive && view.item.kind == ClipboardKind::Text {
+        // 列表查询没有完整正文；按全文定位遮罩区间，避免截断的摘要把凭据前缀漏出来。
         if let Some(full) = crate::db::items::find_item_by_id(ctx.pool, &view.item.id).await? {
-            let source = crate::clipboard::fragment_source(&full);
-            let masked = (!crate::clipboard::contains_secret(source))
-                .then(|| ctx.rules.mask(source))
-                .flatten();
-            if let Some(masked) = masked {
-                view.item.summary = Some(masked.trim().chars().take(SUMMARY_MAX_CHARS).collect());
-                view.color_preview = None;
-                span_masked = true;
-            }
+            let masked =
+                super::text::mask_with_rules(crate::clipboard::fragment_source(&full), &ctx.rules);
+            view.item.summary = Some(masked.trim().chars().take(SUMMARY_MAX_CHARS).collect());
+            view.color_preview = None;
+            span_masked = true;
         }
     }
     if !span_masked {

@@ -1,9 +1,9 @@
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, FocusHandle, Global, Hsla, Image, ImageSource,
     InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, ParentElement as _, Rems,
-    Render, Role, ScrollAnchor, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
-    Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowOptions, div, img,
-    prelude::FluentBuilder as _, px, rems, size,
+    Render, Role, ScrollAnchor, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowOptions,
+    div, img, prelude::FluentBuilder as _, px, rems, size,
 };
 use kwikpaste_core::{
     CoreEvent, StorageLocation, app_ids,
@@ -12,7 +12,10 @@ use kwikpaste_core::{
     ops::{PreferenceDirectory, StorageOverview},
     readable_export::{ExportFormat, ExportOptions, ExportPreview},
     settings::Settings,
-    settings::{CaptureKind, Content, CopySoundTone, ItemAction, RetentionRule, RetentionUnit},
+    settings::{
+        CaptureKind, Content, CopySoundTone, GroupBarEntry, ItemAction, RetentionRule,
+        RetentionUnit,
+    },
     sync::{LanDeviceView, LanNearbyView, LanSyncState, PairTarget},
 };
 use kwikpaste_ui::{
@@ -1586,6 +1589,7 @@ impl Preferences {
                         this.open_source_apps_for("shortcuts.pauseApps", window, cx)
                     }
                     "actions.visible" => this.open_action_visibility(window, cx),
+                    "appearance.groupBar" => this.open_group_bar(window, cx),
                     "control.reopenOnboarding" => {
                         if let Err(error) = super::open_onboarding(cx) {
                             log::warn!("could not reopen onboarding: {error:#}");
@@ -1653,17 +1657,55 @@ impl Preferences {
         }
     }
 
-    /// 打开快捷动作排序弹框；所有改动先留在弹框实体里，保存时一次写回顺序和勾选项。
+    /// 打开快捷动作排序弹框，保存时一次写回顺序和勾选项。
     fn open_action_visibility(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let order =
-            normalized_item_action_order(&self.settings.clipboard.content.item_action_order);
-        let dialog = cx.new(|_| ActionVisibilityDialog {
-            enabled: self.settings.clipboard.content.item_actions.clone(),
-            order,
-        });
+        let content = &self.settings.clipboard.content;
+        self.open_checklist(
+            i18n::t("preferences:schema.settings.actions.visible.title"),
+            normalized_order(
+                &content.item_action_order,
+                &Content::default().item_action_order,
+            ),
+            content.item_actions.clone(),
+            |order, enabled| {
+                values::merge(
+                    values::patch("clipboard.content.itemActionOrder", json!(order)),
+                    values::patch("clipboard.content.itemActions", json!(enabled)),
+                )
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// 打开分组栏按钮排序弹框：只存勾选的按钮，没勾的排在后面。
+    fn open_group_bar(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let enabled = self.settings.clipboard.window.group_bar.clone();
+        self.open_checklist(
+            i18n::t("preferences:schema.settings.appearance.groupBar.title"),
+            normalized_order(&enabled, &GroupBarEntry::ALL),
+            enabled,
+            |_, enabled| values::patch("clipboard.window.groupBar", json!(enabled)),
+            window,
+            cx,
+        );
+    }
+
+    /// 可勾选、可拖动排序的弹框；改动先留在弹框实体里，保存时把完整顺序和按顺序排好的勾选项交给
+    /// `save` 生成补丁。
+    fn open_checklist<T: ChecklistItem>(
+        &self,
+        title: SharedString,
+        order: Vec<T>,
+        enabled: Vec<T>,
+        save: impl FnOnce(Vec<T>, Vec<T>) -> serde_json::Value + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let dialog = cx.new(|_| ChecklistDialog { order, enabled });
         let content = dialog.clone();
         let answer = form_dialog(
-            DialogSpec::new(i18n::t("preferences:schema.settings.actions.visible.title"))
+            DialogSpec::new(title)
                 .ok_text(i18n::t("common:actions.save"))
                 .cancel_text(i18n::t("common:actions.cancel")),
             move |_, _| content.clone().into_any_element(),
@@ -1683,7 +1725,7 @@ impl Preferences {
                             .order
                             .iter()
                             .copied()
-                            .filter(|action| dialog.enabled.contains(action))
+                            .filter(|item| dialog.enabled.contains(item))
                             .collect::<Vec<_>>();
                         (dialog.order.clone(), enabled)
                     })
@@ -1691,10 +1733,7 @@ impl Preferences {
                 else {
                     return;
                 };
-                let patch = values::merge(
-                    values::patch("clipboard.content.itemActionOrder", json!(order)),
-                    values::patch("clipboard.content.itemActions", json!(enabled)),
-                );
+                let patch = save(order, enabled);
                 let _ = entity.update(cx, |this, cx| this.apply_patch(patch, cx));
             })
             .detach();
@@ -4689,30 +4728,48 @@ pub(super) fn app_icon(
         .into_any_element()
 }
 
-/// 设置里的顺序在前（去重），缺的动作按默认顺序补在末尾，弹框始终列出全部动作。
-fn normalized_item_action_order(current: &[ItemAction]) -> Vec<ItemAction> {
+/// 设置里的顺序在前（去重），缺的项按默认顺序补在末尾，弹框始终列出全部项。
+fn normalized_order<T: Copy + PartialEq>(current: &[T], defaults: &[T]) -> Vec<T> {
     let mut order = Vec::new();
-    for action in current.iter().chain(&Content::default().item_action_order) {
-        if !order.contains(action) {
-            order.push(*action);
+    for item in current.iter().chain(defaults) {
+        if !order.contains(item) {
+            order.push(*item);
         }
     }
     order
 }
 
+/// 排序弹框里的一项：图标和文案。
+trait ChecklistItem: Copy + PartialEq + 'static {
+    fn glyph(self) -> (IconName, SharedString);
+}
+
+impl ChecklistItem for ItemAction {
+    fn glyph(self) -> (IconName, SharedString) {
+        clipboard::view::quick_action_glyph(self)
+    }
+}
+
+impl ChecklistItem for GroupBarEntry {
+    fn glyph(self) -> (IconName, SharedString) {
+        clipboard::view::group_bar_glyph(self)
+    }
+}
+
 #[derive(Clone, Copy)]
-struct ActionVisibilityDrag {
-    action: ItemAction,
+struct ChecklistDrag<T> {
+    item: T,
 }
 
-struct ActionVisibilityPreview {
-    action: ItemAction,
+struct ChecklistPreview {
+    icon: IconName,
+    label: SharedString,
 }
 
-impl Render for ActionVisibilityPreview {
+impl Render for ChecklistPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
-        let (icon, label) = clipboard::view::quick_action_glyph(self.action);
+        let (icon, label) = (self.icon, self.label.clone());
         div()
             .flex()
             .items_center()
@@ -4730,13 +4787,13 @@ impl Render for ActionVisibilityPreview {
     }
 }
 
-struct ActionVisibilityDialog {
-    order: Vec<ItemAction>,
-    enabled: Vec<ItemAction>,
+struct ChecklistDialog<T> {
+    order: Vec<T>,
+    enabled: Vec<T>,
 }
 
-impl ActionVisibilityDialog {
-    fn toggle(&mut self, action: ItemAction, checked: bool, cx: &mut Context<Self>) {
+impl<T: ChecklistItem> ChecklistDialog<T> {
+    fn toggle(&mut self, action: T, checked: bool, cx: &mut Context<Self>) {
         if checked {
             if !self.enabled.contains(&action) {
                 self.enabled.push(action);
@@ -4747,7 +4804,7 @@ impl ActionVisibilityDialog {
         cx.notify();
     }
 
-    fn move_to(&mut self, action: ItemAction, target: usize, cx: &mut Context<Self>) {
+    fn move_to(&mut self, action: T, target: usize, cx: &mut Context<Self>) {
         if target >= self.order.len() {
             return;
         }
@@ -4763,33 +4820,30 @@ impl ActionVisibilityDialog {
     }
 }
 
-impl Render for ActionVisibilityDialog {
+impl<T: ChecklistItem> Render for ChecklistDialog<T> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
         let rows = self.order.iter().enumerate().map(|(index, action)| {
             let action = *action;
             let checked = self.enabled.contains(&action);
-            let (icon, label) = clipboard::view::quick_action_glyph(action);
+            let (icon, label) = action.glyph();
             let entity = cx.entity().downgrade();
             let checkbox_entity = entity.clone();
             let label_entity = entity.clone();
-            sortable::row(format!("visible-action-{index}"), tokens)
+            sortable::row(format!("checklist-{index}"), tokens)
                 .when(index > 0, |row| {
                     row.border_t_1().border_color(tokens.border.divider)
                 })
-                .on_drag(ActionVisibilityDrag { action }, |dragged, _, _, cx| {
-                    cx.new(|_| ActionVisibilityPreview {
-                        action: dragged.action,
-                    })
+                .on_drag(ChecklistDrag { item: action }, |dragged, _, _, cx| {
+                    let (icon, label) = dragged.item.glyph();
+                    cx.new(|_| ChecklistPreview { icon, label })
                 })
-                .drag_over::<ActionVisibilityDrag>(move |style, _, _, _| {
+                .drag_over::<ChecklistDrag<T>>(move |style, _, _, _| {
                     sortable::drop_target(style, tokens)
                 })
-                .on_drop(
-                    cx.listener(move |this, dragged: &ActionVisibilityDrag, _, cx| {
-                        this.move_to(dragged.action, index, cx);
-                    }),
-                )
+                .on_drop(cx.listener(move |this, dragged: &ChecklistDrag<T>, _, cx| {
+                    this.move_to(dragged.item, index, cx);
+                }))
                 .child(
                     div()
                         .flex_none()
@@ -4797,7 +4851,7 @@ impl Render for ActionVisibilityDialog {
                         .child(PrefIcon::Grip.view(rems(1.), tokens.text.faint)),
                 )
                 .child(
-                    Checkbox::new(format!("visible-action-check-{index}"))
+                    Checkbox::new(format!("checklist-check-{index}"))
                         .checked(checked)
                         .accessibility_label(label.clone())
                         .on_change(move |checked, _, cx| {
@@ -4809,7 +4863,7 @@ impl Render for ActionVisibilityDialog {
                 .child(Icon::new(icon).size(rems(1.)).color(tokens.text.secondary))
                 .child(
                     div()
-                        .id(format!("visible-action-label-{index}"))
+                        .id(format!("checklist-label-{index}"))
                         .flex_1()
                         .cursor_pointer()
                         .on_click(move |_, _, cx| {
@@ -4825,7 +4879,7 @@ impl Render for ActionVisibilityDialog {
                 .into_any_element()
         });
         div()
-            .id("visible-actions-list")
+            .id("checklist")
             .max_h(rems(28.))
             .overflow_y_scroll()
             .child(list_tile(tokens).children(rows))

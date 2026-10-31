@@ -729,6 +729,11 @@
         "fileMaxCount": {
           "title": "文件最多显示数量"
         },
+        "groupBar": {
+          "controlLabel": "管理",
+          "description": "选择「全部」后面显示哪些按钮，拖动调整顺序。",
+          "title": "分组栏按钮"
+        },
         "headerRow": {
           "description": "在内容上方显示来源、类型和时间；关闭后每条记录更矮。",
           "title": "显示头部行"

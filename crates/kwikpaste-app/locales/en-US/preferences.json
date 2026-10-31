@@ -739,6 +739,11 @@
         "fileMaxCount": {
           "title": "Maximum Files Shown"
         },
+        "groupBar": {
+          "controlLabel": "Manage",
+          "description": "Choose which buttons appear after All, and drag to reorder them.",
+          "title": "Group Bar Buttons"
+        },
         "headerRow": {
           "description": "Show source, type, and time above the content. Turn off for shorter records.",
           "title": "Show Header Row"

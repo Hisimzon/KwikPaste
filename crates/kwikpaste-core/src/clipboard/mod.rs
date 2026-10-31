@@ -48,6 +48,7 @@ pub use ingest::{build_item_with_settings, SUMMARY_MAX_CHARS};
 pub use payload::{ClipboardPayload, ImagePayload, TextPayload};
 pub use read::{png_dimensions, ClipboardReader};
 pub use secrets::contains_secret;
+pub(crate) use secrets::{credential_header_spans, secret_spans};
 pub(crate) use storage::FILE_THUMBNAILS_DIR;
 pub use storage::{
     image_file_dimensions, validate_image_file_name, ImageStore, StoredImage, THUMBNAIL_MAX,

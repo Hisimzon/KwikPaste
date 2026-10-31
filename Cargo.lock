@@ -4264,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-app"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4297,7 +4297,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-core"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4361,7 +4361,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ext-protocol"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -4369,7 +4369,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-os"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4393,7 +4393,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ui"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "futures",
@@ -4407,7 +4407,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-updater"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

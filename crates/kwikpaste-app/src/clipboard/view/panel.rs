@@ -13,7 +13,7 @@ use gpui::{
 use kwikpaste_core::{
     CoreEvent,
     settings::{
-        ListLayout, WINDOW_OPEN_GROUP_PREFIX, WINDOW_OPEN_SELECTION_ALL,
+        ListLayout, Settings, WINDOW_OPEN_GROUP_PREFIX, WINDOW_OPEN_SELECTION_ALL,
         WindowOpenCategorySelection, WindowOpenRangeSelection,
     },
 };
@@ -39,7 +39,7 @@ use super::{
 use crate::{
     clipboard::{
         model::{
-            filter::{ListFilter, Range, SearchFilters, adjacent_group},
+            filter::{ListFilter, Range, SearchFilters, adjacent_group, bar_categories},
             item::{ItemKind, ListItem},
         },
         source::{ClipboardSource, Group},
@@ -106,7 +106,8 @@ impl ClipboardPanel {
         // 调整筛选条件。
         let list = cx.new(|cx| ClipboardList::new(source.clone(), host.clone(), window, cx));
         let header = cx.new(|cx| Header::new(window, cx));
-        let groups = cx.new(|_| GroupBar::new(BarMode::Full));
+        let entries = list.read(cx).settings().clipboard.window.group_bar.clone();
+        let groups = cx.new(|_| GroupBar::new(BarMode::Full, entries));
         let list_focus = list.read(cx).focus_handle(cx);
 
         let mut subscriptions = vec![
@@ -210,16 +211,24 @@ impl ClipboardPanel {
             events,
             |panel, _, event: &CoreEvent, cx| match event {
                 CoreEvent::GroupsUpdated => panel.reload_groups(cx),
-                // 布局在渲染时对齐（见 `sync_layout`），这里只要求重画。
-                CoreEvent::SettingsUpdated { settings, .. }
-                    if (settings.clipboard.display.layout == ListLayout::Split)
-                        != panel.side.is_some() =>
-                {
-                    cx.notify();
-                }
+                CoreEvent::SettingsUpdated { settings, .. } => panel.apply_settings(settings, cx),
                 _ => {}
             },
         ));
+    }
+
+    /// 分组栏按钮变了：换按钮，隐藏的按钮不再选中。布局在渲染时对齐（见 `sync_layout`），这里只要求重画。
+    fn apply_settings(&mut self, settings: &Settings, cx: &mut Context<Self>) {
+        let entries = &settings.clipboard.window.group_bar;
+        if self.groups.read(cx).entries() != entries.as_slice() {
+            let entries = entries.clone();
+            self.groups
+                .update(cx, |bar, cx| bar.set_entries(entries, cx));
+            self.update_filter(|_| {}, cx);
+        }
+        if (settings.clipboard.display.layout == ListLayout::Split) != self.side.is_some() {
+            cx.notify();
+        }
     }
 
     // ------------------------------------------------------------ 双栏
@@ -314,7 +323,7 @@ impl ClipboardPanel {
             }
             list
         });
-        let bar = cx.new(|_| GroupBar::new(BarMode::Side));
+        let bar = cx.new(|_| GroupBar::new(BarMode::Side, Vec::new()));
         let main = self.list.read(cx).filter();
         let filter = ListFilter {
             range: Range::Favorite,
@@ -480,10 +489,11 @@ impl ClipboardPanel {
         self.list.update(cx, |list, cx| list.set_groups(groups, cx));
     }
 
-    /// 改筛选条件：列表重载，分组栏跟着高亮。
+    /// 改筛选条件：列表重载，分组栏跟着高亮。分组栏上隐藏的按钮不会被选中（Mod+Q、打开时选中）。
     fn update_filter(&mut self, change: impl FnOnce(&mut ListFilter), cx: &mut Context<Self>) {
         let mut filter = self.list.read(cx).filter().clone();
         change(&mut filter);
+        filter.keep_to_bar(self.groups.read(cx).entries());
         self.groups
             .update(cx, |bar, cx| bar.set_filter(&filter, cx));
         self.list.update(cx, |list, cx| list.set_filter(filter, cx));
@@ -500,6 +510,20 @@ impl ClipboardPanel {
             },
             cx,
         );
+    }
+
+    /// ←/→：在分组栏显示的分类之间切换。
+    fn cycle_category(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let categories = bar_categories(self.groups.read(cx).entries());
+        let Some(kind) = self
+            .list
+            .read(cx)
+            .filter()
+            .adjacent_category(forward, &categories)
+        else {
+            return;
+        };
+        self.update_filter(|filter| filter.category = Some(kind), cx);
     }
 
     fn toggle_category(&mut self, kind: ItemKind, cx: &mut Context<Self>) {
@@ -1016,8 +1040,7 @@ impl Render for ClipboardPanel {
                         panel.cycle_side_tab(true, cx);
                         return;
                     }
-                    let kind = panel.list.read(cx).filter().adjacent_category(false);
-                    panel.update_filter(|filter| filter.category = Some(kind), cx);
+                    panel.cycle_category(false, cx);
                 })),
             )
             .on_action(cx.listener(unless_menu(|panel, _: &NextCategory, _, cx| {
@@ -1025,8 +1048,7 @@ impl Render for ClipboardPanel {
                     panel.cycle_side_tab(false, cx);
                     return;
                 }
-                let kind = panel.list.read(cx).filter().adjacent_category(true);
-                panel.update_filter(|filter| filter.category = Some(kind), cx);
+                panel.cycle_category(true, cx);
             })))
             .on_action(cx.listener(unless_menu(|panel, _: &NextGroup, _, cx| {
                 panel.cycle_group(false, cx);

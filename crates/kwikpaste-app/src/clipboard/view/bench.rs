@@ -69,6 +69,8 @@ enum Step {
     GrowScrollTop,
     JumpCold,
     JumpColdAfter,
+    ReuseScrollTop,
+    ReuseScrollTopAfter,
     ScrollbarReport,
     Widen,
     WidenAfter,
@@ -141,6 +143,7 @@ pub struct Bench {
     widen_before: Option<f32>,
     width_result: Option<(f32, f32)>,
     jump_target: Option<usize>,
+    reuse_top: Option<usize>,
     deferred_ids: Vec<Arc<str>>,
     top_checks: Vec<(String, bool)>,
 }
@@ -446,6 +449,16 @@ fn schedule() -> Vec<(f32, Step)> {
         at += 0.25;
     }
     steps.extend([
+        // 离顶部不到一个预取半径：刷新范围含第 0 行，复用的卡片落地后仍在缓存里。
+        (
+            44.8,
+            Step::Goto {
+                row: 12,
+                offset: 10.,
+            },
+        ),
+        (45.0, Step::ReuseScrollTop),
+        (45.3, Step::ReuseScrollTopAfter),
         (
             45.5,
             Step::Goto {
@@ -504,6 +517,7 @@ pub fn start(
         widen_before: None,
         width_result: None,
         jump_target: None,
+        reuse_top: None,
         deferred_ids: Vec::new(),
         top_checks: Vec::new(),
     }));
@@ -714,6 +728,42 @@ fn run_step(
             ));
             bench.anchors.push((
                 "A9 jump into unloaded rows keeps the top row at y=0".to_owned(),
+                if ok { 0. } else { 1. },
+                true,
+            ));
+        }
+        Step::ReuseScrollTop => {
+            // 复用顶行：core 把它挪到最前，列表收到去重的 `ClipboardUpserted`（FB-9Z00CH）。
+            let top = list.state.logical_scroll_top().item_ix;
+            let Some(item) = list.model.get(top).cloned() else {
+                bench.borrow_mut().note("A11 skipped: row not loaded");
+                return;
+            };
+            if let Ok(mut store) = bench.borrow().store.lock() {
+                store.remove(&item.id);
+                store.insert_newest((*item).clone());
+            }
+            bench.borrow_mut().reuse_top = Some(top);
+            list.on_update(
+                ListUpdate::Upserted {
+                    kind: item.kind,
+                    deduplicated: true,
+                },
+                cx,
+            );
+        }
+        Step::ReuseScrollTopAfter => {
+            let top = list.state.logical_scroll_top();
+            let target = bench.borrow().reuse_top;
+            let ok = target == Some(top.item_ix);
+            let mut bench = bench.borrow_mut();
+            bench.note(format!(
+                "A11 reuse the scroll-top row {target:?}: logical top now ({}, {:.1})",
+                top.item_ix,
+                top.offset_in_item.as_f32()
+            ));
+            bench.anchors.push((
+                "A11 reusing the scroll-top row keeps its row index".to_owned(),
                 if ok { 0. } else { 1. },
                 true,
             ));

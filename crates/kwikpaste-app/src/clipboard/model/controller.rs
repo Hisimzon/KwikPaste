@@ -58,7 +58,7 @@ pub enum UpdateAction {
     },
     /// 不在顶部或面板隐藏：记成挂起，回到顶部再刷新。
     Defer { reset_selection: bool },
-    /// 显示中不在顶部时复用了已有记录：就地重拉当前范围，保持视口锚点。
+    /// 显示中不在顶部时复用了已有记录：就地重拉当前范围，保持顶行的行号。
     RefreshInPlace,
 }
 
