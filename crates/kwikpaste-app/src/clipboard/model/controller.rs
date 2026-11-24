@@ -34,16 +34,23 @@ pub enum NavOutcome {
 }
 
 /// core 发来的列表变化（`CoreEvent` 中与列表有关的几种）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListUpdate {
-    /// 新记录入库或已有记录被重新使用（`deduplicated`）。
-    Upserted { kind: ItemKind, deduplicated: bool },
+    /// 新记录入库或已有记录被重新使用（`deduplicated`）。`group_id` 是新记录自动归入的分组。
+    Upserted {
+        id: Arc<str>,
+        kind: ItemKind,
+        deduplicated: bool,
+        group_id: Option<Arc<str>>,
+    },
     /// 清理删掉了 `removed` 条。
     Cleaned { removed: u64 },
     /// 历史数据整体换了一份：导入备份、切换存储位置（core `ClipboardReloaded`，1.x `imported`）。
     Reloaded,
     /// 图片文字识别有了进展或开关变了（core `OcrChanged`）：刷新搜索结果和图片能力。
     ImageTextChanged,
+    /// 文本记录的翻译状态或译文变了（core `TranslationChanged`）：刷新卡片上的译文和可用动作。
+    TranslationChanged,
 }
 
 /// 收到列表变化后要做的事。
@@ -58,7 +65,7 @@ pub enum UpdateAction {
     },
     /// 不在顶部或面板隐藏：记成挂起，回到顶部再刷新。
     Defer { reset_selection: bool },
-    /// 显示中不在顶部时复用了已有记录：就地重拉当前范围，保持顶行的行号。
+    /// 显示中不在顶部时复用了已有记录或识别有了进展：就地重拉当前范围，视口锚点由视图保持。
     RefreshInPlace,
 }
 
@@ -68,6 +75,8 @@ pub const HINT_KEYS: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 
 #[derive(Debug, Default)]
 pub struct ListController {
     selected: Option<Arc<str>>,
+    /// 最近一次点击或键盘选中的记录，悬停不改它：不在多选时 Shift 点卡片从它连选（资源管理器的起点）。
+    picked: Option<Arc<str>>,
     /// 第一个可见的项的模型下标（包含置顶行）。
     first_visible: usize,
     pending_reload: bool,
@@ -99,6 +108,11 @@ impl ListController {
     /// 显式选中一条（点击卡片、快捷动作、右键菜单作用到它时）。
     pub fn select(&mut self, id: &Arc<str>) {
         self.selected = Some(id.clone());
+        self.picked = Some(id.clone());
+    }
+
+    pub fn picked(&self) -> Option<&Arc<str>> {
+        self.picked.as_ref()
     }
 
     /// 指针移进卡片：它成为当前项（1.x 的 hover 与键盘共用选中）。返回选中是否变了。
@@ -155,7 +169,7 @@ impl ListController {
 
         match model.get(next) {
             Some(item) => {
-                self.selected = Some(item.id.clone());
+                self.select(&item.id);
                 (NavOutcome::Moved { index: next }, None)
             }
             None => {
@@ -209,14 +223,19 @@ impl ListController {
     }
 
     /// 列表变化的处理决定（1.x `handleClipboardUpdated` + `requestReloadAtTop`）。
-    pub fn on_update(&mut self, update: ListUpdate, visible: bool, at_top: bool) -> UpdateAction {
+    pub fn on_update(&mut self, update: &ListUpdate, visible: bool, at_top: bool) -> UpdateAction {
         let reset_selection = match update {
             ListUpdate::Cleaned { .. } | ListUpdate::Reloaded => true,
-            ListUpdate::Upserted { kind, deduplicated } => {
-                let relevant = if deduplicated {
-                    self.filter.may_include_existing(Some(kind))
+            ListUpdate::Upserted {
+                kind,
+                deduplicated,
+                group_id,
+                ..
+            } => {
+                let relevant = if *deduplicated {
+                    self.filter.may_include_existing(Some(*kind))
                 } else {
-                    self.filter.may_include(Some(kind))
+                    self.filter.may_include(Some(*kind), group_id.as_deref())
                 };
                 if !relevant {
                     return UpdateAction::Ignore;
@@ -225,6 +244,12 @@ impl ListController {
             }
             ListUpdate::ImageTextChanged => {
                 if !self.filter.may_include_existing(Some(ItemKind::Image)) {
+                    return UpdateAction::Ignore;
+                }
+                false
+            }
+            ListUpdate::TranslationChanged => {
+                if !self.filter.may_include_existing(Some(ItemKind::Text)) {
                     return UpdateAction::Ignore;
                 }
                 false
@@ -245,6 +270,7 @@ impl ListController {
                     deduplicated: true,
                     ..
                 } | ListUpdate::ImageTextChanged
+                    | ListUpdate::TranslationChanged
             )
         {
             return UpdateAction::RefreshInPlace;
@@ -272,12 +298,14 @@ impl ListController {
     /// 面板显示时（`scrollToTopOnOpen` 默认开启）：清掉选中，回到顶部后由下一帧消费挂起的刷新。
     pub fn on_shown(&mut self) {
         self.selected = None;
+        self.picked = None;
     }
 
     /// 过滤条件变化：清掉选中和挂起的刷新（视图会整体重载）。
     pub fn set_filter(&mut self, filter: ListFilter) {
         self.filter = filter;
         self.selected = None;
+        self.picked = None;
         self.pending_reload = false;
     }
 
@@ -297,6 +325,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::super::{
+        filter::Category,
         item::Platform,
         list_model::{FetchRequest, Page},
     };
@@ -332,6 +361,8 @@ mod tests {
             image_display: None,
             has_image_text: false,
             image_text_snippet: None,
+            translation: None,
+            translating: false,
         })
     }
 
@@ -427,6 +458,22 @@ mod tests {
         assert!(controller.is_active(7, "r7"));
         assert!(!controller.is_active(0, "r0"));
         assert_eq!(controller.active_index(&model), 7);
+    }
+
+    #[test]
+    fn range_start_follows_clicks_and_arrows_but_not_hover() {
+        let mut model = model(30, 30, 0);
+        let mut controller = ListController::new();
+
+        controller.select(&Arc::from("r3"));
+        controller.hover(&Arc::from("r9"));
+        assert_eq!(controller.picked().map(|id| &**id), Some("r3"));
+
+        controller.navigate(Nav::Down, &mut model);
+        assert_eq!(controller.picked().map(|id| &**id), Some("r10"));
+
+        controller.on_shown();
+        assert_eq!(controller.picked(), None);
     }
 
     #[test]
@@ -543,12 +590,14 @@ mod tests {
     fn updates_defer_until_the_top() {
         let mut controller = ListController::new();
         let upsert = ListUpdate::Upserted {
+            id: "r1".into(),
             kind: ItemKind::Text,
             deduplicated: false,
+            group_id: None,
         };
 
         assert_eq!(
-            controller.on_update(upsert, true, true),
+            controller.on_update(&upsert, true, true),
             UpdateAction::ReloadNow {
                 reset_selection: false
             }
@@ -556,7 +605,7 @@ mod tests {
         assert!(!controller.has_pending_reload());
 
         assert_eq!(
-            controller.on_update(upsert, true, false),
+            controller.on_update(&upsert, true, false),
             UpdateAction::Defer {
                 reset_selection: false
             }
@@ -570,17 +619,19 @@ mod tests {
     fn reuse_refreshes_in_place_below_the_top() {
         let mut controller = ListController::new();
         let reuse = ListUpdate::Upserted {
+            id: "r1".into(),
             kind: ItemKind::Text,
             deduplicated: true,
+            group_id: None,
         };
 
         assert_eq!(
-            controller.on_update(reuse, true, false),
+            controller.on_update(&reuse, true, false),
             UpdateAction::RefreshInPlace
         );
         assert!(!controller.has_pending_reload());
         assert_eq!(
-            controller.on_update(reuse, true, true),
+            controller.on_update(&reuse, true, true),
             UpdateAction::ReloadNow {
                 reset_selection: false
             }
@@ -592,9 +643,11 @@ mod tests {
         let mut controller = ListController::new();
         controller.hover(&"r1".into());
         let action = controller.on_update(
-            ListUpdate::Upserted {
+            &ListUpdate::Upserted {
+                id: "r1".into(),
                 kind: ItemKind::Text,
                 deduplicated: false,
+                group_id: None,
             },
             false,
             false,
@@ -609,7 +662,7 @@ mod tests {
         );
         assert!(!controller.has_pending_reload());
 
-        let cleaned = controller.on_update(ListUpdate::Cleaned { removed: 3 }, false, true);
+        let cleaned = controller.on_update(&ListUpdate::Cleaned { removed: 3 }, false, true);
         assert_eq!(
             cleaned,
             UpdateAction::ReloadNow {
@@ -625,7 +678,7 @@ mod tests {
         controller.hover(&"r1".into());
 
         assert_eq!(
-            controller.on_update(ListUpdate::Cleaned { removed: 3 }, true, false),
+            controller.on_update(&ListUpdate::Cleaned { removed: 3 }, true, false),
             UpdateAction::Defer {
                 reset_selection: true
             }
@@ -634,7 +687,7 @@ mod tests {
 
         controller.hover(&"r2".into());
         assert_eq!(
-            controller.on_update(ListUpdate::Reloaded, true, true),
+            controller.on_update(&ListUpdate::Reloaded, true, true),
             UpdateAction::ReloadNow {
                 reset_selection: true
             }
@@ -648,7 +701,7 @@ mod tests {
         let mut controller = ListController::new();
         controller.hover(&"r1".into());
         assert_eq!(
-            controller.on_update(ListUpdate::ImageTextChanged, true, true),
+            controller.on_update(&ListUpdate::ImageTextChanged, true, true),
             UpdateAction::ReloadNow {
                 reset_selection: false
             }
@@ -666,7 +719,7 @@ mod tests {
         ] {
             controller.set_filter(filter);
             assert_eq!(
-                controller.on_update(ListUpdate::ImageTextChanged, true, false),
+                controller.on_update(&ListUpdate::ImageTextChanged, true, false),
                 UpdateAction::RefreshInPlace
             );
         }
@@ -677,7 +730,7 @@ mod tests {
         });
         controller.hover(&"r1".into());
         assert_eq!(
-            controller.on_update(ListUpdate::ImageTextChanged, true, true),
+            controller.on_update(&ListUpdate::ImageTextChanged, true, true),
             UpdateAction::ReloadNow {
                 reset_selection: false
             }
@@ -686,11 +739,11 @@ mod tests {
 
         controller.set_filter(ListFilter {
             keyword: "发票".into(),
-            category: Some(ItemKind::Text),
+            category: Some(Category::Text),
             ..ListFilter::default()
         });
         assert_eq!(
-            controller.on_update(ListUpdate::ImageTextChanged, true, true),
+            controller.on_update(&ListUpdate::ImageTextChanged, true, true),
             UpdateAction::Ignore
         );
     }
@@ -704,9 +757,11 @@ mod tests {
         });
         assert_eq!(
             controller.on_update(
-                ListUpdate::Upserted {
+                &ListUpdate::Upserted {
+                    id: "r1".into(),
                     kind: ItemKind::Text,
-                    deduplicated: false
+                    deduplicated: false,
+                    group_id: None,
                 },
                 true,
                 false
@@ -715,9 +770,11 @@ mod tests {
         );
         assert_eq!(
             controller.on_update(
-                ListUpdate::Upserted {
+                &ListUpdate::Upserted {
+                    id: "r1".into(),
                     kind: ItemKind::Text,
-                    deduplicated: true
+                    deduplicated: true,
+                    group_id: None,
                 },
                 true,
                 false
@@ -735,9 +792,11 @@ mod tests {
         });
 
         let action = controller.on_update(
-            ListUpdate::Upserted {
+            &ListUpdate::Upserted {
+                id: "r1".into(),
                 kind: ItemKind::Text,
                 deduplicated: false,
+                group_id: None,
             },
             true,
             true,

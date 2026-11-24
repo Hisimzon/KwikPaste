@@ -83,11 +83,20 @@ pub(crate) async fn store_and_emit(core: &CoreInner, item: &ClipboardItem) -> Re
             core.ocr.nudge();
         }
     }
+    // 重新复制历史里已有的内容也算新复制：还没有译文就照样自动翻。
+    if item.kind == crate::db::models::ClipboardKind::Text {
+        core.translate.on_inserted(item, &result.id).await;
+    }
 
     core.events.emit(CoreEvent::ClipboardUpserted {
         id: result.id.clone(),
         kind: item.kind,
         deduplicated: result.deduplicated,
+        group_id: if result.deduplicated {
+            None
+        } else {
+            item.group_id.clone()
+        },
     });
     Ok(result)
 }

@@ -108,6 +108,8 @@ pub enum ListIntent {
     },
     ShowShortcuts,
     OpenPreferences,
+    /// 空状态的「清除筛选条件」：请面板清掉搜索词、筛选、分类和分组。
+    ClearFilters,
     /// 已交给宿主拖出（通知，自测据此核对拖的是哪一条）。
     DragOut {
         id: Arc<str>,
@@ -276,13 +278,15 @@ pub struct ClipboardList {
     pub(super) hovered_snippet: Option<(Arc<str>, Arc<str>, SnippetKind)>,
     /// 按住修饰键：显示数字角标。
     pub(super) key_hints: bool,
+    /// 页脚上一次显示的状态文案：重新加载首页期间沿用，不闪「共 0 项」。
+    footer_status: RefCell<gpui::SharedString>,
     /// 刚复制成功的快捷动作按钮，1 秒后复原。
     copied: Option<(Arc<str>, QuickAction)>,
     copied_reset: Option<Task<()>>,
     /// 批量删除后第一页落地时再补拉视图范围。
     refetch_view_after_first_page: bool,
-    /// 复用后原地刷新的请求令牌：落地时保留行号，不跟着顶行的 id 走。
-    in_place_token: Option<u64>,
+    /// 复用后原地刷新的请求令牌和被复用的记录：落地时它若还是顶行，保留行号，不跟着它跳回顶部。
+    reused_refresh: Option<(u64, Arc<str>)>,
     note: Option<NoteEdit>,
     /// 粘贴、复制交给谁做（平台层的粘贴链路，或夹具的替身）。
     host: Rc<dyn ItemHost>,
@@ -370,10 +374,11 @@ impl ClipboardList {
             hovered: None,
             hovered_snippet: None,
             key_hints: false,
+            footer_status: RefCell::default(),
             copied: None,
             copied_reset: None,
             refetch_view_after_first_page: false,
-            in_place_token: None,
+            reused_refresh: None,
             note: None,
             host,
             freshness: Freshness::default(),
@@ -406,10 +411,15 @@ impl ClipboardList {
                     return;
                 }
                 CoreEvent::ClipboardUpserted {
-                    kind, deduplicated, ..
+                    id,
+                    kind,
+                    deduplicated,
+                    group_id,
                 } => ListUpdate::Upserted {
+                    id: Arc::from(id.as_str()),
                     kind: item_kind(*kind),
                     deduplicated: *deduplicated,
+                    group_id: group_id.as_deref().map(Arc::from),
                 },
                 CoreEvent::ClipboardCleaned { removed } => {
                     ListUpdate::Cleaned { removed: *removed }
@@ -424,6 +434,10 @@ impl ClipboardList {
                     return;
                 }
                 CoreEvent::OcrChanged => ListUpdate::ImageTextChanged,
+                CoreEvent::TranslationChanged { id } => {
+                    list.refresh_preview_translation(id.as_deref(), cx);
+                    ListUpdate::TranslationChanged
+                }
                 _ => return,
             };
             list.on_update(update, cx);
@@ -473,7 +487,7 @@ impl ClipboardList {
     pub fn on_update(&mut self, update: ListUpdate, cx: &mut Context<Self>) {
         let action = self
             .controller
-            .on_update(update, self.visible, self.at_top());
+            .on_update(&update, self.visible, self.at_top());
         log::debug!("list update {update:?} -> {action:?}");
         let reset_selection = match action {
             UpdateAction::ReloadNow { reset_selection }
@@ -491,7 +505,14 @@ impl ClipboardList {
             UpdateAction::ReloadNow { .. } => self.reload(cx),
             UpdateAction::RefreshInPlace => {
                 if let Some(request) = self.model.reload_current_range() {
-                    self.in_place_token = Some(request.token);
+                    self.reused_refresh = match &update {
+                        ListUpdate::Upserted {
+                            id,
+                            deduplicated: true,
+                            ..
+                        } => Some((request.token, id.clone())),
+                        _ => None,
+                    };
                     self.fetch(request, cx);
                 }
             }
@@ -606,15 +627,16 @@ impl ClipboardList {
     ) {
         match result {
             Ok(page) => {
-                // 排序刷新时保留视口锚点；置顶切换不能让正在浏览的卡片上下跳一行。
-                // 复用把卡片挪到最前时保留行号：点击处上方的卡片下移一格、下方不动，
-                // 点的若是顶行也不会跟着它跳回顶部。
+                // 排序刷新时按顶行 id 保留视口锚点：置顶切换、视口外的复用和后台识别都不能让
+                // 正在浏览的卡片跳动。被复用的正是顶行时保留行号，不跟着它跳回顶部。
                 let top = self.state.logical_scroll_top();
-                let anchor = (request.replace
-                    && !self.at_top()
-                    && self.in_place_token != Some(request.token))
-                .then(|| self.model.get(top.item_ix).map(|item| item.id.clone()))
-                .flatten();
+                let top_id = self.model.get(top.item_ix).map(|item| item.id.clone());
+                let reused_top = self.reused_refresh.as_ref().is_some_and(|(token, id)| {
+                    *token == request.token && top_id.as_ref() == Some(id)
+                });
+                let anchor = (request.replace && !self.at_top() && !reused_top)
+                    .then_some(top_id)
+                    .flatten();
                 if let Some(applied) = self.model.apply(&request, page) {
                     self.sync_rows(Some(&applied));
                     if let Some(index) = anchor.and_then(|id| self.model.index_of(&id)) {
@@ -1285,7 +1307,8 @@ impl ClipboardList {
     }
 
     /// 按下卡片（1.x `handleCardMouseDown`）：多选时左键勾选、Shift 连选，并记下拖出的起点（按住
-    /// 已勾选的卡片拖动时整组拖出）；否则左键选中、记下拖出的起点并预备单击动作（见
+    /// 已勾选的卡片拖动时整组拖出）；否则按住 Ctrl/Cmd 或 Shift 的左键直接进入多选（见
+    /// [`Self::begin_selection`]），普通左键选中、记下拖出的起点并预备单击动作（见
     /// [`Self::click_card`]），中键按中键设置执行。
     fn press_card(
         &mut self,
@@ -1315,6 +1338,9 @@ impl ClipboardList {
 
         let id = item.id.clone();
         match event.button {
+            MouseButton::Left if event.modifiers.secondary() || event.modifiers.shift => {
+                self.begin_selection(item, event.modifiers.shift, window, cx);
+            }
             MouseButton::Left => {
                 self.controller.select(&id);
                 self.drag.press(id.to_string(), event.position);
@@ -1407,6 +1433,7 @@ impl ClipboardList {
             AutoPaste::SingleClickCopy if armed => self.copy(id, false, None, window, cx),
             AutoPaste::DoubleClickPaste if double => self.paste_item(id, false, cx),
             AutoPaste::DoubleClickCopy if double => self.copy(id, false, None, window, cx),
+            AutoPaste::DoubleClickView if double => self.view_item(&item, window, cx),
             _ => {}
         }
     }
@@ -1587,15 +1614,9 @@ impl ClipboardList {
                 .into()
             });
         let actions = (hovered && !selecting)
-            .then(|| {
-                visible_actions(
-                    &self.settings.clipboard.content.item_actions,
-                    &item,
-                    can_delete,
-                )
-            })
+            .then(|| visible_actions(&self.settings.clipboard.content.item_actions, &item))
             .filter(|actions| !actions.is_empty())
-            .map(|actions| self.quick_actions(&item, actions, cx));
+            .map(|actions| self.quick_actions(&item, actions, can_delete, cx));
         let checkbox = selecting.then(|| self.checkbox(&item, can_delete));
         let on_snippet = (!selecting && !item.quick_snippets.is_empty()).then(|| {
             let entity = cx.entity().downgrade();
@@ -1639,6 +1660,7 @@ impl ClipboardList {
             show_original: hovered && self.settings.clipboard.content.show_original_preview,
             hint,
             checked: selecting && self.selection.is_checked(&item.id),
+            favorite: item.is_favorite && !self.filter().favorites(),
             actions,
             checkbox,
             on_snippet,
@@ -1672,33 +1694,30 @@ impl ClipboardList {
                         == crate::clipboard::model::filter::Range::Favorite)
                     .then_some(ReorderSection::Favorite)
             });
-        let record_reorder = reorder_section.is_some();
-        let reorder_canvas = canvas(
-            move |bounds, window, _| {
-                let mut geometry = reorder_geometry.borrow_mut();
-                if record_reorder {
+        let reorder_canvas = reorder_section.map(|section| {
+            canvas(
+                move |bounds, window, _| {
+                    let mut geometry = reorder_geometry.borrow_mut();
                     geometry
                         .cards
                         .retain(|(id, _, _)| id.as_ref() != reorder_id.as_ref());
-                    if let Some(section) = reorder_section {
-                        geometry.cards.push((reorder_id.clone(), section, bounds));
-                    }
+                    geometry.cards.push((reorder_id.clone(), section, bounds));
                     if !geometry.repaint_requested {
                         geometry.repaint_requested = true;
                         window.request_animation_frame();
                     }
-                }
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full();
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        });
 
         card::card(env, &item, index, state)
             .children(anchor)
-            .child(reorder_canvas)
+            .children(reorder_canvas)
             .on_hover(cx.listener(move |list, hovered: &bool, _, cx| {
                 list.hover_card(&id, *hovered, cx);
             }))
@@ -1746,6 +1765,7 @@ impl ClipboardList {
             layout: &layout,
             now: self.now,
             reduce_motion: self.reduce_motion(cx),
+            translations: self.settings.extensions.translate.show_on_cards,
         };
         let index = ix;
         let placeholder = self.model.get(index).is_none();
@@ -1776,7 +1796,13 @@ fn eased_step(remaining: f32, fraction: f32) -> f32 {
 impl Render for ClipboardList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let render_start = Instant::now();
-        self.rem = window.rem_size();
+        if self.rem != window.rem_size() {
+            // 文字大小（含系统文本缩放）变了：缓存的行高与均值全部作废。
+            self.rem = window.rem_size();
+            self.state.remeasure();
+            self.heights = HeightSamples::default();
+            self.hints.dirty = true;
+        }
         // 时间标签每帧按当前本地时间算（附录 D §8 第 4 条）；一帧只取一次时钟。
         self.now = Local::now();
         if let Some(timing) = &self.timing {
@@ -1833,6 +1859,7 @@ impl Render for ClipboardList {
             layout: &layout,
             now: self.now,
             reduce_motion: self.reduce_motion(cx),
+            translations: self.settings.extensions.translate.show_on_cards,
         };
 
         let empty = self.model.loaded_initial() && self.model.total() == 0;
@@ -1956,6 +1983,7 @@ impl Render for ClipboardList {
                         show_original: false,
                         hint: None,
                         checked: false,
+                        favorite: false,
                         actions: None,
                         checkbox: None,
                         on_snippet: None,
@@ -2180,8 +2208,8 @@ impl Render for ClipboardList {
                     }
                 }),
             )
-            // 按住空格预览当前项、Shift+空格看大图（钩子转来的空格按下、松开）。
-            .on_key_down(cx.listener(|list, event: &KeyDownEvent, _, cx| {
+            // 按住空格预览当前项；「查看」仍是默认 Shift+空格时也在这里处理（钩子转来的空格按下、松开）。
+            .on_key_down(cx.listener(|list, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && list.reorder.is_some() {
                     list.cancel_reorder(cx);
                     cx.stop_propagation();
@@ -2194,12 +2222,13 @@ impl Render for ClipboardList {
                 if !modifiers.modified() {
                     list.preview_space(true, cx);
                     cx.stop_propagation();
-                } else if modifiers == gpui::Modifiers::shift() {
-                    if let Some(item) = list
-                        .active_item()
-                        .filter(|item| item.kind == ItemKind::Image)
-                    {
-                        list.view_image(item.id.clone(), cx);
+                } else if modifiers == gpui::Modifiers::shift()
+                    && effective_panel_keys(&list.settings.shortcuts, PanelAction::ViewImage)
+                        .iter()
+                        .any(|key| key == "shift-space")
+                {
+                    if let Some(item) = list.active_item() {
+                        list.view_item(&item, window, cx);
                     }
                     cx.stop_propagation();
                 }

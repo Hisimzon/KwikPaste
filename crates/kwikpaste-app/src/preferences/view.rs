@@ -14,7 +14,7 @@ use kwikpaste_core::{
     settings::Settings,
     settings::{
         CaptureKind, Content, CopySoundTone, GroupBarEntry, ItemAction, RetentionRule,
-        RetentionUnit,
+        RetentionUnit, SettingsDelta,
     },
     sync::{LanDeviceView, LanNearbyView, LanSyncState, PairTarget},
 };
@@ -64,6 +64,7 @@ mod image_text;
 mod ocr_engine;
 mod overview;
 mod shortcut_page;
+mod translate;
 mod wetype;
 
 const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(640.), px(480.));
@@ -71,6 +72,8 @@ const WINDOW_MIN_SIZE: gpui::Size<gpui::Pixels> = size(px(640.), px(480.));
 const SIDEBAR_WIDTH: f32 = 14.;
 const SIDEBAR_COLLAPSED_WIDTH: f32 = 4.25;
 const SIDEBAR_TRANSITION: Duration = Duration::from_millis(200);
+/// 侧栏二级项比一级项多缩进的量（间距单位）。
+const NESTED_NAV_INDENT: f32 = 3.5;
 
 struct PreferencesWindow {
     handle: AnyWindowHandle,
@@ -92,9 +95,7 @@ pub(crate) fn logo() -> Arc<Image> {
 }
 
 fn window_size(cx: &App) -> gpui::Size<gpui::Pixels> {
-    let scale = cx
-        .try_global::<crate::platform::SystemSignals>()
-        .map_or(1.0, |signals| signals.text_scale as f32);
+    let scale = kwikpaste_ui::theme::text_scale(cx);
     size(px(980. * scale), px(700. * scale))
 }
 
@@ -176,10 +177,11 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
         view: view.downgrade(),
     });
     let window_id = handle.window_id();
+    let owner = view.entity_id();
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == window_id {
             // 录制中直接关窗不会走 finish_recording，热键会一直停在注销状态。
-            hotkey::resume(cx);
+            hotkey::resume(owner, cx);
             let _ = cx.remove_global::<PreferencesWindow>();
         }
     })
@@ -187,45 +189,18 @@ pub(super) fn open(cx: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 导入确认框开在唯一的偏好窗里：已经开着就复用并带到前台，否则先打开。
 pub(super) fn open_import(path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(window_size(cx), cx)),
-        window_min_size: Some(WINDOW_MIN_SIZE),
-        titlebar: Some(kwikpaste_ui::titlebar_options(i18n::t(
-            "preferences:windowTitle",
-        ))),
-        focus: false,
-        ..Default::default()
+    open(cx)?;
+    let Some(handle) = cx
+        .try_global::<PreferencesWindow>()
+        .map(|window| window.handle)
+    else {
+        return Ok(());
     };
-    let (handle, view) = crate::platform::open_window(options, cx, |window, cx| {
-        let view = cx.new(|cx| Preferences::new(window, cx));
-        view.update(cx, |this, cx| {
-            this.refresh_storage_overview(cx);
-            this.refresh_image_text(cx);
-            if this.tab == TabId::Extensions {
-                this.refresh_extensions(window, cx);
-            }
-        });
-        crate::platform::reveal_after_first_frame(window, cx, |window, cx| {
-            bring_window_to_front(window, cx);
-        });
-        Preferences::show_import_confirmation(path.clone(), window, cx);
-        view
-    })?;
-    cx.set_global(PreferencesWindow {
-        handle,
-        view: view.downgrade(),
-    });
-    let window_id = handle.window_id();
-    cx.on_window_closed(move |cx, closed_id| {
-        if closed_id == window_id {
-            // 同上：录制中直接关窗时补一次 resume。
-            hotkey::resume(cx);
-            let _ = cx.remove_global::<PreferencesWindow>();
-        }
+    handle.update(cx, |_, window, cx| {
+        Preferences::show_import_confirmation(path, window, cx);
     })
-    .detach();
-    Ok(())
 }
 
 /// 取前台会同步收到窗口消息；放到任务里，等调用方的 GPUI 借用（窗口 update、托盘 dispatch）结束后再做，
@@ -294,6 +269,8 @@ struct Preferences {
     _subscriptions: Vec<Subscription>,
     language: SelectState,
     selects: std::collections::HashMap<&'static str, SelectState>,
+    /// 下拉选项文字所用的语言；切换语言后重新填一遍。
+    options_language: i18n::Language,
     number_inputs: std::collections::HashMap<&'static str, NumberInputState>,
     sliders: std::collections::HashMap<&'static str, SliderState>,
     scroll: ScrollHandle,
@@ -310,14 +287,18 @@ struct Preferences {
     storage_migrating: bool,
     lan_state: Option<LanSyncState>,
     lan_code_hidden: bool,
-    /// 扩展页里展开了详情的扩展 id。
+    /// 扩展列表里展开了介绍的扩展 id。
     extensions_expanded: std::collections::HashSet<String>,
+    /// 侧栏二级菜单打开的扩展页（扩展 id）；只在扩展分类下有值。
+    extension_page: Option<String>,
     /// 图片文字识别的计数（采集页状态行），打开窗口和收到 `OcrChanged` 时刷新。
     ocr_status: Option<kwikpaste_core::OcrStatus>,
     ocr_refresh: u64,
     /// 系统的识别能力；只在开着识别时探测。
     ocr_support: Option<kwikpaste_core::OcrSupport>,
     lan_name: TextInput,
+    /// 扩展页里翻译设置的控件。
+    translate: translate::TranslateControls,
     lan_max_image: NumberInputState,
     icons: gpui::Entity<KpImageCache>,
     /// 全部分组：启动分组下拉与自动归组规则共用，分组变化时刷新。
@@ -422,8 +403,11 @@ impl Preferences {
             cx,
         );
         lan_name.set_value(settings.sync.lan.device_name.clone(), window, cx);
-        let lan_name_sub = lan_name.on_change(cx, |this, value, cx| {
-            this.update("sync.lan.deviceName", json!(value.to_string()), cx);
+        // 设备名改名会通知局域网对端，所以和数字框一样只在失焦或回车时保存。
+        let lan_name_sub = lan_name.on_commit(window, cx, |this, value, _, cx| {
+            if value.as_ref() != this.settings.sync.lan.device_name {
+                this.update("sync.lan.deviceName", json!(value.to_string()), cx);
+            }
         });
         let lan_max_image = NumberInputState::new(
             u64::from(settings.sync.lan.max_image_mb),
@@ -443,18 +427,19 @@ impl Preferences {
         let mut setting_subscriptions = Vec::new();
         let settings_json = values::to_json(&settings);
         for tab in schema::tabs(portable) {
-            for section in tab.sections {
-                for setting in section.settings {
+            for section in &tab.sections {
+                for setting in &section.settings {
                     match setting.control {
                         Control::Select(kind) => {
                             let numeric = matches!(kind, schema::Options::Numbers(_));
-                            let options = text::options(&setting)
-                                .into_iter()
-                                .map(|(value, label)| SelectOption::new(value, label))
-                                .collect();
                             let selected =
                                 values::get_choice(&settings_json, setting.path.unwrap_or(""));
-                            let state = SelectState::new(options, selected.as_deref(), window, cx);
+                            let state = SelectState::new(
+                                select_options(setting),
+                                selected.as_deref(),
+                                window,
+                                cx,
+                            );
                             let path = setting.path;
                             let subscription = state.on_change(cx, move |this, value, cx| {
                                 if let (Some(path), Some(value)) = (path, value) {
@@ -551,20 +536,8 @@ impl Preferences {
             kwikpaste_core::settings::RetentionUnit::Months => "months",
             kwikpaste_core::settings::RetentionUnit::Forever => "forever",
         };
-        let retention_unit_state = SelectState::new(
-            ["minutes", "hours", "days", "weeks", "months", "forever"]
-                .into_iter()
-                .map(|value| {
-                    SelectOption::new(
-                        value,
-                        i18n::t(&format!("preferences:schema.retentionUnits.{value}")),
-                    )
-                })
-                .collect(),
-            Some(retention_unit),
-            window,
-            cx,
-        );
+        let retention_unit_state =
+            SelectState::new(retention_unit_options(), Some(retention_unit), window, cx);
         let retention_unit_sub =
             retention_unit_state.on_change_in(window, cx, |this, value, window, cx| {
                 if let Some(value) = value {
@@ -595,11 +568,13 @@ impl Preferences {
             .detach();
         }
         let lan_state = core_host::core(cx).map(|core| core.lan_sync_state());
+        let (translate, translate_subscriptions) =
+            translate::TranslateControls::new(&settings, window, cx);
         let subscriptions: Vec<Subscription> = core_events(cx)
             .map(|events| {
                 cx.subscribe_in(&events, window, |this, _, event: &CoreEvent, window, cx| {
-                    if matches!(event, CoreEvent::SettingsUpdated { .. }) {
-                        this.sync_settings(window, cx);
+                    if let CoreEvent::SettingsUpdated { delta, .. } = event {
+                        this.sync_settings(delta, window, cx);
                     }
                     if matches!(
                         event,
@@ -622,6 +597,7 @@ impl Preferences {
                     if matches!(event, CoreEvent::ExtensionsChanged) {
                         this.ocr_support = None;
                         this.ocr_refresh = this.ocr_refresh.wrapping_add(1);
+                        this.translate.reload_ai(window, cx);
                         cx.notify();
                     }
                     if this.tab == TabId::Extensions
@@ -661,6 +637,7 @@ impl Preferences {
                 hotkey_status_subscription,
             ])
             .chain(setting_subscriptions)
+            .chain(translate_subscriptions)
             .collect();
         let mut subscriptions = subscriptions;
         subscriptions.push(cx.observe(&icons, |_, _, cx| cx.notify()));
@@ -673,11 +650,23 @@ impl Preferences {
         // 窗口一打开就有焦点，Esc 不用先点一下界面就能关窗。
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        // 录制时按键只送到根节点：切到别的应用或焦点移到别的控件，就结束录制、恢复全局热键。
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                this.stop_recording(cx);
+            }
+        }));
+        subscriptions.push(cx.on_blur(&focus, window, |this, _, cx| this.stop_recording(cx)));
+        let view = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            let _ = view.update(cx, |this, cx| this.commit_focused_input(window, cx));
+            true
+        });
         let scroll = ScrollHandle::new();
         let setting_anchors = schema::tabs(portable)
-            .into_iter()
-            .flat_map(|tab| tab.sections)
-            .flat_map(|section| section.settings)
+            .iter()
+            .flat_map(|tab| &tab.sections)
+            .flat_map(|section| &section.settings)
             .map(|setting| (setting.id, ScrollAnchor::for_handle(scroll.clone())))
             .collect();
         let mut preferences = Self {
@@ -692,6 +681,7 @@ impl Preferences {
             _subscriptions: subscriptions,
             language,
             selects,
+            options_language: i18n::language(),
             number_inputs,
             sliders,
             scroll,
@@ -706,10 +696,12 @@ impl Preferences {
             lan_state,
             lan_code_hidden: false,
             extensions_expanded: Default::default(),
+            extension_page: None,
             ocr_status: None,
             ocr_refresh: 0,
             ocr_support: None,
             lan_name,
+            translate,
             lan_max_image,
             icons,
             groups: Vec::new(),
@@ -734,31 +726,77 @@ impl Preferences {
                 }
             };
             let _ = this.update_in(cx, |this, window, cx| {
-                this.groups = groups.clone();
-                cx.notify();
-                let Some(state) = this.selects.get("window.selectGroupOnOpen") else {
-                    return;
-                };
-                let mut options = ["all", "preserve"]
-                    .into_iter()
-                    .map(|value| SelectOption::new(value, startup_group_label(value)))
-                    .collect::<Vec<_>>();
-                options.extend(
-                    groups
-                        .into_iter()
-                        .map(|group| SelectOption::new(format!("group:{}", group.id), group.name)),
-                );
-                state.set_options(options, window, cx);
-                let selected = &this.settings.clipboard.window.select_group_on_open;
-                state.set_value(selected, window, cx);
+                this.groups = groups;
+                this.sync_startup_group_options(window, cx);
                 cx.notify();
             });
         })
         .detach();
     }
 
-    /// 导入或其它入口更新设置后，同步快照及独立持有状态的控件。
-    fn sync_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 启动分组下拉：两个固定项加当前全部分组。
+    fn sync_startup_group_options(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.selects.get("window.selectGroupOnOpen") else {
+            return;
+        };
+        let mut options = ["all", "preserve"]
+            .into_iter()
+            .map(|value| SelectOption::new(value, startup_group_label(value)))
+            .collect::<Vec<_>>();
+        options.extend(
+            self.groups
+                .iter()
+                .map(|group| SelectOption::new(format!("group:{}", group.id), group.name.clone())),
+        );
+        state.set_options(options, window, cx);
+        state.set_value(
+            &self.settings.clipboard.window.select_group_on_open,
+            window,
+            cx,
+        );
+    }
+
+    /// 切换界面语言后，下拉选项与占位文字换成新语言（选中值不变）。
+    fn relabel_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = i18n::language();
+        if self.options_language == language {
+            return;
+        }
+        self.options_language = language;
+        let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
+        for setting in schema::tabs(portable)
+            .iter()
+            .flat_map(|tab| &tab.sections)
+            .flat_map(|section| &section.settings)
+        {
+            if let (Control::Select(_), Some(state)) =
+                (setting.control, self.selects.get(setting.id))
+            {
+                state.set_options(select_options(setting), window, cx);
+            }
+        }
+        if let Some(state) = self.selects.get("history.retention.unit") {
+            state.set_options(retention_unit_options(), window, cx);
+        }
+        self.sync_startup_group_options(window, cx);
+        self.search
+            .set_placeholder(i18n::t("preferences:search.placeholder"), window, cx);
+        self.lan_name.set_placeholder(
+            i18n::t("preferences:schema.settings.sync.lan.deviceName.placeholder"),
+            window,
+            cx,
+        );
+        self.translate.relabel(&self.settings, window, cx);
+    }
+
+    /// 导入或其它入口更新设置后，同步快照及独立持有状态的控件；下拉、数字框和滑块只同步这次改到的。
+    /// 分组列表由 `GroupsUpdated` 单独刷新。
+    fn sync_settings(
+        &mut self,
+        delta: &SettingsDelta,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(core) = core_host::core(cx) else {
             return;
         };
@@ -766,11 +804,13 @@ impl Preferences {
         let settings = values::to_json(&self.settings);
         let portable = core.paths().is_portable();
         for setting in schema::tabs(portable)
-            .into_iter()
-            .flat_map(|tab| tab.sections)
-            .flat_map(|section| section.settings)
+            .iter()
+            .flat_map(|tab| &tab.sections)
+            .flat_map(|section| &section.settings)
         {
-            let Some(path) = setting.path else { continue };
+            let Some(path) = setting.path.filter(|path| delta.touches(path)) else {
+                continue;
+            };
             if let Some(state) = self.selects.get(setting.id)
                 && let Some(value) = values::get_choice(&settings, path)
             {
@@ -786,15 +826,27 @@ impl Preferences {
         if let Some(value) = values::get_choice(&settings, "appearance.language") {
             self.language.set_value(&value, window, cx);
         }
-        if self.lan_name.value(cx).as_ref() != self.settings.sync.lan.device_name {
+        // 输入框里还没提交的内容只在这次改到它时才被覆盖。
+        if delta.touches("sync.lan.deviceName")
+            && self.lan_name.value(cx).as_ref() != self.settings.sync.lan.device_name
+        {
             self.lan_name
                 .set_value(self.settings.sync.lan.device_name.clone(), window, cx);
         }
-        self.lan_max_image
-            .set_value(u64::from(self.settings.sync.lan.max_image_mb), window, cx);
+        if delta.touches("sync.lan.maxImageMb") {
+            self.lan_max_image.set_value(
+                u64::from(self.settings.sync.lan.max_image_mb),
+                window,
+                cx,
+            );
+        }
         self.sidebar_collapsed = self.settings.appearance.preferences_sidebar_collapsed;
-        self.sync_retention(window, cx);
-        self.refresh_startup_groups(window, cx);
+        if delta.touches("clipboard.history.retention") {
+            self.sync_retention(window, cx);
+        }
+        if delta.touches("extensions.translate") {
+            self.translate.sync(&self.settings, window, cx);
+        }
         cx.notify();
     }
 
@@ -950,15 +1002,35 @@ impl Preferences {
         }
         self.shortcut_conflict = None;
         self.recording = Some(id);
-        hotkey::suspend(cx);
+        hotkey::suspend(cx.entity_id(), cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
     fn finish_recording(&mut self, cx: &mut Context<Self>) {
         self.recording = None;
-        hotkey::resume(cx);
+        hotkey::resume(cx.entity_id(), cx);
         cx.notify();
+    }
+
+    /// 关窗前提交正在编辑的数字框、设备名和翻译的 AI 接口：它们只在失焦或回车时保存，
+    /// 移除窗口不会再发失焦。
+    fn commit_focused_input(&self, window: &Window, cx: &mut App) {
+        for state in self.number_inputs.values().chain([&self.lan_max_image]) {
+            state.commit_if_focused(window, cx);
+        }
+        self.lan_name.commit_if_focused(window, cx);
+        self.translate.commit_if_focused(window, cx);
+    }
+
+    /// 结束正在进行的全局快捷键或窗口内按键录制。
+    fn stop_recording(&mut self, cx: &mut Context<Self>) {
+        if self.recording.is_some() {
+            self.finish_recording(cx);
+        }
+        if self.recording_panel.is_some() {
+            self.finish_panel_recording(cx);
+        }
     }
 
     fn capture_shortcut(
@@ -1018,7 +1090,7 @@ impl Preferences {
                 let result = core.update_settings(patch).await;
                 let _ = this.update(cx, |this, cx| {
                     this.recording = None;
-                    hotkey::resume(cx);
+                    hotkey::resume(cx.entity_id(), cx);
                     match result {
                         Ok(settings) => this.settings = settings,
                         Err(error) => log::error!("shortcut update failed: {error}"),
@@ -1589,6 +1661,9 @@ impl Preferences {
                     }
                     "shortcuts.pauseApps" => {
                         this.open_source_apps_for("shortcuts.pauseApps", window, cx)
+                    }
+                    "capture.mergeLinesApps" => {
+                        this.open_source_apps_for("capture.mergeLinesApps", window, cx)
                     }
                     "actions.visible" => this.open_action_visibility(window, cx),
                     "appearance.groupBar" => this.open_group_bar(window, cx),
@@ -2954,18 +3029,22 @@ impl Preferences {
         let Some(core) = core_host::core(cx).cloned() else {
             return;
         };
-        let (title_key, settings_path, excluded) = if setting_id == "shortcuts.pauseApps" {
-            (
+        let (title_key, settings_path, excluded) = match setting_id {
+            "shortcuts.pauseApps" => (
                 "preferences:schema.settings.shortcuts.pauseApps.title",
                 "shortcuts.pauseAppIds",
                 self.settings.shortcuts.pause_app_ids.clone(),
-            )
-        } else {
-            (
+            ),
+            "capture.mergeLinesApps" => (
+                "preferences:schema.settings.capture.mergeLinesApps.title",
+                "clipboard.capture.mergeLinesAppIds",
+                self.settings.clipboard.capture.merge_lines_app_ids.clone(),
+            ),
+            _ => (
                 "preferences:schema.settings.source.excludedApps.title",
                 "clipboard.filters.excludedAppIds",
                 self.settings.clipboard.filters.excluded_app_ids.clone(),
-            )
+            ),
         };
         let entity = cx.entity().downgrade();
         window
@@ -3029,6 +3108,64 @@ impl Preferences {
                 (progress * 2. - 1.).max(0.)
             }
         });
+        // 二级项的缩进跟着侧栏宽度一起过渡，收起后和一级图标对齐。
+        let nested_indent = NESTED_NAV_INDENT
+            * match (collapsed, progress) {
+                (true, Some(progress)) => 1. - progress,
+                (true, None) => 0.,
+                (false, Some(progress)) => progress,
+                (false, None) => 1.,
+            };
+        let nav_item = |key: gpui::ElementId,
+                        title: gpui::SharedString,
+                        icon: PrefIcon,
+                        selected: bool,
+                        nested: bool| {
+            div()
+                .id(key)
+                .role(Role::Tab)
+                .aria_label(title.clone())
+                .flex()
+                .items_center()
+                .gap(space(2.))
+                .w_full()
+                .h(rems(2.25))
+                .px(space(2.5))
+                .when(nested, |item| item.pl(space(2.5 + nested_indent)))
+                .rounded(theme::radius::MD)
+                .kp_text(TextSize::Sm)
+                // 选中项是中性灰底（同剪贴板面板的当前项），悬停浅一档。
+                .when(selected, |item| {
+                    item.bg(component_tokens.nav_selected)
+                        .text_color(tokens.text.primary)
+                })
+                .when(!selected, |item| {
+                    item.text_color(tokens.text.secondary)
+                        .hover(|style| style.bg(component_tokens.nav_hover))
+                })
+                .cursor_pointer()
+                .child(icon.view(
+                    rems(1.),
+                    if selected {
+                        tokens.text.primary
+                    } else {
+                        tokens.text.secondary
+                    },
+                ))
+                // 收起时只留图标，名称放进提示。
+                .when(collapsed && progress.is_none(), |item| {
+                    item.kp_tooltip(title.clone())
+                })
+                .when(show_labels, |item| {
+                    item.child(
+                        div()
+                            .whitespace_nowrap()
+                            .opacity(label_opacity)
+                            .child(title),
+                    )
+                })
+        };
+        let open_extension = self.open_extension(cx).map(|status| status.id);
         let mut nav = div().flex().flex_col().gap(space(0.5));
         let mut group = None;
         for tab in tabs {
@@ -3036,56 +3173,40 @@ impl Preferences {
                 nav = nav.child(div().h(px(1.)).my(space(1.)).bg(tokens.border.divider));
             }
             group = Some(tab.group);
-            let selected = tab.id == self.tab;
             let id = tab.id;
-            let title = text::tab_title_of(&tab);
+            let extensions = id == TabId::Extensions;
+            let selected = id == self.tab && !(extensions && open_extension.is_some());
             nav = nav.child(
-                div()
-                    .id(id.key())
-                    .role(Role::Tab)
-                    .aria_label(title.clone())
-                    .flex()
-                    .items_center()
-                    .gap(space(2.))
-                    .w_full()
-                    .h(rems(2.25))
-                    .px(space(2.5))
-                    .rounded(theme::radius::MD)
-                    .kp_text(TextSize::Sm)
-                    // 选中项是中性灰底（同剪贴板面板的当前项），悬停浅一档。
-                    .when(selected, |item| {
-                        item.bg(component_tokens.nav_selected)
-                            .text_color(tokens.text.primary)
-                    })
-                    .when(!selected, |item| {
-                        item.text_color(tokens.text.secondary)
-                            .hover(|style| style.bg(component_tokens.nav_hover))
-                    })
-                    .cursor_pointer()
-                    .child(tab.icon.view(
-                        rems(1.),
-                        if selected {
-                            tokens.text.primary
-                        } else {
-                            tokens.text.secondary
-                        },
-                    ))
-                    // 收起时只留图标，名称放进提示。
-                    .when(collapsed && progress.is_none(), |item| {
-                        item.kp_tooltip(title.clone())
-                    })
-                    .when(show_labels, |item| {
-                        item.child(
-                            div()
-                                .whitespace_nowrap()
-                                .opacity(label_opacity)
-                                .child(title),
-                        )
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.navigate_to(id, None, window, cx);
-                    })),
+                nav_item(
+                    id.key().into(),
+                    text::tab_title_of(tab),
+                    tab.icon,
+                    selected,
+                    false,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.navigate_to(id, None, window, cx);
+                })),
             );
+            if !extensions {
+                continue;
+            }
+            // 已安装的扩展各占一个二级项，点开是它自己的设置页。
+            for extension in extensions::installed_pages(cx) {
+                let selected = open_extension.as_deref() == Some(extension.as_str());
+                nav = nav.child(
+                    nav_item(
+                        gpui::SharedString::from(format!("extension-page-{extension}")).into(),
+                        extensions::name(&extension),
+                        extensions::icon(&extension),
+                        selected,
+                        true,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_extension_page(extension.clone(), window, cx);
+                    })),
+                );
+            }
         }
         let (toggle_icon, toggle_label) = if collapsed {
             (
@@ -3178,29 +3299,25 @@ impl Preferences {
     ) {
         let opening = self.tab != tab;
         self.tab = tab;
+        self.extension_page = None;
         self.shortcut_detail = None;
         self.shortcut_conflict = None;
-        if self.recording.is_some() {
-            self.finish_recording(cx);
-        }
-        if self.recording_panel.is_some() {
-            self.finish_panel_recording(cx);
-        }
+        self.stop_recording(cx);
         self.search.set_value("", window, cx);
         self.scroll.set_offset(gpui::point(px(0.), px(0.)));
         if let Some(id) = setting_id {
             let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
             if schema::tabs(portable)
-                .into_iter()
+                .iter()
                 .filter(|page| page.id == tab)
-                .flat_map(|page| page.sections)
-                .flat_map(|section| section.settings)
+                .flat_map(|page| &page.sections)
+                .flat_map(|section| &section.settings)
                 .any(|setting| setting.id == id && setting.is_advanced(&self.settings))
             {
                 self.advanced_expanded.insert(tab);
             }
             if id == "ocr.status" {
-                self.extensions_expanded.insert("ocr".to_owned());
+                self.extension_page = Some("ocr".to_owned());
             }
             if let Some(anchor) = self.setting_anchors.get(id).cloned() {
                 // 页面和折叠内容需先完成布局，不能使用上一页或搜索结果的锚点位置。
@@ -3218,6 +3335,12 @@ impl Preferences {
             self.refresh_image_text(cx);
         }
         cx.notify();
+    }
+
+    /// 打开侧栏二级菜单里一个扩展自己的页面。
+    fn open_extension_page(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate_to(TabId::Extensions, None, window, cx);
+        self.extension_page = Some(id);
     }
 
     /// 父开关关闭的子项仍收起；搜索不受页面或更多选项折叠的限制。
@@ -3302,6 +3425,15 @@ impl Preferences {
                 ))
             )
             .into();
+        }
+        if setting.id == "about.checkUpdates" {
+            let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+            let portable = core_host::core(cx).is_some_and(|core| core.paths().is_portable());
+            description = if portable {
+                format!("{version} · {}", i18n::t("preferences:about.portable")).into()
+            } else {
+                version.into()
+            };
         }
         let path = setting.path;
         let settings_json = values::to_json(&self.settings);
@@ -3495,9 +3627,13 @@ impl Preferences {
         if let Some(id) = detail {
             blocks.push(self.render_shortcut_detail(id, cx));
         }
+        let extension = self.open_extension(cx).filter(|_| !searching);
+        if let Some(status) = &extension {
+            blocks.extend(self.render_extension_page(status, cx));
+        }
         for tab in tabs
             .iter()
-            .filter(|_| detail.is_none())
+            .filter(|_| detail.is_none() && extension.is_none())
             .filter(|tab| page_in_scope(tab.id, self.tab, &query))
         {
             // 默认区只剩一个分组时，标题和页面标题重复，不显示。
@@ -3759,6 +3895,8 @@ impl Preferences {
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(if searching {
                                 i18n::t("preferences:search.title")
+                            } else if let Some(status) = &extension {
+                                extensions::name(&status.id)
                             } else {
                                 text::tab_title(self.tab)
                             }),
@@ -4639,10 +4777,48 @@ fn segment(
 struct SourceAppsDialog {
     apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
     selected: Vec<String>,
+    /// 应用 id 与显示在它下面的提示（自动分组：已被别的规则收走）。
+    claimed: Vec<(String, gpui::SharedString)>,
     icons: gpui::Entity<KpImageCache>,
+    search: TextInput,
+    _search_subscription: Subscription,
+}
+
+/// 应用列表的搜索过滤：按名称或路径做不区分大小写的包含匹配，空查询全部命中。
+pub(super) fn app_matches_query(app: &kwikpaste_core::ops::ClipboardAppView, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+
+    query.is_empty()
+        || app.name.to_lowercase().contains(&query)
+        || app.id.to_lowercase().contains(&query)
 }
 
 impl SourceAppsDialog {
+    pub(super) fn new(
+        apps: Vec<kwikpaste_core::ops::ClipboardAppView>,
+        selected: Vec<String>,
+        claimed: Vec<(String, gpui::SharedString)>,
+        icons: gpui::Entity<KpImageCache>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let search = TextInput::new(
+            i18n::t("preferences:schema.settings.source.appTransfer.searchPlaceholder"),
+            window,
+            cx,
+        );
+        let search_subscription = search.on_change(cx, |_, _, cx| cx.notify());
+
+        Self {
+            apps,
+            selected,
+            claimed,
+            icons,
+            search,
+            _search_subscription: search_subscription,
+        }
+    }
+
     fn set_selected(&mut self, id: &str, checked: bool, cx: &mut Context<Self>) {
         app_ids::set_app_listed(&mut self.selected, id, checked);
         cx.notify();
@@ -4892,7 +5068,14 @@ impl Render for SourceAppsDialog {
     /// 浅灰列表块里每行一个应用：勾选框、应用图标和应用名，下面一行灰色小字是路径（同引导的忽略应用）。
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
-        let apps = self.apps.clone();
+        let search = self.search.clone();
+        let query = search.value(cx);
+        let apps: Vec<_> = self
+            .apps
+            .iter()
+            .filter(|app| app_matches_query(app, &query))
+            .cloned()
+            .collect();
         let selected = self.selected.clone();
         let rows = apps.iter().enumerate().map(|(index, app)| {
             let id = app.id.clone();
@@ -4903,6 +5086,11 @@ impl Render for SourceAppsDialog {
                 app.name.clone()
             };
             let path = (!app.name.is_empty()).then(|| id.clone());
+            let claimed = self
+                .claimed
+                .iter()
+                .find(|(claimed, _)| app_ids::same_app(claimed, &id))
+                .map(|(_, hint)| hint.clone());
             let entity = cx.entity().downgrade();
             div()
                 .flex()
@@ -4967,12 +5155,26 @@ impl Render for SourceAppsDialog {
                         .truncate()
                         .child(path)
                 }))
+                .children(claimed.map(|hint| {
+                    div()
+                        .pl(space(13.))
+                        .kp_text(TextSize::Xs)
+                        .text_color(tokens.status.warning.solid)
+                        .child(hint)
+                }))
         });
         div()
-            .id("excluded-apps-list")
-            .max_h(rems(24.))
-            .overflow_y_scroll()
-            .child(list_tile(tokens).children(rows))
+            .flex()
+            .flex_col()
+            .gap(space(2.))
+            .child(Input::new(&search))
+            .child(
+                div()
+                    .id("excluded-apps-list")
+                    .max_h(rems(24.))
+                    .overflow_y_scroll()
+                    .child(list_tile(tokens).children(rows)),
+            )
     }
 }
 
@@ -4985,8 +5187,10 @@ fn add_app_button(
         "source-app-add",
         i18n::t("preferences:schema.settings.source.appTransfer.addApp"),
     )
+    .with_icon(IconName::Plus)
     .ghost()
-    .on_click(move |_, _, cx| {
+    .on_click(move |_, window, cx| {
+        let window_handle = window.window_handle();
         let prompt = clipboard::view::pin::prompt_for_paths(
             gpui::PathPromptOptions {
                 files: true,
@@ -5015,7 +5219,18 @@ fn add_app_button(
                         cx.notify();
                     });
                 }
-                Err(error) => log::warn!("could not add source app: {error:#}"),
+                Err(error) => {
+                    log::warn!("could not add source app: {error:#}");
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        toast::show(
+                            Toast::error(i18n::t(
+                                "preferences:schema.settings.source.appTransfer.notAnApp",
+                            )),
+                            window,
+                            cx,
+                        );
+                    });
+                }
             }
         })
         .detach();
@@ -5037,11 +5252,7 @@ fn open_source_apps_dialog(
     let icons = cx.new(|_| KpImageCache::with_capacity(128));
     let dialog = cx.new(|cx| {
         cx.observe(&icons, |_, _, cx| cx.notify()).detach();
-        SourceAppsDialog {
-            apps,
-            selected: excluded,
-            icons,
-        }
+        SourceAppsDialog::new(apps, excluded, Vec::new(), icons, window, cx)
     });
     let content = dialog.clone();
     let adder = dialog.downgrade();
@@ -5114,10 +5325,11 @@ struct RetentionRuleEditor {
     unused_only: bool,
     keep_value: NumberInputState,
     keep_unit: SelectState,
+    _min_size_subscription: Subscription,
 }
 
 impl RetentionRuleEditor {
-    fn new(rule: &RetentionRule, window: &mut Window, cx: &mut App) -> Self {
+    fn new(rule: &RetentionRule, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let keep_value = NumberInputState::new(
             u64::from(rule.keep.value),
             0,
@@ -5126,32 +5338,27 @@ impl RetentionRuleEditor {
             cx,
         );
         let keep_unit = SelectState::new(
-            ["minutes", "hours", "days", "weeks", "months", "forever"]
-                .into_iter()
-                .map(|key| {
-                    SelectOption::new(
-                        key,
-                        i18n::t(&format!("preferences:schema.retentionUnits.{key}")),
-                    )
-                })
-                .collect(),
+            retention_unit_options(),
             Some(retention_unit_key(rule.keep.unit)),
             window,
             cx,
         );
+        let min_size = NumberInputState::new(
+            u64::from(rule.min_size_kb),
+            0,
+            u64::from(u32::MAX),
+            window,
+            cx,
+        );
+        let min_size_subscription = min_size.on_commit(window, cx, |_, _, _, cx| cx.notify());
         Self {
             categories: rule.categories.clone(),
-            min_size: NumberInputState::new(
-                u64::from(rule.min_size_kb),
-                0,
-                u64::from(u32::MAX),
-                window,
-                cx,
-            ),
+            min_size,
             sensitive_only: rule.sensitive_only,
             unused_only: rule.unused_only,
             keep_value,
             keep_unit,
+            _min_size_subscription: min_size_subscription,
         }
     }
 
@@ -5179,6 +5386,8 @@ impl Render for RetentionRuleEditor {
             .keep_unit
             .selected_value(cx)
             .is_some_and(|value| value.as_ref() == "forever");
+        let min_size_kb = self.min_size.clamped(cx);
+        let files_no_size = min_size_kb > 0 && self.categories.contains(&ContentCategory::Files);
         let categories = ContentCategory::ALL.into_iter().map(|category| {
             let checked = self.categories.contains(&category);
             let entity = entity.clone();
@@ -5245,11 +5454,37 @@ impl Render for RetentionRuleEditor {
                 i18n::t("preferences:retentionRules.form.minSize"),
                 div()
                     .flex()
+                    .flex_col()
+                    .gap(space(2.))
                     .child(
-                        NumberInput::new(&self.min_size)
-                            .width(CONTROL_WIDTH)
-                            .suffix("KB"),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(space(2.))
+                            .child(
+                                NumberInput::new(&self.min_size)
+                                    .width(CONTROL_WIDTH)
+                                    .suffix("KB"),
+                            )
+                            .when(min_size_kb == 0, |row| {
+                                row.child(
+                                    div()
+                                        .kp_text(TextSize::Xs)
+                                        .text_color(tokens.text.muted)
+                                        .child(i18n::t(
+                                            "preferences:retentionRules.form.minSizePlaceholder",
+                                        )),
+                                )
+                            }),
                     )
+                    .when(files_no_size, |field| {
+                        field.child(
+                            div()
+                                .kp_text(TextSize::Xs)
+                                .text_color(tokens.text.muted)
+                                .child(i18n::t("preferences:retentionRules.form.filesNoSize")),
+                        )
+                    })
                     .into_any_element(),
                 tokens,
             ))
@@ -5361,6 +5596,26 @@ fn retention_unit_key(unit: RetentionUnit) -> &'static str {
     }
 }
 
+fn retention_unit_options() -> Vec<SelectOption> {
+    ["minutes", "hours", "days", "weeks", "months", "forever"]
+        .into_iter()
+        .map(|key| {
+            SelectOption::new(
+                key,
+                i18n::t(&format!("preferences:schema.retentionUnits.{key}")),
+            )
+        })
+        .collect()
+}
+
+/// 下拉设置的候选项（值、当前语言的文字）。
+pub(super) fn select_options(setting: &Setting) -> Vec<SelectOption> {
+    text::options(setting)
+        .into_iter()
+        .map(|(value, label)| SelectOption::new(value, label))
+        .collect()
+}
+
 fn startup_group_label(value: &str) -> gpui::SharedString {
     i18n::t(&format!(
         "preferences:schema.settings.window.selectGroupOnOpen.options.{value}"
@@ -5409,8 +5664,8 @@ fn retention_rule_summary(rule: &RetentionRule) -> gpui::SharedString {
     parts.join(" · ").into()
 }
 
-/// 设置行里的列表块（采集顺序、清理规则）：嵌在分组卡片里，用内容底色加细边框和小圆角，
-/// 行间细分隔线由调用方画。
+/// 设置行里的列表块（采集顺序、清理规则）：嵌在分组卡片里，只有细边框和小圆角、沿用卡片的底色
+/// （铺不透明的面板色在系统材质上会比卡片更深），行间细分隔线由调用方画。
 fn list_tile(tokens: &SemanticTokens) -> gpui::Div {
     div()
         .flex()
@@ -5418,7 +5673,6 @@ fn list_tile(tokens: &SemanticTokens) -> gpui::Div {
         .w_full()
         .overflow_hidden()
         .rounded(theme::radius::LG)
-        .bg(tokens.surface.panel)
         .border_1()
         .border_color(tokens.border.subtle)
 }
@@ -5568,7 +5822,8 @@ fn section_block(
                     .child(
                         div()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.text.muted)
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(tokens.text.secondary)
                             .child(title),
                     )
                     .children(action),
@@ -5610,6 +5865,7 @@ fn platform_label(platform: kwikpaste_core::db::models::Platform) -> &'static st
 
 impl Render for Preferences {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.relabel_options(window, cx);
         div()
             .size_full()
             .track_focus(&self.focus)
@@ -5629,7 +5885,9 @@ impl Render for Preferences {
                     } else if this.shortcut_detail.is_some() {
                         this.close_shortcut_detail(cx);
                     } else {
-                        window.remove_window();
+                        this.commit_focused_input(window, cx);
+                        // 提交事件要在窗口还在时送达，关窗排在它后面。
+                        cx.defer_in(window, |_, window, _| window.remove_window());
                     }
                     return;
                 }
@@ -5911,15 +6169,14 @@ pub(crate) fn shortcut_recorder_button(
     let problem = shortcut_recorder_problem(id, current, settings, recording, cx);
     let label: gpui::SharedString = if recording {
         i18n::t("preferences:controls.recordShortcut")
-    } else if problem.is_some() {
-        format!("{} ⚠", text::format_shortcut(current)).into()
     } else if current.trim().is_empty() {
         i18n::t("preferences:controls.shortcutNotSet")
     } else {
         text::format_shortcut(current).into()
     };
     Button::new(format!("shortcut-{id}"), label)
-        .when(problem.is_some(), |button| button.danger())
+        // 冲突用描边提示，原因在悬停提示和行内说明里：红色实心按钮看起来像「删除」。
+        .when(problem.is_some(), |button| button.danger_outline())
         .tooltip(problem.unwrap_or_else(|| i18n::t("preferences:controls.recordShortcut")))
 }
 
@@ -5931,7 +6188,11 @@ fn page_in_scope(tab: TabId, current: TabId, query: &str) -> bool {
 /// 搜索与普通页面共用父子可见性，不读取更多选项的展开状态。
 fn search_setting_matches(setting: &Setting, settings: &Settings, query: &str) -> bool {
     !setting.is_collapsed(settings)
-        && search_matches(query, &text::setting_title(setting), setting.keywords)
+        && (search_matches(query, &text::setting_title(setting), setting.keywords)
+            || search_matches(query, &text::setting_description(setting), &[])
+            || text::options(setting)
+                .iter()
+                .any(|(_, label)| search_matches(query, label, &[])))
 }
 
 /// 复杂面板在搜索结果中只提供跳转，普通设置继续使用原控件。
@@ -6066,6 +6327,27 @@ mod tests {
         assert!(!search_setting_matches(volume, &settings, "volume"));
         settings.clipboard.feedback.copy_sound = true;
         assert!(search_setting_matches(volume, &settings, "volume"));
+    }
+
+    #[test]
+    fn search_matches_descriptions_and_option_labels() {
+        use super::schema;
+        use kwikpaste_core::settings::ListDensity;
+        let tabs = schema::tabs(false);
+        let mut settings = Settings::default();
+        let find = |id: &str| {
+            tabs.iter()
+                .flat_map(|tab| &tab.sections)
+                .flat_map(|section| &section.settings)
+                .find(|setting| setting.id == id)
+                .unwrap()
+        };
+        let image_height = find("appearance.imageMaxHeight");
+        assert!(search_setting_matches(image_height, &settings, "20–100"));
+        assert!(!search_setting_matches(image_height, &settings, "zzzz"));
+        let gap = find("appearance.itemGap");
+        settings.clipboard.display.density = ListDensity::Custom;
+        assert!(search_setting_matches(gap, &settings, "12 px"));
     }
 
     #[test]

@@ -4,7 +4,7 @@ pub mod process;
 mod tests;
 
 use crate::{Core, CoreEvent, Result};
-pub use kwikpaste_ext_protocol::{OCR_PROTOCOL, WETYPE_PROTOCOL};
+pub use kwikpaste_ext_protocol::{OCR_PROTOCOL, TRANSLATE_PROTOCOL, WETYPE_PROTOCOL};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -53,6 +53,7 @@ fn known(id: &str) -> anyhow::Result<u32> {
         "ocr" => Ok(OCR_PROTOCOL),
         id if is_ocr_tier(id) => Ok(OCR_PROTOCOL),
         "wetype" => Ok(WETYPE_PROTOCOL),
+        "translate" => Ok(TRANSLATE_PROTOCOL),
         _ => anyhow::bail!("unknown extension: {id}"),
     }
 }
@@ -280,6 +281,11 @@ impl Core {
             if id == "wetype" {
                 core.0.wetype.stop().await;
             }
+            let _translate = if id == "translate" {
+                Some(core.0.translate.stop().await)
+            } else {
+                None
+            };
             let result = core
                 .0
                 .extensions
@@ -320,6 +326,11 @@ impl Core {
             if id == "wetype" {
                 core.0.wetype.stop().await;
             }
+            let _translate = if id == "translate" {
+                Some(core.0.translate.stop().await)
+            } else {
+                None
+            };
             let result = core.0.extensions.uninstall(&id);
             if id == "wetype" && result.is_ok() {
                 core.0.wetype.uninstalled();
@@ -361,6 +372,11 @@ impl Core {
             if id == "wetype" {
                 core.0.wetype.stop().await;
             }
+            let _translate = if id == "translate" {
+                Some(core.0.translate.stop().await)
+            } else {
+                None
+            };
             let result = core.0.extensions.set_enabled(&id, enabled);
             if is_ocr(&id) {
                 core.0.ocr.clear_support();

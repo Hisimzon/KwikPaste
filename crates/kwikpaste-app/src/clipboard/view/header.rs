@@ -178,6 +178,7 @@ fn filter_menu(header: &WeakEntity<Header>, window: &mut Window, cx: &mut App) -
                     filters.toggle_app(app.clone())
                 })
                 .image(image)
+                .image_placeholder(IconName::AppWindow)
                 .into()
             })
             .collect()
@@ -200,16 +201,34 @@ fn filter_menu(header: &WeakEntity<Header>, window: &mut Window, cx: &mut App) -
     .icon(IconName::FilterX)
     .disabled(filters.is_empty());
 
+    // 一级项直接写出当前选了什么：不用逐个展开子菜单才知道哪里生效。
+    let with_value = |key: &str, value: Option<SharedString>| -> SharedString {
+        match value {
+            Some(value) => format!("{} · {value}", t(key)).into(),
+            None => t(key),
+        }
+    };
+    let count = |count: usize| (count > 0).then(|| SharedString::from(count.to_string()));
+
     vec![
-        Submenu::new(t("clipboard:filter.time"), times)
-            .icon(IconName::Clock)
-            .into(),
-        Submenu::new(t("clipboard:filter.apps"), apps)
-            .icon(IconName::AppWindow)
-            .into(),
-        Submenu::new(t("clipboard:filter.type"), kinds)
-            .icon(IconName::Shapes)
-            .into(),
+        Submenu::new(
+            with_value("clipboard:filter.time", filters.since.map(since_label)),
+            times,
+        )
+        .icon(IconName::Clock)
+        .into(),
+        Submenu::new(
+            with_value("clipboard:filter.apps", count(filters.apps.len())),
+            apps,
+        )
+        .icon(IconName::AppWindow)
+        .into(),
+        Submenu::new(
+            with_value("clipboard:filter.type", count(filters.kinds.len())),
+            kinds,
+        )
+        .icon(IconName::Shapes)
+        .into(),
         MenuEntry::Separator,
         clear.into(),
     ]
@@ -231,6 +250,8 @@ pub struct Header {
     /// 这次在搜索框上按下的鼠标要进入编辑态；按在漏斗或标签上时由它们清掉（见 [`Self::press_search`]）。
     edit_press: bool,
     language: i18n::Language,
+    /// 还没发出的搜索词；防抖到点或 [`Self::take_pending_keyword`] 取走。
+    pending_keyword: Option<Arc<str>>,
     debounce: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -263,6 +284,7 @@ impl Header {
             pinned: false,
             editing: false,
             language: i18n::language(),
+            pending_keyword: None,
             debounce: None,
             edit_press: false,
             _subscriptions: subscriptions,
@@ -321,6 +343,7 @@ impl Header {
 
     /// 清空搜索框和筛选标签，取消还没发出的防抖。由调用方同步列表的筛选条件。
     pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_keyword = None;
         self.debounce = None;
         self.filters = SearchFilters::default();
         self.input.set_value("", window, cx);
@@ -516,12 +539,24 @@ impl Header {
         let keyword: Arc<str> = Arc::from(value.trim());
         // 只记长度：搜索词是用户内容，不进日志。
         log::debug!("search input changed ({} chars)", keyword.chars().count());
+        self.pending_keyword = Some(keyword);
         self.debounce = Some(cx.spawn(async move |header, cx| {
             cx.background_executor().timer(SEARCH_DEBOUNCE).await;
             header
-                .update(cx, |_, cx| cx.emit(HeaderEvent::Keyword(keyword)))
+                .update(cx, |header, cx| {
+                    if let Some(keyword) = header.pending_keyword.take() {
+                        cx.emit(HeaderEvent::Keyword(keyword));
+                    }
+                })
                 .ok();
         }));
+    }
+
+    /// 取走还没发出的搜索词并取消防抖，由调用方当场应用：防抖期间按 Enter 不能按搜索前的结果执行。
+    /// 事件要等这次更新结束才送达，所以直接返回而不是 emit。
+    pub fn take_pending_keyword(&mut self) -> Option<Arc<str>> {
+        self.debounce = None;
+        self.pending_keyword.take()
     }
 }
 
@@ -559,8 +594,10 @@ impl Render for Header {
         let chips = self.render_chips(cx);
         let filter_button = self.render_filter_button(cx);
         let tokens = theme::semantic(cx);
-        let shortcuts = crate::core_host::core(cx)
-            .map(|core| core.settings().shortcuts)
+        let shortcuts = self
+            .hints
+            .then(|| crate::core_host::core(cx).map(|core| core.settings().shortcuts))
+            .flatten()
             .unwrap_or_default();
         let hint = |action| {
             self.hints
@@ -614,8 +651,9 @@ impl Render for Header {
             // 拖动空白，留多了会把搜索框挤窄。可点徽标不属于拖动区域，macOS 的拖动会吞掉子元素点击。
             .child(
                 div()
-                    .flex_none()
-                    .w(space(2.))
+                    .flex_shrink(1.)
+                    .w(space(14.))
+                    .min_w(space(2.))
                     .self_stretch()
                     .window_drag_area(),
             )

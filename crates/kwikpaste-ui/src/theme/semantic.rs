@@ -1,7 +1,7 @@
 //! 角色化语义 token：视图描述用途，而不是选择某个原始色阶。
 
 use super::palette::{self, Palette};
-use gpui::{BoxShadow, Hsla};
+use gpui::{BoxShadow, Hsla, point, px};
 
 /// 窗口、面板、抬高层、浮层、聚光层和遮罩表面。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,7 +56,7 @@ pub struct AccentTokens {
     pub text_hover: Hsla,
     pub text_active: Hsla,
 }
-/// 一个状态的常态、悬停、按下、细微底和描边。
+/// 一个状态的常态、悬停、按下、细微底、描边和当文字用的颜色。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StatusTokens {
     pub solid: Hsla,
@@ -64,6 +64,7 @@ pub struct StatusTokens {
     pub active: Hsla,
     pub subtle: Hsla,
     pub border: Hsla,
+    pub text: Hsla,
 }
 
 /// 单项的悬停、选中、选中悬停及文字按钮状态。
@@ -110,12 +111,30 @@ pub struct StatusGroup {
     pub danger: StatusTokens,
     pub info: StatusTokens,
 }
-/// 浮层和卡片阴影。
+/// 浮层的描边环与阴影、卡片阴影。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShadowTokens {
+    pub overlay_ring: Hsla,
     pub overlay: [BoxShadow; 3],
     pub card: [BoxShadow; 3],
 }
+impl ShadowTokens {
+    /// 浮层的完整外沿：1 px 描边环加阴影，与菜单、下拉一致。
+    pub fn float(&self) -> Vec<BoxShadow> {
+        let ring = BoxShadow {
+            color: self.overlay_ring,
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(1.),
+            inset: false,
+        };
+
+        std::iter::once(ring)
+            .chain(self.overlay.iter().cloned())
+            .collect()
+    }
+}
+
 /// 从角色色板直接生成的视图语义层。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticTokens {
@@ -141,6 +160,7 @@ fn status(s: palette::StatusPalette) -> StatusTokens {
         active: s.active.hsla(),
         subtle: s.subtle.hsla(),
         border: s.border.hsla(),
+        text: s.text.hsla(),
     }
 }
 impl SemanticTokens {
@@ -151,7 +171,7 @@ impl SemanticTokens {
                 window: p.surfaces.window.hsla(),
                 panel: p.surfaces.panel.hsla(),
                 raised: p.surfaces.raised.hsla(),
-                overlay: p.surfaces.raised.hsla(),
+                overlay: p.surfaces.overlay.hsla(),
                 spotlight: p.surfaces.spotlight.hsla(),
                 mask: p.surfaces.mask.hsla(),
             },
@@ -227,6 +247,7 @@ impl SemanticTokens {
                 path: p.kinds.path.hsla(),
             },
             shadow: ShadowTokens {
+                overlay_ring: p.shadows.overlay_ring.hsla(),
                 overlay: p.shadows.overlay.map(palette::ShadowSpec::box_shadow),
                 card: p.shadows.card.map(palette::ShadowSpec::box_shadow),
             },

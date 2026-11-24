@@ -248,6 +248,7 @@ const PANEL_GROUPS: [(&str, &[PanelAction]); 4] = [
             PanelAction::NoteSelected,
             PanelAction::EditContent,
             PanelAction::SplitSelected,
+            PanelAction::TranslateSelected,
             PanelAction::OpenSelected,
             PanelAction::DeleteSelected,
             PanelAction::SelectAll,
@@ -346,7 +347,6 @@ fn dropdown_face(label: gpui::SharedString, tokens: &SemanticTokens) -> gpui::Di
         .rounded(theme::radius::MD)
         .border_1()
         .border_color(tokens.border.default)
-        .bg(tokens.surface.panel)
         .kp_text(TextSize::Sm)
         .cursor_pointer()
         .hover(|style| style.bg(tokens.fill.subtle))
@@ -1130,14 +1130,14 @@ impl Preferences {
         }
         self.recording_panel = Some(action);
         self.shortcut_conflict = None;
-        hotkey::suspend(cx);
+        hotkey::suspend(cx.entity_id(), cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
     pub(super) fn finish_panel_recording(&mut self, cx: &mut Context<Self>) {
         if self.recording_panel.take().is_some() {
-            hotkey::resume(cx);
+            hotkey::resume(cx.entity_id(), cx);
         }
         cx.notify();
     }
@@ -1190,6 +1190,7 @@ impl Preferences {
     /// 剪贴板窗口内的按键表：两列四组，可改的按键点开录制，改过的可恢复默认，固定键只显示。
     pub(super) fn render_panel_shortcuts(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let tokens = theme::semantic(cx);
+        let translate = crate::core_host::core(cx).is_some_and(|core| core.translate_enabled());
         let columns = [&PANEL_GROUPS[..2], &PANEL_GROUPS[2..]].map(|groups| {
             let mut items: Vec<gpui::AnyElement> = Vec::new();
             for (group, actions) in groups {
@@ -1202,7 +1203,10 @@ impl Preferences {
                         .child(words(&format!("panel.groups.{group}")))
                         .into_any_element(),
                 );
-                for (index, action) in actions.iter().enumerate() {
+                let listed = actions
+                    .iter()
+                    .filter(|action| translate || **action != PanelAction::TranslateSelected);
+                for (index, action) in listed.enumerate() {
                     items.push(self.render_panel_item(*action, index == 0, cx));
                 }
             }

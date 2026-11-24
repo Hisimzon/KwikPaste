@@ -5,8 +5,8 @@
 //!   可见卡片）：[`paste`]`(cx, id, plain, keep_visible)`。流程：`Core::prepare_paste` 按「粘贴时去除格式」
 //!   「粘贴文件为路径」写回剪贴板并记一次使用 → 让出前台（编辑态先把前台还给进入前的窗口；
 //!   `keep_visible` 为假时隐藏面板，固定面板时传真）→ 面板原先可见就等 50 ms → 注入粘贴键
-//!   （Windows Ctrl+V，macOS ⌘V）。列表经 `clipboard::view::host::PlatformHost` 调到这里
-//!   （`keep_visible` 先传假）；粘贴的就是列表给的 id，「当前项是不是刚复制的那条」由列表负责。
+//!   （Windows Ctrl+V，WindTerm 等少数终端 Shift+Insert；macOS ⌘V）。
+//!   列表经 `clipboard::view::host::PlatformHost` 调到这里（`keep_visible` 先传假）；粘贴的就是列表给的 id，「当前项是不是刚复制的那条」由列表负责。
 //! - **粘贴片段**（快捷信息、拆词选区）：[`paste_fragment`]，流程同上；只复制不粘贴用 [`copy_fragment`]。
 //! - **复制**（不粘贴）：[`copy`]。`Core::copy_item` 写回剪贴板；固定面板（`keep_visible`）完成复制后
 //!   释放导航键，设置「复制后隐藏窗口」打开且 `keep_visible` 为假时隐藏面板。
@@ -176,6 +176,43 @@ pub fn copy_image_text(cx: &mut App, id: String, keep_visible: bool) -> Task<Res
         }
         probe::copied(&id, false, outcome.hide_window);
         Ok(outcome)
+    })
+}
+
+/// 把译文写回剪贴板（不粘贴），隐藏规则同 [`copy`]。
+pub fn copy_translation(cx: &mut App, id: String, keep_visible: bool) -> Task<Result<CopyOutcome>> {
+    let Some(core) = core_host::core(cx).cloned() else {
+        return Task::ready(Err(core_missing()));
+    };
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let outcome = core.copy_translation(&id).await?;
+        if keep_visible {
+            cx.update(|cx| {
+                super::request(cx, PanelCommand::SetInputCapture(false));
+            });
+        } else if outcome.hide_window {
+            cx.update(|cx| {
+                super::request(cx, PanelCommand::Hide(Trigger::now(TriggerSource::Copy)));
+            });
+        }
+        probe::copied(&id, false, outcome.hide_window);
+        Ok(outcome)
+    })
+}
+
+/// 粘贴译文，流程同 [`paste`]。
+pub fn paste_translation(cx: &mut App, id: String, keep_visible: bool) -> Task<Result<()>> {
+    let Some(core) = core_host::core(cx).cloned() else {
+        return Task::ready(Err(core_missing()));
+    };
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let _phase = super::enter_phase(crate::health::Phase::Paste);
+        let started = Instant::now();
+        core.prepare_paste_translation(&id).await?;
+        let report = yield_and_inject(cx, keep_visible).await?;
+        probe::pasted("translation", &id, false, report, started.elapsed());
+        Ok(())
     })
 }
 

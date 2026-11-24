@@ -21,11 +21,12 @@ use kwikpaste_core::{
 
 use super::{
     ClipboardSource, Group, GroupInput, ImageSave, ListQuery, NoteSaved, Preview, PreviewTextView,
+    TranslationView,
     synthetic::{self, AssetSet, GenerateOptions},
 };
 use crate::clipboard::model::{
     actions::OpenTarget,
-    filter::{ListFilter, SourceApp},
+    filter::{Category, ListFilter, SourceApp},
     item::{
         FileRow, FilesPreview, ItemAction, ItemKind, ItemRef, ListItem, Platform, SubKind,
         TextSnippet,
@@ -69,7 +70,7 @@ pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
     } = &query.filter;
 
     ClipboardItemQuery {
-        kind: category.map(|kind| match kind {
+        kind: category.map(|category| match category.kind() {
             ItemKind::Text => ClipboardKind::Text,
             ItemKind::Image => ClipboardKind::Image,
             ItemKind::Files => ClipboardKind::Files,
@@ -81,9 +82,10 @@ pub fn item_query(query: &ListQuery) -> ClipboardItemQuery {
             query.hide_favorites.then_some(false)
         },
         group: Some(match category {
-            Some(ItemKind::Text) => kwikpaste_core::db::models::ClipboardGroupFilter::Text,
-            Some(ItemKind::Image) => kwikpaste_core::db::models::ClipboardGroupFilter::Image,
-            Some(ItemKind::Files) => kwikpaste_core::db::models::ClipboardGroupFilter::Files,
+            Some(Category::Text) => kwikpaste_core::db::models::ClipboardGroupFilter::Text,
+            Some(Category::Image) => kwikpaste_core::db::models::ClipboardGroupFilter::Image,
+            Some(Category::Files) => kwikpaste_core::db::models::ClipboardGroupFilter::Files,
+            Some(Category::Link) => kwikpaste_core::db::models::ClipboardGroupFilter::Link,
             None => kwikpaste_core::db::models::ClipboardGroupFilter::All,
         }),
         keyword: (!keyword.is_empty()).then(|| keyword.to_string()),
@@ -212,6 +214,21 @@ impl ClipboardSource for CoreSource {
     fn copy_image_text(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
         let core = self.core.clone();
         async move { Ok(core.copy_image_text(&id).await?.hide_window) }.boxed()
+    }
+
+    fn translate(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>> {
+        let core = self.core.clone();
+        async move { Ok(core.translate_item(&id).await?) }.boxed()
+    }
+
+    fn copy_translation(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        let core = self.core.clone();
+        async move { Ok(core.copy_translation(&id).await?.hide_window) }.boxed()
+    }
+
+    fn translation(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<TranslationView>> {
+        let core = self.core.clone();
+        async move { Ok(core.translation_view(&id).await?) }.boxed()
     }
 
     fn toggle_favorite(&self, id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
@@ -654,6 +671,8 @@ impl From<ClipboardItemView> for ListItem {
                 text: shared(snippet.text),
                 matched: snippet.matched,
             }),
+            translation: view.translation.map(shared),
+            translating: view.translating,
         }
     }
 }
@@ -684,6 +703,9 @@ impl From<ClipboardAction> for ItemAction {
             ClipboardAction::SaveImage => Self::SaveImage,
             ClipboardAction::CopyImageText => Self::CopyImageText,
             ClipboardAction::SplitWords => Self::SplitWords,
+            ClipboardAction::Translate => Self::Translate,
+            ClipboardAction::CopyTranslation => Self::CopyTranslation,
+            ClipboardAction::PasteTranslation => Self::PasteTranslation,
             ClipboardAction::OpenLink => Self::OpenLink,
             ClipboardAction::SendEmail => Self::SendEmail,
             ClipboardAction::RevealInFinder => Self::RevealInFinder,
@@ -831,7 +853,7 @@ mod tests {
             offset: 0,
             limit: 0,
             filter: ListFilter {
-                category: Some(ItemKind::Image),
+                category: Some(Category::Image),
                 ..ListFilter::default()
             },
             sort: Default::default(),

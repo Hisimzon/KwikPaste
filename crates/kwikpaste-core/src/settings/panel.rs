@@ -14,6 +14,8 @@ pub enum PanelAction {
     NoteSelected,
     EditContent,
     SplitSelected,
+    /// 翻译当前项（翻译扩展启用时）。
+    TranslateSelected,
     OpenSelected,
     DeleteSelected,
     SelectAll,
@@ -24,7 +26,7 @@ pub enum PanelAction {
     ToggleRange,
     CreateGroup,
     PreviewSelected,
-    /// 当前图片在独立窗口里看大图。
+    /// 查看当前项：图片在独立窗口里看大图，文本打开内容编辑窗。
     ViewImage,
     PinWindow,
     ShowShortcuts,
@@ -33,7 +35,7 @@ pub enum PanelAction {
 }
 
 impl PanelAction {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::PasteSelected,
         Self::PasteSelectedPlain,
         Self::PasteNth,
@@ -43,6 +45,7 @@ impl PanelAction {
         Self::NoteSelected,
         Self::EditContent,
         Self::SplitSelected,
+        Self::TranslateSelected,
         Self::OpenSelected,
         Self::DeleteSelected,
         Self::SelectAll,
@@ -71,6 +74,7 @@ impl PanelAction {
             Self::NoteSelected => "noteSelected",
             Self::EditContent => "editContent",
             Self::SplitSelected => "splitSelected",
+            Self::TranslateSelected => "translateSelected",
             Self::OpenSelected => "openSelected",
             Self::DeleteSelected => "deleteSelected",
             Self::SelectAll => "selectAll",
@@ -81,7 +85,7 @@ impl PanelAction {
             Self::ToggleRange => "toggleRange",
             Self::CreateGroup => "createGroup",
             Self::PreviewSelected => "previewSelected",
-            Self::ViewImage => "viewImage",
+            Self::ViewImage => "viewItem",
             Self::PinWindow => "pinWindow",
             Self::ShowShortcuts => "showShortcuts",
             Self::OpenPreference => "openPreference",
@@ -100,9 +104,14 @@ impl PanelAction {
                 | Self::SwitchCategory
                 | Self::SwitchCustomGroup
                 | Self::PreviewSelected
-                | Self::ViewImage
                 | Self::ClosePreviewFilterWindow
         )
+    }
+
+    /// 自定义按键上线之后才新增的动作：默认键是“软”的，别的动作已经占用它时让位，
+    /// 免得老用户的设置因为按键重复而保存不了。
+    const fn soft_default(self) -> bool {
+        matches!(self, Self::TranslateSelected)
     }
 
     /// 默认 GPUI 按键；第 N 项粘贴只返回修饰键前缀，数字由运行时展开。
@@ -117,6 +126,7 @@ impl PanelAction {
             Self::NoteSelected => &["secondary-m"],
             Self::EditContent => &["secondary-e"],
             Self::SplitSelected => &["secondary-s"],
+            Self::TranslateSelected => &["secondary-l"],
             Self::OpenSelected => &["secondary-o"],
             Self::DeleteSelected if cfg!(target_os = "macos") => {
                 &["secondary-backspace", "delete", "secondary-delete"]
@@ -130,7 +140,7 @@ impl PanelAction {
             Self::ToggleRange => &["secondary-q"],
             Self::CreateGroup => &["secondary-n"],
             Self::PreviewSelected => &["space"],
-            // 固定键：可改键位只能是 Mod 组合或 Enter / Delete / F 键，用户覆盖不会与它重复。
+            // 默认键不在可录入集合里（由列表的按下监听处理），用户覆盖不会与它重复。
             Self::ViewImage => &["shift-space"],
             Self::PinWindow => &["secondary-p"],
             Self::ShowShortcuts => &["secondary-k"],
@@ -167,6 +177,9 @@ pub fn effective_panel_keys(shortcuts: &Shortcuts, action: PanelAction) -> Vec<S
             vec![value.clone()]
         };
     }
+    if action.soft_default() && default_claimed(shortcuts, action) {
+        return Vec::new();
+    }
     if action == PanelAction::PasteNth {
         return expand_nth("secondary");
     }
@@ -175,6 +188,18 @@ pub fn effective_panel_keys(shortcuts: &Shortcuts, action: PanelAction) -> Vec<S
         .iter()
         .map(|key| (*key).to_owned())
         .collect()
+}
+
+/// 软默认键是否已被别的动作的有效覆盖占用。
+fn default_claimed(shortcuts: &Shortcuts, action: PanelAction) -> bool {
+    action.default_keys().iter().any(|key| {
+        shortcuts.panel.iter().any(|(id, value)| {
+            value == key
+                && PanelAction::from_id(id).is_some_and(|other| {
+                    other != action && other.editable() && override_allowed(other, value)
+                })
+        })
+    })
 }
 
 /// 只接收规范小写键位，避免吞掉普通输入或覆盖固定导航键。
@@ -297,7 +322,9 @@ pub fn panel_key_conflict(
         vec![keystroke.to_owned()]
     };
     for other in PanelAction::ALL {
+        let soft = other.soft_default() && !shortcuts.panel.contains_key(other.id());
         if other != action
+            && !soft
             && effective_panel_keys(shortcuts, other)
                 .iter()
                 .any(|key| candidates.contains(key))
@@ -404,6 +431,26 @@ mod tests {
     }
 
     #[test]
+    fn view_image_can_be_rebound_and_unbound() {
+        let mut shortcuts = Shortcuts::default();
+        assert_eq!(
+            effective_panel_keys(&shortcuts, PanelAction::ViewImage),
+            ["shift-space"]
+        );
+        shortcuts
+            .panel
+            .insert("viewItem".into(), "secondary-shift-v".into());
+        assert_eq!(
+            effective_panel_keys(&shortcuts, PanelAction::ViewImage),
+            ["secondary-shift-v"]
+        );
+        assert!(validate_panel_shortcuts(&shortcuts).is_ok());
+        shortcuts.panel.insert("viewItem".into(), String::new());
+        assert!(effective_panel_keys(&shortcuts, PanelAction::ViewImage).is_empty());
+        assert!(validate_panel_shortcuts(&shortcuts).is_ok());
+    }
+
+    #[test]
     fn allowed_keys_and_duplicate_rejection() {
         for key in [
             "secondary-shift-b",
@@ -442,6 +489,34 @@ mod tests {
             .panel
             .insert("favoriteSelected".into(), "shift-b".into());
         assert!(validate_panel_shortcuts(&shortcuts).is_err());
+    }
+
+    #[test]
+    fn translate_default_yields_to_an_existing_override() {
+        let mut shortcuts = Shortcuts::default();
+        assert_eq!(
+            effective_panel_keys(&shortcuts, PanelAction::TranslateSelected),
+            ["secondary-l"]
+        );
+        // 默认键不算冲突：别的动作可以直接改成 Mod+L。
+        assert_eq!(
+            panel_key_conflict(&shortcuts, PanelAction::FavoriteSelected, "secondary-l"),
+            None
+        );
+        // 升级前就把别的动作改成 Mod+L 的用户：翻译让位，设置照常能保存。
+        shortcuts
+            .panel
+            .insert("favoriteSelected".into(), "secondary-l".into());
+        assert!(effective_panel_keys(&shortcuts, PanelAction::TranslateSelected).is_empty());
+        assert!(validate_panel_shortcuts(&shortcuts).is_ok());
+        // 用户给翻译另设的键照常参与冲突检查。
+        shortcuts
+            .panel
+            .insert("translateSelected".into(), "secondary-j".into());
+        assert_eq!(
+            panel_key_conflict(&shortcuts, PanelAction::NoteSelected, "secondary-j"),
+            Some(ShortcutOwner::Panel(PanelAction::TranslateSelected))
+        );
     }
 
     #[test]

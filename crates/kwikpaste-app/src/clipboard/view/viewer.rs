@@ -590,6 +590,12 @@ impl ImageViewer {
         }
     }
 
+    fn pin_to_screen(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.current_id() {
+            super::screen_pin::open_image(self.source.clone(), self.host.clone(), id, cx);
+        }
+    }
+
     fn open_external(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(original) = &self.original {
             cx.open_with_system(&original.path);
@@ -977,10 +983,8 @@ impl ImageViewer {
             .gap(space(0.5))
             .p(space(1.))
             .rounded(radius::LG)
-            .bg(tokens.surface.raised)
-            .border_1()
-            .border_color(tokens.border.default)
-            .shadow_md()
+            .bg(tokens.surface.overlay)
+            .shadow(tokens.shadow.float())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(self.icon_button(
                 "viewer-zoom-out",
@@ -1056,6 +1060,14 @@ impl ImageViewer {
                 cx,
             ))
             .child(self.icon_button(
+                "viewer-pin",
+                IconName::PictureInPicture,
+                "preview:viewer.pinToScreen",
+                None,
+                Self::pin_to_screen,
+                cx,
+            ))
+            .child(self.icon_button(
                 "viewer-open",
                 IconName::ExternalLink,
                 "preview:viewer.openExternal",
@@ -1093,9 +1105,8 @@ impl ImageViewer {
             .child(
                 div()
                     .rounded(radius::MD)
-                    .bg(tokens.surface.raised)
-                    .border_1()
-                    .border_color(tokens.border.default)
+                    .bg(tokens.surface.overlay)
+                    .shadow(tokens.shadow.float())
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(self.icon_button(
                         id,

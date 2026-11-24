@@ -11,13 +11,15 @@
     "categories": {
       "files": "文件",
       "image": "图片",
+      "link": "链接",
       "text": "文本"
     },
     "category": "暂无{{category}}记录",
+    "clearFilters": "清除筛选条件",
     "favoriteCategory": "暂无收藏的{{category}}记录",
     "favorites": "暂无收藏记录",
     "filtered": "没有符合筛选条件的记录",
-    "group": "「{{group}}」分组暂无相关记录",
+    "group": "「{{group}}」分组暂无记录",
     "groupCategory": "「{{group}}」分组下暂无{{category}}记录",
     "groupFallback": "该分组",
     "groupFavoriteCategory": "「{{group}}」分组下暂无收藏的{{category}}记录",
@@ -72,18 +74,22 @@
     "hide": "隐藏分组",
     "icon": "图标",
     "image": "图片",
+    "link": "链接",
     "manage": "管理分组",
+    "manageHint": "勾选的分组显示在分组栏，拖动调整顺序",
     "more": "更多分组",
+    "moreActions": "更多操作",
     "name": "名称",
     "namePlaceholder": "输入分组名称",
     "nameRequired": "请输入名称",
     "removeIcon": "删除自定义图标",
+    "showInBar": "在分组栏显示「{{name}}」",
     "text": "文本",
     "useCustomIcon": "使用自定义 SVG"
   },
   "header": {
     "pin": "固定窗口",
-    "searchPlaceholder": "搜索剪贴板...",
+    "searchPlaceholder": "搜索剪贴板…",
     "unpin": "取消固定",
     "updateAvailable": "有新版本 v{{version}}，点击更新",
     "updateBadge": "新版本"
@@ -92,6 +98,7 @@
     "addNote": "添加备注",
     "copy": "复制",
     "copyImageText": "复制图中文字",
+    "copyTranslation": "复制译文",
     "delete": "删除",
     "editContent": "编辑内容",
     "editNote": "编辑备注",
@@ -102,7 +109,9 @@
     "pasteAsFile": "粘贴为文件",
     "pasteAsPath": "粘贴为路径",
     "pasteAsPlainText": "粘贴为纯文本",
+    "pasteTranslation": "粘贴译文",
     "pinItem": "置顶",
+    "pinToScreen": "贴到屏幕",
     "restoreOriginal": "恢复原文",
     "revealInExplorer": "在资源管理器中显示",
     "revealInFinder": "在访达中显示",
@@ -110,17 +119,18 @@
     "select": "多选",
     "sendEmail": "发送邮件",
     "splitWords": "拆词",
+    "translate": "翻译",
     "unfavorite": "取消收藏",
     "unpinItem": "取消置顶",
     "viewImage": "查看大图"
   },
   "note": {
-    "placeholder": "为这条记录添加备注...",
+    "placeholder": "为这条记录添加备注…",
     "title": "编辑备注"
   },
   "origin": {
     "fromDevice": "来自 {{name}}",
-    "fromWeType": "来自 微信输入法 · {{name}}"
+    "fromWeType": "来自微信输入法 · {{name}}"
   },
   "quickActions": {
     "copy": "复制",
@@ -131,7 +141,7 @@
     "openLink": "打开链接",
     "paste": "粘贴",
     "pastePath": "粘贴为路径",
-    "pastePlain": "纯文本粘贴",
+    "pastePlain": "粘贴为纯文本",
     "pinItem": "置顶",
     "pinItemActive": "取消置顶",
     "reveal": "在文件管理器中显示",
@@ -144,6 +154,7 @@
     "clear": "取消全选",
     "delete": "删除",
     "exit": "取消",
+    "exitWithKey": "取消（{{key}}）",
     "hint": "点击选择，按住 Shift 连选",
     "paste": "粘贴",
     "protected": "收藏或置顶记录受删除保护，可在设置里允许删除",
@@ -151,7 +162,7 @@
     "selected": "已选 {{count}} 项"
   },
   "shortcuts": {
-    "closePreviewFilterWindow": "关闭预览 / 筛选 / 窗口",
+    "closePreviewFilterWindow": "返回上一层 / 关闭窗口",
     "copySelected": "复制选中项",
     "createGroup": "新增分组",
     "deleteSelected": "删除选中项",
@@ -160,14 +171,19 @@
     "focusSearch": "聚焦搜索框",
     "navigate": "上下导航",
     "noteSelected": "添加 / 编辑备注",
-    "openPreference": "打开偏好设置窗口",
+    "openPreference": "打开偏好设置",
     "openSelected": "打开链接 / 邮箱 / 文件位置",
-    "pasteNth": "粘贴前 10 项",
+    "pasteNth": "粘贴第 1–10 项",
     "pasteSelected": "粘贴选中项",
     "pasteSelectedPlain": "粘贴选中项为纯文本",
     "pinSelected": "置顶 / 取消置顶",
     "pinWindow": "固定 / 取消固定窗口",
     "previewSelected": "按住预览选中项",
+    "sections": {
+      "item": "当前项",
+      "navigation": "导航与筛选",
+      "window": "窗口"
+    },
     "selectAll": "全选 / 取消全选",
     "showShortcuts": "显示快捷键",
     "splitSelected": "拆词选中项",
@@ -175,7 +191,15 @@
     "switchCustomGroup": "切换自定义分组",
     "title": "键盘快捷键",
     "toggleRange": "切换全部 / 收藏",
-    "viewImage": "查看大图"
+    "translateSelected": "翻译选中项",
+    "viewItem": "查看大图 / 编辑文本"
+  },
+  "translation": {
+    "pending": "翻译中…",
+    "providers": {
+      "transmart": "腾讯交互翻译",
+      "volc": "火山翻译"
+    }
   },
   "types": {
     "color": "颜色",

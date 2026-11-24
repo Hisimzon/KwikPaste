@@ -22,7 +22,7 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// 已发布（含 2.0 新增）迁移的 sha384：LF 是 macOS 检出的字节，CRLF 是 Windows 检出的字节。
 /// 用户库的 `_sqlx_migrations` 里存的就是这两种之一，对不上的话存量用户启动即失败；
 /// 跨平台覆盖导入备份时按这张表换算（[`adopt_published_checksums`]）。新增迁移要在这里补上两种值。
-pub(crate) const PUBLISHED: [(i64, &str, &str); 11] = [
+pub(crate) const PUBLISHED: [(i64, &str, &str); 12] = [
     (
         1,
         "bfa656aa68eed66f8dab5bacb9efa4bafeb11713fd417239e05f7b4c5757330fae5eafeeb138771c6d18785670c44b05",
@@ -73,13 +73,17 @@ pub(crate) const PUBLISHED: [(i64, &str, &str); 11] = [
         "63a530790e242038e85438c22231ae5a4c060933c74b8805cf570e9a04545cc5ecaf627eb8e4ce413770dd4cfb66cd2c",
         "492c7ed37d773eafb11c932dab38f91a7bbc92b93c642b89e25881cd9d28dfc2d9e60be19475ce5c26cf772d45fbe163",
     ),
+    (
+        11,
+        "8ad7abd5b78288ce841f574c94235849375ea9cf73698c26928b9ca124a29f1ce42172dffbbab4f803eab186c3c466d0",
+        "5488a40f3acd7c879f5f1de680a70d4a6b40461acc3a9a53dd3bc4d385501fef61c07b700cc1771888af60e814b2581b",
+    ),
     // 本地新增的拼音索引迁移从 0100 起，避开上游后续新增迁移占用的编号。
     (
         100,
         "aa7f4f07fd1025a0a5bcde295839fa729d11be2030ea83d6b5e66e021c3451bb36ed1760a69444792f03e1b4fb186748",
         "dc559c2b9265035b3c7aa8aaa4224fb7720a6f823c60265e5c43db7653ab6f188c0b975bbb8b048bea717480881389ad",
     ),
-
 ];
 
 const LEGACY_PINYIN_MIGRATION_VERSION: i64 = 9;

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use kwikpaste_core::settings::PanelAction;
 
 use gpui::{
-    AnyElement, App, Context, ElementId, InteractiveElement as _, IntoElement, MouseButton,
+    AnyElement, Context, ElementId, InteractiveElement as _, IntoElement, MouseButton,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, div,
     prelude::FluentBuilder as _, radians,
 };
@@ -109,10 +109,14 @@ impl ClipboardList {
         &self,
         item: &Arc<ListItem>,
         actions: Vec<QuickAction>,
+        can_delete: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tokens = theme::semantic(cx);
+        let disabled_opacity = theme::components(cx).quick_action.disabled_opacity;
         let buttons = actions.into_iter().map(|action| {
+            // 受删除保护：删除按钮留在原位置灰，提示里说明原因。
+            let protected = action == QuickAction::Delete && !can_delete;
             let copied = is_copy(action)
                 && self
                     .copied
@@ -134,9 +138,16 @@ impl ClipboardList {
                 .items_center()
                 .justify_center()
                 .rounded(radius::SM)
-                .cursor_pointer()
                 .text_color(color)
-                .hover(move |style| style.bg(tokens.fill.subtle).text_color(hover_color))
+                .map(|button| {
+                    if protected {
+                        button.cursor_default().opacity(disabled_opacity)
+                    } else {
+                        button.cursor_pointer().hover(move |style| {
+                            style.bg(tokens.fill.subtle).text_color(hover_color)
+                        })
+                    }
+                })
                 .child(
                     Icon::new(icon)
                         .size(TextSize::Sm.font_size())
@@ -148,9 +159,15 @@ impl ClipboardList {
                 .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |list, _, window, cx| {
                     cx.stop_propagation();
-                    list.run_quick_action(item.clone(), action, window, cx);
+                    if !protected {
+                        list.run_quick_action(item.clone(), action, window, cx);
+                    }
                 }))
-                .kp_tooltip(label)
+                .kp_tooltip(if protected {
+                    t("clipboard:selection.protected")
+                } else {
+                    label
+                })
         });
 
         div()
@@ -171,7 +188,7 @@ impl ClipboardList {
     }
 
     /// 空列表：按筛选条件给出 16 种提示之一。
-    pub(super) fn render_empty(&self, cx: &App) -> AnyElement {
+    pub(super) fn render_empty(&self, cx: &mut Context<Self>) -> AnyElement {
         let tokens = theme::semantic(cx);
         let filter = self.filter();
         let text = empty_text(filter);
@@ -200,6 +217,12 @@ impl ClipboardList {
         } else {
             IconName::Inbox
         };
+
+        // 右栏的分组是它的页签，不算筛选。
+        let clearable = filter.searching()
+            || !filter.search.is_empty()
+            || filter.category.is_some()
+            || (filter.group_id.is_some() && !self.side);
 
         div()
             .flex()
@@ -233,6 +256,16 @@ impl ClipboardList {
                     .text_center()
                     .child(t_args(text.key, &args)),
             )
+            .when(clearable, |column| {
+                column.child(
+                    Button::new("empty-clear-filters", t("clipboard:empty.clearFilters"))
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(super::ListIntent::ClearFilters);
+                        })),
+                )
+            })
             .into_any_element()
     }
 
@@ -252,11 +285,17 @@ impl ClipboardList {
                 .map(SharedString::from)
         };
         let empty = total == 0;
-        let status = if empty {
-            t_count("clipboard:footer.total", total, &[])
+        let status = if !self.model.loaded_initial() && !self.footer_status.borrow().is_empty() {
+            self.footer_status.borrow().clone()
         } else {
-            let index = (self.controller.active_index(&self.model) + 1).to_string();
-            t_count("clipboard:footer.position", total, &[("index", &index)])
+            let status = if empty {
+                t_count("clipboard:footer.total", total, &[])
+            } else {
+                let index = (self.controller.active_index(&self.model) + 1).to_string();
+                t_count("clipboard:footer.position", total, &[("index", &index)])
+            };
+            *self.footer_status.borrow_mut() = status.clone();
+            status
         };
 
         div()
@@ -347,6 +386,14 @@ impl ClipboardList {
         let tokens = theme::semantic(cx);
         let count = self.selection.count();
         let busy = self.selection.busy();
+        let exit_label = shortcut::panel_display(
+            &self.settings.shortcuts,
+            PanelAction::ClosePreviewFilterWindow,
+        )
+        .map_or_else(
+            || t("clipboard:selection.exit"),
+            |key| t_args("clipboard:selection.exitWithKey", &[("key", &key)]),
+        );
         let status = if count > 0 {
             t_count(
                 "clipboard:selection.selected",
@@ -424,16 +471,8 @@ impl ClipboardList {
                             })),
                     )
                     .child(
-                        Button::new("selection-exit", t("clipboard:selection.exit"))
+                        Button::icon("selection-exit", IconName::Close, exit_label)
                             .small()
-                            .ghost()
-                            .when_some(
-                                shortcut::panel_display(
-                                    &self.settings.shortcuts,
-                                    PanelAction::ClosePreviewFilterWindow,
-                                ),
-                                |button, hint| button.tooltip(hint),
-                            )
                             .on_click(cx.listener(|list, _, _, cx| list.exit_selection(cx))),
                     ),
             )

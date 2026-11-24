@@ -12,8 +12,8 @@ use gpui::{
 use kwikpaste_core::app_ids;
 use kwikpaste_core::settings::Settings;
 use kwikpaste_ui::{
-    Button, ButtonSize, Checkbox, KpStyled as _, ScrollArea, Select, SelectOption, SelectState,
-    Switch, kinsoku_wrap,
+    Button, ButtonSize, Checkbox, Input, KpStyled as _, ScrollArea, Select, SelectOption,
+    SelectState, Switch, TextInput, kinsoku_wrap,
     theme::{self, TextSize, space},
 };
 use serde_json::json;
@@ -67,10 +67,11 @@ pub fn open(cx: &mut App) -> anyhow::Result<()> {
         });
         view
     })?;
+    let owner = view.entity_id();
     cx.set_global(OnboardingWindow { handle, view });
     cx.on_window_closed(move |cx, closed_id| {
         if closed_id == handle.window_id() {
-            hotkey::resume(cx);
+            hotkey::resume(owner, cx);
             let _ = cx.remove_global::<OnboardingWindow>();
         }
     })
@@ -97,14 +98,7 @@ struct Onboarding {
     _subscriptions: Vec<Subscription>,
     finishing: bool,
     icons: Entity<KpImageCache>,
-}
-
-/// 快捷键一步里下拉选项的候选项（值、当前语言的文字）。
-fn select_options(setting: &schema::Setting) -> Vec<SelectOption> {
-    text::options(setting)
-        .into_iter()
-        .map(|(value, label)| SelectOption::new(value, label))
-        .collect()
+    app_search: TextInput,
 }
 
 impl Onboarding {
@@ -181,7 +175,12 @@ impl Onboarding {
             };
             let numeric = matches!(kind, schema::Options::Numbers(_));
             let selected = values::get_choice(&settings_json, path);
-            let state = SelectState::new(select_options(&setting), selected.as_deref(), window, cx);
+            let state = SelectState::new(
+                view::select_options(&setting),
+                selected.as_deref(),
+                window,
+                cx,
+            );
             subscriptions.push(state.on_change(cx, move |this, value, cx| {
                 if let Some(value) = value {
                     this.update_settings(values::choice_patch(path, &value, numeric), cx);
@@ -191,13 +190,31 @@ impl Onboarding {
         }
         let icons = cx.new(|_| KpImageCache::with_capacity(128));
         subscriptions.push(cx.observe(&icons, |_, _, cx| cx.notify()));
+        let app_search = TextInput::new(
+            i18n::t("preferences:schema.settings.source.appTransfer.searchPlaceholder"),
+            window,
+            cx,
+        );
+        subscriptions.push(app_search.on_change(cx, |_, _, cx| cx.notify()));
+        // 录制时按键只送到根节点：切到别的应用或焦点移到别的控件，就结束录制、恢复全局热键。
+        let focus = cx.focus_handle();
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() && this.recording.is_some() {
+                this.finish_recording(cx);
+            }
+        }));
+        subscriptions.push(cx.on_blur(&focus, window, |this, _, cx| {
+            if this.recording.is_some() {
+                this.finish_recording(cx);
+            }
+        }));
         Self {
             step: initial_step.min(steps.saturating_sub(1)),
             settings,
             has_permissions,
             source_apps: Vec::new(),
             recording: None,
-            focus: cx.focus_handle(),
+            focus,
             scroll: ScrollHandle::new(),
             language,
             selects,
@@ -207,6 +224,7 @@ impl Onboarding {
             _subscriptions: subscriptions,
             finishing: false,
             icons,
+            app_search,
         }
     }
 
@@ -219,7 +237,7 @@ impl Onboarding {
         self.options_language = language;
         for setting in schema::shortcut_settings() {
             if let Some(state) = self.selects.get(setting.id) {
-                state.set_options(select_options(&setting), window, cx);
+                state.set_options(view::select_options(&setting), window, cx);
             }
         }
     }
@@ -309,14 +327,14 @@ impl Onboarding {
 
     fn begin_recording(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         self.recording = Some(id);
-        hotkey::suspend(cx);
+        hotkey::suspend(cx.entity_id(), cx);
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
     fn finish_recording(&mut self, cx: &mut Context<Self>) {
         self.recording = None;
-        hotkey::resume(cx);
+        hotkey::resume(cx.entity_id(), cx);
         cx.notify();
     }
 
@@ -834,14 +852,19 @@ impl Onboarding {
     fn render_ignore_apps(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let entity = cx.entity().downgrade();
         let tokens = theme::semantic(cx);
-        let icon_states: Vec<_> = self
+        let query = self.app_search.value(cx);
+        let visible_apps: Vec<_> = self
             .source_apps
+            .iter()
+            .filter(|app| view::app_matches_query(app, &query))
+            .collect();
+        let icon_states: Vec<_> = visible_apps
             .iter()
             .map(|app| self.cached_app_icon(app.icon_path.as_deref(), tokens, window, cx))
             .collect();
         let rows =
-            self.source_apps
-                .iter()
+            visible_apps
+                .into_iter()
                 .zip(icon_states)
                 .enumerate()
                 .map(|(index, (app, icon))| {
@@ -932,27 +955,30 @@ impl Onboarding {
             .flex()
             .flex_col()
             .gap(space(3.))
-            .child(self.step_heading(
-                i18n::t("onboarding:ignoreApps.title"),
-                i18n::t("onboarding:ignoreApps.description"),
-                cx,
-            ))
-            .child(self.surface_card(cx).children(rows))
             .child(
-                div().flex().justify_end().child(
-                    Button::new(
-                        "onboarding-open-preferences",
-                        i18n::t("onboarding:ignoreApps.manage"),
-                    )
-                    .small()
-                    .ghost()
-                    .on_click(|_, _, cx| {
-                        if let Err(error) = crate::preferences::open(cx) {
-                            log::warn!("could not open preferences from onboarding: {error:#}");
-                        }
-                    }),
+                self.step_heading(
+                    i18n::t("onboarding:ignoreApps.title"),
+                    i18n::t("onboarding:ignoreApps.description"),
+                    cx,
+                )
+                .child(
+                    div().flex().child(
+                        Button::new(
+                            "onboarding-open-preferences",
+                            i18n::t("onboarding:ignoreApps.manage"),
+                        )
+                        .small()
+                        .link()
+                        .on_click(|_, _, cx| {
+                            if let Err(error) = crate::preferences::open(cx) {
+                                log::warn!("could not open preferences from onboarding: {error:#}");
+                            }
+                        }),
+                    ),
                 ),
             )
+            .child(Input::new(&self.app_search))
+            .child(self.surface_card(cx).children(rows))
             .into_any_element()
     }
 
@@ -970,6 +996,15 @@ impl Onboarding {
 
 impl Onboarding {
     fn render_done(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let open_clipboard = &self.settings.shortcuts.open_clipboard;
+        let open_description = if open_clipboard.is_empty() {
+            i18n::t("onboarding:done.cards.open.description")
+        } else {
+            i18n::t_args(
+                "onboarding:done.cards.open.descriptionWithShortcut",
+                &[("shortcut", &text::format_shortcut(open_clipboard))],
+            )
+        };
         div()
             .flex()
             .flex_col()
@@ -1013,7 +1048,7 @@ impl Onboarding {
                         self.render_feature_card(
                             PrefIcon::ClipboardPlus,
                             i18n::t("onboarding:done.cards.open.title"),
-                            i18n::t("onboarding:done.cards.open.description"),
+                            open_description,
                             cx,
                         ),
                         self.render_feature_card(
@@ -1094,35 +1129,47 @@ impl Render for Onboarding {
                             .into_any_element()
                     })
                     .child(
-                        div().flex().items_center().gap(space(2.)).children([
-                            Button::new("onboarding-skip", i18n::t("onboarding:actions.skip"))
-                                .ghost()
-                                .disabled(self.finishing)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.finish(window, cx)),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(space(2.))
+                            // 最后一步的「跳过」和「开始使用」做的是同一件事，只留主按钮。
+                            .when(!is_last, |actions| {
+                                actions.child(
+                                    Button::new(
+                                        "onboarding-skip",
+                                        i18n::t("onboarding:actions.skip"),
+                                    )
+                                    .ghost()
+                                    .disabled(self.finishing)
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| this.finish(window, cx)),
+                                    ),
                                 )
-                                .into_any_element(),
-                            Button::new(
-                                "onboarding-next",
-                                if is_last {
-                                    i18n::t("onboarding:actions.finish")
-                                } else if is_first {
-                                    i18n::t("onboarding:actions.start")
-                                } else {
-                                    i18n::t("onboarding:actions.next")
-                                },
-                            )
-                            .primary()
-                            .disabled(self.finishing)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if is_last {
-                                    this.finish(window, cx);
-                                } else {
-                                    this.move_step(1, cx);
-                                }
-                            }))
-                            .into_any_element(),
-                        ]),
+                            })
+                            .child(
+                                Button::new(
+                                    "onboarding-next",
+                                    if is_last {
+                                        i18n::t("onboarding:actions.finish")
+                                    } else if is_first {
+                                        i18n::t("onboarding:actions.start")
+                                    } else {
+                                        i18n::t("onboarding:actions.next")
+                                    },
+                                )
+                                .primary()
+                                .disabled(self.finishing)
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        if is_last {
+                                            this.finish(window, cx);
+                                        } else {
+                                            this.move_step(1, cx);
+                                        }
+                                    },
+                                )),
+                            ),
                     ),
             )
     }

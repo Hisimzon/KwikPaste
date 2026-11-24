@@ -100,12 +100,18 @@ pub async fn wire_from_item(
 ) -> anyhow::Result<Option<(WireItem, Vec<u8>)>> {
     match item.kind {
         ClipboardKind::Text => {
+            // 接收方（含已发布的各版本）纯文本只用 content、摘要自己重算：
+            // 只有富文本带纯文本表示，摘要不发，可同步的文本不再被重复字段压掉一半。
+            let rich = matches!(
+                item.sub_kind,
+                Some(ClipboardSubKind::Html | ClipboardSubKind::Rtf)
+            );
             let wire = WireItem {
                 kind: item.kind,
                 sub_kind: item.sub_kind,
                 content: item.content.clone(),
-                search_text: item.search_text.clone(),
-                summary: item.summary.clone(),
+                search_text: if rich { item.search_text.clone() } else { None },
+                summary: None,
                 width: None,
                 height: None,
             };
@@ -165,7 +171,10 @@ pub async fn wire_from_item(
 
 /// 一页补齐。
 pub struct CatchUpPage {
-    pub items: Vec<(WireItem, Vec<u8>)>,
+    /// 参与同步的记录。图片的原图发送时才逐张读：一页最多 50 张，不能一起读进内存。
+    pub items: Vec<ClipboardItem>,
+    /// 附件上限：本机设置与对方申报的上限中较小的那个。
+    pub attachment_limit: u64,
     /// 这一页覆盖到的本机序号：对方收齐这页后把水位线推进到这里。
     pub until: u64,
     pub more: bool,
@@ -205,17 +214,14 @@ pub async fn collect_catch_up(
         let Some(item) = crate::db::items::find_item_by_id(&pool, &id).await? else {
             continue;
         };
-        if !is_syncable(&item, &lan) {
-            continue;
-        }
-        let limit = attachment_limit.min(lan.max_image_bytes());
-        if let Some(wire) = wire_from_item(core, &item, limit).await? {
-            items.push(wire);
+        if is_syncable(&item, &lan) {
+            items.push(item);
         }
     }
 
     Ok(CatchUpPage {
         items,
+        attachment_limit: attachment_limit.min(lan.max_image_bytes()),
         until,
         more,
         epoch: own_epoch,
@@ -498,17 +504,17 @@ mod tests {
                     .unwrap()
                     .is_none());
                 let page = collect_catch_up(&core.0, 0, None, u64::MAX).await.unwrap();
-                assert!(page.items.is_empty());
+                assert_eq!(page.items.len(), 1);
                 assert_eq!(page.until, 1);
 
                 std::fs::create_dir(&path).unwrap();
                 assert!(wire_from_item(&core.0, &item, u64::MAX).await.is_err());
-                assert!(collect_catch_up(&core.0, 0, None, u64::MAX).await.is_err());
                 std::fs::remove_dir(&path).unwrap();
                 std::fs::write(path, bytes).unwrap();
-                let page = collect_catch_up(&core.0, 0, None, u64::MAX).await.unwrap();
-                assert_eq!(page.items.len(), 1);
-                assert_eq!(page.until, 1);
+                assert!(wire_from_item(&core.0, &item, u64::MAX)
+                    .await
+                    .unwrap()
+                    .is_some());
                 Ok(())
             }
         }))
@@ -569,14 +575,16 @@ mod tests {
     fn escaped_text_over_header_limit_is_skipped_with_its_checkpoint() {
         let fixture = Fixture::new();
         let core = fixture.start();
-        let item = core
+        let mut item = core
             .build_item(&ClipboardPayload::Text(TextPayload {
-                text: "\\".repeat(4 * 1024 * 1024),
+                text: "\\".to_owned(),
                 html: None,
                 rtf: None,
             }))
             .unwrap()
             .unwrap();
+        // 转义后翻倍，超过 JSON 头上限。
+        item.content = "\\".repeat(9 * 1024 * 1024);
         block_on(core.store_item(item.clone(), None)).unwrap();
 
         block_on(core.hop({
@@ -584,13 +592,13 @@ mod tests {
             async move {
                 assert!(wire_from_item(&core.0, &item, 0).await.unwrap().is_none());
                 let page = collect_catch_up(&core.0, 0, None, 0).await.unwrap();
-                assert!(page.items.is_empty());
                 assert_eq!(page.until, 1);
 
                 let mut plain = item;
                 plain.content = "a".repeat(4 * 1024 * 1024);
                 plain.search_text = Some(plain.content.clone());
                 let (wire, attachment) = wire_from_item(&core.0, &plain, 0).await.unwrap().unwrap();
+                assert!(wire.search_text.is_none() && wire.summary.is_none());
                 for live in [true, false] {
                     assert!(super::super::protocol::encode(
                         &Message::Push {

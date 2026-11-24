@@ -55,6 +55,7 @@ pub use kwikpaste_core::presenter::{
     ClipboardPreviewPayload as PreviewPayload, PreviewContentMetrics,
 };
 pub use kwikpaste_core::settings::PreviewTextView;
+pub use kwikpaste_core::translate::TranslationView;
 
 /// 预览窗的数据（core `preview_payload`）与定尺寸用的内容度量（core `preview_metrics`）。
 #[derive(Clone, Debug)]
@@ -114,6 +115,21 @@ pub trait ClipboardSource: Send + Sync + 'static {
     /// 把图片识别出的文字写回剪贴板；夹具没有识别文字，真实数据源转给 core。
     fn copy_image_text(&self, _id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
         Box::pin(async { anyhow::bail!("image text is unavailable for this source") })
+    }
+
+    /// 翻译一条记录，已有译文时是重新翻译；结果经 core 的 `TranslationChanged` 回来。夹具没有翻译。
+    fn translate(&self, _id: Arc<str>) -> BoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(async { anyhow::bail!("translation is unavailable for this source") })
+    }
+
+    /// 把译文写回剪贴板。返回设置是否要求随后隐藏窗口。
+    fn copy_translation(&self, _id: Arc<str>) -> BoxFuture<'static, anyhow::Result<bool>> {
+        Box::pin(async { anyhow::bail!("translation is unavailable for this source") })
+    }
+
+    /// 预览窗用的译文全文和翻译状态。夹具没有翻译。
+    fn translation(&self, _id: Arc<str>) -> BoxFuture<'static, anyhow::Result<TranslationView>> {
+        Box::pin(async { Ok(TranslationView::default()) })
     }
 
     /// 翻转收藏，返回新状态。

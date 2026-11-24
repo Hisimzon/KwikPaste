@@ -27,7 +27,7 @@ use crate::{
             actions::{DeletePolicy, OpenTarget, QuickAction, is_available, is_copy, open_target},
             filter::ListFilter,
             freshness::Activation,
-            item::{ItemKind, ListItem, SubKind},
+            item::{ItemAction, ItemKind, ListItem, SubKind},
             layout::LayoutSpec,
         },
         source::{Group, core_source::item_query},
@@ -35,6 +35,7 @@ use crate::{
             card,
             editing::{self, EditTarget},
             editor::{self, EditItem},
+            screen_pin,
             viewer::{self, ViewerImage},
         },
     },
@@ -130,6 +131,12 @@ impl ClipboardList {
         let layout = LayoutSpec::from_settings(&new.display);
         let relayout = layout != self.layout;
         self.delete_policy = DeletePolicy::from_settings(&settings.clipboard.content);
+        // 卡片上的译文开关改变带译文卡片的高度：视口外缓存的行高也要作废。
+        if self.settings.extensions.translate.show_on_cards
+            != settings.extensions.translate.show_on_cards
+        {
+            self.state.remeasure();
+        }
         self.settings = settings;
         self.layout = layout;
         if preview_changed {
@@ -436,10 +443,21 @@ impl ClipboardList {
 
     // ------------------------------------------------------------ 大图
 
+    /// 「查看」：图片看大图，文本打开内容编辑窗，文件不响应；快捷键与“双击查看”共用。
+    pub fn view_item(&mut self, item: &ListItem, window: &mut Window, cx: &mut Context<Self>) {
+        match item.kind {
+            ItemKind::Image => self.view_image(item.id.clone(), cx),
+            ItemKind::Text => self.edit_content(item.id.clone(), window, cx),
+            ItemKind::Files => {}
+        }
+    }
+
     /// 在大图预览窗里看这张图：已加载的图片记录按列表顺序做快照，面板按点外部处理（固定时留着）。
     pub fn view_image(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
-        let images: Vec<ViewerImage> = (0..self.model.total())
-            .filter_map(|index| self.model.get(index))
+        let images: Vec<ViewerImage> = self
+            .model
+            .cached_items()
+            .into_iter()
             .filter(|item| item.kind == ItemKind::Image)
             .map(|item| ViewerImage {
                 id: item.id.clone(),
@@ -458,6 +476,21 @@ impl ClipboardList {
         if let Err(err) = viewer::open(self.source.clone(), self.host.clone(), images, index, cx) {
             log::error!("could not open the image viewer: {err:#}");
         }
+    }
+
+    /// 把这张图或这段文字钉到屏幕上；面板与看大图时一样按点外部处理（固定时留着）。
+    pub fn pin_to_screen(&mut self, item: &ListItem, cx: &mut Context<Self>) {
+        let open = match item.kind {
+            ItemKind::Image => screen_pin::open_image,
+            ItemKind::Text => screen_pin::open_text,
+            ItemKind::Files => return,
+        };
+        self.close_preview(cx);
+        editing::request_panel(
+            cx,
+            PanelCommand::Hide(Trigger::now(TriggerSource::OutsideClick)),
+        );
+        open(self.source.clone(), self.host.clone(), item.id.clone(), cx);
     }
 
     // ------------------------------------------------------------ 复制
@@ -481,9 +514,10 @@ impl ClipboardList {
             let result = task.await;
             list.update_in(cx, |list, window, cx| match result {
                 Ok(()) => {
-                    Self::toast_success("commands:messages.copied", window, cx);
                     if let Some(action) = feedback {
                         list.show_copied(id, action, cx);
+                    } else {
+                        Self::toast_success("commands:messages.copied", window, cx);
                     }
                 }
                 Err(err) => Self::toast_error("commands:labels.copy", &err, window, cx),
@@ -520,6 +554,58 @@ impl ClipboardList {
             .ok();
         }));
         cx.notify();
+    }
+
+    // ------------------------------------------------------------ 翻译
+
+    /// 翻译这一条（右键菜单、快捷键、预览窗）；已有译文时是重新翻译。译文经 core 的事件回来，
+    /// 这里只在排不上队时提示原因（扩展没启用、记录不可翻译、AI 接口没填全）。
+    pub fn translate(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
+        let task = self.source.translate(id);
+        cx.spawn_in(window, async move |list, cx| {
+            if let Err(err) = task.await {
+                list.update_in(cx, |_, window, cx| {
+                    Self::toast_error("commands:labels.translate", &err, window, cx)
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// 快捷键：当前项可翻译且还没有译文时开始翻译，其余情况不做事。
+    pub fn translate_active(
+        &mut self,
+        item: &ListItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if item.available_actions.contains(&ItemAction::Translate) {
+            self.translate(item.id.clone(), window, cx);
+        }
+    }
+
+    /// 复制译文（右键菜单、预览窗），预览保持打开。
+    pub fn copy_translation(&mut self, id: Arc<str>, window: &mut Window, cx: &mut Context<Self>) {
+        let task = self.host.copy_translation(id, cx);
+
+        cx.spawn_in(window, async move |list, cx| {
+            let result = task.await;
+            list.update_in(cx, |_, window, cx| match result {
+                Ok(()) => Self::toast_success("commands:messages.copied", window, cx),
+                Err(err) => Self::toast_error("commands:labels.copyTranslation", &err, window, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 粘贴译文：写回剪贴板、让出前台、注入粘贴键。
+    pub fn paste_translation(&mut self, id: Arc<str>, cx: &mut Context<Self>) {
+        log::info!("translation paste requested for {id}");
+        self.close_preview(cx);
+        let task = self.host.paste_translation(id, cx);
+        self.report_host_failure("commands:labels.pasteTranslation", task, cx);
     }
 
     // ------------------------------------------------------------ 收藏、置顶

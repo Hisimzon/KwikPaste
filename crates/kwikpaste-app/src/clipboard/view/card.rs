@@ -51,6 +51,8 @@ pub struct CardEnv<'a> {
     pub layout: &'a LayoutSpec,
     pub now: DateTime<Local>,
     pub reduce_motion: bool,
+    /// 「在卡片上显示译文」开着（设置 `extensions.translate.showOnCards`）。
+    pub translations: bool,
 }
 
 /// 图片区的状态（缩略图或单图文件）。
@@ -79,6 +81,8 @@ pub struct CardState {
     pub hint: Option<SharedString>,
     /// 多选时已勾上：卡片铺一层淡主色。
     pub checked: bool,
+    /// 收藏标记；在「收藏」范围里不显示（那里每一条都是收藏）。
+    pub favorite: bool,
     /// 悬停快捷动作（列表画好的按钮行）；有它时头部行不显示时间。
     pub actions: Option<AnyElement>,
     /// 多选的复选框。
@@ -140,6 +144,7 @@ pub fn card(
         state.show_original,
         state.on_link,
     );
+    let favorite = state.favorite;
     let pinned = item.is_pinned;
     let sensitive = item.shows_sensitive_mark();
     let hint = state.hint;
@@ -150,7 +155,7 @@ pub fn card(
     // 卡片风格是圆角块，整圈描边平时浅灰、选中或置顶时主色；无间风格贴边，只用底边线分隔。
     let lifted = state.lifted;
     let highlight = if lifted {
-        Some(tokens.surface.raised)
+        Some(tokens.surface.overlay)
     } else if state.checked {
         Some(tokens.accent.subtle)
     } else if state.active {
@@ -183,9 +188,7 @@ pub fn card(
         })
         .when_some(highlight, |frame, highlight| frame.bg(highlight))
         .when(lifted, |frame| {
-            frame
-                .rounded(radius::LG)
-                .shadow(tokens.shadow.overlay.to_vec())
+            frame.rounded(radius::LG).shadow(tokens.shadow.float())
         });
 
     frame = if layout.header_row {
@@ -200,7 +203,7 @@ pub fn card(
                 state.app_icon.clone(),
                 actions,
                 checkbox,
-                status_marks(tokens, pinned, sensitive, true),
+                status_marks(tokens, favorite, pinned, sensitive, true),
             ))
             .child(body)
             .children(snippets(env, item, 0, links, on_snippet))
@@ -226,8 +229,8 @@ pub fn card(
                     .child(body)
                     .children(snippets(env, item, 0, links, on_snippet)),
             )
-            .when(pinned || sensitive, |frame| {
-                frame.child(status_marks(tokens, pinned, sensitive, true))
+            .when(favorite || pinned || sensitive, |frame| {
+                frame.child(status_marks(tokens, favorite, pinned, sensitive, true))
             })
             .when_some(checkbox, |frame, checkbox| {
                 frame.child(
@@ -249,8 +252,8 @@ pub fn card(
                         .p(space((2.) / 4.))
                         .rounded(radius::MD)
                         .border_1()
-                        .border_color(tokens.border.subtle)
-                        .bg(tokens.surface.raised)
+                        .border_color(tokens.border.default)
+                        .bg(tokens.surface.overlay)
                         .shadow(tokens.shadow.card.to_vec())
                         .child(actions),
                 )
@@ -613,7 +616,19 @@ fn content(
     }
 
     match item.kind {
-        ItemKind::Text => text_body(env, item, on_link),
+        ItemKind::Text => {
+            let body = text_body(env, item, on_link);
+            match translation_block(env, item) {
+                Some(block) => div()
+                    .flex()
+                    .flex_col()
+                    .gap(space(1.5))
+                    .child(body)
+                    .child(block)
+                    .into_any_element(),
+                None => body,
+            }
+        }
         ItemKind::Image => {
             let body = image_body(env, item, index, image);
             match &item.image_text_snippet {
@@ -679,10 +694,12 @@ fn text_body(env: &CardEnv<'_>, item: &ListItem, on_link: Option<LinkHandler>) -
             .into_any_element();
     };
 
-    // 按住修饰键：主色、下划线，点了打开；按下不冒泡给卡片（不选中、不触发单击粘贴）。
+    // 按住修饰键：主色、下划线，点了打开；按下不冒泡给卡片（不选中、不触发单击粘贴）。宽度只到
+    // 文字为止，旁边的空白仍是卡片：Ctrl/Cmd 点那里是多选。
     div()
         .id("card-link")
-        .w_full()
+        .self_start()
+        .max_w_full()
         .kp_text(TextSize::Sm)
         .line_clamp(env.layout.text_max_lines)
         .text_ellipsis()
@@ -696,6 +713,45 @@ fn text_body(env: &CardEnv<'_>, item: &ListItem, on_link: Option<LinkHandler>) -
         })
         .child(summary)
         .into_any_element()
+}
+
+/// 原文下面的译文：次级文字色，前面一个小图标，最多两行；翻译中时是一行淡色的提示。
+/// 备注盖住正文时走不到这里，所以显示备注的卡片没有译文块。
+fn translation_block(env: &CardEnv<'_>, item: &ListItem) -> Option<AnyElement> {
+    if !env.translations {
+        return None;
+    }
+    let tokens = env.tokens;
+    let (text, color) = match &item.translation {
+        Some(text) => (shared(text), tokens.text.secondary),
+        None if item.translating => (t("clipboard:translation.pending"), tokens.text.faint),
+        None => return None,
+    };
+
+    Some(
+        div()
+            .flex()
+            .items_start()
+            .gap(space(1.))
+            .kp_text(TextSize::Sm)
+            .text_color(color)
+            .child(
+                div().flex_none().pt(space((3.) / 4.)).child(
+                    Icon::new(IconName::Languages)
+                        .size(space((14.) / 4.))
+                        .color(tokens.text.muted),
+                ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .line_clamp(env.layout.text_max_lines.min(2))
+                    .text_ellipsis()
+                    .child(text),
+            )
+            .into_any_element(),
+    )
 }
 
 fn note_annotation(env: &CardEnv<'_>, note: &Arc<str>) -> AnyElement {
@@ -932,7 +988,8 @@ fn snippets(
                     .enumerate()
                     .map(|(index, snippet)| {
                         let long = snippet.text.chars().count() >= SNIPPET_TOOLTIP_MIN_CHARS;
-                        let open = links && snippet_open_url(snippet.kind, &snippet.text).is_some();
+                        let openable = snippet_open_url(snippet.kind, &snippet.text).is_some();
+                        let open = links && openable;
                         let chip = div()
                             .id(ElementId::NamedInteger("snippet".into(), index as u64))
                             .flex()
@@ -990,7 +1047,7 @@ fn snippets(
                                 on_hover(event, window, cx);
                             })
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .when(snippet_open_url(kind, &text).is_some(), |chip| {
+                            .when(openable, |chip| {
                                 chip.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
                                     cx.stop_propagation();
                                     on_open(
@@ -1019,10 +1076,13 @@ fn snippets(
 /// 快捷信息「打开」的去处：链接（`www.` 开头补 `https://`）用浏览器、邮箱用 `mailto:`；
 /// 其它类型（以及 `ftp://` 这类不交给浏览器的链接）没有。
 pub fn snippet_open_url(kind: SnippetKind, text: &str) -> Option<String> {
-    let lower = text.to_ascii_lowercase();
+    let starts_with = |prefix: &str| {
+        text.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    };
     match kind {
-        SnippetKind::Link if lower.starts_with("www.") => Some(format!("https://{text}")),
-        SnippetKind::Link if lower.starts_with("http://") || lower.starts_with("https://") => {
+        SnippetKind::Link if starts_with("www.") => Some(format!("https://{text}")),
+        SnippetKind::Link if starts_with("http://") || starts_with("https://") => {
             Some(text.to_owned())
         }
         SnippetKind::Email => Some(format!("mailto:{text}")),
@@ -1051,12 +1111,25 @@ pub fn snippet_dot(color: KindTag) -> Div {
         .bg(color.foreground)
 }
 
-/// 置顶、敏感标记：有头部行时是右下角 20 px 的水印，没有时是正文右侧 16 px 的小图标。
-fn status_marks(tokens: &SemanticTokens, pinned: bool, sensitive: bool, inline: bool) -> Div {
+/// 收藏、置顶、敏感标记：有头部行时是右下角 20 px 的水印，没有时是正文右侧 16 px 的小图标。
+fn status_marks(
+    tokens: &SemanticTokens,
+    favorite: bool,
+    pinned: bool,
+    sensitive: bool,
+    inline: bool,
+) -> Div {
     let size = space((14.) / 4.);
     let marks = div()
         .flex()
         .gap(space(1.))
+        .when(favorite, |marks| {
+            marks.child(
+                Icon::new(IconName::Star)
+                    .size(size)
+                    .color(tokens.status.warning.solid),
+            )
+        })
         .when(pinned, |marks| {
             marks.child(
                 Icon::new(IconName::PushPin)

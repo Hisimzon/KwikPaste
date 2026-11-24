@@ -6,6 +6,7 @@
   "autoGroup": {
     "add": "添加规则",
     "apps": "来源应用",
+    "claimed": "也在「{{group}}」的规则里，排在前面的启用规则生效",
     "delete": "删除",
     "edit": "编辑规则",
     "empty": "还没有自动分组规则",
@@ -20,7 +21,7 @@
       "confirmPassword": "确认密码",
       "confirmRequired": "请再次输入备份密码",
       "dialogTitle": "导出数据",
-      "encryptedHint": "备份会用你输入的密码加密。快贴 不会保存密码，忘记后无法恢复。",
+      "encryptedHint": "备份会用你输入的密码加密。快贴不会保存密码，忘记后无法恢复。",
       "kind": "导出类型",
       "kindBackup": "备份包",
       "kindBackupHint": "包含全部记录、图片和设置，可通过「导入备份」完整恢复。",
@@ -41,11 +42,11 @@
       "plainWarning": "任何拿到文件的人都可以直接读取备份内容。",
       "plainWarningTitle": "明文备份不受密码保护",
       "scope": "导出范围",
-      "title": "导出 快贴 备份"
+      "title": "导出快贴备份"
     },
-    "fileFilter": "快贴 备份",
+    "fileFilter": "快贴备份",
     "import": {
-      "fileFallback": "快贴 备份文件",
+      "fileFallback": "快贴备份文件",
       "importSettings": "同时导入备份里的设置",
       "ok": "导入",
       "overwriteConfirm": "我已阅读风险提示，确认覆盖当前数据",
@@ -55,11 +56,11 @@
       "overwriteWarning": "覆盖导入会立即替换已选择的当前数据。合并导入更适合日常恢复；只有确定要以备份为准时再选择覆盖。",
       "password": "备份密码",
       "passwordRequired": "请输入备份密码",
-      "pickTitle": "选择 快贴 备份",
+      "pickTitle": "选择快贴备份",
       "strategy": "导入方式",
       "strategyMerge": "合并导入",
       "strategyOverwrite": "覆盖导入",
-      "title": "导入 快贴 备份",
+      "title": "导入快贴备份",
       "typeEncrypted": "加密备份，导入时需要密码",
       "typePlain": "未加密备份"
     },
@@ -137,6 +138,53 @@
       "uninstallContent": "卸载后不再识别新图片，已识别的文字会保留。"
     },
     "retry": "重试",
+    "translate": {
+      "ai": {
+        "apiKey": "API Key",
+        "baseUrl": "接口地址",
+        "baseUrlDescription": "兼容 OpenAI 格式的接口地址，不含 /chat/completions。",
+        "model": "模型",
+        "modelDescription": "建议用 flash、lite 一类的快速模型，会思考的模型更慢。",
+        "preset": "预设",
+        "presetDescription": "选一个会填好地址和建议的模型，之后都可以再改。",
+        "presets": {
+          "bailian": "阿里云百炼",
+          "custom": "自定义",
+          "deepseek": "DeepSeek",
+          "ollama": "Ollama（本机）",
+          "siliconflow": "硅基流动",
+          "zhipu": "智谱"
+        },
+        "prompt": "提示词",
+        "promptDescription": "留空使用内置提示词。{to} 会换成目标语言的英文名。"
+      },
+      "auto": "自动翻译新复制的外文",
+      "autoDescription": "只翻开启之后新复制的内容。识别出是首选语言、或拿不准语种时不翻，也不联网。",
+      "clear": "清除翻译结果",
+      "clearConfirm": "清除",
+      "clearContent": "会删掉所有已存的译文，原文不受影响。之后要看译文需要重新翻译。",
+      "clearDescription": "删掉所有已存的译文。",
+      "cleared": "已清除翻译结果",
+      "description": "翻译文本记录，在列表和预览里同时显示原文和译文。",
+      "engine": "翻译引擎",
+      "engines": {
+        "ai": "AI 接口",
+        "free": "免费翻译"
+      },
+      "feature": "在右键菜单里选「翻译」或按快捷键，译文显示在原文下面，可以单独复制或粘贴。也可以打开自动翻译，新复制的外文会自动译成首选语言。",
+      "firstLanguage": "首选语言",
+      "firstLanguageDescription": "别的语言译成它；原文就是它时译成第二语言。",
+      "followInterface": "跟随界面语言",
+      "how": "翻译在单独的后台进程里进行，有任务时才启动，空闲一分钟后自动退出。免费翻译使用火山翻译和腾讯交互翻译的网页接口，不用注册；AI 接口支持兼容 OpenAI 格式的服务，也可以接本机的 Ollama。",
+      "installContent": "翻译会把要翻译的文字发送给第三方翻译服务。免费翻译目前使用火山翻译和腾讯交互翻译的网页接口，它们是非官方接口，可能随时失效；AI 接口发送到你填写的地址。标记为敏感的记录不会发送。确定要安装吗？",
+      "installTitle": "安装翻译",
+      "name": "翻译",
+      "privacy": "要翻译的文字会发送给所选的翻译服务。标记为敏感的记录，以及链接、邮箱、颜色、路径不会发送。AI 接口的地址和 Key 只保存在这台电脑上，不进备份。",
+      "secondLanguage": "第二语言",
+      "showOnCards": "在卡片上显示译文",
+      "showOnCardsDescription": "关掉后只在预览里看。",
+      "uninstallContent": "卸载后不再翻译，已有的译文会保留但不显示。AI 接口的地址和 Key 会被删除。"
+    },
     "unavailable": "暂时无法获取，请稍后重试",
     "uninstall": "卸载",
     "uninstallTitle": "卸载扩展",
@@ -580,7 +628,7 @@
       "forever": "永久保留",
       "hours": "小时",
       "minutes": "分钟",
-      "months": "月",
+      "months": "个月",
       "weeks": "周"
     },
     "sections": {
@@ -594,7 +642,7 @@
         "title": "自动分组"
       },
       "backup": {
-        "description": "导出或导入 快贴 备份包。",
+        "description": "导出或导入快贴备份包。",
         "title": "备份迁移"
       },
       "capture": {
@@ -651,9 +699,6 @@
       "panelShortcuts": {
         "title": "剪贴板窗口内"
       },
-      "performance": {
-        "title": "性能"
-      },
       "permissions": {
         "title": "系统权限"
       },
@@ -686,7 +731,7 @@
       "about": {
         "checkUpdates": {
           "controlLabel": "检查更新",
-          "title": "检查更新"
+          "title": "当前版本"
         },
         "github": {
           "controlLabel": "打开",
@@ -700,25 +745,25 @@
       "actions": {
         "deleteConfirm": {
           "description": "收藏和置顶记录由下面的开关单独控制。",
-          "title": "普通条目删除前确认"
+          "title": "删除普通记录前确认"
         },
         "deleteFavoriteConfirm": {
-          "title": "收藏条目删除前确认"
+          "title": "删除收藏记录前确认"
         },
         "deleteFavoriteItems": {
           "description": "关闭后，收藏记录不能删除。",
-          "title": "允许删除收藏条目"
+          "title": "允许删除收藏记录"
         },
         "deleteFavoriteItemsOnlyInFavoriteGroup": {
           "description": "在其他分组里隐藏收藏记录的删除入口。",
-          "title": "收藏项仅在收藏分组删除"
+          "title": "只在「收藏」里允许删除收藏记录"
         },
         "deletePinnedConfirm": {
-          "title": "置顶条目删除前确认"
+          "title": "删除置顶记录前确认"
         },
         "deletePinnedItems": {
           "description": "关闭后，置顶记录不能删除。",
-          "title": "允许删除置顶条目"
+          "title": "允许删除置顶记录"
         },
         "visible": {
           "controlLabel": "管理",
@@ -727,6 +772,13 @@
       },
       "appearance": {
         "fileMaxCount": {
+          "options": {
+            "1": "1",
+            "2": "2",
+            "3": "3",
+            "4": "4",
+            "5": "5"
+          },
           "title": "文件最多显示数量"
         },
         "groupBar": {
@@ -739,6 +791,7 @@
           "title": "显示头部行"
         },
         "imageMaxHeight": {
+          "description": "范围 20–100 px。",
           "title": "图片最大显示高度"
         },
         "itemGap": {
@@ -809,7 +862,23 @@
           "title": "悬停显示原始内容"
         },
         "textMaxLines": {
+          "options": {
+            "1": "1",
+            "2": "2",
+            "3": "3",
+            "4": "4",
+            "5": "5"
+          },
           "title": "文本内容最大显示行数"
+        },
+        "textSize": {
+          "description": "同时缩放间距和图标；在系统文本缩放的基础上调整。",
+          "options": {
+            "large": "大",
+            "small": "小",
+            "standard": "标准"
+          },
+          "title": "文字大小"
         },
         "theme": {
           "options": {
@@ -849,10 +918,14 @@
           "description": "包含 HTML 和 RTF；0 表示不限制。",
           "title": "文本最大收录大小"
         },
+        "mergeLinesApps": {
+          "description": "从这些应用复制的文字，段落内的换行会自动合并，适合 PDF 阅读器。空行分隔的段落会保留。",
+          "title": "合并换行的应用"
+        },
         "order": {
           "controlLabel": "管理",
           "description": "同时有多种格式时，按这个顺序决定保存哪一种。",
-          "title": "采集顺序"
+          "title": "格式优先级"
         }
       },
       "control": {
@@ -877,7 +950,7 @@
         "reopenOnboarding": {
           "controlLabel": "打开",
           "description": "再次查看首次使用引导，不会重置当前设置或历史记录。",
-          "title": "重新打开引导"
+          "title": "首次使用引导"
         },
         "trayClick": {
           "options": {
@@ -966,7 +1039,7 @@
           "title": "默认保留时长"
         },
         "rules": {
-          "description": "按内容类型、大小、来源等条件单独设置保留时长。从上到下匹配，记录按第一条命中的规则处理。",
+          "description": "按内容类型、大小等条件单独设置保留时长。从上到下匹配，记录按第一条命中的规则处理。",
           "title": "自定义规则"
         }
       },
@@ -993,7 +1066,7 @@
           "title": "日志目录"
         },
         "storageLimit": {
-          "description": "左下角存储占用以此为满格，超出后按下一项处理。",
+          "description": "「数据」页的存储空间以此为上限，超出后按下一项处理。",
           "title": "存储上限"
         },
         "storageLimitAction": {
@@ -1039,10 +1112,11 @@
             "disabled": "禁用",
             "doubleClickCopy": "双击复制",
             "doubleClickPaste": "双击粘贴",
+            "doubleClickView": "双击查看大图 / 编辑文本",
             "singleClickCopy": "单击复制",
             "singleClickPaste": "单击粘贴"
           },
-          "title": "鼠标左键"
+          "title": "左键点击卡片"
         },
         "fileMode": {
           "description": "只粘贴路径，不粘贴文件本身。",
@@ -1056,7 +1130,7 @@
             "singleClickPaste": "粘贴",
             "singleClickPastePlain": "粘贴为纯文本"
           },
-          "title": "鼠标中键"
+          "title": "中键点击卡片"
         },
         "plainDefault": {
           "description": "去掉 HTML、RTF 等格式。",
@@ -1077,7 +1151,7 @@
           "title": "辅助功能访问权限"
         },
         "adminRestartConfirm": {
-          "content": "快贴 需要以管理员权限重启后，此设置才会生效。Windows 可能会弹出用户账户控制确认窗口。",
+          "content": "快贴需要以管理员权限重启后，此设置才会生效。Windows 可能会弹出用户账户控制确认窗口。",
           "ok": "重启",
           "title": "需要重启"
         },
@@ -1086,7 +1160,7 @@
           "title": "完全磁盘访问权限"
         },
         "runAsAdministrator": {
-          "description": "用于以管理员权限重启 快贴，并在需要时让后续启动保持提权运行。",
+          "description": "需要往以管理员身份运行的程序里粘贴时开启；开启后快贴会以管理员身份重启。",
           "statusElevated": "当前：已以管理员身份运行。",
           "statusNormal": "当前：未以管理员身份运行。",
           "title": "管理员权限启动"
@@ -1123,7 +1197,7 @@
         "textView": {
           "description": "预览文本时显示原文，或拆成词块逐个点选。",
           "options": {
-            "plain": "默认",
+            "plain": "原文",
             "words": "选词"
           },
           "title": "文本预览方式"
@@ -1131,10 +1205,10 @@
       },
       "search": {
         "clearOnHide": {
-          "title": "清空上次搜索"
+          "title": "隐藏时清空搜索"
         },
         "defaultFocus": {
-          "title": "聚焦搜索框"
+          "title": "打开时聚焦搜索框"
         },
         "sort": {
           "options": {
@@ -1232,7 +1306,7 @@
           "title": "修饰键"
         },
         "winV": {
-          "description": "按 Win+V 唤起 快贴，替代 Windows 系统剪贴板历史面板。",
+          "description": "按 Win+V 唤起快贴，替代 Windows 系统剪贴板历史面板。",
           "title": "接管 Win+V"
         }
       },
@@ -1244,6 +1318,7 @@
           "ignoredTitle": "已忽略的应用",
           "itemsUnit": "项",
           "itemUnit": "项",
+          "notAnApp": "无法识别这个应用",
           "refreshApps": "刷新可忽略应用",
           "searchPlaceholder": "搜索应用"
         },
@@ -1285,14 +1360,6 @@
         }
       },
       "window": {
-        "idleDestroySeconds": {
-          "description": "偏好设置、预览等窗口隐藏超过这段时间后释放，下次使用时自动重建。",
-          "title": "非剪贴板窗口空闲释放"
-        },
-        "lightweightMode": {
-          "description": "隐藏剪贴板窗口后暂停无谓刷新，非剪贴板窗口空闲后释放渲染资源。",
-          "title": "轻量模式"
-        },
         "position": {
           "options": {
             "center": "屏幕中间",
@@ -1302,17 +1369,18 @@
           "title": "窗口位置"
         },
         "scrollToTopOnOpen": {
-          "title": "回到列表顶部"
+          "title": "打开时回到列表顶部"
         },
         "selectCategoryOnOpen": {
           "options": {
             "all": "全部",
             "files": "文件",
             "image": "图片",
+            "link": "链接",
             "preserve": "保持上次选择",
             "text": "文本"
           },
-          "title": "选中分类"
+          "title": "打开时选中的分类"
         },
         "selectGroupOnOpen": {
           "options": {
@@ -1320,7 +1388,7 @@
             "missingGroup": "已删除的分组",
             "preserve": "保持上次选择"
           },
-          "title": "选中分组"
+          "title": "打开时选中的分组"
         },
         "selectRangeOnOpen": {
           "options": {
@@ -1328,7 +1396,7 @@
             "favorite": "收藏",
             "preserve": "保持上次选择"
           },
-          "title": "选中范围"
+          "title": "打开时选中的范围"
         }
       }
     },
@@ -1460,6 +1528,6 @@
     "unavailable": "自定义数据目录 {{path}} 当前不可用，本次使用默认目录。重新连接后重启快贴即可恢复，不再使用它可以还原默认目录。",
     "unavailableToast": "自定义数据目录当前不可用，本次使用默认目录"
   },
-  "title": "快贴 偏好设置",
+  "title": "快贴偏好设置",
   "windowTitle": "偏好设置"
 }

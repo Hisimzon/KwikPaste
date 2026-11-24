@@ -55,6 +55,11 @@ fn platform_keys() -> serde_json::Value {
     serde_json::Value::Object(platforms)
 }
 
+/// 发布流水线给这种形态、这个版本起的产物名，签名的 trusted comment 记的就是它。
+fn asset(kind: &InstallKind, version: &str) -> String {
+    format!("KwikPaste{}", kind.asset_suffix(version).unwrap())
+}
+
 /// 一份清单：所有 Windows 平台键都指向同一个安装包地址。
 fn manifest(version: &str, url: &str, signature: &str) -> Vec<u8> {
     let mut platforms = platform_keys();
@@ -134,12 +139,16 @@ fn silent_update_downloads_without_prompt_or_badge_and_waits_for_idle() {
     let key = TestKey::generate();
     let installer = b"MZ silent installer";
     let files = Server::start(vec![Reply::ok(installer.to_vec())]);
-    let body = manifest(
-        "2.0.1",
-        &files.url("/setup.exe"),
-        &key.sign(installer, true),
-    );
-    let manifests = Server::start(vec![Reply::ok(body.clone()), Reply::ok(body)]);
+    let signature = key.sign_as(installer, &asset(&InstallKind::Nsis, "2.0.1"));
+    // 第二次检查换了镜像：地址不同、签名相同，仍是已下载的那个包。
+    let manifests = Server::start(vec![
+        Reply::ok(manifest("2.0.1", &files.url("/setup.exe"), &signature)),
+        Reply::ok(manifest(
+            "2.0.1",
+            &files.url("/mirror/setup.exe"),
+            &signature,
+        )),
+    ]);
     let Setup {
         test,
         updater,
@@ -243,7 +252,7 @@ fn failed_handoff_version_falls_back_to_prompt_for_this_run() {
     let body = manifest(
         "2.0.1",
         &files.url("/setup.exe"),
-        &key.sign(installer, true),
+        &key.sign_as(installer, &asset(&InstallKind::Nsis, "2.0.1")),
     );
     let server = Server::start(vec![Reply::ok(body.clone()), Reply::ok(body)]);
     let Setup {
@@ -310,6 +319,17 @@ fn silent_nsis_parameters_and_hidden_restart_arguments_preserve_manual_mode() {
         vec![OsString::from(AUTO_LAUNCH_ARG)]
     );
     assert_eq!(restart_args(original.clone(), false), original);
+    let crashed = [
+        "/custom",
+        "--relaunched-after-crash",
+        "3",
+        "--crash-degraded",
+        "D:/Backups/history.KwikPasteBak",
+    ];
+    assert_eq!(
+        restart_args(crashed.map(OsString::from).to_vec(), false),
+        vec![OsString::from("/custom")]
+    );
     #[cfg(target_os = "windows")]
     assert_eq!(
         restart_args(
@@ -392,7 +412,7 @@ fn check_download_and_install_through_the_nsis_handoff() {
     let manifests = Server::start(vec![Reply::ok(manifest(
         "2.0.1",
         &installer_url,
-        &key.sign(&installer, true),
+        &key.sign_as(&installer, &asset(&InstallKind::Nsis, "2.0.1")),
     ))]);
     let stable = Url::parse(&manifests.url("/v2/stable/latest.json")).unwrap();
     let Setup {
@@ -650,7 +670,7 @@ fn staging_failure_keeps_scheduler_alive_and_exposes_a_manual_retry() {
     let body = manifest(
         "2.0.1",
         &files.url("/portable.zip"),
-        &key.sign(&bytes, true),
+        &key.sign_as(&bytes, &asset(&InstallKind::Portable, "2.0.1")),
     );
     let manifests = Server::start(vec![Reply::ok(body.clone()), Reply::ok(body)]);
     let Setup {
