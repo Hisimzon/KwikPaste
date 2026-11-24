@@ -210,7 +210,7 @@ fn backup_extension_validation_rejects_other_suffix() {
 
 #[test]
 fn encrypted_payload_header_round_trips() {
-    let encrypted = encrypt_payload(b"hello", "password-123").unwrap();
+    let encrypted = encrypt_payload(b"hello".to_vec(), "password-123").unwrap();
     let mut bytes = Vec::new();
     write_header(&mut bytes, &encrypted.header).unwrap();
     bytes.extend_from_slice(&encrypted.ciphertext);
@@ -225,11 +225,11 @@ fn encrypted_payload_header_round_trips() {
 
 #[test]
 fn oversized_kdf_parameters_are_rejected_before_deriving() {
-    let encrypted = encrypt_payload(b"hello", PASSWORD).unwrap();
+    let encrypted = encrypt_payload(b"hello".to_vec(), PASSWORD).unwrap();
     let kdf = encrypted.header.kdf.as_ref().unwrap();
     let cipher = encrypted.header.cipher.as_ref().unwrap();
     assert_eq!(
-        decrypt_payload(&encrypted.ciphertext, PASSWORD, kdf, cipher).unwrap(),
+        decrypt_payload(encrypted.ciphertext.clone(), PASSWORD, kdf, cipher).unwrap(),
         b"hello"
     );
 
@@ -245,7 +245,7 @@ fn oversized_kdf_parameters_are_rejected_before_deriving() {
             parallelism,
             salt: kdf.salt.clone(),
         };
-        assert!(decrypt_payload(&encrypted.ciphertext, PASSWORD, &crafted, cipher).is_err());
+        assert!(decrypt_payload(encrypted.ciphertext.clone(), PASSWORD, &crafted, cipher).is_err());
     }
 }
 
@@ -266,7 +266,7 @@ fn payload_extraction_keeps_files_and_rejects_links_and_escapes() {
         writer.start_file("db/clipboard.db", options).unwrap();
         writer.write_all(b"db").unwrap();
     });
-    let dir = extract_payload_zip(&payload).unwrap();
+    let dir = extract_payload_zip(Cursor::new(&payload)).unwrap();
     assert_eq!(
         std::fs::read(dir.path().join("db").join("clipboard.db")).unwrap(),
         b"db"
@@ -278,13 +278,13 @@ fn payload_extraction_keeps_files_and_rejects_links_and_escapes() {
             .add_symlink("config/settings.json", "/etc/passwd", options)
             .unwrap();
     });
-    assert!(extract_payload_zip(&link).is_err());
+    assert!(extract_payload_zip(Cursor::new(&link)).is_err());
 
     let escape = zip_bytes(|writer| {
         writer.start_file("../outside.txt", options).unwrap();
         writer.write_all(b"x").unwrap();
     });
-    assert!(extract_payload_zip(&escape).is_err());
+    assert!(extract_payload_zip(Cursor::new(&escape)).is_err());
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn inspect_backup_reader_recognizes_plain_zip() {
 
 #[test]
 fn inspect_backup_reader_recognizes_encrypted_container() {
-    let encrypted = encrypt_payload(b"hello", "password-123").unwrap();
+    let encrypted = encrypt_payload(b"hello".to_vec(), "password-123").unwrap();
     let mut bytes = Vec::new();
     write_header(&mut bytes, &encrypted.header).unwrap();
     bytes.extend_from_slice(&encrypted.ciphertext);
@@ -973,7 +973,7 @@ fn favorites_backup_carries_only_favorites() {
     assert_eq!((result.text_count, result.image_count), (1, 1));
 
     let backup = PathBuf::from(&result.path);
-    let extracted = extract_payload_zip(&fs::read(&backup).unwrap()).unwrap();
+    let extracted = extract_payload_zip(File::open(&backup).unwrap()).unwrap();
     let manifest = read_json_file(&extracted.path().join(MANIFEST_FILENAME)).unwrap();
     assert_eq!(manifest["scope"]["favoritesOnly"], json!(true));
     assert_eq!(
@@ -1340,7 +1340,7 @@ fn overwrite_with_unreadable_settings_changes_nothing() {
     let temp = tempdir().unwrap();
     let backup = craft_backup(temp.path(), |_| Box::pin(async {}));
     // 把设置换成读不懂的内容后重新打包。
-    let extracted = extract_payload_zip(&fs::read(&backup).unwrap()).unwrap();
+    let extracted = extract_payload_zip(File::open(&backup).unwrap()).unwrap();
     fs::write(
         extracted.path().join("config").join("settings.json"),
         b"[not settings",
@@ -1570,6 +1570,8 @@ fn partial_backup_strips_ocr_text_while_full_backup_keeps_it() {
             sqlx::query("INSERT INTO image_texts(item_id,status,text,lines,attempts,created_at,updated_at) SELECT id,'done','private OCR sentinel',?,1,created_at,created_at FROM clipboard_items WHERE kind='image'")
                 .bind(r#"[{"text":"private OCR sentinel","quad":[[0,0],[1,0],[1,1],[0,1]]}]"#)
                 .execute(&core.0.db.pool().await).await.unwrap();
+            sqlx::query("INSERT INTO item_translations(item_id,source_hash,text,target_lang,provider,created_at,updated_at) SELECT id,content_hash,'private translation sentinel','en','volc',created_at,created_at FROM clipboard_items WHERE kind='image'")
+                .execute(&core.0.db.pool().await).await.unwrap();
             Ok(())
         }
     })).unwrap();
@@ -1580,8 +1582,7 @@ fn partial_backup_strips_ocr_text_while_full_backup_keeps_it() {
             .path,
     );
     for (path, expected) in [(full, 1), (partial, 0)] {
-        let payload = read_backup_payload(&path, None).unwrap();
-        let root = extract_payload_zip(&payload).unwrap();
+        let root = extract_payload_zip(File::open(&path).unwrap()).unwrap();
         source.fixture.runtime.handle().block_on(async {
             let pool = SqlitePoolOptions::new()
                 .max_connections(1)
@@ -1602,6 +1603,11 @@ fn partial_backup_strips_ocr_text_while_full_backup_keeps_it() {
             .await
             .unwrap();
             assert_eq!((rows, hits), (expected, expected));
+            let translations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM item_translations")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(translations, expected);
             let lines: Option<String> = sqlx::query_scalar("SELECT lines FROM image_texts")
                 .fetch_optional(&pool)
                 .await

@@ -13,9 +13,13 @@ pub enum MenuAction {
     PasteAsPath,
     Copy,
     ViewImage,
+    PinToScreen,
     SaveImage,
     CopyImageText,
     SplitWords,
+    Translate,
+    CopyTranslation,
+    PasteTranslation,
     OpenLink,
     SendEmail,
     RevealInFinder,
@@ -39,9 +43,13 @@ const GROUPS: [&[MenuAction]; 4] = [
         MenuAction::PasteAsPath,
         MenuAction::Copy,
         MenuAction::ViewImage,
+        MenuAction::PinToScreen,
         MenuAction::SaveImage,
         MenuAction::CopyImageText,
         MenuAction::SplitWords,
+        MenuAction::Translate,
+        MenuAction::CopyTranslation,
+        MenuAction::PasteTranslation,
     ],
     &[
         MenuAction::OpenLink,
@@ -71,6 +79,9 @@ impl MenuAction {
             Self::SaveImage => ItemAction::SaveImage,
             Self::CopyImageText => ItemAction::CopyImageText,
             Self::SplitWords => ItemAction::SplitWords,
+            Self::Translate => ItemAction::Translate,
+            Self::CopyTranslation => ItemAction::CopyTranslation,
+            Self::PasteTranslation => ItemAction::PasteTranslation,
             Self::OpenLink => ItemAction::OpenLink,
             Self::SendEmail => ItemAction::SendEmail,
             Self::RevealInFinder => ItemAction::RevealInFinder,
@@ -81,7 +92,11 @@ impl MenuAction {
             Self::RestoreOriginal => ItemAction::RestoreOriginal,
             Self::Select => ItemAction::Select,
             Self::Delete => ItemAction::Delete,
-            Self::PasteImageAsFile | Self::MoveToGroup | Self::EditContent | Self::ViewImage => {
+            Self::PasteImageAsFile
+            | Self::MoveToGroup
+            | Self::EditContent
+            | Self::ViewImage
+            | Self::PinToScreen => {
                 return None;
             }
         })
@@ -95,6 +110,7 @@ impl MenuAction {
             Self::PasteAsPlainText | Self::PasteAsPath => PanelAction::PasteSelectedPlain,
             Self::Copy => PanelAction::CopySelected,
             Self::SplitWords => PanelAction::SplitSelected,
+            Self::Translate => PanelAction::TranslateSelected,
             Self::OpenLink | Self::SendEmail | Self::RevealInFinder | Self::RevealInExplorer => {
                 PanelAction::OpenSelected
             }
@@ -105,8 +121,11 @@ impl MenuAction {
             Self::ViewImage => PanelAction::ViewImage,
             Self::Delete => PanelAction::DeleteSelected,
             Self::PasteImageAsFile
+            | Self::PinToScreen
             | Self::SaveImage
             | Self::CopyImageText
+            | Self::CopyTranslation
+            | Self::PasteTranslation
             | Self::MoveToGroup
             | Self::RestoreOriginal
             | Self::Select => {
@@ -125,9 +144,13 @@ impl MenuAction {
             Self::PasteAsPath => "clipboard:menu.pasteAsPath",
             Self::Copy => "clipboard:menu.copy",
             Self::ViewImage => "clipboard:menu.viewImage",
+            Self::PinToScreen => "clipboard:menu.pinToScreen",
             Self::SaveImage => "clipboard:menu.saveImage",
             Self::CopyImageText => "clipboard:menu.copyImageText",
             Self::SplitWords => "clipboard:menu.splitWords",
+            Self::Translate => "clipboard:menu.translate",
+            Self::CopyTranslation => "clipboard:menu.copyTranslation",
+            Self::PasteTranslation => "clipboard:menu.pasteTranslation",
             Self::OpenLink => "clipboard:menu.openLink",
             Self::SendEmail => "clipboard:menu.sendEmail",
             Self::RevealInFinder => "clipboard:menu.revealInFinder",
@@ -155,21 +178,26 @@ pub fn menu_groups(item: &ListItem, can_delete: bool, has_groups: bool) -> Vec<V
             item.kind == super::item::ItemKind::Image
                 && item.available_actions.contains(&ItemAction::Paste)
         }
-        // 原图还在才能另存，也才能看大图。
+        // 原图还在才能另存，也才能看大图、贴到屏幕。
         MenuAction::ViewImage => {
             item.kind == super::item::ItemKind::Image
                 && item.available_actions.contains(&ItemAction::SaveImage)
         }
+        MenuAction::PinToScreen => match item.kind {
+            super::item::ItemKind::Text => true,
+            super::item::ItemKind::Image => item.available_actions.contains(&ItemAction::SaveImage),
+            super::item::ItemKind::Files => false,
+        },
         _ => match action.item_action() {
-            Some(ItemAction::Delete) if !can_delete => false,
             Some(wanted) => item.available_actions.contains(&wanted),
             None => has_groups,
         },
     };
-    let any_core_action = GROUPS
-        .iter()
-        .flat_map(|group| group.iter())
-        .any(|action| action.item_action().is_some() && available(*action));
+    let any_core_action = GROUPS.iter().flat_map(|group| group.iter()).any(|action| {
+        action.item_action().is_some()
+            && (can_delete || *action != MenuAction::Delete)
+            && available(*action)
+    });
     if !any_core_action {
         return Vec::new();
     }
@@ -215,7 +243,7 @@ mod tests {
         assert_eq!(
             menu_groups(&item, true, false),
             vec![
-                vec![MenuAction::Paste, MenuAction::Copy],
+                vec![MenuAction::Paste, MenuAction::Copy, MenuAction::PinToScreen],
                 vec![MenuAction::OpenLink],
                 vec![MenuAction::ToggleFavorite, MenuAction::EditContent],
                 vec![MenuAction::Select, MenuAction::Delete],
@@ -224,18 +252,19 @@ mod tests {
     }
 
     #[test]
-    fn protected_records_lose_delete_and_groups_add_move() {
+    fn protected_records_keep_delete_and_groups_add_move() {
         let item = with_actions(&[ItemAction::Paste, ItemAction::Delete, ItemAction::EditNote]);
 
         assert_eq!(
             menu_groups(&item, false, true),
             vec![
-                vec![MenuAction::Paste],
+                vec![MenuAction::Paste, MenuAction::PinToScreen],
                 vec![
                     MenuAction::MoveToGroup,
                     MenuAction::EditNote,
                     MenuAction::EditContent
                 ],
+                vec![MenuAction::Delete],
             ]
         );
     }
@@ -245,7 +274,10 @@ mod tests {
         let mut item = with_actions(&[ItemAction::EditNote]);
         assert_eq!(
             menu_groups(&item, true, false),
-            vec![vec![MenuAction::EditNote, MenuAction::EditContent]]
+            vec![
+                vec![MenuAction::PinToScreen],
+                vec![MenuAction::EditNote, MenuAction::EditContent]
+            ]
         );
         assert_eq!(
             MenuAction::EditContent
@@ -276,6 +308,63 @@ mod tests {
                 MenuAction::PasteImageAsFile,
                 MenuAction::Copy
             ]]
+        );
+    }
+
+    #[test]
+    fn images_with_an_original_can_be_viewed_and_pinned_to_the_screen() {
+        let mut item = with_actions(&[ItemAction::Copy, ItemAction::SaveImage]);
+        item.kind = super::super::item::ItemKind::Image;
+        assert_eq!(
+            menu_groups(&item, true, false),
+            vec![vec![
+                MenuAction::Copy,
+                MenuAction::ViewImage,
+                MenuAction::PinToScreen,
+                MenuAction::SaveImage
+            ]]
+        );
+    }
+
+    #[test]
+    fn translation_actions_close_the_first_group() {
+        let item = with_actions(&[
+            ItemAction::Paste,
+            ItemAction::Copy,
+            ItemAction::SplitWords,
+            ItemAction::Translate,
+        ]);
+        assert_eq!(
+            menu_groups(&item, true, false)[0],
+            vec![
+                MenuAction::Paste,
+                MenuAction::Copy,
+                MenuAction::PinToScreen,
+                MenuAction::SplitWords,
+                MenuAction::Translate
+            ]
+        );
+        let item = with_actions(&[
+            ItemAction::Paste,
+            ItemAction::SplitWords,
+            ItemAction::CopyTranslation,
+            ItemAction::PasteTranslation,
+        ]);
+        assert_eq!(
+            menu_groups(&item, true, false)[0],
+            vec![
+                MenuAction::Paste,
+                MenuAction::PinToScreen,
+                MenuAction::SplitWords,
+                MenuAction::CopyTranslation,
+                MenuAction::PasteTranslation
+            ]
+        );
+        assert_eq!(
+            MenuAction::Translate
+                .accelerator(&kwikpaste_core::settings::Shortcuts::default())
+                .as_deref(),
+            Some("secondary-l")
         );
     }
 

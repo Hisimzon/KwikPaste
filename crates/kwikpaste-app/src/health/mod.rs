@@ -37,9 +37,9 @@ pub use crash::{Restart, exit_code, request_restart, restart_requests, spawn_rel
 use crate::selftest;
 
 /// 崩溃重启的子进程带的参数：`--relaunched-after-crash <n>`，`n` 是 10 分钟内的第几次。
-pub const RELAUNCHED: &str = "--relaunched-after-crash";
+pub const RELAUNCHED: &str = kwikpaste_os::single_instance::RELAUNCHED_AFTER_CRASH_ARG;
 /// 降级重启另带的参数。
-pub const DEGRADED: &str = "--crash-degraded";
+pub const DEGRADED: &str = kwikpaste_os::single_instance::CRASH_DEGRADED_ARG;
 /// Internal helper process mode. It is handled before GPUI/logging is initialized.
 pub const WATCHDOG: &str = "--watchdog";
 
@@ -130,7 +130,7 @@ pub fn install() {
         logger::init(paths.log_dir());
     }
 
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = kwikpaste_os::args().collect();
     let relaunch = parse_relaunch(args.iter().cloned());
     let degraded = args.iter().any(|arg| arg == DEGRADED);
     let restart_enabled = !selftest::active() || selftest::enabled(selftest::CRASH_RESTART);
@@ -165,7 +165,7 @@ pub fn install() {
 
 /// Handle the helper process before any GPUI or renderer code is loaded.
 pub fn run_watchdog_if_requested() -> bool {
-    let mut args = std::env::args().skip(1);
+    let mut args = kwikpaste_os::args().skip(1);
     if args.next().as_deref() != Some(WATCHDOG) {
         return false;
     }

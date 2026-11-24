@@ -107,7 +107,7 @@ impl ClipboardList {
                     entry = entry.shortcut(shortcut::display_keystroke(&accelerator));
                 }
                 if action == MenuAction::Delete {
-                    entry = entry.danger();
+                    entry = entry.danger().disabled(!can_delete);
                 }
                 entries.push(entry.into());
             }
@@ -183,11 +183,15 @@ impl ClipboardList {
             MenuAction::Copy => self.copy(id, false, None, window, cx),
             MenuAction::CopyImageText => self.copy_image_text(id, window, cx),
             MenuAction::ViewImage => self.view_image(id, cx),
+            MenuAction::PinToScreen => self.pin_to_screen(&item, cx),
             MenuAction::SaveImage => {
                 self.close_preview_of(&id, cx);
                 save_image(self.source.image_save(id), window, cx);
             }
             MenuAction::SplitWords => self.split(&item, cx),
+            MenuAction::Translate => self.translate(id, window, cx),
+            MenuAction::CopyTranslation => self.copy_translation(id, window, cx),
+            MenuAction::PasteTranslation => self.paste_translation(id, cx),
             MenuAction::OpenLink => self.open(id, OpenTarget::Link, window, cx),
             MenuAction::SendEmail => self.open(id, OpenTarget::Email, window, cx),
             MenuAction::RevealInFinder | MenuAction::RevealInExplorer => {

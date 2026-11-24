@@ -344,7 +344,7 @@ impl Bench {
 
 /// 跑分的输出目录：`--selftest-out <目录>`，默认 `<临时目录>/kwikpaste-list-bench`。
 fn out_dir() -> PathBuf {
-    let mut args = std::env::args();
+    let mut args = kwikpaste_os::args();
     while let Some(arg) = args.next() {
         if arg == "--selftest-out"
             && let Some(dir) = args.next()
@@ -614,14 +614,16 @@ fn run_step(
             if let Ok(mut store) = bench.borrow().store.lock() {
                 store.insert_newest(item);
             }
-            bench.borrow_mut().deferred_ids.push(id);
+            bench.borrow_mut().deferred_ids.push(id.clone());
             bench
                 .borrow_mut()
                 .check("A1 new item while scrolled (deferred)", list, None, true);
             list.on_update(
                 ListUpdate::Upserted {
+                    id,
                     kind: ItemKind::Text,
                     deduplicated: false,
+                    group_id: None,
                 },
                 cx,
             );
@@ -746,8 +748,10 @@ fn run_step(
             bench.borrow_mut().reuse_top = Some(top);
             list.on_update(
                 ListUpdate::Upserted {
+                    id: item.id.clone(),
                     kind: item.kind,
                     deduplicated: true,
+                    group_id: None,
                 },
                 cx,
             );
@@ -849,11 +853,13 @@ fn run_step(
             if let Ok(mut store) = bench.borrow().store.lock() {
                 store.insert_newest(item);
             }
-            bench.borrow_mut().deferred_ids.push(id);
+            bench.borrow_mut().deferred_ids.push(id.clone());
             list.on_update(
                 ListUpdate::Upserted {
+                    id,
                     kind: ItemKind::Text,
                     deduplicated: false,
+                    group_id: None,
                 },
                 cx,
             );
@@ -1106,7 +1112,7 @@ impl Bench {
 /// 跑分用的合成数据：1 万行（`--selftest-rows <n>` 可改），开头 2 条置顶。
 pub fn fixture(assets: &AssetSet) -> (FixtureStore, usize) {
     let mut rows = 10_000;
-    let mut args = std::env::args();
+    let mut args = kwikpaste_os::args();
     while let Some(arg) = args.next() {
         if arg == "--selftest-rows"
             && let Some(value) = args.next().and_then(|value| value.parse().ok())

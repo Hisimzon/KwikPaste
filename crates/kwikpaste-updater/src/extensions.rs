@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use kwikpaste_core::extensions::InstalledExtension;
 use kwikpaste_core::runtime::hop;
 use kwikpaste_core::{Core, Result};
-use kwikpaste_ext_protocol::{OCR_PROTOCOL, WETYPE_PROTOCOL};
+use kwikpaste_ext_protocol::{OCR_PROTOCOL, TRANSLATE_PROTOCOL, WETYPE_PROTOCOL};
 use serde::{Deserialize, Serialize};
 
 use crate::{DownloadProgress, UpdaterUi, lock, other};
@@ -14,6 +14,7 @@ use crate::{DownloadProgress, UpdaterUi, lock, other};
 const KNOWN: &[(&str, u32)] = &[
     ("ocr", OCR_PROTOCOL),
     ("wetype", WETYPE_PROTOCOL),
+    ("translate", TRANSLATE_PROTOCOL),
     #[cfg(target_os = "windows")]
     ("ocr-tiny", OCR_PROTOCOL),
     #[cfg(target_os = "windows")]
@@ -437,6 +438,22 @@ fn dev_catalog(exe: &std::path::Path) -> Result<Vec<CatalogEntry>> {
 }
 
 #[cfg(any(not(debug_assertions), test))]
+/// extension-release.yml 发布的文件名，签名的 trusted comment 记的就是它：把签名绑到扩展 ID、版本和目标平台。
+fn asset_name(entry: &CatalogEntry) -> String {
+    let extension = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    format!(
+        "KwikPaste-ext-{}_{}_{}{extension}",
+        entry.id,
+        entry.version,
+        crate::target::extension_target()
+    )
+}
+
+#[cfg(any(not(debug_assertions), test))]
 /// 大小与签名均通过后才能进入 Core；调用方持有临时目录，所有返回路径都会清理。
 async fn download_verified(
     client: &reqwest::Client,
@@ -448,7 +465,11 @@ async fn download_verified(
     let downloaded =
         crate::download::fetch_to_file(client, &entry.url, staged, MAX_EXTENSION_BYTES, progress)
             .await?;
-    crate::verify::verify(&std::fs::read(staged)?, &entry.signature, public_key)?;
+    let signed = crate::verify::verify(&std::fs::read(staged)?, &entry.signature, public_key)?;
+    let expected = asset_name(entry);
+    if signed != expected {
+        anyhow::bail!("the signature is for {signed}, not {expected}");
+    }
     if downloaded != entry.size {
         anyhow::bail!(
             "extension size mismatch: expected {}, got {downloaded}",

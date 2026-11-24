@@ -107,6 +107,31 @@ impl TextInput {
         })
     }
 
+    /// 正在编辑时按失焦提交一次（[`Self::on_commit`]）。关窗前用：移除窗口不会再发失焦。
+    pub fn commit_if_focused(&self, window: &Window, cx: &mut App) {
+        if self.is_focused(window, cx) {
+            self.state.update(cx, |_, cx| cx.emit(InputEvent::Blur));
+        }
+    }
+
+    /// 失焦或回车时回调当前内容，用于不该每个键都落盘的输入。返回的订阅要由视图保存。
+    pub fn on_commit<V: 'static>(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<V>,
+        handler: impl Fn(&mut V, SharedString, &mut Window, &mut Context<V>) + 'static,
+    ) -> Subscription {
+        cx.subscribe_in(
+            &self.state,
+            window,
+            move |view, state, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    handler(view, state.read(cx).value(), window, cx);
+                }
+            },
+        )
+    }
+
     /// 内容变化（输入法组字期间不发，组字结束时补发）、获得焦点、失去焦点。返回的订阅要由视图保存。
     pub fn on_event_in<V: 'static>(
         &self,

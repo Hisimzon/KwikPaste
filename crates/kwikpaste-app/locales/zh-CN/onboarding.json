@@ -11,6 +11,7 @@
     "cards": {
       "open": {
         "description": "用快捷键随时唤起剪贴板窗口。",
+        "descriptionWithShortcut": "按 {{shortcut}} 随时唤起剪贴板窗口。",
         "title": "快速打开"
       },
       "preferences": {
@@ -23,18 +24,18 @@
       }
     },
     "description": "关键设置已经准备好，接下来就可以开始记录、搜索和复用复制过的内容。",
-    "logoAlt": "快贴 图标",
-    "title": "开始使用 快贴"
+    "logoAlt": "快贴图标",
+    "title": "开始使用快贴"
   },
   "ignoreApps": {
-    "description": "选择不需要记录的来源应用，密码管理器、密钥工具或临时窗口都可以忽略；从勾选的应用复制的内容不会写入剪贴板历史。",
+    "description": "勾选的应用里复制的内容不会被记录，适合密码管理器、密钥工具等。",
     "manage": "在偏好设置中管理",
     "title": "设置忽略应用"
   },
   "permissions": {
     "description": {
-      "macos": "快贴 在 macOS 上需要辅助功能和完全磁盘访问权限来完成核心工作流。",
-      "windows": "快贴 在 Windows 上需要管理员权限启动来完成部分系统级工作流。"
+      "macos": "快贴在 macOS 上需要辅助功能和完全磁盘访问权限来完成核心工作流。",
+      "windows": "快贴在 Windows 上需要管理员权限启动来完成部分系统级工作流。"
     },
     "title": "开启必要权限"
   },
@@ -65,7 +66,7 @@
         "title": "即时搜索"
       }
     },
-    "logoAlt": "快贴 图标",
-    "title": "欢迎使用 快贴"
+    "logoAlt": "快贴图标",
+    "title": "欢迎使用快贴"
   }
 }

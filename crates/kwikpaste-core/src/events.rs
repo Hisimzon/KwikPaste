@@ -38,11 +38,19 @@ pub enum CoreEvent {
     WeTypeChanged,
     /// 图片文字识别状态变化；后台进度最多每秒两次，按需识别落库后立即通知。
     OcrChanged,
+    /// 一条记录的翻译开始、完成或失败了，列表和预览据此刷新这条记录；
+    /// `None` 表示不止一条（清除译文、自动队列因失败清空）。
+    TranslationChanged {
+        id: Option<String>,
+    },
     /// 一条记录入库或命中已有内容（1.x `clipboard://updated` 的 `{ id, kind, deduplicated }`）。
     ClipboardUpserted {
         id: String,
         kind: ClipboardKind,
         deduplicated: bool,
+        /// 新记录要归入的自定义分组（自动分组规则命中时），正在看这个分组的列表据此刷新。
+        /// 复用已有记录时为 `None`。
+        group_id: Option<String>,
     },
     /// 自动或手动清理删掉了记录（1.x `clipboard://updated` 的 `{ cleanup }`），列表需要整体刷新。
     ClipboardCleaned {

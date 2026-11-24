@@ -5,7 +5,7 @@ exclude = ["src-tauri", "third_party"]
 resolver = "3"
 
 [workspace.package]
-version = "2.0.9"
+version = "2.0.10"
 edition = "2024"
 authors = ["LILTT"]
 license = "Apache-2.0"
@@ -33,6 +33,7 @@ kwikpaste-core = { path = "crates/kwikpaste-core" }
 blake3 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 dirs = "6"
+fancy-regex = "0.20"
 log = "0.4"
 regex = "1"
 semver = "1"
@@ -129,6 +130,7 @@ unexpected_cfgs = "deny"
 gpui-pre-windows = { path = "third_party/gpui/gpui-pre-windows" }
 gpui-pre-macos = { path = "third_party/gpui/gpui-pre-macos" }
 gpui-pre = { path = "third_party/gpui/gpui-pre" }
+gpui-component = { path = "third_party/gpui/gpui-component" }
 
 [profile.dev]
 debug = "line-tables-only"

@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{anyhow, Context};
 use argon2::{Algorithm, Argon2, Params, Version};
-use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use flate2::read::GzDecoder;
@@ -66,6 +66,8 @@ const ARGON2_PARALLELISM_MAX: u32 = 16;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
+/// Poly1305 标签长度：就地加密时追加在密文后面。
+const TAG_LEN: usize = 16;
 const SETTINGS_FILENAME: &str = "settings.json";
 const DB_FILENAME: &str = "clipboard.db";
 const DB_ARCHIVE_DIR: &str = "db";
@@ -293,12 +295,16 @@ async fn export_history_backup(
     // 删图片的清理与删除都要独占锁；导出持共享锁即可挡住它们，采集照常进行。
     let _publication = core.cleanup.image_publication().await;
     let pool = core.db.pool().await;
-    // 部分备份的源文件在临时目录里，打包完才能删。
+    // 数据库快照（部分备份还有裁剪后的源文件）在临时目录里，打包完才能删。
     let mut _staged = None;
     let (source_paths, counts) = if options.scope.is_all() {
         let counts = load_counts(&pool).await?;
-        checkpoint_database(&pool).await?;
-        (backup_source_paths(&core.paths)?, counts)
+        let staged = tempfile::tempdir().context("failed to create backup snapshot directory")?;
+        let mut paths = backup_source_paths(&core.paths)?;
+        paths.db_path = staged.path().join(DB_FILENAME);
+        snapshot_database(&pool, &paths.db_path).await?;
+        _staged = Some(staged);
+        (paths, counts)
     } else {
         let (staged, counts) = stage_scoped_source(core, &pool, &options.scope).await?;
         let paths = BackupSourcePaths {
@@ -356,13 +362,10 @@ async fn import_history_backup(
     } = input;
     let password = password.map(Zeroizing::new);
     let (temp, legacy) = blocking(move || {
-        let payload = read_backup_payload(&path, password.as_ref().map(|value| value.as_str()))?;
-        if payload.starts_with(GZIP_MAGIC) {
-            return Ok((extract_payload_tar_gz(&payload)?, true));
+        match open_backup_payload(&path, password.as_ref().map(|value| value.as_str()))? {
+            BackupPayload::File(file) => extract_payload(BufReader::new(file)),
+            BackupPayload::Decrypted(bytes) => extract_payload(Cursor::new(bytes)),
         }
-        let temp = extract_payload_zip(&payload)?;
-        validate_extracted_payload(temp.path())?;
-        Ok((temp, false))
     })
     .await?;
 
@@ -479,6 +482,18 @@ fn normalize_backup_path(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
+/// 用 `VACUUM INTO` 把当前库写成一份一致的快照。导出期间采集照常写库，
+/// 直接打包正在使用的主库文件会撞上自动 checkpoint 改写它。
+async fn snapshot_database(pool: &SqlitePool, target: &Path) -> Result<()> {
+    sqlx::query("VACUUM INTO ?")
+        .bind(target.to_string_lossy().into_owned())
+        .execute(pool)
+        .await
+        .context("failed to snapshot the database for backup")?;
+
+    Ok(())
+}
+
 async fn checkpoint_database(pool: &SqlitePool) -> Result<()> {
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(pool)
@@ -575,11 +590,7 @@ async fn stage_scoped_source(
 
     let staged = tempfile::tempdir().context("failed to create partial backup directory")?;
     let db_path = staged.path().join(DB_FILENAME);
-    sqlx::query("VACUUM INTO ?")
-        .bind(db_path.to_string_lossy().into_owned())
-        .execute(pool)
-        .await
-        .context("failed to copy the database for a partial backup")?;
+    snapshot_database(pool, &db_path).await?;
 
     let copy = SqlitePoolOptions::new()
         .max_connections(1)
@@ -656,10 +667,11 @@ async fn stage_scoped_source(
     Ok((staged, counts))
 }
 
-/// 部分备份不带图片识别文字：删掉派生的 OCR 正文、重建它的索引再 VACUUM，删掉的文字不留在索引段或空闲页里。
+/// 部分备份不带派生内容：删掉图片识别文字和译文、重建识别文字的索引再 VACUUM，删掉的文字不留在索引段或空闲页里。
 async fn strip_ocr_backup(pool: &SqlitePool) -> Result<()> {
     for statement in [
         "DELETE FROM image_texts",
+        "DELETE FROM item_translations",
         "INSERT INTO image_texts_fts(image_texts_fts) VALUES ('rebuild')",
         "VACUUM",
     ] {
@@ -905,13 +917,25 @@ fn write_container(
         }
         BackupExportMode::Encrypted => {
             let password = password.ok_or_else(|| anyhow!("missing backup password"))?;
+            let mut file = File::open(payload_path)
+                .with_context(|| format!("failed to open payload {payload_path:?}"))?;
+            let len = file
+                .metadata()
+                .context("failed to read backup payload metadata")?
+                .len();
+            // 一次留够标签的位置：就地加密不再整块重新分配，内存里只有一份载荷。
             let mut payload = Vec::new();
-            File::open(payload_path)
-                .with_context(|| format!("failed to open payload {payload_path:?}"))?
-                .read_to_end(&mut payload)
+            payload
+                .try_reserve_exact(
+                    usize::try_from(len)
+                        .context("backup payload is too large")?
+                        .saturating_add(TAG_LEN),
+                )
+                .context("backup payload is too large to encrypt")?;
+            file.read_to_end(&mut payload)
                 .context("failed to read backup payload")?;
 
-            let encrypted = encrypt_payload(&payload, &password)?;
+            let encrypted = encrypt_payload(payload, &password)?;
             write_header(&mut temp, &encrypted.header)?;
             temp.write_all(&encrypted.ciphertext)
                 .context("failed to write encrypted backup payload")?;
@@ -938,7 +962,8 @@ struct EncryptedPayload {
     ciphertext: Vec<u8>,
 }
 
-fn encrypt_payload(payload: &[u8], password: &str) -> Result<EncryptedPayload> {
+/// 就地加密：密文（带标签）复用 `payload` 的内存。
+fn encrypt_payload(mut payload: Vec<u8>, password: &str) -> Result<EncryptedPayload> {
     let mut salt = [0u8; SALT_LEN];
     let mut nonce = [0u8; NONCE_LEN];
     rand::rngs::OsRng.fill_bytes(&mut salt);
@@ -960,8 +985,8 @@ fn encrypt_payload(payload: &[u8], password: &str) -> Result<EncryptedPayload> {
     let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref())
         .context("failed to initialize backup cipher")?;
     let nonce = XNonce::from(nonce);
-    let ciphertext = cipher
-        .encrypt(&nonce, payload)
+    cipher
+        .encrypt_in_place(&nonce, b"", &mut payload)
         .map_err(|_| anyhow!("failed to encrypt backup payload"))?;
 
     Ok(EncryptedPayload {
@@ -980,7 +1005,7 @@ fn encrypt_payload(payload: &[u8], password: &str) -> Result<EncryptedPayload> {
                 nonce: nonce.to_vec(),
             }),
         },
-        ciphertext,
+        ciphertext: payload,
     })
 }
 
@@ -1004,23 +1029,30 @@ fn write_header<W: Write>(writer: &mut W, header: &ContainerHeader) -> Result<()
     Ok(())
 }
 
-fn read_backup_payload(path: &Path, password: Option<&str>) -> Result<Vec<u8>> {
+/// 备份载荷：明文备份直接从文件流式解包；加密备份读进一块内存就地解密，不另留一份密文。
+enum BackupPayload {
+    File(File),
+    Decrypted(Vec<u8>),
+}
+
+fn open_backup_payload(path: &Path, password: Option<&str>) -> Result<BackupPayload> {
     let mut file = File::open(path).with_context(|| format!("failed to open backup {path:?}"))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    let mut magic = Vec::with_capacity(MAGIC.len());
+    Read::by_ref(&mut file)
+        .take(MAGIC.len() as u64)
+        .read_to_end(&mut magic)
         .with_context(|| format!("failed to read backup {path:?}"))?;
 
-    if bytes.starts_with(ZIP_MAGIC) || bytes.starts_with(GZIP_MAGIC) {
-        return Ok(bytes);
+    if magic.starts_with(ZIP_MAGIC) || magic.starts_with(GZIP_MAGIC) {
+        file.rewind()
+            .with_context(|| format!("failed to read backup {path:?}"))?;
+        return Ok(BackupPayload::File(file));
     }
-    if !bytes.starts_with(MAGIC) && !bytes.starts_with(ECOPASTE_MAGIC) {
+    if !magic.starts_with(MAGIC) && !magic.starts_with(ECOPASTE_MAGIC) {
         return app_error("不是有效的 KwikPaste 备份文件");
     }
 
-    let mut cursor = Cursor::new(bytes.as_slice());
-    cursor.set_position(MAGIC.len() as u64);
-    let header = read_container_header_after_magic(&mut cursor)?;
-    let ciphertext_start = cursor.position() as usize;
+    let header = read_container_header_after_magic(&mut file)?;
     let Some(kdf) = header.kdf else {
         return app_error("加密备份文件头无效");
     };
@@ -1031,11 +1063,15 @@ fn read_backup_payload(path: &Path, password: Option<&str>) -> Result<Vec<u8>> {
         return app_error("请输入备份密码");
     };
 
-    decrypt_payload(&bytes[ciphertext_start..], password, &kdf, &cipher)
+    let mut ciphertext = Vec::new();
+    file.read_to_end(&mut ciphertext)
+        .with_context(|| format!("failed to read backup {path:?}"))?;
+    decrypt_payload(ciphertext, password, &kdf, &cipher).map(BackupPayload::Decrypted)
 }
 
+/// 就地解密：明文复用 `ciphertext` 的内存。
 fn decrypt_payload(
-    ciphertext: &[u8],
+    mut ciphertext: Vec<u8>,
     password: &str,
     kdf: &KdfHeader,
     cipher_header: &CipherHeader,
@@ -1072,17 +1108,35 @@ fn decrypt_payload(
     nonce.copy_from_slice(&cipher_header.nonce);
     let nonce = XNonce::from(nonce);
     cipher
-        .decrypt(&nonce, ciphertext)
-        .map_err(|_| AppError::Other(anyhow!("备份密码不正确或文件已损坏")))
+        .decrypt_in_place(&nonce, b"", &mut ciphertext)
+        .map_err(|_| AppError::Other(anyhow!("备份密码不正确或文件已损坏")))?;
+
+    Ok(ciphertext)
+}
+
+/// 解包备份载荷：zip 解到临时目录并检查必需文件；EcoPaste 0.x 的 tar.gz 返回 `true`。
+fn extract_payload<R: Read + Seek>(mut reader: R) -> Result<(TempDir, bool)> {
+    let mut magic = Vec::with_capacity(GZIP_MAGIC.len());
+    Read::by_ref(&mut reader)
+        .take(GZIP_MAGIC.len() as u64)
+        .read_to_end(&mut magic)
+        .context("failed to read backup payload")?;
+    reader.rewind().context("failed to read backup payload")?;
+    if magic.starts_with(GZIP_MAGIC) {
+        return Ok((extract_payload_tar_gz(reader)?, true));
+    }
+
+    let temp = extract_payload_zip(reader)?;
+    validate_extracted_payload(temp.path())?;
+    Ok((temp, false))
 }
 
 /// 把备份里的 zip 解到临时目录。只解普通文件和目录：zip 的 `extract` 遇到符号链接条目时按条目里
 /// 声称的大小预分配缓冲，手工构造的文件能让它 panic 或申请几十 GB；路径一律经 `enclosed_name`，
 /// 不会写到临时目录外面。
-fn extract_payload_zip(payload: &[u8]) -> Result<TempDir> {
+fn extract_payload_zip<R: Read + Seek>(payload: R) -> Result<TempDir> {
     let temp = tempfile::tempdir().context("failed to create temporary import directory")?;
-    let cursor = Cursor::new(payload);
-    let mut archive = ZipArchive::new(cursor).context("failed to read backup zip payload")?;
+    let mut archive = ZipArchive::new(payload).context("failed to read backup zip payload")?;
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -1112,7 +1166,7 @@ fn extract_payload_zip(payload: &[u8]) -> Result<TempDir> {
 }
 
 /// EcoPaste 0.x 的 tar.gz 只接受临时目录内的普通相对路径、文件和目录。
-fn extract_payload_tar_gz(payload: &[u8]) -> Result<TempDir> {
+fn extract_payload_tar_gz<R: Read>(payload: R) -> Result<TempDir> {
     let temp = tempfile::tempdir().context("failed to create temporary import directory")?;
     let mut archive = tar::Archive::new(GzDecoder::new(payload));
     for entry in archive
@@ -1253,45 +1307,59 @@ async fn import_ecopaste_history(
     backup.close().await;
     let rows = rows?;
 
-    let mut imported_items = 0;
-    let mut skipped_items = 0;
-    {
+    let (imported_items, skipped_items) = {
         let _publication = core.cleanup.image_publication().await;
-        let _upsert = core.upsert_lock.lock().await;
-        let pool = core.db.pool().await;
-        for row in rows {
-            let Some(payload) = row.payload(root)? else {
-                skipped_items += 1;
-                continue;
-            };
-            let settings = core.settings.snapshot();
-            let Some(mut item) = clipboard::build_item_with_settings(
-                &core.images,
-                &payload,
-                &settings.clipboard.capture,
-                &settings.clipboard.sensitive,
-                settings.clipboard.content.copy_plain,
-                settings.clipboard.compiled_rules(),
-            )?
-            else {
-                skipped_items += 1;
-                continue;
-            };
-            item.note = row
-                .note
-                .map(|note| note.trim().to_owned())
-                .filter(|note| !note.is_empty());
-            item.is_favorite = row.favorite == Some(1);
-            let timestamp = row
-                .create_time
-                .as_deref()
-                .and_then(|value| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S").ok())
-                .and_then(|value| Local.from_local_datetime(&value).single())
-                .map(|value| value.with_timezone(&Utc))
-                .unwrap_or_else(Utc::now);
-            item.created_at = timestamp;
-            item.updated_at = timestamp;
+        let images = core.images.clone();
+        let settings = core.settings.snapshot();
+        let root = root.to_owned();
+        // 读旧图片、写原图、算指纹都是同步 I/O：整批放进阻塞线程池，入库时才逐条拿采集锁，
+        // 导入几千条期间本机采集不被挡住。
+        let (items, mut skipped_items) = blocking(move || {
+            let mut items = Vec::with_capacity(rows.len());
+            let mut skipped = 0;
+            for row in rows {
+                let Some(payload) = row.payload(&root)? else {
+                    skipped += 1;
+                    continue;
+                };
+                let Some(mut item) = clipboard::build_item_with_settings(
+                    &images,
+                    &payload,
+                    &settings.clipboard.capture,
+                    &settings.clipboard.sensitive,
+                    settings.clipboard.content.copy_plain,
+                    settings.clipboard.compiled_rules(),
+                )?
+                else {
+                    skipped += 1;
+                    continue;
+                };
+                item.note = row
+                    .note
+                    .map(|note| note.trim().to_owned())
+                    .filter(|note| !note.is_empty());
+                item.is_favorite = row.favorite == Some(1);
+                let timestamp = row
+                    .create_time
+                    .as_deref()
+                    .and_then(|value| {
+                        NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S").ok()
+                    })
+                    .and_then(|value| Local.from_local_datetime(&value).single())
+                    .map(|value| value.with_timezone(&Utc))
+                    .unwrap_or_else(Utc::now);
+                item.created_at = timestamp;
+                item.updated_at = timestamp;
+                items.push(item);
+            }
+            Ok((items, skipped))
+        })
+        .await?;
 
+        let pool = core.db.pool().await;
+        let mut imported_items = 0;
+        for item in items {
+            let _upsert = core.upsert_lock.lock().await;
             let exists: Option<i64> =
                 sqlx::query_scalar("SELECT 1 FROM clipboard_items WHERE content_hash = ? LIMIT 1")
                     .bind(&item.content_hash)
@@ -1305,7 +1373,8 @@ async fn import_ecopaste_history(
             crate::db::items::insert_item(&pool, &item).await?;
             imported_items += 1;
         }
-    }
+        (imported_items, skipped_items)
+    };
     refresh_apps_registry(core).await;
     core.events.emit(CoreEvent::ClipboardReloaded);
     core.ocr.nudge();

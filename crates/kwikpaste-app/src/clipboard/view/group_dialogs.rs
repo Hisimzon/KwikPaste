@@ -300,7 +300,6 @@ impl Render for GroupEditor {
                                     .rounded(radius::MD)
                                     .border_1()
                                     .border_color(tokens.border.default)
-                                    .bg(tokens.surface.panel)
                                     .cursor_pointer()
                                     .hover(|style| {
                                         style
@@ -669,7 +668,10 @@ impl GroupManager {
                     group.id
                 )))
                 .checked(visible)
-                .accessibility_label(SharedString::from(group.name.to_string()))
+                .accessibility_label(t_args(
+                    "clipboard:groups.showInBar",
+                    &[("name", group.name.as_ref())],
+                ))
                 .on_change(move |checked, _, cx| {
                     toggler
                         .update(cx, |manager, cx| {
@@ -691,7 +693,11 @@ impl GroupManager {
                     .min_w_0()
                     .truncate()
                     .kp_text(TextSize::Sm)
-                    .text_color(tokens.text.primary)
+                    .text_color(if visible {
+                        tokens.text.primary
+                    } else {
+                        tokens.text.secondary
+                    })
                     .child(group.name.to_string()),
             )
             .child(
@@ -704,7 +710,7 @@ impl GroupManager {
                     Button::icon(
                         SharedString::from(format!("manage-group-more-button-{}", group.id)),
                         IconName::Ellipsis,
-                        t("clipboard:groups.manage"),
+                        t("clipboard:groups.moreActions"),
                     )
                     .size(ButtonSize::Small),
                 )
@@ -728,7 +734,6 @@ fn row_menu(group: &Group, manager: gpui::WeakEntity<GroupManager>) -> Vec<MenuE
                 })
                 .ok();
         })
-        .icon(IconName::Pencil)
         .into(),
         MenuItem::new(t("clipboard:groups.delete"), move |window, cx| {
             manager
@@ -737,7 +742,6 @@ fn row_menu(group: &Group, manager: gpui::WeakEntity<GroupManager>) -> Vec<MenuE
                 })
                 .ok();
         })
-        .icon(IconName::Trash2)
         .danger()
         .into(),
     ]
@@ -746,19 +750,32 @@ fn row_menu(group: &Group, manager: gpui::WeakEntity<GroupManager>) -> Vec<MenuE
 impl Render for GroupManager {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let groups = self.groups.clone();
+        let tokens = theme::semantic(cx);
 
         div()
-            .id("group-manager")
             .flex()
             .flex_col()
-            .gap(space((2.) / 4.))
-            .max_h(space((360.) / 4.))
-            .overflow_y_scroll()
-            .children(
-                groups
-                    .iter()
-                    .enumerate()
-                    .map(|(index, group)| self.row(index, group, cx)),
+            .gap(space(2.))
+            .child(
+                div()
+                    .kp_text(TextSize::Xs)
+                    .text_color(tokens.text.muted)
+                    .child(t("clipboard:groups.manageHint")),
+            )
+            .child(
+                div()
+                    .id("group-manager")
+                    .flex()
+                    .flex_col()
+                    .gap(space((2.) / 4.))
+                    .max_h(space((360.) / 4.))
+                    .overflow_y_scroll()
+                    .children(
+                        groups
+                            .iter()
+                            .enumerate()
+                            .map(|(index, group)| self.row(index, group, cx)),
+                    ),
             )
     }
 }

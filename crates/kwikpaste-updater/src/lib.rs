@@ -31,7 +31,7 @@ mod verify;
 mod testing;
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -559,11 +559,13 @@ impl Inner {
         }
     }
 
-    /// 换上新找到的版本；还是同一个版本、同一个地址时保留已下载的安装包。
+    /// 换上新找到的版本；还是同一个版本、同一个签名时保留已下载的安装包。不比下载地址：主镜像和
+    /// GitHub 兜底给的是同一个文件、不同的地址。
     fn set_candidate(&self, found: Option<Candidate>) {
         let mut pending = lock(&self.pending);
         let keep = |current: &Pending, next: &Candidate| {
-            current.candidate.version == next.version && current.candidate.platform == next.platform
+            current.candidate.version == next.version
+                && current.candidate.platform.signature == next.platform.signature
         };
         *pending = match (pending.take(), found) {
             (Some(current), Some(next)) if keep(&current, &next) => Some(Pending {
@@ -589,20 +591,37 @@ impl Inner {
     }
 }
 
-/// 静默重启保留参数并补上托盘启动标记；手动更新保持原参数不变。
+/// 静默重启保留参数并补上托盘启动标记；手动更新保持其余参数不变。
 ///
-/// Windows 去掉提权重启标记：安装器拉起的新进程不带管理员令牌，带着标记它就不再按设置提权。
-fn restart_args(mut args: Vec<OsString>, silent: bool) -> Vec<OsString> {
-    #[cfg(target_os = "windows")]
-    args.retain(|arg| arg != kwikpaste_os::win::admin::ADMIN_RESTARTED_ARG);
+/// 去掉崩溃重启的参数：新版本带着它会当成崩溃后拉起的进程，进入降级模式。冷启动时带的备份文件也去掉，
+/// 否则新版本会再导入一次。Windows 还去掉提权重启标记：安装器拉起的新进程不带管理员令牌，带着标记它就
+/// 不再按设置提权。
+fn restart_args(args: Vec<OsString>, silent: bool) -> Vec<OsString> {
+    use kwikpaste_os::single_instance::{CRASH_DEGRADED_ARG, RELAUNCHED_AFTER_CRASH_ARG};
+
+    let mut kept = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if arg == RELAUNCHED_AFTER_CRASH_ARG {
+            args.next();
+            continue;
+        }
+        #[cfg(target_os = "windows")]
+        if arg == kwikpaste_os::win::admin::ADMIN_RESTARTED_ARG {
+            continue;
+        }
+        if arg != CRASH_DEGRADED_ARG && !kwikpaste_core::backup::is_backup_path(Path::new(&arg)) {
+            kept.push(arg);
+        }
+    }
     if silent
-        && !args
+        && !kept
             .iter()
             .any(|arg| arg == kwikpaste_os::autostart::AUTO_LAUNCH_ARG)
     {
-        args.push(kwikpaste_os::autostart::AUTO_LAUNCH_ARG.into());
+        kept.push(kwikpaste_os::autostart::AUTO_LAUNCH_ARG.into());
     }
-    args
+    kept
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

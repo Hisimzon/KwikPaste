@@ -6,6 +6,7 @@
   "autoGroup": {
     "add": "Add rule",
     "apps": "Source apps",
+    "claimed": "Also in the “{{group}}” rule; the first enabled rule wins",
     "delete": "Delete",
     "edit": "Edit rule",
     "empty": "No auto grouping rules yet",
@@ -137,6 +138,53 @@
       "uninstallContent": "New images will no longer be recognized; recognized text is kept."
     },
     "retry": "Retry",
+    "translate": {
+      "ai": {
+        "apiKey": "API key",
+        "baseUrl": "Endpoint address",
+        "baseUrlDescription": "The address of an OpenAI-compatible endpoint, without /chat/completions.",
+        "model": "Model",
+        "modelDescription": "Fast models such as flash or lite variants work best. Reasoning models are slower.",
+        "preset": "Preset",
+        "presetDescription": "Choosing one fills in the address and a suggested model. You can change both afterwards.",
+        "presets": {
+          "bailian": "Alibaba Cloud Bailian",
+          "custom": "Custom",
+          "deepseek": "DeepSeek",
+          "ollama": "Ollama (this computer)",
+          "siliconflow": "SiliconFlow",
+          "zhipu": "Zhipu"
+        },
+        "prompt": "Prompt",
+        "promptDescription": "Leave empty to use the built-in prompt. {to} is replaced with the English name of the target language."
+      },
+      "auto": "Translate newly copied foreign text automatically",
+      "autoDescription": "Only text copied after you turn this on is translated. Text in your first language, or text whose language is unclear, is not translated and is not sent anywhere.",
+      "clear": "Clear translations",
+      "clearConfirm": "Clear",
+      "clearContent": "This deletes all saved translations. The original text is not affected. To see a translation again you need to translate the item again.",
+      "clearDescription": "Delete all saved translations.",
+      "cleared": "Translations cleared",
+      "description": "Translate text items and show the original and the translation together in the list and the preview.",
+      "engine": "Translation engine",
+      "engines": {
+        "ai": "AI endpoint",
+        "free": "Free translation"
+      },
+      "feature": "Choose Translate in the context menu or press the shortcut. The translation appears under the original and can be copied or pasted on its own. You can also turn on automatic translation, which translates newly copied foreign text into your first language.",
+      "firstLanguage": "First language",
+      "firstLanguageDescription": "Other languages are translated into it. Text already in it is translated into the second language.",
+      "followInterface": "Follow the interface language",
+      "how": "Translation runs in a separate background process that starts when there is work and exits after a minute of inactivity. Free translation uses the web endpoints of Volcano Translate and Tencent TranSmart and needs no account. The AI endpoint works with OpenAI-compatible services, including Ollama on this computer.",
+      "installContent": "Translation sends the text to be translated to a third-party translation service. Free translation currently uses the web endpoints of Volcano Translate and Tencent TranSmart. These are unofficial endpoints and may stop working at any time. The AI endpoint sends text to the address you enter. Items marked as sensitive are never sent. Install it?",
+      "installTitle": "Install translation",
+      "name": "Translation",
+      "privacy": "The text to be translated is sent to the translation service you choose. Items marked as sensitive, and links, email addresses, colors and paths, are never sent. The AI endpoint address and key are stored only on this computer and are not included in backups.",
+      "secondLanguage": "Second language",
+      "showOnCards": "Show translations on cards",
+      "showOnCardsDescription": "When off, translations appear only in the preview.",
+      "uninstallContent": "After uninstalling, nothing is translated. Existing translations are kept but hidden. The AI endpoint address and key are deleted."
+    },
     "unavailable": "Temporarily unavailable. Please try again later.",
     "uninstall": "Uninstall",
     "uninstallTitle": "Uninstall extension",
@@ -536,7 +584,7 @@
       "keep": "Keep for",
       "keepHint": "Records matching this rule are cleaned up once they go unused for this long. Maximum Items and the storage limit still apply to all regular records.",
       "minSize": "Larger than",
-      "minSizePlaceholder": "Any size",
+      "minSizePlaceholder": "No limit",
       "preview": "{{matched}} regular records match right now; {{expired}} of them are past the retention.",
       "previewNone": "No regular records match right now.",
       "sensitiveOnly": "Only content detected as a secret or token",
@@ -601,7 +649,7 @@
         "title": "Appearance"
       },
       "autoGroup": {
-        "title": "Auto grouping"
+        "title": "Auto Grouping"
       },
       "backup": {
         "description": "Export or import KwikPaste backup packages.",
@@ -620,7 +668,7 @@
         "title": "Click Actions"
       },
       "customRules": {
-        "title": "Text matching rules"
+        "title": "Text Matching Rules"
       },
       "deleteProtection": {
         "title": "Delete Protection"
@@ -638,7 +686,7 @@
         "title": "Global Shortcuts"
       },
       "imageText": {
-        "title": "Text in images"
+        "title": "Text in Images"
       },
       "lanContent": {
         "title": "What to Sync"
@@ -659,10 +707,7 @@
         "title": "Overview"
       },
       "panelShortcuts": {
-        "title": "In the clipboard window"
-      },
-      "performance": {
-        "title": "Performance"
+        "title": "In the Clipboard Window"
       },
       "permissions": {
         "title": "System Permissions"
@@ -674,7 +719,7 @@
         "title": "Privacy"
       },
       "shortcutPause": {
-        "title": "Pause rules"
+        "title": "Pause Rules"
       },
       "sort": {
         "title": "Sorting"
@@ -696,7 +741,7 @@
       "about": {
         "checkUpdates": {
           "controlLabel": "Check",
-          "title": "Check for Updates"
+          "title": "Current Version"
         },
         "github": {
           "controlLabel": "Open",
@@ -721,7 +766,7 @@
         },
         "deleteFavoriteItemsOnlyInFavoriteGroup": {
           "description": "Hide the delete action for favorites outside the Favorites group.",
-          "title": "Delete Favorites Only in Favorites"
+          "title": "Delete Favorites Only from Favorites"
         },
         "deletePinnedConfirm": {
           "title": "Confirm Pinned Deletes"
@@ -737,6 +782,13 @@
       },
       "appearance": {
         "fileMaxCount": {
+          "options": {
+            "1": "1",
+            "2": "2",
+            "3": "3",
+            "4": "4",
+            "5": "5"
+          },
           "title": "Maximum Files Shown"
         },
         "groupBar": {
@@ -749,6 +801,7 @@
           "title": "Show Header Row"
         },
         "imageMaxHeight": {
+          "description": "Range: 20–100 px.",
           "title": "Maximum Image Height"
         },
         "itemGap": {
@@ -819,7 +872,23 @@
           "title": "Show Original on Hover"
         },
         "textMaxLines": {
+          "options": {
+            "1": "1",
+            "2": "2",
+            "3": "3",
+            "4": "4",
+            "5": "5"
+          },
           "title": "Maximum Text Lines"
+        },
+        "textSize": {
+          "description": "Also scales spacing and icons, on top of the system text size.",
+          "options": {
+            "large": "Large",
+            "small": "Small",
+            "standard": "Default"
+          },
+          "title": "Text Size"
         },
         "theme": {
           "options": {
@@ -832,7 +901,7 @@
       },
       "autoGroupRules": {
         "description": "Items copied from the chosen apps go into a group automatically. Items already in another group stay there. Grouped items are not removed by automatic cleanup.",
-        "title": "Group by source app"
+        "title": "Group by Source App"
       },
       "backup": {
         "export": {
@@ -859,10 +928,14 @@
           "description": "Includes HTML and RTF. 0 means no limit.",
           "title": "Maximum Text Capture Size"
         },
+        "mergeLinesApps": {
+          "description": "Line breaks inside paragraphs are joined in text copied from these apps, handy for PDF readers. Paragraphs separated by blank lines are kept.",
+          "title": "Join Line Breaks for These Apps"
+        },
         "order": {
           "controlLabel": "Manage",
           "description": "When the clipboard holds several formats, save the first one in this order.",
-          "title": "Capture Order"
+          "title": "Format Priority"
         }
       },
       "control": {
@@ -887,7 +960,7 @@
         "reopenOnboarding": {
           "controlLabel": "Open",
           "description": "View the first-time onboarding again without resetting your current settings or history.",
-          "title": "Reopen Onboarding"
+          "title": "First-Run Guide"
         },
         "trayClick": {
           "options": {
@@ -926,11 +999,11 @@
               "classic": "Classic",
               "tick": "Tick"
             },
-            "title": "Sound tone"
+            "title": "Sound Tone"
           },
           "volume": {
             "description": "Drag to adjust, release to save; 0% is silent.",
-            "title": "Sound volume"
+            "title": "Sound Volume"
           }
         },
         "updateOnReuse": {
@@ -940,7 +1013,7 @@
       },
       "customRules": {
         "description": "Match copied text with a regex to show it as a quick snippet, mark it sensitive, or skip recording it. Sensitive and Don't record apply to new copies only.",
-        "title": "Text matching rules"
+        "title": "Text Matching Rules"
       },
       "diagnostics": {
         "reportProblem": {
@@ -976,7 +1049,7 @@
           "title": "Default Retention"
         },
         "rules": {
-          "description": "Set separate retention by content type, size, source app and more. Rules match from top to bottom, and a record follows the first rule it matches.",
+          "description": "Set separate retention by content type, size and more. Rules match from top to bottom, and a record follows the first rule it matches.",
           "title": "Custom Rules"
         }
       },
@@ -1003,7 +1076,7 @@
           "title": "Log Directory"
         },
         "storageLimit": {
-          "description": "The storage meter in the sidebar is full at this size. What happens beyond it is set below.",
+          "description": "The storage bar on the Data page is full at this size. What happens beyond it is set below.",
           "title": "Storage Limit"
         },
         "storageLimitAction": {
@@ -1018,10 +1091,10 @@
       "ocr": {
         "enabled": {
           "description": "Find images by the text inside them and copy that text. Recognition runs on this device and nothing is uploaded.",
-          "title": "Recognize text in images"
+          "title": "Recognize Text in Images"
         },
         "status": {
-          "title": "Recognition status"
+          "title": "Recognition Status"
         }
       },
       "organizing": {
@@ -1049,6 +1122,7 @@
             "disabled": "Disabled",
             "doubleClickCopy": "Double-click to copy",
             "doubleClickPaste": "Double-click to paste",
+            "doubleClickView": "Double-click to view image / edit text",
             "singleClickCopy": "Single-click to copy",
             "singleClickPaste": "Single-click to paste"
           },
@@ -1074,7 +1148,7 @@
         },
         "quickSnippetColors": {
           "description": "Color quick info and the matching text in the preview by type.",
-          "title": "Quick info colors"
+          "title": "Quick Info Colors"
         },
         "quickSnippets": {
           "description": "List codes, numbers, and links found in text records below each item. Click one to paste or copy just that part.",
@@ -1089,14 +1163,14 @@
         "adminRestartConfirm": {
           "content": "KwikPaste needs to restart with administrator privileges for this change to take effect. Windows may show a User Account Control prompt.",
           "ok": "Restart",
-          "title": "Restart required"
+          "title": "Restart Required"
         },
         "fullDiskAccess": {
           "description": "Used to read required local data and access system-protected app resources.",
           "title": "Full Disk Access Permission"
         },
         "runAsAdministrator": {
-          "description": "Used to restart KwikPaste with administrator privileges and keep future launches elevated when needed.",
+          "description": "Turn on to paste into apps running as administrator. KwikPaste restarts elevated.",
           "statusElevated": "Currently running as administrator.",
           "statusNormal": "Currently not running as administrator.",
           "title": "Run as Administrator"
@@ -1133,7 +1207,7 @@
         "textView": {
           "description": "Show previewed text as written, or split into words to pick from.",
           "options": {
-            "plain": "Default",
+            "plain": "Original",
             "words": "Words"
           },
           "title": "Text Preview Style"
@@ -1141,10 +1215,10 @@
       },
       "search": {
         "clearOnHide": {
-          "title": "Clear Last Search"
+          "title": "Clear Search on Hide"
         },
         "defaultFocus": {
-          "title": "Focus Search Box"
+          "title": "Focus Search on Open"
         },
         "sort": {
           "options": {
@@ -1183,7 +1257,7 @@
               "shift": "Shift"
             }
           },
-          "title": "Double-tap to toggle"
+          "title": "Double-Tap to Toggle"
         },
         "doubleTapSide": {
           "options": {
@@ -1191,7 +1265,7 @@
             "left": "Left only",
             "right": "Right only"
           },
-          "title": "Key side"
+          "title": "Key Side"
         },
         "mouseTrigger": {
           "description": "Click the chosen button to open or hide the clipboard window. Its usual click action, like opening a new tab or going back, is turned off.",
@@ -1215,19 +1289,19 @@
         },
         "panel": {
           "description": "Keys inside the clipboard window, such as paste, favorite and pin.",
-          "title": "Clipboard window shortcuts"
+          "title": "Clipboard Window Shortcuts"
         },
         "pastePlain": {
           "description": "Paste what's on the clipboard without formatting, without opening the clipboard window.",
-          "title": "Paste as plain text"
+          "title": "Paste as Plain Text"
         },
         "pauseApps": {
           "description": "",
-          "title": "Pause shortcuts in these apps"
+          "title": "Pause Shortcuts in These Apps"
         },
         "pauseInFullscreen": {
           "description": "When the foreground app is full screen, such as a game, KwikPaste's shortcuts and mouse button trigger go to that app.",
-          "title": "Pause shortcuts in full-screen apps"
+          "title": "Pause Shortcuts in Full-Screen Apps"
         },
         "quickPaste": {
           "description": "Hold the modifier keys and press 1–9 or 0 to paste the first 10 items of the All list without opening the window.",
@@ -1250,6 +1324,7 @@
           "ignoredTitle": "Ignored Apps",
           "itemsUnit": "items",
           "itemUnit": "item",
+          "notAnApp": "This file isn't a recognized app",
           "refreshApps": "Refresh Available Apps",
           "searchPlaceholder": "Search apps"
         },
@@ -1292,14 +1367,6 @@
         }
       },
       "window": {
-        "idleDestroySeconds": {
-          "description": "Release hidden windows such as Preferences and Preview after this long. They rebuild on next use.",
-          "title": "Secondary Window Idle Release"
-        },
-        "lightweightMode": {
-          "description": "Pause unnecessary refresh work after the clipboard window hides, and release secondary rendering resources after they become idle.",
-          "title": "Lightweight Mode"
-        },
         "position": {
           "options": {
             "center": "Center of Screen",
@@ -1309,17 +1376,18 @@
           "title": "Window Position"
         },
         "scrollToTopOnOpen": {
-          "title": "Scroll to Top"
+          "title": "Scroll to Top on Open"
         },
         "selectCategoryOnOpen": {
           "options": {
             "all": "All",
             "files": "Files",
             "image": "Image",
+            "link": "Links",
             "preserve": "Keep Last Selection",
             "text": "Text"
           },
-          "title": "Category"
+          "title": "Category on Open"
         },
         "selectGroupOnOpen": {
           "options": {
@@ -1327,7 +1395,7 @@
             "missingGroup": "Deleted Group",
             "preserve": "Keep Last Selection"
           },
-          "title": "Group"
+          "title": "Group on Open"
         },
         "selectRangeOnOpen": {
           "options": {
@@ -1335,7 +1403,7 @@
             "favorite": "Favorites",
             "preserve": "Keep Last Selection"
           },
-          "title": "Range"
+          "title": "Range on Open"
         }
       }
     },

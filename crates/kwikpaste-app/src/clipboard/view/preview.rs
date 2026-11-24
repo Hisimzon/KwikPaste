@@ -12,15 +12,17 @@ use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context, DispatchPhase,
     Div, ElementId, Entity, EventEmitter, FontStyle, FontWeight, HighlightStyle, ImageSource,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, ParentElement as _, Render, ScrollHandle, SharedString, Stateful,
-    StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledText, UnderlineStyle,
-    UniformListScrollHandle, WeakEntity, Window, WindowBounds, WindowKind, WindowOptions, canvas,
-    div, img, point, prelude::FluentBuilder as _, px, size, uniform_list,
+    MouseMoveEvent, ParentElement as _, Render, Role, ScrollDelta, ScrollHandle, ScrollWheelEvent,
+    SharedString, Stateful, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _,
+    StyledText, UnderlineStyle, UniformListScrollHandle, WeakEntity, Window, WindowBounds,
+    WindowKind, WindowOptions, canvas, div, img, point, prelude::FluentBuilder as _, px, size,
+    uniform_list,
 };
 use kwikpaste_core::{
     clipboard::SnippetKind,
     db::models::{ClipboardKind, ClipboardSubKind},
     presenter::{PreviewBlock, PreviewDocument, PreviewInline},
+    translate::{TranslateFailure, TranslationState, TranslationView},
 };
 use kwikpaste_ui::{
     Button, Icon, IconName, KpStyled as _, MenuEntry, MenuItem, MenuTrigger, dismiss_menu,
@@ -38,8 +40,11 @@ use crate::{
             preview::{
                 FILE_ROW_HEIGHT, HEADER_HEIGHT, RectF, SNIPPET_CHIP_HEIGHT, SNIPPET_CHIP_PADDING_X,
                 SNIPPET_PART_GAP, SNIPPETS_MAX_HEIGHT, SNIPPETS_PADDING_Y, TEXT_PADDING_X,
-                TEXT_ROW_HEIGHT, WORDS_BAR_HEIGHT, WordSelection, format_bytes, utf16_range,
+                TEXT_ROW_HEIGHT, TRANSLATION_BAR_HEIGHT, TRANSLATION_MAX_ROWS,
+                TRANSLATION_PADDING_BOTTOM, WORDS_BAR_HEIGHT, WordSelection, format_bytes,
+                utf16_range,
             },
+            translation::{language_name, provider_name},
         },
         source::{Preview, PreviewTextView},
     },
@@ -72,6 +77,12 @@ pub enum PreviewEvent {
     ViewImage,
     /// 双击了文本记录的正文：打开内容编辑框。
     EditText,
+    /// 点了翻译、重试或重新翻译。
+    Translate,
+    /// 译文区里点了复制。
+    CopyTranslation,
+    /// 译文区里点了粘贴。
+    PasteTranslation,
 }
 
 /// 有识别文字的图片记录正在看的那一面。
@@ -79,6 +90,13 @@ pub enum PreviewEvent {
 pub enum ImageTextView {
     Image,
     Text,
+}
+
+/// 预览窗里和翻译有关的内容：core 给的译文与状态，加上译文按面板宽度折好的行。
+#[derive(Clone, Debug, PartialEq)]
+pub struct TranslationZone {
+    pub view: TranslationView,
+    pub rows: Vec<Range<usize>>,
 }
 
 /// 预览窗的内容视图。
@@ -93,6 +111,9 @@ pub struct PreviewPanel {
     image_box: Option<(f32, f32)>,
     /// 图片有识别文字时的「图片 / 文字」切换；`Text` 时 `preview` 是识别文字的文本预览。
     image_text: Option<ImageTextView>,
+    /// 这条记录的翻译：可翻译时才有，决定头部的翻译按钮和正文下方的译文区。
+    translation: Option<TranslationZone>,
+    translation_scroll: ScrollHandle,
     /// 快捷信息按类型着色（「快捷信息颜色」设置），列表在 [Self::set] 前更新。
     pub snippet_colors: bool,
     /// 按住修饰键：快捷信息里的链接、邮箱显示成链接，点了打开。列表的数字角标开关时同步。
@@ -121,6 +142,8 @@ impl PreviewPanel {
             selection: WordSelection::default(),
             image_box: None,
             image_text: None,
+            translation: None,
+            translation_scroll: ScrollHandle::new(),
             snippet_colors: true,
             links: false,
             images,
@@ -131,6 +154,7 @@ impl PreviewPanel {
     }
 
     /// 换内容：选词清空，滚动回到顶部。`rows` 是纯文本视图按面板宽度折好的行。
+    #[allow(clippy::too_many_arguments)]
     pub fn set(
         &mut self,
         preview: Option<Preview>,
@@ -138,6 +162,7 @@ impl PreviewPanel {
         text_view: PreviewTextView,
         image_box: Option<(f32, f32)>,
         image_text: Option<ImageTextView>,
+        translation: Option<TranslationZone>,
         cx: &mut Context<Self>,
     ) {
         let same_item = self.image_text == image_text
@@ -150,6 +175,7 @@ impl PreviewPanel {
             self.scroll.set_offset(point(px(0.), px(0.)));
             self.text_scroll
                 .scroll_to_item(0, gpui::ScrollStrategy::Top);
+            self.translation_scroll.set_offset(point(px(0.), px(0.)));
         }
         self.rows = Rc::new(rows);
         self.missing = preview.is_none();
@@ -157,6 +183,7 @@ impl PreviewPanel {
         self.text_view = text_view;
         self.image_box = image_box;
         self.image_text = image_text;
+        self.translation = translation;
         cx.notify();
     }
 
@@ -187,6 +214,7 @@ impl PreviewPanel {
     pub fn forget(&mut self) {
         self.preview = None;
         self.rows = Rc::default();
+        self.translation = None;
     }
 
     fn can_pick_words(&self) -> bool {
@@ -197,6 +225,161 @@ impl PreviewPanel {
 
     fn words_view(&self) -> bool {
         self.text_view == PreviewTextView::Words && self.can_pick_words()
+    }
+
+    /// 可翻译、还没有译文、也不在翻译中或失败：头部给一个翻译按钮。
+    fn can_translate(&self) -> bool {
+        self.translation.as_ref().is_some_and(|zone| {
+            zone.view.translatable
+                && zone.view.translation.is_none()
+                && zone.view.state == TranslationState::Idle
+        })
+    }
+
+    /// 正文下方的译文区：一行工具栏，下面是译文。没有译文、也不在翻译中或失败时没有这一区。
+    fn translation_zone(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let zone = self.translation.as_ref()?;
+        let view = &zone.view;
+        let tokens = theme::semantic(cx);
+        let (label, color) = match (&view.state, &view.translation) {
+            (TranslationState::Idle, None) => return None,
+            (TranslationState::Pending, _) => {
+                (t("preview:translation.pending"), tokens.text.secondary)
+            }
+            (TranslationState::Failed { kind, message }, _) => {
+                let key = match kind {
+                    TranslateFailure::Network => "preview:translation.failed.network",
+                    TranslateFailure::Auth => "preview:translation.failed.auth",
+                    TranslateFailure::RateLimited => "preview:translation.failed.rateLimited",
+                    TranslateFailure::Unsupported => "preview:translation.failed.unsupported",
+                    TranslateFailure::Other => "preview:translation.failed.other",
+                };
+                // 服务返回的原始正文可能带换行，标签只有一行。
+                let message = message.split_whitespace().collect::<Vec<_>>().join(" ");
+                (
+                    t_args(key, &[("message", &message)]),
+                    tokens.status.danger.solid,
+                )
+            }
+            (TranslationState::Idle, Some(done)) => {
+                let provider = provider_name(&done.provider);
+                let to = language_name(&done.target_lang);
+                let label = match &done.source_lang {
+                    Some(from) => t_args(
+                        "preview:translation.source",
+                        &[
+                            ("provider", &provider),
+                            ("from", language_name(from)),
+                            ("to", to),
+                        ],
+                    ),
+                    None => t_args(
+                        "preview:translation.sourceUnknown",
+                        &[("provider", &provider), ("to", to)],
+                    ),
+                };
+                (label, tokens.text.secondary)
+            }
+        };
+        let pending = view.state == TranslationState::Pending;
+        let failed = matches!(view.state, TranslationState::Failed { .. });
+        let button = |id: &'static str, key: &str, event: PreviewEvent, cx: &mut Context<Self>| {
+            Button::new(id, t(key))
+                .small()
+                .ghost()
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(event.clone())))
+        };
+
+        let bar = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(space(1.))
+            .h(space((TRANSLATION_BAR_HEIGHT as f32) / 4.))
+            .pr(space((12.) / 4.))
+            .pl(space((TEXT_PADDING_X as f32) / 4.))
+            .child(
+                Icon::new(IconName::Languages)
+                    .size(space((14.) / 4.))
+                    .color(tokens.text.muted),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .kp_text(TextSize::Xs)
+                    .text_color(color)
+                    .child(label),
+            )
+            .when(view.translation.is_some(), |bar| {
+                bar.child(button(
+                    "preview-translation-copy",
+                    "preview:translation.copy",
+                    PreviewEvent::CopyTranslation,
+                    cx,
+                ))
+                .child(button(
+                    "preview-translation-paste",
+                    "preview:translation.paste",
+                    PreviewEvent::PasteTranslation,
+                    cx,
+                ))
+            })
+            .when(!pending, |bar| {
+                bar.child(button(
+                    "preview-translation-again",
+                    if failed {
+                        "preview:translation.retry"
+                    } else {
+                        "preview:translation.retranslate"
+                    },
+                    PreviewEvent::Translate,
+                    cx,
+                ))
+            });
+
+        // 和纯文本视图一样按预先折好的行画（每行固定行高、不再自动折行），高度与
+        // `translation_height` 算的一致。
+        let body = view.translation.as_ref().map(|done| {
+            let text = done.text.as_str();
+            div()
+                .id("preview-translation-body")
+                .flex_none()
+                .max_h(space(
+                    ((TRANSLATION_MAX_ROWS as f64 * TEXT_ROW_HEIGHT + TRANSLATION_PADDING_BOTTOM)
+                        as f32)
+                        / 4.,
+                ))
+                .overflow_y_scroll()
+                .track_scroll(&self.translation_scroll)
+                .pb(space((TRANSLATION_PADDING_BOTTOM as f32) / 4.))
+                .children(zone.rows.iter().map(|row| {
+                    let line = text
+                        .get(row.clone())
+                        .filter(|line| !line.is_empty())
+                        .unwrap_or(" ");
+                    div()
+                        .h(space((TEXT_ROW_HEIGHT as f32) / 4.))
+                        .px(space((TEXT_PADDING_X as f32) / 4.))
+                        .kp_text(TextSize::Sm)
+                        .line_height(space((TEXT_ROW_HEIGHT as f32) / 4.))
+                        .whitespace_nowrap()
+                        .child(SharedString::from(line.to_owned()))
+                }))
+        });
+
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .border_t_1()
+                .border_color(tokens.border.divider)
+                .child(bar)
+                .children(body)
+                .into_any_element(),
+        )
     }
 
     fn header(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -211,15 +394,21 @@ impl PreviewPanel {
                         i64::try_from(payload.total_files).unwrap_or(i64::MAX),
                         &[],
                     ),
-                    t_count(
-                        "preview:meta.filesLoaded",
-                        i64::try_from(payload.files.len()).unwrap_or(i64::MAX),
-                        &[],
-                    ),
+                    if payload.files.len() < payload.total_files {
+                        t_args(
+                            "preview:file.shownCount",
+                            &[
+                                ("shown", &payload.files.len().to_string()),
+                                ("total", &payload.total_files.to_string()),
+                            ],
+                        )
+                    } else {
+                        SharedString::default()
+                    },
                 ),
                 ClipboardKind::Image => {
                     let dimensions = match (payload.image_width, payload.image_height) {
-                        (Some(width), Some(height)) => format!("{width} x {height}"),
+                        (Some(width), Some(height)) => format!("{width} × {height}"),
                         _ => t("preview:meta.unknownSize").to_string(),
                     };
                     let size = payload
@@ -228,7 +417,10 @@ impl PreviewPanel {
                         .unwrap_or_default();
                     (
                         t("preview:title.image"),
-                        SharedString::from(format!("{dimensions}{size}")),
+                        SharedString::from(format!(
+                            "{dimensions}{size} · {}",
+                            t("preview:image.hint")
+                        )),
                     )
                 }
                 ClipboardKind::Text if self.image_text == Some(ImageTextView::Text) => {
@@ -297,22 +489,41 @@ impl PreviewPanel {
                         .flex_none()
                         .items_center()
                         .gap(space((8.) / 4.))
+                        .when(self.can_translate(), |row| {
+                            row.child(
+                                div()
+                                    .id("preview-translate")
+                                    .role(Role::Button)
+                                    .aria_label(t("preview:translation.translate"))
+                                    .flex()
+                                    .flex_none()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(space((24.) / 4.))
+                                    .rounded(radius::SM)
+                                    .cursor_pointer()
+                                    .text_color(tokens.text.secondary)
+                                    .hover(|style| {
+                                        style.bg(tokens.fill.subtle).text_color(tokens.text.primary)
+                                    })
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        cx.emit(PreviewEvent::Translate);
+                                    }))
+                                    .child(Icon::new(IconName::Languages).size(space(4.))),
+                            )
+                        })
                         .when_some(self.image_text, |row, current| {
                             row.child(self.image_text_switch(current, cx))
                         })
                         .when(self.can_pick_words(), |row| row.child(self.view_switch(cx)))
                         // 有「图片 / 文字」切换时它已经说明了类型，不再放类型标签。
                         .when(self.image_text.is_none(), |row| {
+                            // 纯文字：带底色的块挤在分段控件旁边，看起来像第三个可点的选项。
                             row.child(
                                 div()
-                                    .flex()
-                                    .h(space((24.) / 4.))
-                                    .items_center()
-                                    .rounded(radius::SM)
-                                    .bg(tokens.fill.subtle)
-                                    .px(space((8.) / 4.))
+                                    .flex_none()
                                     .kp_text(TextSize::Xs)
-                                    .text_color(tokens.text.secondary)
+                                    .text_color(tokens.text.muted)
                                     .child(t(type_key(payload.kind, payload.sub_kind))),
                             )
                         }),
@@ -456,6 +667,16 @@ impl PreviewPanel {
                     .id("preview-image")
                     .cursor_pointer()
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(PreviewEvent::ViewImage)))
+                    // 滚轮同点击：打开大图查看器；触控板的精确滚动需按住 Mod 才算，避免误开。
+                    .on_scroll_wheel(cx.listener(|_, event: &ScrollWheelEvent, _, cx| {
+                        let wheel = match event.delta {
+                            ScrollDelta::Lines(delta) => delta.y != 0.,
+                            ScrollDelta::Pixels(_) => event.modifiers.secondary(),
+                        };
+                        if wheel {
+                            cx.emit(PreviewEvent::ViewImage);
+                        }
+                    }))
                     .relative()
                     .flex_none()
                     .w(px(width))
@@ -647,7 +868,8 @@ impl PreviewPanel {
                     snippets.iter().enumerate().map(|(index, snippet)| {
                         let text: Arc<str> = Arc::from(snippet.text.as_str());
                         let kind = snippet.kind;
-                        let open = self.links && card::snippet_open_url(kind, &text).is_some();
+                        let openable = card::snippet_open_url(kind, &text).is_some();
+                        let open = self.links && openable;
                         let open_text = text.clone();
                         let menu_text = text.clone();
                         let panel = cx.entity().downgrade();
@@ -686,7 +908,7 @@ impl PreviewPanel {
                                     })
                                     .child(SharedString::from(snippet.text.clone())),
                             )
-                            .when(card::snippet_open_url(kind, &text).is_some(), |chip| {
+                            .when(openable, |chip| {
                                 chip.on_mouse_down(
                                     MouseButton::Middle,
                                     cx.listener(move |_, _, _, cx| {
@@ -902,15 +1124,11 @@ impl PreviewPanel {
             .iter()
             .zip(icon_states)
             .map(|(file, icon_state)| {
-                let kind = if file.is_dir {
-                    t("preview:file.folder")
-                } else {
-                    t("preview:file.item")
-                };
                 let size_label = file
                     .size
                     .map(|size| SharedString::from(format_bytes(size)))
-                    .unwrap_or(kind);
+                    .or_else(|| file.is_dir.then(|| t("preview:file.folder")))
+                    .unwrap_or_default();
                 let path = if file.exists {
                     SharedString::from(file.path.clone())
                 } else {
@@ -995,22 +1213,6 @@ impl PreviewPanel {
             .track_scroll(&self.scroll)
             .py(space((8.) / 4.))
             .children(rows)
-            .when(payload.total_files > payload.files.len(), |list| {
-                list.child(
-                    div()
-                        .px(space((16.) / 4.))
-                        .py(space((8.) / 4.))
-                        .kp_text(TextSize::Xs)
-                        .text_color(tokens.text.secondary)
-                        .child(t_args(
-                            "preview:file.shownCount",
-                            &[
-                                ("shown", &payload.files.len().to_string()),
-                                ("total", &payload.total_files.to_string()),
-                            ],
-                        )),
-                )
-            })
             .into_any_element()
     }
 }
@@ -1256,6 +1458,7 @@ impl Render for PreviewPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = theme::semantic(cx);
         let content = self.content(window, cx);
+        let translation = self.translation_zone(cx);
         let panel = cx.entity().downgrade();
 
         div()
@@ -1277,6 +1480,7 @@ impl Render for PreviewPanel {
             )
             .child(self.header(cx))
             .child(div().flex_1().min_h_0().relative().child(content))
+            .children(translation)
             .child(pointer_tracker(panel))
     }
 }

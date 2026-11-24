@@ -1,6 +1,6 @@
 {
   "batchDeleteConfirm": {
-    "content": "The {{count}} selected records cannot be restored after deletion. Delete them?",
+    "content": "The {{count}} selected items can't be restored.",
     "title": "Delete selected records"
   },
   "clearConfirm": {
@@ -10,7 +10,7 @@
     "title": "Clear records"
   },
   "deleteConfirm": {
-    "content": "This item cannot be restored after deletion. Delete it?",
+    "content": "This can't be undone.",
     "title": "Delete item"
   },
   "error": "{{label}} failed: {{message}}",
@@ -26,6 +26,7 @@
     "closeWindow": "Close window",
     "copy": "Copy",
     "copyImageText": "Copy text in image",
+    "copyTranslation": "Copy translation",
     "delete": "Delete",
     "deleteApps": "Delete apps",
     "deleteClipboardGroup": "Delete group",
@@ -62,6 +63,7 @@
     "openWindow": "Open window",
     "pairLanDevice": "Pairing",
     "paste": "Paste",
+    "pasteTranslation": "Paste translation",
     "pinItem": "Pin item",
     "playCopySound": "Play sound",
     "previewHistoryCleanup": "Estimate cleanup",
@@ -92,6 +94,7 @@
     "splitWords": "Split words",
     "suspendGlobalShortcuts": "Suspend global shortcuts",
     "toggleFavorite": "Favorite",
+    "translate": "Translate",
     "unpinItem": "Unpin item"
   },
   "messages": {
@@ -101,6 +104,7 @@
     "cacheAlreadyClean": "No cache to clean",
     "cacheCleaned": "Cleaned {{count}} cache files and freed {{size}}",
     "clipboardGroupDeleted": "Group deleted",
+    "clipboardGroupHidden": "\"{{group}}\" hidden. Restore it in Manage groups.",
     "clipboardGroupSaved": "Group saved",
     "clipboardGroupsLayoutSaved": "Group layout saved",
     "clipboardItemsCleared": "Cleared {{count}} records",
@@ -119,7 +123,7 @@
     "itemUnpinned": "Unpinned from top",
     "lanDevicePaired": "Paired with {{name}}",
     "lanDeviceRemoved": "Unpaired from {{name}}",
-    "noteSaved": "Saved",
+    "noteSaved": "Note saved",
     "noteSavedAndFavorited": "Saved and favorited",
     "pasteBlocked": "The system blocked the paste keystroke (often a game anti-cheat). The content is copied; restart KwikPaste to restore auto-paste",
     "qrCodeCopied": "Copied the QR code content",

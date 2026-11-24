@@ -3,6 +3,8 @@
 //! 设置项 id 是 i18n key（`preferences:schema.settings.<id>.*`）与搜索跳转的目标，挪动分类时保持不变；
 //! `path` 是 `settings.json` 的点分 camelCase 路径，读值和写补丁都按它走。
 
+use std::sync::LazyLock;
+
 use super::icons::PrefIcon;
 use kwikpaste_core::settings::{ListDensity, ListStyle, Settings};
 
@@ -258,6 +260,7 @@ const CLICK_ACTIONS: &[&str] = &[
     "doubleClickPaste",
     "singleClickCopy",
     "doubleClickCopy",
+    "doubleClickView",
 ];
 const COPY_SOUND_TONES: &[&str] = &["classic", "chirp", "bubble", "chime", "tick"];
 const MIDDLE_CLICK_ACTIONS: &[&str] = &[
@@ -276,13 +279,15 @@ const STORAGE_LIMIT_ACTIONS: &[&str] = &["remind", "cleanup"];
 const LANGUAGES: &[&str] = &["zh-CN", "en-US"];
 const LIST_STYLES: &[&str] = &["card", "seamless"];
 const PANEL_LAYOUTS: &[&str] = &["single", "split"];
+const TEXT_SIZES: &[&str] = &["small", "standard", "large"];
 const LIST_DENSITIES: &[&str] = &["comfortable", "standard", "compact", "custom"];
 /// 自定义密度可选的条目间距与上下内边距（px），与列表的映射一一对应。
 const LIST_ITEM_GAPS: &[u64] = &[0, 2, 4, 6, 8, 12];
 const LIST_PADDINGS_Y: &[u64] = &[2, 4, 6, 8];
+const DISPLAY_COUNTS: &[u64] = &[1, 2, 3, 4, 5];
 const WINDOW_POSITIONS: &[&str] = &["followCursor", "center", "remember"];
 const OPEN_RANGES: &[&str] = &["preserve", "all", "favorite"];
-const OPEN_CATEGORIES: &[&str] = &["preserve", "all", "text", "image", "files"];
+const OPEN_CATEGORIES: &[&str] = &["preserve", "all", "text", "image", "files", "link"];
 const HOVER_DELAYS: &[&str] = &["ms300", "ms500", "ms1000"];
 const TEXT_VIEWS: &[&str] = &["plain", "words"];
 /// 预览窗与卡片之间可选的距离（px）。
@@ -320,7 +325,14 @@ fn not_custom_density(settings: &Settings) -> bool {
 }
 
 /// 全部分类。平台条件与 1.x 相同；`portable` 时不显示以管理员身份运行（计划任务记着 exe 路径）。
-pub fn tabs(portable: bool) -> Vec<Tab> {
+/// 结构只随 `portable` 变化，偏好窗每帧都要遍历，所以各建一次后共用。
+pub fn tabs(portable: bool) -> &'static [Tab] {
+    static INSTALLED: LazyLock<Vec<Tab>> = LazyLock::new(|| build_tabs(false));
+    static PORTABLE: LazyLock<Vec<Tab>> = LazyLock::new(|| build_tabs(true));
+    if portable { &PORTABLE } else { &INSTALLED }
+}
+
+fn build_tabs(portable: bool) -> Vec<Tab> {
     vec![
         Tab {
             id: TabId::General,
@@ -484,29 +496,6 @@ fn general_sections(portable: bool) -> Vec<Section> {
             settings: permissions,
         });
     }
-    sections.push(Section {
-        id: "performance",
-        settings: vec![
-            Setting::new("window.lightweightMode", Control::Switch)
-                .path("clipboard.window.lightweightMode")
-                .keywords(&["system", "performance", "memory", "idle"])
-                .advanced(),
-            Setting::new(
-                "window.idleDestroySeconds",
-                Control::Number {
-                    min: 5,
-                    max: 86_400,
-                    suffix: Some("seconds"),
-                },
-            )
-            .path("clipboard.window.idleDestroySeconds")
-            .keywords(&["system", "idle", "destroy", "seconds"])
-            .child_of("window.lightweightMode", |settings| {
-                !settings.clipboard.window.lightweight_mode
-            })
-            .advanced(),
-        ],
-    });
     sections
 }
 
@@ -532,6 +521,7 @@ fn shortcut_sections() -> Vec<Section> {
                     .keywords(&[
                         "shortcut",
                         "hotkey",
+                        "快捷键",
                         "open",
                         "double tap",
                         "双击",
@@ -545,13 +535,28 @@ fn shortcut_sections() -> Vec<Section> {
                     ]),
                 Setting::new("shortcuts.pastePlain", Control::ShortcutEntry)
                     .path("shortcuts.pastePlain")
-                    .keywords(&["shortcut", "hotkey", "plain", "text", "paste", "纯文本"]),
+                    .keywords(&[
+                        "shortcut",
+                        "hotkey",
+                        "快捷键",
+                        "plain",
+                        "text",
+                        "paste",
+                        "纯文本",
+                    ]),
                 Setting::new("shortcuts.quickPaste", Control::ShortcutEntry)
                     .path("shortcuts.quickPaste")
-                    .keywords(&["quick paste", "number", "digit", "paste", "modifier"]),
+                    .keywords(&[
+                        "quick paste",
+                        "快捷键",
+                        "number",
+                        "digit",
+                        "paste",
+                        "modifier",
+                    ]),
                 Setting::new("shortcuts.openPreference", Control::ShortcutEntry)
                     .path("shortcuts.openPreference")
-                    .keywords(&["shortcut", "hotkey", "preference"]),
+                    .keywords(&["shortcut", "hotkey", "快捷键", "preference"]),
             ],
         },
         Section {
@@ -676,6 +681,21 @@ fn appearance_sections() -> Vec<Section> {
                     .path("clipboard.display.listStyle")
                     .keywords(&["list", "card", "seamless", "divider", "style"]),
                 Setting::new(
+                    "appearance.textSize",
+                    Control::Segmented(Options::Values(TEXT_SIZES)),
+                )
+                .path("appearance.textSize")
+                .keywords(&[
+                    "font",
+                    "text",
+                    "size",
+                    "scale",
+                    "zoom",
+                    "字号",
+                    "字体",
+                    "文字大小",
+                ]),
+                Setting::new(
                     "appearance.listDensity",
                     Control::Segmented(Options::Values(LIST_DENSITIES)),
                 )
@@ -739,11 +759,7 @@ fn appearance_sections() -> Vec<Section> {
                     }),
                 Setting::new(
                     "appearance.textMaxLines",
-                    Control::Number {
-                        min: 1,
-                        max: 5,
-                        suffix: Some("lines"),
-                    },
+                    Control::Segmented(Options::Numbers(DISPLAY_COUNTS)),
                 )
                 .path("clipboard.display.textMaxLines")
                 .keywords(&["density", "text", "line", "compact"])
@@ -761,11 +777,7 @@ fn appearance_sections() -> Vec<Section> {
                 .advanced(),
                 Setting::new(
                     "appearance.fileMaxCount",
-                    Control::Number {
-                        min: 1,
-                        max: 5,
-                        suffix: Some("files"),
-                    },
+                    Control::Segmented(Options::Numbers(DISPLAY_COUNTS)),
                 )
                 .path("clipboard.display.fileMaxCount")
                 .keywords(&["density", "file", "count", "array"])
@@ -1039,6 +1051,10 @@ fn capture_sections() -> Vec<Section> {
                 .path("clipboard.capture.maxImageMb")
                 .keywords(&["image", "picture", "size", "limit", "mb"])
                 .advanced(),
+                Setting::new("capture.mergeLinesApps", Control::AppExclusion)
+                    .path("clipboard.capture.mergeLinesAppIds")
+                    .keywords(&["pdf", "line break", "newline", "换行", "回车", "app"])
+                    .advanced(),
             ],
         },
         Section {

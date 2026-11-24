@@ -40,6 +40,10 @@ pub enum CommandKey {
     QrCodeNotFound,
     SplitTextOnly,
     SplitSensitiveRedacted,
+    TranslateUnavailable,
+    TranslateNotTranslatable,
+    TranslateNotConfigured,
+    TranslationMissing,
     PortableStorageFixed,
     StorageInsufficientSpace,
     StorageSpaceUnavailable,
@@ -70,6 +74,7 @@ pub enum StartupKey {
 
 #[derive(Debug, Clone, Copy)]
 pub enum TrayKey {
+    OpenClipboard,
     Preference,
     Exit,
 }

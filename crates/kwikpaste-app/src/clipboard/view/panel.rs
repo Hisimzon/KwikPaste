@@ -7,8 +7,8 @@ use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _,
-    IntoElement, ModifiersChangedEvent, ParentElement as _, Render, Styled as _, Subscription,
-    Window, div,
+    IntoElement, ModifiersChangedEvent, MouseDownEvent, ParentElement as _, Render, Styled as _,
+    Subscription, Window, div,
 };
 use kwikpaste_core::{
     CoreEvent,
@@ -27,7 +27,7 @@ use super::{
     NewGroup, NextCategory, NextGroup, OpenPreferences, OpenSelected, PasteSelected,
     PasteSelectedPlain, PinWindow, PreviousCategory, PreviousGroup, QuickPaste, SelectAll,
     SelectNext, SelectPrevious, ShowShortcuts, SplitSelected, ToggleFavorite, TogglePinned,
-    ToggleRange,
+    ToggleRange, TranslateSelected, ViewSelected,
     editing::{self, EditTarget},
     group_bar::{BarMode, GroupBar, GroupBarEvent},
     group_dialogs,
@@ -39,8 +39,8 @@ use super::{
 use crate::{
     clipboard::{
         model::{
-            filter::{ListFilter, Range, SearchFilters, adjacent_group, bar_categories},
-            item::{ItemKind, ListItem},
+            filter::{Category, ListFilter, Range, SearchFilters, adjacent_group, bar_categories},
+            item::ListItem,
         },
         source::{ClipboardSource, Group},
     },
@@ -181,6 +181,19 @@ impl ClipboardPanel {
             }
             ListIntent::ShowShortcuts => shortcuts::show(window, cx),
             ListIntent::OpenPreferences => self.emit_intent(PanelIntent::OpenPreferences, cx),
+            ListIntent::ClearFilters => {
+                self.clear_search(window, cx);
+                // 右栏的分组是它的页签，只清搜索。
+                if *list == self.list {
+                    self.update_filter(
+                        |filter| {
+                            filter.category = None;
+                            filter.group_id = None;
+                        },
+                        cx,
+                    );
+                }
+            }
             ListIntent::Paste { id, plain } => {
                 log::debug!("paste intent handled by panel host: {id} plain={plain}");
             }
@@ -526,7 +539,7 @@ impl ClipboardPanel {
         self.update_filter(|filter| filter.category = Some(kind), cx);
     }
 
-    fn toggle_category(&mut self, kind: ItemKind, cx: &mut Context<Self>) {
+    fn toggle_category(&mut self, kind: Category, cx: &mut Context<Self>) {
         self.update_filter(
             |filter| {
                 filter.category = if filter.category == Some(kind) {
@@ -596,6 +609,7 @@ impl ClipboardPanel {
 
     /// 隐藏分组（1.x 右键菜单“隐藏分组”）：名称和图标不变，只改显隐。
     fn hide_group(&mut self, group: Group, window: &mut Window, cx: &mut Context<Self>) {
+        let name = group.name.clone();
         let future = self.source.hide_group(group);
 
         cx.spawn_in(window, async move |panel, cx| {
@@ -604,7 +618,10 @@ impl ClipboardPanel {
                 .update_in(cx, |panel, window, cx| {
                     match result {
                         Ok(()) => toast::show(
-                            Toast::success(t("commands:messages.clipboardGroupSaved")),
+                            Toast::success(t_args(
+                                "commands:messages.clipboardGroupHidden",
+                                &[("group", &name)],
+                            )),
                             window,
                             cx,
                         ),
@@ -697,12 +714,7 @@ impl ClipboardPanel {
         cx: &mut Context<Self>,
     ) {
         match event {
-            HeaderEvent::Keyword(keyword) => {
-                let side_keyword = keyword.clone();
-                let keyword = keyword.clone();
-                self.update_filter(|filter| filter.keyword = keyword, cx);
-                self.update_side_filter(|filter| filter.keyword = side_keyword, cx);
-            }
+            HeaderEvent::Keyword(keyword) => self.apply_keyword(keyword.clone(), cx),
             HeaderEvent::RequestEditing(trigger) => {
                 editing::begin(EditTarget::Search, *trigger, cx);
             }
@@ -713,6 +725,22 @@ impl ClipboardPanel {
                 self.update_filter(|filter| filter.search = search, cx);
                 self.update_side_filter(|filter| filter.search = side_search, cx);
             }
+        }
+    }
+
+    fn apply_keyword(&mut self, keyword: Arc<str>, cx: &mut Context<Self>) {
+        let side_keyword = keyword.clone();
+        self.update_filter(|filter| filter.keyword = keyword, cx);
+        self.update_side_filter(|filter| filter.keyword = side_keyword, cx);
+    }
+
+    /// 粘贴类按键之前：搜索词还在防抖就当场应用，列表随即挂起按键，等新结果的第一页落地再执行。
+    fn flush_keyword(&mut self, cx: &mut Context<Self>) {
+        if let Some(keyword) = self
+            .header
+            .update(cx, |header, _| header.take_pending_keyword())
+        {
+            self.apply_keyword(keyword, cx);
         }
     }
 
@@ -812,6 +840,8 @@ impl ClipboardPanel {
     /// 分类、分组；设置了默认聚焦搜索框时请求编辑态。
     fn on_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_layout(window, cx);
+        // 左栏的列表显示时拿焦点（见 `ClipboardList::on_panel_event`），按键回到左栏。
+        self.set_side_active(false, cx);
         self.reload_filter_apps(cx);
         let settings = self.list.read(cx).settings().clipboard.clone();
         let window_settings = settings.window;
@@ -865,9 +895,10 @@ impl ClipboardPanel {
                 match window_settings.select_category_on_open {
                     WindowOpenCategorySelection::Preserve => {}
                     WindowOpenCategorySelection::All => filter.category = None,
-                    WindowOpenCategorySelection::Text => filter.category = Some(ItemKind::Text),
-                    WindowOpenCategorySelection::Image => filter.category = Some(ItemKind::Image),
-                    WindowOpenCategorySelection::Files => filter.category = Some(ItemKind::Files),
+                    WindowOpenCategorySelection::Text => filter.category = Some(Category::Text),
+                    WindowOpenCategorySelection::Image => filter.category = Some(Category::Image),
+                    WindowOpenCategorySelection::Files => filter.category = Some(Category::Files),
+                    WindowOpenCategorySelection::Link => filter.category = Some(Category::Link),
                 }
                 let group = window_settings.select_group_on_open.as_str();
                 if split {
@@ -1001,6 +1032,7 @@ impl Render for ClipboardPanel {
                 panel.current().update(cx, |list, cx| list.select_next(cx));
             })))
             .on_action(cx.listener(unless_menu(|panel, _: &PasteSelected, _, cx| {
+                panel.flush_keyword(cx);
                 panel.current().update(cx, |list, cx| {
                     if list.preview_words(cx).is_some() {
                         // 预览里选了词：Enter 粘贴选中的词（1.x `enterPastePreviewWords`）。
@@ -1015,6 +1047,7 @@ impl Render for ClipboardPanel {
             })))
             .on_action(
                 cx.listener(unless_menu(|panel, _: &PasteSelectedPlain, _, cx| {
+                    panel.flush_keyword(cx);
                     panel.current().update(cx, |list, cx| {
                         if !list.selecting() {
                             list.paste_active(true, cx);
@@ -1102,6 +1135,11 @@ impl Render for ClipboardPanel {
                 })),
             )
             .on_action(
+                cx.listener(unless_menu(|panel, _: &ViewSelected, window, cx| {
+                    panel.with_active(cx, |list, item, cx| list.view_item(&item, window, cx));
+                })),
+            )
+            .on_action(
                 cx.listener(unless_menu(|panel, _: &OpenSelected, window, cx| {
                     panel.with_active(cx, |list, _, cx| list.open_active(window, cx));
                 })),
@@ -1109,6 +1147,13 @@ impl Render for ClipboardPanel {
             .on_action(cx.listener(unless_menu(|panel, _: &SplitSelected, _, cx| {
                 panel.with_active(cx, |list, item, cx| list.split(&item, cx));
             })))
+            .on_action(
+                cx.listener(unless_menu(|panel, _: &TranslateSelected, window, cx| {
+                    panel.with_active(cx, |list, item, cx| {
+                        list.translate_active(&item, window, cx)
+                    });
+                })),
+            )
             .on_action(
                 cx.listener(unless_menu(|panel, _: &DeleteSelected, window, cx| {
                     panel.current().update(cx, |list, cx| {
@@ -1130,6 +1175,7 @@ impl Render for ClipboardPanel {
             .on_action(
                 cx.listener(unless_menu(|panel, action: &QuickPaste, _, cx| {
                     let key = action.key;
+                    panel.flush_keyword(cx);
                     panel
                         .current()
                         .update(cx, |list, cx| list.quick_paste(key, cx));
@@ -1153,7 +1199,9 @@ impl Render for ClipboardPanel {
             })))
             .child(self.header.clone());
 
-        let column = |bar: Entity<GroupBar>, list: Entity<ClipboardList>| {
+        // 按下列表区就把按键交给这一栏：Windows 面板从不激活，GPUI 不发焦点事件，`on_focus_in`
+        // 不会触发。
+        let column = |bar: Entity<GroupBar>, list: Entity<ClipboardList>, side: bool| {
             div()
                 .flex()
                 .flex_col()
@@ -1161,9 +1209,21 @@ impl Render for ClipboardPanel {
                 .min_w_0()
                 .min_h_0()
                 .child(bar)
-                .child(div().flex().flex_col().flex_1().min_h_0().child(list))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .capture_any_mouse_down(cx.listener(
+                            move |panel, _: &MouseDownEvent, _, cx| {
+                                panel.set_side_active(side, cx);
+                            },
+                        ))
+                        .child(list),
+                )
         };
-        let left = column(self.groups.clone(), self.list.clone());
+        let left = column(self.groups.clone(), self.list.clone(), false);
         let Some(side) = &self.side else {
             return root.child(left);
         };
@@ -1176,7 +1236,7 @@ impl Render for ClipboardPanel {
                 .min_h_0()
                 .child(left)
                 .child(div().flex_none().w(gpui::px(1.)).bg(tokens.border.divider))
-                .child(column(side.bar.clone(), side.list.clone())),
+                .child(column(side.bar.clone(), side.list.clone(), true)),
         )
     }
 }

@@ -231,12 +231,17 @@ fn customized_settings_round_trip_exactly() {
     expected["clipboard"]["display"]["quickSnippetColors"] = Value::Bool(true);
     expected["clipboard"]["customRules"] = Value::Array(Vec::new());
     expected["clipboard"]["autoGroupRules"] = Value::Array(Vec::new());
+    expected["clipboard"]["capture"]["mergeLinesAppIds"] = Value::Array(Vec::new());
     expected["clipboard"]["preview"]["gap"] = Value::from(28);
     expected["clipboard"]["window"]["groupBar"] =
-        serde_json::json!(["favorite", "text", "image", "files"]);
+        serde_json::json!(["favorite", "text", "image", "files", "link"]);
+    expected["clipboard"]["window"]["groupBarKnowsLink"] = Value::Bool(true);
     expected["appearance"]["preferencesSidebarCollapsed"] = Value::from(false);
-    expected["extensions"] =
-        serde_json::json!({"wetype":{"sendText":true,"sendImage":true,"writeClipboard":true}});
+    expected["appearance"]["textSize"] = Value::from("standard");
+    expected["extensions"] = serde_json::json!({
+        "wetype":{"sendText":true,"sendImage":true,"writeClipboard":true},
+        "translate":{"engine":"free","firstLanguage":"","secondLanguage":"","showOnCards":true,"auto":false}
+    });
     // 旧文件中的更新选项已移除，读取时忽略，保存时不再写出。
     let update = expected["update"].as_object_mut().unwrap();
     for key in [

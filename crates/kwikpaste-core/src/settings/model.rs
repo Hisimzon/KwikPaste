@@ -76,6 +76,7 @@ pub struct Appearance {
     pub language: Language,
     /// 偏好设置窗口的侧栏收起成只有图标；旧配置没有这个字段，按展开读取。
     pub preferences_sidebar_collapsed: bool,
+    pub text_size: TextSizeLevel,
 }
 
 impl Default for Appearance {
@@ -85,6 +86,27 @@ impl Default for Appearance {
             material: Material::Default,
             language: Language::ZhCN,
             preferences_sidebar_collapsed: false,
+            text_size: TextSizeLevel::Standard,
+        }
+    }
+}
+
+/// 文字大小档位，叠加在系统文本缩放之上。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TextSizeLevel {
+    Small,
+    #[default]
+    Standard,
+    Large,
+}
+
+impl TextSizeLevel {
+    pub fn factor(self) -> f64 {
+        match self {
+            Self::Small => 0.9,
+            Self::Standard => 1.0,
+            Self::Large => 1.1,
         }
     }
 }
@@ -313,6 +335,8 @@ pub struct Capture {
     pub max_image_mb: u32,
     /// 剪贴板同时提供多种表示时的采集优先级。
     pub order: Vec<CaptureKind>,
+    /// 从这些应用复制的文字入库时合并段落内的换行（PDF 阅读器的硬折行）。
+    pub merge_lines_app_ids: Vec<String>,
 }
 
 impl Default for Capture {
@@ -326,6 +350,7 @@ impl Default for Capture {
             max_text_mb: 4,
             max_image_mb: 100,
             order: CaptureKind::default_order(),
+            merge_lines_app_ids: Vec::new(),
         }
     }
 }
@@ -666,6 +691,8 @@ pub enum AutoPaste {
     DoubleClickPaste,
     SingleClickCopy,
     DoubleClickCopy,
+    /// 双击查看：图片看大图，文本打开内容编辑窗。
+    DoubleClickView,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -892,6 +919,10 @@ pub struct Window {
     pub select_group_on_open: String,
     /// 分组栏「全部」之后显示的内置按钮及顺序；不在列表里的不显示。
     pub group_bar: Vec<GroupBarEntry>,
+    /// `group_bar` 由认识「链接」的版本保存过。2.0.9 写的文件没有这个字段，读入时补一次链接，
+    /// 见 [`Window::add_link_to_released_group_bar`]。
+    #[serde(default)]
+    pub group_bar_knows_link: bool,
     /// 隐藏窗口轻量化：剪贴板窗口隐藏后进入 dormant，非剪贴板窗口空闲后释放 WebView。
     pub lightweight_mode: bool,
     /// 非剪贴板窗口隐藏后释放 WebView 的空闲秒数。
@@ -908,9 +939,26 @@ impl Default for Window {
             select_category_on_open: WindowOpenCategorySelection::All,
             select_group_on_open: WINDOW_OPEN_SELECTION_ALL.to_owned(),
             group_bar: GroupBarEntry::ALL.to_vec(),
+            group_bar_knows_link: true,
             lightweight_mode: true,
             idle_destroy_seconds: 60,
         }
+    }
+}
+
+impl Window {
+    /// 2.0.9 保存的分组栏还没有「链接」：列表仍是当时的默认时补到末尾，改过的留给用户在外观页勾选。
+    /// 只补这一次，之后用户隐藏链接不会再补回来。
+    pub(crate) fn add_link_to_released_group_bar(&mut self) {
+        if self.group_bar_knows_link {
+            return;
+        }
+
+        use GroupBarEntry::{Favorite, Files, Image, Link, Text};
+        if self.group_bar == [Favorite, Text, Image, Files] {
+            self.group_bar.push(Link);
+        }
+        self.group_bar_knows_link = true;
     }
 }
 
@@ -932,6 +980,7 @@ pub enum WindowOpenCategorySelection {
     Text,
     Image,
     Files,
+    Link,
 }
 
 /// 分组栏上可以隐藏和排序的内置按钮；「全部」始终显示，不在其中。
@@ -942,11 +991,19 @@ pub enum GroupBarEntry {
     Text,
     Image,
     Files,
+    /// 网址文本，与搜索筛选的「链接」同一判定。
+    Link,
 }
 
 impl GroupBarEntry {
-    /// 默认顺序，也是旧版分组栏的样子。
-    pub const ALL: [Self; 4] = [Self::Favorite, Self::Text, Self::Image, Self::Files];
+    /// 默认顺序。
+    pub const ALL: [Self; 5] = [
+        Self::Favorite,
+        Self::Text,
+        Self::Image,
+        Self::Files,
+        Self::Link,
+    ];
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1052,6 +1109,45 @@ pub struct Update {
 #[serde(default, rename_all = "camelCase")]
 pub struct ExtensionSettings {
     pub wetype: WeTypeSettings,
+    pub translate: TranslateSettings,
+}
+
+/// 翻译扩展的设置。AI 接口的地址、Key、模型、提示词不在这里：`settings.json` 会进备份，
+/// 反馈上报还会带上改过的设置项，它们存在扩展的状态目录里。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TranslateSettings {
+    pub engine: TranslateEngineKind,
+    /// 首选语言（BCP 47）；空串表示跟随界面语言。
+    pub first_language: String,
+    /// 第二语言；空串表示英语，首选语言是英语时为简体中文。
+    pub second_language: String,
+    /// 在列表卡片上显示译文；关掉后只在预览里看。
+    pub show_on_cards: bool,
+    /// 自动翻译新复制的外文。
+    pub auto: bool,
+}
+
+impl Default for TranslateSettings {
+    fn default() -> Self {
+        Self {
+            engine: TranslateEngineKind::Free,
+            first_language: String::new(),
+            second_language: String::new(),
+            show_on_cards: true,
+            auto: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TranslateEngineKind {
+    /// 免密钥的网页接口。
+    #[default]
+    Free,
+    /// 用户自己填的 OpenAI 兼容接口。
+    Ai,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -644,12 +644,27 @@ dependencies = [
 
 [[package]]
 name = "bit-set"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+dependencies = [
+ "bit-vec 0.8.0",
+]
+
+[[package]]
+name = "bit-set"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34ddef2995421ab6a5c779542c81ee77c115206f4ad9d5a8e05f4ff49716a3dd"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.9.1",
 ]
+
+[[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
 name = "bit-vec"
@@ -1997,6 +2012,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fancy-regex"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a2e16b9a584b602f1e0e5e22c30ca0906786088c27500653e432d086def8b53"
+dependencies = [
+ "bit-set 0.8.0",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2892,8 +2918,6 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac246c9f3d9771e56fbf90bd7d8656d0992d83940b580debf2efab4c44fe91df"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3563,6 +3587,8 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -4264,7 +4290,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-app"
-version = "2.0.9"
+version = "2.0.10"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4297,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-core"
-version = "2.0.9"
+version = "2.0.10"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4307,6 +4333,7 @@ dependencies = [
  "clipboard-rs",
  "clipboard-win",
  "dirs 6.0.0",
+ "fancy-regex",
  "file_icon_provider",
  "flate2",
  "html5ever",
@@ -4361,15 +4388,25 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ext-protocol"
-version = "2.0.9"
+version = "2.0.10"
 dependencies = [
  "serde",
  "serde_json",
 ]
 
 [[package]]
+name = "kwikpaste-ext-translate"
+version = "1.0.1"
+dependencies = [
+ "kwikpaste-ext-protocol",
+ "reqwest",
+ "serde_json",
+ "whatlang",
+]
+
+[[package]]
 name = "kwikpaste-os"
-version = "2.0.9"
+version = "2.0.10"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4393,7 +4430,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-ui"
-version = "2.0.9"
+version = "2.0.10"
 dependencies = [
  "anyhow",
  "futures",
@@ -4407,7 +4444,7 @@ dependencies = [
 
 [[package]]
 name = "kwikpaste-updater"
-version = "2.0.9"
+version = "2.0.10"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4927,7 +4964,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2bf919621e7975acb27d881bae2fb993e0d45c8e0446e85e6272971e00dc8df"
 dependencies = [
  "arrayvec",
- "bit-set",
+ "bit-set 0.9.1",
  "bitflags 2.13.2",
  "cfg-if",
  "cfg_aliases",
@@ -6756,7 +6793,9 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -6769,6 +6808,8 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-native-tls",
@@ -9230,8 +9271,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f519832254e56965a9940c4af57dcb75f702b6f6fa4a0b172f685395843a4d7"
 dependencies = [
  "arrayvec",
- "bit-set",
- "bit-vec",
+ "bit-set 0.9.1",
+ "bit-vec 0.9.1",
  "bitflags 2.13.2",
  "bytemuck",
  "cfg_aliases",
@@ -9302,7 +9343,7 @@ dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
- "bit-set",
+ "bit-set 0.9.1",
  "bitflags 2.13.2",
  "block2 0.6.2",
  "bytemuck",
@@ -9369,6 +9410,15 @@ dependencies = [
  "log",
  "raw-window-handle",
  "web-sys",
+]
+
+[[package]]
+name = "whatlang"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5e8f38b596e2a359b755342473520a99421e43658548c79489ee221b728c107"
+dependencies = [
+ "hashbrown 0.15.5",
 ]
 
 [[package]]

@@ -19,6 +19,7 @@ mod list;
 mod panel;
 pub mod pin;
 mod preview;
+mod screen_pin;
 pub mod selftest;
 mod shortcuts;
 mod viewer;
@@ -74,12 +75,16 @@ actions!(
         EditNote,
         /// Mod+E：编辑当前项的内容。
         EditContent,
+        /// 用户改过键的「查看」：图片看大图、文本编辑内容（默认 Shift+空格由列表监听处理）。
+        ViewSelected,
         /// Delete / Mod+Delete / Mod+Backspace：删除当前项；多选时删除已勾选的记录。
         DeleteSelected,
         /// Mod+O：打开链接 / 邮箱 / 文件位置。
         OpenSelected,
         /// Mod+S：拆词。
         SplitSelected,
+        /// Mod+L：翻译当前项。
+        TranslateSelected,
         /// Mod+A：进入多选并全选 / 取消全选。
         SelectAll,
         /// Mod+P：固定 / 取消固定窗口。
@@ -128,6 +133,7 @@ fn bindings(shortcuts: &Shortcuts) -> anyhow::Result<Vec<KeyBinding>> {
                 PanelAction::NoteSelected => Box::new(EditNote),
                 PanelAction::EditContent => Box::new(EditContent),
                 PanelAction::SplitSelected => Box::new(SplitSelected),
+                PanelAction::TranslateSelected => Box::new(TranslateSelected),
                 PanelAction::OpenSelected => Box::new(OpenSelected),
                 PanelAction::DeleteSelected => Box::new(DeleteSelected),
                 PanelAction::SelectAll => Box::new(SelectAll),
@@ -140,8 +146,10 @@ fn bindings(shortcuts: &Shortcuts) -> anyhow::Result<Vec<KeyBinding>> {
                 PanelAction::FocusSearch => Box::new(FocusSearch),
                 PanelAction::ToggleRange => Box::new(ToggleRange),
                 PanelAction::CreateGroup => Box::new(NewGroup),
-                // 按住预览、Shift+空格看大图由列表的按下、松开监听处理：绑成动作会吞掉搜索框里的输入。
-                PanelAction::PreviewSelected | PanelAction::ViewImage => continue,
+                // 按住预览、默认 Shift+空格查看由列表的按下、松开监听处理：绑成动作会吞掉搜索框里的输入。
+                PanelAction::PreviewSelected => continue,
+                PanelAction::ViewImage if key == "shift-space" => continue,
+                PanelAction::ViewImage => Box::new(ViewSelected),
                 PanelAction::PinWindow => Box::new(PinWindow),
                 PanelAction::ShowShortcuts => Box::new(ShowShortcuts),
                 PanelAction::OpenPreference => Box::new(OpenPreferences),
@@ -279,6 +287,9 @@ mod tests {
             .panel
             .insert("pasteNth".into(), "secondary-shift".into());
         shortcuts.panel.insert("copySelected".into(), String::new());
+        shortcuts
+            .panel
+            .insert("viewItem".into(), "secondary-shift-v".into());
         assert_hook_bindings(&shortcuts);
     }
 

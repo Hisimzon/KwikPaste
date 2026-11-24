@@ -637,7 +637,7 @@ fn serve_ui(request: UiRequest, cx: &mut App) {
 
 /// 枚举本进程的原生顶层窗口，覆盖 GPUI 窗口以及后台线程打开的系统对话框。
 #[cfg(target_os = "windows")]
-fn any_app_window_visible() -> bool {
+pub(super) fn any_app_window_visible() -> bool {
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
@@ -1185,7 +1185,6 @@ impl Render for UpdateWindow {
                             update.is_some()
                                 && !self.downloading
                                 && !self.installing
-                                && !downloaded
                                 && self.error.is_none(),
                             |element| {
                                 element.child(
@@ -1206,6 +1205,22 @@ impl Render for UpdateWindow {
                                     .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
                             )
                         })
+                        .when(
+                            update.is_some()
+                                && !self.downloading
+                                && !self.installing
+                                && self.error.is_some(),
+                            |element| {
+                                element.child(
+                                    Button::new("update-retry", t("common:update.retry")).on_click(
+                                        cx.listener(|view, _, _, cx| {
+                                            view.error = None;
+                                            view.download(cx);
+                                        }),
+                                    ),
+                                )
+                            },
+                        )
                         .when(
                             (update.is_none() && !self.checking) || self.error.is_some(),
                             |element| {

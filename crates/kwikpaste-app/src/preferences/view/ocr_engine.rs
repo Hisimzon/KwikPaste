@@ -39,6 +39,7 @@ impl Preferences {
     /// 一整行：标题与说明、四个单选项、实测数据的出处。
     pub(super) fn render_ocr_engines(
         &self,
+        first: bool,
         statuses: &[ExtensionStatus],
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -110,7 +111,7 @@ impl Preferences {
             .into_iter()
             .map(|choice| self.render_choice(choice, cx))
             .collect::<Vec<_>>();
-        row_frame(false, tokens)
+        row_frame(first, tokens)
             .child(
                 div()
                     .flex()
@@ -147,7 +148,7 @@ impl Preferences {
                     .child(
                         div()
                             .kp_text(TextSize::Xs)
-                            .text_color(tokens.text.faint)
+                            .text_color(tokens.text.muted)
                             .child(i18n::t("preferences:ocrEngine.footnote")),
                     ),
             )
@@ -265,7 +266,7 @@ impl Preferences {
     }
 }
 
-fn busy(status: &ExtensionStatus) -> bool {
+pub(super) fn busy(status: &ExtensionStatus) -> bool {
     matches!(
         status.operation,
         OperationState::Downloading { .. } | OperationState::Installing

@@ -69,6 +69,8 @@ pub enum IconName {
     KeyRound,
     /// 1.x `i-lucide:keyboard`：快捷键列表。
     Keyboard,
+    /// `lucide:languages`：译文、翻译按钮。
+    Languages,
     /// 1.x `i-lucide:laptop`：来自 macOS 设备的同步记录。
     Laptop,
     /// `lucide:link`：链接类型。
@@ -91,6 +93,8 @@ pub enum IconName {
     Pencil,
     /// 1.x `i-lets-icons:pin`：固定窗口。
     PinWindow,
+    /// `lucide:picture-in-picture-2`：贴到屏幕。
+    PictureInPicture,
     /// 1.x `i-ph:push-pin-bold`：置顶标记。
     PushPin,
     Plus,
@@ -170,6 +174,7 @@ impl IconName {
             Self::ImageOff => "lucide-image-off.svg",
             Self::KeyRound => "lucide-key-round.svg",
             Self::Keyboard => "lucide-keyboard.svg",
+            Self::Languages => "lucide-languages.svg",
             Self::Laptop => "lucide-laptop.svg",
             Self::ListChecks => "lucide-list-checks.svg",
             Self::Mail => "lucide-mail.svg",
@@ -178,6 +183,7 @@ impl IconName {
             Self::NotebookPen => "lucide-notebook-pen.svg",
             Self::Pencil => "lucide-pencil.svg",
             Self::PinWindow => "lets-icons-pin.svg",
+            Self::PictureInPicture => "lucide-picture-in-picture-2.svg",
             Self::PushPin => "ph-push-pin-bold.svg",
             Self::ScanText => "lucide-scan-text.svg",
             Self::Settings2 => "lucide-settings-2.svg",
@@ -305,10 +311,12 @@ mod tests {
             IconName::GroupImage,
             IconName::GroupText,
             IconName::Keyboard,
+            IconName::Languages,
             IconName::ListChecks,
             IconName::Mail,
             IconName::Pencil,
             IconName::PinWindow,
+            IconName::PictureInPicture,
             IconName::Settings2,
             IconName::SettingLine,
             IconName::Smartphone,
